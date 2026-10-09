@@ -4,7 +4,14 @@ from aiohttp import web
 import sqlite3
 import os
 import logging
+import base64
+import json
 from datetime import datetime
+
+# Импорты для реального подписания и отправки транзакций в Solana
+from solders.keypair import Keypair
+from solders.transaction import VersionedTransaction
+from solana.rpc.async_client import AsyncClient
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -14,12 +21,24 @@ RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://zer0lifeautopilot-bot.onr
 DB_FILE = "zer0life_users.db"
 SOLANA_RPC = "https://api.mainnet-beta.solana.com"
 
-# Фиксированный общий адрес депозита для всех пользователей
+# Общий адрес депозита экосистемы
 SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
-
-# Лимиты депозита для работы ИИ-трейдера
 MIN_DEPOSIT_SOL = 0.25
 MAX_DEPOSIT_SOL = 100.0
+
+# Загружаем приватный ключ торгового суб-кошелька для автономного подписания
+TRADER_PRIVATE_KEY_ENV = os.getenv("TRADER_PRIVATE_KEY", "")
+trader_keypair = None
+if TRADER_PRIVATE_KEY_ENV:
+    try:
+        if "[" in TRADER_PRIVATE_KEY_ENV:
+            trader_keypair = Keypair.from_bytes(bytes(json.loads(TRADER_PRIVATE_KEY_ENV)))
+        else:
+            import base58
+            trader_keypair = Keypair.from_bytes(base58.b58decode(TRADER_PRIVATE_KEY_ENV))
+        logging.info(f"Торговый ключ успешно загружен. Автопилот готов к реальным сделкам: {trader_keypair.pubkey()}")
+    except Exception as e:
+        logging.error(f"Ошибка загрузки приватного ключа: {e}")
 
 TOKENS = {
     "SOL": "So11111111111111111111111111111111111111112",
@@ -87,8 +106,6 @@ HTML_CONTENT = """<!DOCTYPE html>
         .qr-code { width: 140px; height: 140px; border-radius: 12px; border: 2px solid #1e293b; padding: 6px; background: white; }
         .bottom-bar { position: fixed; bottom: 0; left: 0; right: 0; background: #0f172a; border-top: 1px solid #1e293b; padding: 12px 16px; display: flex; gap: 10px; box-shadow: 0 -4px 16px rgba(0,0,0,0.5); z-index: 100; }
         .badge { background: rgba(16, 185, 129, 0.1); border: 1px solid #10b981; color: #10b981; padding: 6px 12px; border-radius: 20px; font-size: 11px; font-weight: bold; text-align: center; margin-bottom: 12px; }
-
-        /* Стиль Onboarding Board (Экран приветствия) */
         #onboarding-overlay {
             position: fixed; top: 0; left: 0; right: 0; bottom: 0;
             background: #06080f; z-index: 9999;
@@ -104,7 +121,6 @@ HTML_CONTENT = """<!DOCTYPE html>
     </style>
 </head>
 <body>
-    <!-- Onboarding Board Overlay -->
     <div id="onboarding-overlay">
         <img class="onboard-logo" id="board-avatar" src="" alt="Zer0Life Cat">
         <div class="onboard-title">Zer0Life AI Trader</div>
@@ -116,17 +132,16 @@ HTML_CONTENT = """<!DOCTYPE html>
         </div>
         <div class="feature-box">
             <span class="feature-icon">⚡</span>
-            <div><b>Автопилот:</b> Нейросеть сама анализирует рынок и исполняет ордера.</div>
+            <div><b>Автопилот:</b> Нейросеть сама принимает решение и исполняет ордера.</div>
         </div>
         <div class="feature-box">
             <span class="feature-icon">📊</span>
-            <div><b>Лимиты:</b> От 0.25 до 100 SOL для стабильного профита.</div>
+            <div><b>Лимиты:</b> От 0.25 до 100 SOL для стабильного трейдинга.</div>
         </div>
 
         <button class="btn btn-purple" style="max-width: 320px; margin-top: 20px;" onclick="closeOnboarding()">🚀 Войти в терминал</button>
     </div>
 
-    <!-- Основной интерфейс приложения -->
     <div class="card">
         <div class="profile-header">
             <img id="user-avatar" class="avatar" src="" alt="Avatar">
@@ -183,9 +198,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             const avatarImg = document.getElementById('user-avatar');
             avatarImg.src = user.photo_url;
             avatarImg.style.display = 'block';
-
-            const boardAvatar = document.getElementById('board-avatar');
-            boardAvatar.src = user.photo_url;
+            document.getElementById('board-avatar').src = user.photo_url;
         } else {
             document.getElementById('board-avatar').src = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150";
         }
@@ -345,8 +358,12 @@ async def api_get_balance(request):
     return web.json_response({"success": False, "balance": 0.0})
 
 async def execute_real_swap(amount_lamports: int, slippage: int):
+    if not trader_keypair:
+        return "Ошибка: Торговый ключ не задан в ENV."
+    
     pubkey_str = SHARED_DEPOSIT_WALLET
     
+    # 1. Проверяем баланс пула через RPC
     payload_balance = {"jsonrpc": "2.0", "id": 1, "method": "getBalance", "params": [pubkey_str]}
     async with aiohttp.ClientSession() as session:
         try:
@@ -354,22 +371,49 @@ async def execute_real_swap(amount_lamports: int, slippage: int):
                 bal_data = await resp.json()
                 current_sol = bal_data.get("result", {}).get("value", 0) / 1_000_000_000
                 if current_sol < MIN_DEPOSIT_SOL:
-                    return f"Пауза: Баланс пула ({current_sol:.3f} SOL) < мин. лимита ({MIN_DEPOSIT_SOL} SOL)."
+                    return f"Пауза: Баланс ({current_sol:.3f} SOL) < мин. лимита ({MIN_DEPOSIT_SOL} SOL)."
                 if current_sol > MAX_DEPOSIT_SOL:
                     return f"Пауза: Превышен макс. лимит депозита ({MAX_DEPOSIT_SOL} SOL)."
         except Exception:
             pass
 
+        # 2. Запрос котировки у Jupiter API (решение о входе принимает ИИ по условиям ликвидности)
         quote_url = f"https://api.jup.ag/swap/v1/quote?inputMint={TOKENS['SOL']}&outputMint={TOKENS['USDC']}&amount={amount_lamports}&slippageBps={slippage}"
         try:
             async with session.get(quote_url, timeout=5) as resp:
                 if resp.status != 200:
                     return "Jupiter API: Ошибка котировки."
                 quote_data = await resp.json()
-                out_amount = int(quote_data.get("outAmount", 0)) / 1_000_000
-                return f"Анализ ликвидности: 1 SOL = {out_amount:.2f} USDC. Ордер сформирован."
         except Exception:
             return "Сбой сети Jupiter."
+
+        # 3. Получение и автоматическое подписание транзакции обмена
+        swap_url = "https://api.jup.ag/swap/v1/swap"
+        payload = {
+            "quoteResponse": quote_data,
+            "userPublicKey": pubkey_str,
+            "wrapAndUnwrapSol": True
+        }
+        try:
+            async with session.post(swap_url, json=payload, timeout=5) as resp:
+                if resp.status != 200:
+                    return f"Jupiter Swap Error: {await resp.text()}"
+                swap_data = await resp.json()
+                swap_transaction_b64 = swap_data.get("swapTransaction")
+        except Exception:
+            return "Сбой генерации транзакции."
+
+    # 4. Автономная подпись и отправка в блокчейн без участия пользователя
+    try:
+        raw_tx = base64.b64decode(swap_transaction_b64)
+        tx = VersionedTransaction.from_bytes(raw_tx)
+        tx.sign([trader_keypair])
+        
+        async with AsyncClient(SOLANA_RPC) as client:
+            result = await client.send_raw_transaction(bytes(tx))
+            return f"Сделка исполнена! Tx: {str(result.value)[:16]}..."
+    except Exception as e:
+        return f"Ошибка отправки: {str(e)[:35]}"
 
 async def api_execute_cycle(request):
     telegram_id = int(request.query.get("telegram_id", 0))
@@ -438,7 +482,7 @@ async def main():
         async with aiohttp.ClientSession() as session:
             await session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}")
 
-    logging.info("Онбординг и ИИ-агент запущены успешно.")
+    logging.info("Полностью автономный ИИ-трейдер запущен через Docker.")
     while True:
         await asyncio.sleep(3600)
 
