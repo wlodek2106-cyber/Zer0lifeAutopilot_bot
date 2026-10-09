@@ -76,8 +76,12 @@ async def trading_background_loop():
         logging.info("--- Цикл сканирования рынка DEX ---")
         await asyncio.sleep(300)
 
+# Надежный обработчик с поиском index.html в корне репозитория
 async def index_handler(request):
-    return web.FileResponse('index.html')
+    file_path = os.path.join(os.path.dirname(__file__), 'index.html')
+    if os.path.exists(file_path):
+        return web.FileResponse(file_path)
+    return web.Response(text="index.html not found on server", status=404)
 
 async def main():
     app = web.Application()
