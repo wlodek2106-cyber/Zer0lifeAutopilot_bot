@@ -76,7 +76,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zer0Life Web4 AI Terminal</title>
+    <title>Zer0Life Web4 AI Trader</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         * { box-sizing: border-box; }
@@ -121,7 +121,6 @@ HTML_CONTENT = """<!DOCTYPE html>
         .val { color: #34d399; font-weight: 700; font-family: monospace; }
         
         .logs { background: #020617; border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 16px; padding: 12px; font-family: monospace; font-size: 11px; color: #38bdf8; height: 160px; overflow-y: auto; margin-top: 10px; box-shadow: inset 0 2px 15px rgba(0,0,0,0.9); }
-        
         .trade-item { background: rgba(2, 6, 23, 0.7); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 14px; padding: 12px; margin-top: 10px; font-family: monospace; font-size: 11px; display: flex; justify-content: space-between; align-items: center; }
         
         .qr-container { text-align: center; margin: 16px 0 10px 0; }
@@ -131,9 +130,24 @@ HTML_CONTENT = """<!DOCTYPE html>
         .nav-item { background: transparent; border: none; color: #64748b; font-size: 11px; font-weight: 600; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; }
         .nav-item.active { color: #c084fc; text-shadow: 0 0 15px rgba(192, 132, 252, 0.7); }
         .nav-icon { font-size: 20px; }
+
+        #onboarding-overlay { 
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0; 
+            background: radial-gradient(circle at center, #0f172a 0%, #03050a 100%); 
+            z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; text-align: center; 
+        }
+        .web4-logo { font-size: 42px; margin-bottom: 12px; filter: drop-shadow(0 0 20px rgba(139, 92, 246, 0.6)); }
     </style>
 </head>
 <body>
+    <!-- Премиальный Web4 приветственный экран -->
+    <div id="onboarding-overlay">
+        <div class="web4-logo">⚡</div>
+        <h2 style="font-size: 28px; color: #f8fafc; margin-bottom: 8px; font-weight: 800; letter-spacing: -0.5px;">Zer0Life Web4 AI Trader</h2>
+        <p style="font-size: 14px; color: #94a3b8; margin-bottom: 32px; max-width: 280px; line-height: 1.5;">Автономный децентрализованный ИИ-агент нового поколения на Solana.</p>
+        <button class="btn" style="max-width: 280px; font-size: 15px; padding: 16px;" onclick="document.getElementById('onboarding-overlay').style.display='none'">🚀 Инициализировать Терминал</button>
+    </div>
+
     <!-- Вкладка WALLET -->
     <div id="tab-wallet" class="tab-content active">
         <div class="card">
@@ -426,7 +440,7 @@ async def send_telegram_message(chat_id):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": chat_id,
-        "text": "⚡ **Zer0Life Web4 AI Terminal**\n\nДецентрализованный торговый терминал:",
+        "text": "⚡ **Zer0Life Web4 AI Trader**\n\nДецентрализованный торговый терминал:",
         "parse_mode": "Markdown",
         "reply_markup": {
             "inline_keyboard": [[
@@ -473,7 +487,7 @@ async def main():
             async with session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}") as r:
                 logging.info(f"Telegram webhook set status: {r.status}")
 
-    logging.info("Web4 AI Terminal запущен без лишних экранов.")
+    logging.info("Web4 AI Trader с премиальным стартовым экраном запущен.")
     while True:
         await asyncio.sleep(3600)
 
