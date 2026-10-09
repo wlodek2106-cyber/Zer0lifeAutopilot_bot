@@ -83,17 +83,35 @@ HTML_CONTENT = """<!DOCTYPE html>
         document.getElementById('user-nickname').innerText = firstName;
         document.getElementById('user-avatar').src = photoUrl;
 
-        async function connectExchange() {
+        // Автозагрузка сохраненных ключей из памяти устройства при открытии
+        window.addEventListener('load', () => {
+            const savedKey = localStorage.getItem('bg_key');
+            const savedSecret = localStorage.getItem('bg_secret');
+            const savedPass = localStorage.getItem('bg_pass');
+
+            if (savedKey && savedSecret && savedPass) {
+                document.getElementById('api-key').value = savedKey;
+                document.getElementById('api-secret').value = savedSecret;
+                document.getElementById('api-pass').value = savedPass;
+                
+                // Автоматический запрос баланса при наличии ключей
+                connectExchange(true);
+            }
+        });
+
+        async function connectExchange(isAuto = false) {
             const apiKey = document.getElementById('api-key').value.trim();
             const apiSecret = document.getElementById('api-secret').value.trim();
             const apiPass = document.getElementById('api-pass').value.trim();
 
             if (!apiKey || !apiSecret || !apiPass) {
-                alert("Заполните все поля (Key, Secret, Passphrase)!");
+                if (!isAuto) alert("Заполните все поля (Key, Secret, Passphrase)!");
                 return;
             }
 
-            tg.HapticFeedback.impactOccurred('medium');
+            if (!isAuto) {
+                tg.HapticFeedback.impactOccurred('medium');
+            }
             
             const response = await fetch('/api/connect_bitget', {
                 method: 'POST',
@@ -103,11 +121,21 @@ HTML_CONTENT = """<!DOCTYPE html>
 
             const data = await response.json();
             if (data.status === "success") {
+                // Сохраняем в localStorage телефона
+                localStorage.setItem('bg_key', apiKey);
+                localStorage.setItem('bg_secret', apiSecret);
+                localStorage.setItem('bg_pass', apiPass);
+
                 document.getElementById('account-stats').style.display = 'block';
                 document.getElementById('acc-balance').innerText = data.balance + " USDT";
-                tg.showAlert("Успешно! Получен реальный баланс с Bitget.");
+                
+                if (!isAuto) {
+                    tg.showAlert("Успешно! Получен реальный баланс с Bitget.");
+                }
             } else {
-                alert("Ошибка подключения к Bitget: " + (data.message || "Неверные данные"));
+                if (!isAuto) {
+                    alert("Ошибка подключения к Bitget: " + (data.message || "Неверные данные"));
+                }
             }
         }
     </script>
@@ -171,7 +199,7 @@ async def connect_bitget_handler(request):
             }
             return web.json_response({"status": "success", "balance": result})
         else:
-            return web.json_response({"status": "error", "message": result}, HTTPStatus=400 if False else 200)
+            return web.json_response({"status": "error", "message": result}, status=200)
     except Exception as e:
         return web.json_response({"status": "error", "message": str(e)}, status=400)
 
