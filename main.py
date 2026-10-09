@@ -5,8 +5,6 @@ import sqlite3
 import os
 import logging
 from datetime import datetime
-import base64
-import json
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -71,22 +69,25 @@ HTML_CONTENT = """<!DOCTYPE html>
     <title>Zer0Life Autonomous AI Trader</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        body { background-color: #06080f; color: #f8fafc; font-family: -apple-system, sans-serif; margin: 0; padding: 16px; padding-bottom: 90px; }
-        .card { background: #0f172a; border-radius: 16px; padding: 18px; margin-bottom: 16px; border: 1px solid #1e293b; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
-        .profile-header { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
-        .avatar { width: 52px; height: 52px; border-radius: 50%; object-fit: cover; border: 2px solid #7c3aed; background: #1e293b; display: none; }
-        .input-field { width: 100%; background: #030712; border: 1px solid #1e293b; color: #34d399; padding: 12px; border-radius: 10px; box-sizing: border-box; margin-top: 8px; font-family: monospace; font-size: 11px; text-align: center; }
-        .btn { background: #7c3aed; color: white; border: none; width: 100%; padding: 14px; border-radius: 12px; font-weight: bold; cursor: pointer; margin-top: 10px; font-size: 14px; }
+        * { box-sizing: border-box; }
+        body { background-color: #06080f; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 16px; padding-bottom: 110px; }
+        .card { background: #0f172a; border-radius: 18px; padding: 20px; margin-bottom: 18px; border: 1px solid #1e293b; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
+        .profile-header { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+        .avatar { width: 54px; height: 54px; border-radius: 50%; object-fit: cover; border: 2px solid #7c3aed; background: #1e293b; display: none; }
+        .input-field { width: 100%; background: #030712; border: 1px solid #1e293b; color: #34d399; padding: 12px 14px; border-radius: 12px; margin-top: 8px; font-family: monospace; font-size: 12px; text-align: center; outline: none; }
+        .btn { background: #7c3aed; color: white; border: none; width: 100%; padding: 14px; border-radius: 14px; font-weight: 700; cursor: pointer; margin-top: 12px; font-size: 14px; transition: opacity 0.2s; }
+        .btn:active { opacity: 0.85; }
         .btn-green { background: #10b981; }
         .btn-red { background: #ef4444; }
         .btn-purple { background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%); }
-        .metric { display: flex; justify-content: space-between; margin-top: 8px; font-size: 13px; color: #94a3b8; }
-        .val { color: #34d399; font-weight: bold; font-family: monospace; }
-        .logs { background: #030712; border: 1px solid #1e293b; border-radius: 10px; padding: 10px; font-family: monospace; font-size: 11px; color: #38bdf8; height: 120px; overflow-y: auto; margin-top: 10px; }
-        .qr-container { text-align: center; margin: 12px 0; }
-        .qr-code { width: 140px; height: 140px; border-radius: 12px; border: 2px solid #1e293b; padding: 6px; background: white; }
-        .bottom-bar { position: fixed; bottom: 0; left: 0; right: 0; background: #0f172a; border-top: 1px solid #1e293b; padding: 12px 16px; display: flex; gap: 10px; box-shadow: 0 -4px 16px rgba(0,0,0,0.5); z-index: 100; }
-        .badge { background: rgba(16, 185, 129, 0.1); border: 1px solid #10b981; color: #10b981; padding: 6px 12px; border-radius: 20px; font-size: 11px; font-weight: bold; text-align: center; margin-bottom: 12px; }
+        .metric { display: flex; justify-content: space-between; margin-top: 10px; font-size: 14px; color: #94a3b8; }
+        .val { color: #34d399; font-weight: 700; font-family: monospace; }
+        .logs { background: #030712; border: 1px solid #1e293b; border-radius: 12px; padding: 12px; font-family: monospace; font-size: 11px; color: #38bdf8; height: 140px; overflow-y: auto; margin-top: 10px; }
+        .qr-container { text-align: center; margin: 16px 0 10px 0; }
+        .qr-code { width: 130px; height: 130px; border-radius: 12px; border: 2px solid #1e293b; padding: 6px; background: white; }
+        .bottom-bar { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(10px); border-top: 1px solid #1e293b; padding: 14px 16px; display: flex; gap: 12px; box-shadow: 0 -6px 20px rgba(0,0,0,0.6); z-index: 100; }
+        .badge { background: rgba(16, 185, 129, 0.1); border: 1px solid #10b981; color: #10b981; padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 700; text-align: center; margin-bottom: 14px; }
+        
         #onboarding-overlay {
             position: fixed; top: 0; left: 0; right: 0; bottom: 0;
             background: #06080f; z-index: 9999;
@@ -96,8 +97,8 @@ HTML_CONTENT = """<!DOCTYPE html>
         }
         .onboard-logo { width: 88px; height: 88px; border-radius: 50%; border: 3px solid #7c3aed; object-fit: cover; margin-bottom: 20px; box-shadow: 0 0 24px rgba(124, 58, 237, 0.5); }
         .onboard-title { font-size: 24px; font-weight: 800; color: #f8fafc; margin-bottom: 8px; }
-        .onboard-subtitle { font-size: 14px; color: #94a3b8; line-height: 1.5; margin-bottom: 28px; max-width: 300px; }
-        .feature-box { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; padding: 14px; width: 100%; max-width: 320px; margin-bottom: 12px; text-align: left; font-size: 13px; color: #cbd5e1; display: flex; align-items: center; gap: 12px; }
+        .onboard-subtitle { font-size: 14px; color: #94a3b8; line-height: 1.5; margin-bottom: 24px; max-width: 300px; }
+        .feature-box { background: #0f172a; border: 1px solid #1e293b; border-radius: 14px; padding: 14px; width: 100%; max-width: 320px; margin-bottom: 10px; text-align: left; font-size: 13px; color: #cbd5e1; display: flex; align-items: center; gap: 12px; }
         .feature-icon { font-size: 20px; }
     </style>
 </head>
@@ -127,13 +128,13 @@ HTML_CONTENT = """<!DOCTYPE html>
         <div class="profile-header">
             <img id="user-avatar" class="avatar" src="" alt="Avatar">
             <div>
-                <h2 style="margin: 0; font-size: 17px;" id="uname">Загрузка...</h2>
+                <h2 style="margin: 0; font-size: 18px;" id="uname">Загрузка...</h2>
                 <p style="margin: 4px 0 0 0; font-size: 12px; color: #94a3b8;">ID: <span id="uid" class="val">---</span></p>
             </div>
         </div>
         
         <div class="badge">🔥 Pool Limit: 0.25 - 100 SOL</div>
-        <label style="font-size: 12px; color: #94a3b8;">Адрес депозита экосистемы:</label>
+        <label style="font-size: 12px; color: #94a3b8; font-weight: 600;">Адрес депозита экосистемы:</label>
         <input type="text" id="wallet-input" class="input-field" readonly>
         
         <div class="qr-container">
@@ -144,20 +145,20 @@ HTML_CONTENT = """<!DOCTYPE html>
     </div>
 
     <div class="card">
-        <h3 style="margin-top: 0; font-size: 15px;">📥 Верификация депозита (SOL Top-Up)</h3>
+        <h3 style="margin: 0 0 8px 0; font-size: 16px;">📥 Верификация депозита</h3>
         <label style="font-size: 11px; color: #94a3b8;">Хэш транзакции (Signature) из кошелька:</label>
         <input type="text" id="tx-input" class="input-field" placeholder="Вставь хэш транзакции...">
         <button class="btn btn-green" onclick="verifyDeposit()">Verify & Credit SOL 🔄</button>
     </div>
 
     <div class="card">
-        <h3 style="margin-top: 0; font-size: 15px;">🤖 Автономный ИИ-Трейдер</h3>
+        <h3 style="margin: 0 0 10px 0; font-size: 16px;">🤖 Автономный ИИ-Трейдер</h3>
         <div class="metric"><span>Баланс пула:</span> <span id="wallet-balance" class="val">0.00 SOL</span></div>
         <div class="metric"><span>Статус:</span> <span id="trade-status" class="val" style="color: #f59e0b;">Остановлен</span></div>
     </div>
 
     <div class="card">
-        <h3 style="margin-top: 0; font-size: 15px;">📡 Исполнение сделок в сети (Live)</h3>
+        <h3 style="margin: 0 0 8px 0; font-size: 16px;">📡 Исполнение сделок в сети (Live)</h3>
         <div id="logs-box" class="logs">Инициализация автономного агента... Готов к торгам.</div>
     </div>
 
