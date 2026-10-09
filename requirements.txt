@@ -1,4 +1,4 @@
 aiohttp
-solders
-solana
+solders==0.21.0
+solana==0.32.5
 base58
