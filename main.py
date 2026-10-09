@@ -3,7 +3,10 @@ import aiohttp
 from aiohttp import web
 import logging
 import os
-import json
+import time
+import hmac
+import hashlib
+import base64
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -36,44 +39,36 @@ HTML_CONTENT = """<!DOCTYPE html>
         <div class="profile-header">
             <img id="user-avatar" class="avatar" src="https://i.imgur.com/6VBx3io.png" alt="Avatar">
             <div>
-                <h3 id="user-nickname" style="margin: 0; color: #38bdf8;">Трейдер #---</h3>
+                <h3 id="user-nickname" style="margin: 0; color: #38bdf8;">Трейдер</h3>
                 <p style="margin: 4px 0 0 0; font-size: 11px; color: #94a3b8;">Telegram ID: <span id="user-id">---</span></p>
             </div>
-        </div>
-        <div style="display: flex; gap: 8px;">
-            <input type="text" id="nick-input" class="input-field" placeholder="Ваш никнейм" style="margin: 0;">
-            <button class="btn" style="margin: 0; width: 120px;" onclick="updateProfile()">Сохранить</button>
         </div>
     </div>
 
     <div class="card">
         <h2>🛡 Zer0life AI Autopilot</h2>
-        <p>Статус бота: <span style="color: #10b981; font-weight: bold;">🟢 Автономная торговля активна</span></p>
+        <p>Статус: <span style="color: #10b981; font-weight: bold;">🟢 Подключение к Bitget API</span></p>
     </div>
     
     <div class="card">
-        <h3>🔑 Подключение по API ключам</h3>
-        <p style="color: #94a3b8; font-size: 12px;">Права только на торговлю (без права вывода средств). Прибыль поступает прямо на ваш баланс.</p>
+        <h3>🔑 Данные Bitget API</h3>
+        <p style="color: #94a3b8; font-size: 12px;">Только права на торговлю (без вывода).</p>
         
         <label style="font-size: 12px; color: #94a3b8;">API Key</label>
-        <input type="text" id="api-key" class="input-field" placeholder="Введите ваш API Key">
+        <input type="text" id="api-key" class="input-field" placeholder="Введите API Key">
         
         <label style="font-size: 12px; color: #94a3b8;">API Secret</label>
-        <input type="password" id="api-secret" class="input-field" placeholder="Введите ваш API Secret">
+        <input type="password" id="api-secret" class="input-field" placeholder="Введите API Secret">
+
+        <label style="font-size: 12px; color: #94a3b8;">Passphrase (Пароль API)</label>
+        <input type="password" id="api-pass" class="input-field" placeholder="Введите Passphrase">
         
-        <button class="btn" onclick="saveKeysAndStart()">Подключить ключи и запустить бота</button>
+        <button class="btn" onclick="connectExchange()">Подключить и запросить баланс</button>
 
         <div id="account-stats" style="display:none; margin-top: 15px; border-top: 1px solid #1e293b; padding-top: 10px;">
-            <div class="coin"><span>Баланс счета</span><span class="balance-val" id="acc-balance">$1,245.80 USDT</span></div>
-            <div class="coin"><span>Общая прибыль (AI)</span><span class="balance-val" id="acc-profit">+$142.50 (+12.8%)</span></div>
+            <div class="coin"><span>Баланс счета (USDT)</span><span class="balance-val" id="acc-balance">0.00 USDT</span></div>
+            <div class="coin"><span>Статус соединения</span><span class="balance-val" style="color: #38bdf8;">Активно</span></div>
         </div>
-    </div>
-
-    <div class="card">
-        <h3>📊 DEX / CEX Авто-мониторинг</h3>
-        <div class="coin"><span>SOL / USDT (AI Long)</span><span style="color: #10b981;">В позиции</span></div>
-        <div class="coin"><span>AVAX / USDT (AI Scalp)</span><span style="color: #10b981;">Активен</span></div>
-        <div class="coin"><span>INJ / USDT (AI Grid)</span><span style="color: #10b981;">Активен</span></div>
     </div>
 
     <script>
@@ -87,38 +82,32 @@ HTML_CONTENT = """<!DOCTYPE html>
         document.getElementById('user-id').innerText = userId;
         document.getElementById('user-nickname').innerText = firstName;
         document.getElementById('user-avatar').src = photoUrl;
-        document.getElementById('nick-input').value = firstName;
 
-        async function updateProfile() {
-            const newNick = document.getElementById('nick-input').value;
-            document.getElementById('user-nickname').innerText = newNick;
-            tg.HapticFeedback.notificationOccurred('success');
-            tg.showAlert("Профиль успешно обновлен!");
-        }
+        async function connectExchange() {
+            const apiKey = document.getElementById('api-key').value.trim();
+            const apiSecret = document.getElementById('api-secret').value.trim();
+            const apiPass = document.getElementById('api-pass').value.trim();
 
-        async function saveKeysAndStart() {
-            const apiKey = document.getElementById('api-key').value;
-            const apiSecret = document.getElementById('api-secret').value;
-
-            if (!apiKey || !apiSecret) {
-                alert("Заполните оба поля API ключей!");
+            if (!apiKey || !apiSecret || !apiPass) {
+                alert("Заполните все поля (Key, Secret, Passphrase)!");
                 return;
             }
 
             tg.HapticFeedback.impactOccurred('medium');
             
-            const response = await fetch('/api/save_keys', {
+            const response = await fetch('/api/connect_bitget', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user_id: userId, api_key: apiKey, api_secret: apiSecret })
+                body: JSON.stringify({ user_id: userId, api_key: apiKey, api_secret: apiSecret, api_pass: apiPass })
             });
 
             const data = await response.json();
             if (data.status === "success") {
                 document.getElementById('account-stats').style.display = 'block';
-                tg.showAlert("API ключи успешно привязаны! AI-бот начал торговлю на вашем балансе.");
+                document.getElementById('acc-balance').innerText = data.balance + " USDT";
+                tg.showAlert("Успешно! Получен реальный баланс с Bitget.");
             } else {
-                alert("Ошибка сохранения ключей");
+                alert("Ошибка подключения к Bitget: " + (data.message || "Неверные данные"));
             }
         }
     </script>
@@ -126,21 +115,63 @@ HTML_CONTENT = """<!DOCTYPE html>
 </html>
 """
 
-async def save_keys_handler(request):
+def generate_bitget_signature(timestamp, method, request_path, body, secret_key):
+    message = str(timestamp) + method.upper() + request_path + body
+    mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), digestmod=hashlib.sha256)
+    return base64.b64encode(mac.digest()).decode('utf-8')
+
+async def fetch_bitget_balance(api_key, api_secret, api_pass):
+    try:
+        method = "GET"
+        endpoint = "/api/v2/spot/account/assets"
+        url = f"https://api.bitget.com{endpoint}"
+        timestamp = str(int(time.time() * 1000))
+        
+        signature = generate_bitget_signature(timestamp, method, endpoint, "", api_secret)
+        
+        headers = {
+            "ACCESS-KEY": api_key,
+            "ACCESS-SIGN": signature,
+            "ACCESS-TIMESTAMP": timestamp,
+            "ACCESS-PASSPHRASE": api_pass,
+            "Content-Type": "application/json"
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, timeout=10) as resp:
+                data = await resp.json()
+                if data.get("code") == "00000":
+                    assets = data.get("data", [])
+                    total_usdt = 0.0
+                    for asset in assets:
+                        if asset.get("coin") == "USDT":
+                            total_usdt = float(asset.get("available", 0)) + float(asset.get("frozen", 0))
+                            break
+                    return True, f"{total_usdt:.2f}"
+                else:
+                    return False, data.get("msg", "API Error")
+    except Exception as e:
+        return False, str(e)
+
+async def connect_bitget_handler(request):
     try:
         data = await request.json()
         user_id = data.get("user_id")
         api_key = data.get("api_key")
         api_secret = data.get("api_secret")
+        api_pass = data.get("api_pass")
         
-        USER_ACCOUNTS[user_id] = {
-            "api_key": api_key,
-            "api_secret": api_secret,
-            "balance": "$1,245.80 USDT",
-            "profit": "+$142.50"
-        }
-        logging.info(f"Успешно привязаны ключи для пользователя ID: {user_id}")
-        return web.json_response({"status": "success"})
+        success, result = await fetch_bitget_balance(api_key, api_secret, api_pass)
+        if success:
+            USER_ACCOUNTS[user_id] = {
+                "api_key": api_key,
+                "api_secret": api_secret,
+                "api_pass": api_pass,
+                "balance": result
+            }
+            return web.json_response({"status": "success", "balance": result})
+        else:
+            return web.json_response({"status": "error", "message": result}, HTTPStatus=400 if False else 200)
     except Exception as e:
         return web.json_response({"status": "error", "message": str(e)}, status=400)
 
@@ -175,7 +206,7 @@ async def webhook_handler(request):
         text = message.get("text", "")
         chat_id = message.get("chat", {}).get("id")
         if text == "/start" and chat_id:
-            await send_telegram_message(chat_id, "Ваш персональный AI-терминал готов. Нажмите кнопку ниже для настройки личного кабинета:")
+            await send_telegram_message(chat_id, "Ваш персональный AI-терминал готов. Нажмите кнопку ниже для настройки подключения к бирже:")
         return web.Response(text="OK", status=200)
     except Exception:
         return web.Response(text="Error", status=500)
@@ -184,7 +215,7 @@ async def main():
     app = web.Application()
     app.router.add_get('/', index_handler)
     app.router.add_post('/webhook', webhook_handler)
-    app.router.add_post('/api/save_keys', save_keys_handler)
+    app.router.add_post('/api/connect_bitget', connect_bitget_handler)
     
     runner = web.AppRunner(app)
     await runner.setup()
