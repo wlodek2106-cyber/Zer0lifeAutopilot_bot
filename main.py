@@ -29,7 +29,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 <body>
     <div class="card">
         <h2>⚡ Zer0life DEX Core</h2>
-        <p>Статус: <span style="color: #10b981; font-weight: bold;">🟢 Подключено к Jupiter API</span></p>
+        <p>Статус: <span style="color: #10b981; font-weight: bold;">🟢 Шлюз ликвидности активен</span></p>
         
         <button class="btn btn-green" onclick="checkJupiter()">Проверить ликвидность SOL/USDC</button>
 
@@ -51,9 +51,8 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         async function checkJupiter() {
             const box = document.getElementById('logs');
-            box.innerHTML += `<br>[${new Date().toLocaleTimeString()}] Запрос котировки у Jupiter...`;
+            box.innerHTML += `<br>[${new Date().toLocaleTimeString()}] Запрос котировки через шлюз...`;
             try {
-                // SOL -> USDC
                 const res = await fetch('/api/quote?input=So11111111111111111111111111111111111111112&output=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&amount=1000000000');
                 const data = await res.json();
                 if (data.success) {
@@ -76,7 +75,8 @@ async def quote_handler(request):
     output_mint = request.query.get("output")
     amount = request.query.get("amount")
     
-    url = f"https://quote-api.jup.ag/v6/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount}&slippageBps=50"
+    # Используем актуальный стабильный эндпоинт API Jupiter
+    url = f"https://api.jup.ag/swap/v1/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount}&slippageBps=50"
     
     async with aiohttp.ClientSession() as session:
         try:
@@ -100,7 +100,7 @@ async def send_telegram_message(chat_id, text):
     payload = {
         "chat_id": chat_id,
         "text": f"🛡 **Zer0life DEX Terminal**\n\n{text}",
-        "parse_mode": "Markdown",
+        "parse_Mode": "Markdown",
         "reply_markup": {
             "inline_keyboard": [[
                 {"text": "🚀 Открыть DEX Терминал", "web_app": {"url": RENDER_URL}}
@@ -121,7 +121,7 @@ async def webhook_handler(request):
         text = message.get("text", "")
         chat_id = message.get("chat", {}).get("id")
         if text == "/start" and chat_id:
-            await send_telegram_message(chat_id, "DEX-терминал готов к работе. Нажмите кнопку ниже:")
+            await send_telegram_message(chat_id, "Шлюз ликвидности обновлен. Нажмите кнопку ниже:")
         return web.Response(text="OK", status=200)
     except Exception:
         return web.Response(text="Error", status=500)
