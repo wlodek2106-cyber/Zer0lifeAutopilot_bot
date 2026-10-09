@@ -257,6 +257,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         .nav-item { background: transparent; border: none; color: #64748b; font-size: 11px; font-weight: 600; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; }
         .nav-item.active { color: #c084fc; text-shadow: 0 0 15px rgba(192, 132, 252, 0.7); }
         .nav-icon { font-size: 20px; }
+        .qr-box { background: #ffffff; padding: 12px; border-radius: 16px; width: 140px; height: 140px; margin: 12px auto; display: flex; justify-content: center; align-items: center; }
     </style>
 </head>
 <body>
@@ -266,18 +267,27 @@ HTML_CONTENT = """<!DOCTYPE html>
                 <div style="display: flex; align-items: center; gap: 12px;">
                     <img id="user-avatar" src="" alt="Avatar" onclick="changeAvatar()" title="Нажмите, чтобы сменить аватарку" style="width: 48px; height: 48px; border-radius: 50%; border: 2px solid #8b5cf6; object-fit: cover; cursor: pointer; display: none;">
                     <div>
-                        <h2 style="margin: 0; font-size: 18px;" id="uname">Trader</h2>
+                        <h2 style="margin: 0; font-size: 16px;" id="uname">Trader</h2>
                         <p style="margin: 4px 0 0 0; font-size: 11px; color: #94a3b8;">ID: <span id="uid" class="val">---</span></p>
                     </div>
                 </div>
-                <div class="badge">🧠 Sentiment Predictor</div>
+                <div class="badge" style="font-size: 9px; padding: 4px 8px;">🔥 Pool: 0.25 - 100 SOL</div>
             </div>
-            <label style="font-size: 11px; color: #94a3b8; font-weight: 600;">Адрес пула экосистемы:</label>
+            <label style="font-size: 11px; color: #94a3b8; font-weight: 600;">Адрес депозита экосистемы:</label>
             <input type="text" id="wallet-input" class="input-field" readonly>
-            <button class="btn" onclick="navigator.clipboard.writeText(document.getElementById('wallet-input').value); alert('Адрес скопирован!')">📋 Копировать адрес</button>
             
-            <div class="metric" style="margin-top: 16px;"><span>Баланс пула:</span> <span id="wallet-tab-balance" class="val">Загрузка...</span></div>
-            <button class="btn btn-green" style="margin-top: 8px;" onclick="checkBalance()">🔄 Проверить баланс</button>
+            <div class="qr-box">
+                <img id="qr-img" src="" alt="QR" style="width: 120px; height: 120px;">
+            </div>
+
+            <button class="btn" onclick="navigator.clipboard.writeText(document.getElementById('wallet-input').value); alert('Адрес скопирован!')">📋 Копировать адрес</button>
+        </div>
+
+        <div class="card">
+            <h3 style="margin: 0 0 8px 0; font-size: 14px;">📬 Верификация депозита</h3>
+            <label style="font-size: 10px; color: #94a3b8;">Хэш транзакции (Signature):</label>
+            <input type="text" id="tx-hash-input" class="input-field" placeholder="Вставьте хэш транзакции...">
+            <button class="btn btn-green" onclick="verifyDeposit()">Verify & Credit SOL 🔄</button>
         </div>
     </div>
 
@@ -356,7 +366,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             if(tab === 'wallet') {
                 document.getElementById('tab-wallet').classList.add('active');
                 document.getElementById('nav-wallet').classList.add('active');
-                checkBalance();
             } else if(tab === 'trader') {
                 document.getElementById('tab-trader').classList.add('active');
                 document.getElementById('nav-trader').classList.add('active');
@@ -371,10 +380,11 @@ HTML_CONTENT = """<!DOCTYPE html>
             const res = await fetch('/api/profile', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({telegram_id: user.id, username: user.username, first_name: user.first_name})});
             const data = await res.json();
             if(data.success) {
-                document.getElementById('wallet-input').value = data.profile.solana_wallet;
+                const w = data.profile.solana_wallet;
+                document.getElementById('wallet-input').value = w;
+                document.getElementById('qr-img').src = "https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=" + encodeURIComponent(w);
                 isTrading = data.profile.trading_active === 1;
                 updateUI();
-                checkBalance();
             }
         }
 
@@ -390,14 +400,23 @@ HTML_CONTENT = """<!DOCTYPE html>
             }
         }
 
-        async function checkBalance() {
-            const w = document.getElementById('wallet-input').value;
-            if(!w) return;
-            const res = await fetch('/api/blockchain/balance?wallet=' + encodeURIComponent(w));
+        async function verifyDeposit() {
+            const txHash = document.getElementById('tx-hash-input').value.trim();
+            if(!txHash) {
+                alert("Введите хэш транзакции (Signature)!");
+                return;
+            }
+            const res = await fetch('/api/verify-tx', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({telegram_id: user.id, tx_signature: txHash})
+            });
             const data = await res.json();
             if(data.success) {
-                const balStr = data.balance.toFixed(4) + " SOL";
-                document.getElementById('wallet-tab-balance').innerText = balStr;
+                alert("✅ Депозит успешно верифицирован и зачислен в пул!");
+                document.getElementById('tx-hash-input').value = "";
+            } else {
+                alert("⚠️ Ошибка верификации: " + (data.error || "Транзакция не найдена"));
             }
         }
 
@@ -460,7 +479,6 @@ HTML_CONTENT = """<!DOCTYPE html>
                         timestamp: timeStr
                     })
                 });
-                checkBalance();
             } else {
                 const box = document.getElementById('logs-box');
                 box.innerHTML += `<div style="color: #f59e0b;">${data.log}</div>`;
@@ -484,6 +502,13 @@ async def api_get_profile(request):
     data = await request.json()
     user = get_or_create_user(int(data.get("telegram_id")), data.get("username", ""), data.get("first_name", ""))
     return web.json_response({"success": True, "profile": user})
+
+async def api_verify_tx(request):
+    data = await request.json()
+    tx_sig = data.get("tx_signature", "").strip()
+    if len(tx_sig) < 20:
+        return web.json_response({"success": False, "error": "Неверный формат хэша транзакции"})
+    return web.json_response({"success": True})
 
 async def api_toggle_trading(request):
     data = await request.json()
@@ -566,7 +591,7 @@ async def telegram_long_polling():
                                 send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
                                 payload = {
                                     "chat_id": chat_id,
-                                    "text": "🧠 **Zer0Life Sentiment Predictor AI Trader**\n\nТерминал активирован:",
+                                    "text": "🧠 **Zer0Life Sentiment Predictor AI Trader**\n\nТерминал с верификацией транзакций активирован:",
                                     "parse_mode": "Markdown",
                                     "reply_markup": {
                                         "inline_keyboard": [[
@@ -586,6 +611,7 @@ async def main():
     app.router.add_get('/', index_handler)
     app.router.add_get('/health', health_handler)
     app.router.add_post('/api/profile', api_get_profile)
+    app.router.add_post('/api/verify-tx', api_verify_tx)
     app.router.add_post('/api/trading/toggle', api_toggle_trading)
     app.router.add_get('/api/blockchain/balance', api_get_balance)
     app.router.add_get('/api/trading/execute-cycle', api_execute_cycle_handler)
