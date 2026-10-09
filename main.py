@@ -460,41 +460,49 @@ async def api_get_stats(request):
         "trades": trades
     })
 
-async def send_telegram_message(chat_id):
+async def telegram_long_polling():
+    """Фоновый процесс опроса Telegram (Long Polling) без вебхуков"""
     if not TELEGRAM_TOKEN:
+        logging.warning("TELEGRAM_TOKEN не задан, бот не будет отвечать в чате.")
         return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": "⚡ **Zer0Life Multi-DEX HFT Trader**\n\nТерминал успешно подключен:",
-        "parse_mode": "Markdown",
-        "reply_markup": {
-            "inline_keyboard": [[
-                {"text": "🚀 Открыть Web4 Терминал", "web_app": {"url": RENDER_URL}}
-            ]]
-        }
-    }
+    
+    offset = 0
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+    
     async with aiohttp.ClientSession() as session:
-        await session.post(url, json=payload)
-
-async def webhook_handler(request):
-    try:
-        data = await request.json()
-        message = data.get("message", {})
-        text = message.get("text", "")
-        chat_id = message.get("chat", {}).get("id")
-        if text == "/start" and chat_id:
-            asyncio.create_task(send_telegram_message(chat_id))
-        return web.Response(text="OK", status=200)
-    except Exception:
-        return web.Response(text="Error", status=500)
+        while True:
+            try:
+                async with session.get(url, params={"offset": offset, "timeout": 30}, timeout=35) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        for update in data.get("result", []):
+                            offset = update["update_id"] + 1
+                            message = update.get("message", {})
+                            text = message.get("text", "")
+                            chat_id = message.get("chat", {}).get("id")
+                            
+                            if text == "/start" and chat_id:
+                                send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+                                payload = {
+                                "chat_id": chat_id,
+                                "text": "⚡ **Zer0Life Multi-DEX HFT Trader**\n\nТерминал успешно подключен:",
+                                "parse_mode": "Markdown",
+                                "reply_markup": {
+                                    "inline_keyboard": [[
+                                        {"text": "🚀 Открыть Web4 Терминал", "web_app": {"url": RENDER_URL}}
+                                    ]]
+                                }
+                            }
+                                await session.post(send_url, json=payload)
+            except Exception as e:
+                await asyncio.sleep(3)
+            await asyncio.sleep(1)
 
 async def main():
     init_db()
     app = web.Application()
     app.router.add_get('/', index_handler)
     app.router.add_get('/health', health_handler)
-    app.router.add_post('/webhook', webhook_handler)
     app.router.add_post('/api/profile', api_get_profile)
     app.router.add_post('/api/trading/toggle', api_toggle_trading)
     app.router.add_get('/api/blockchain/balance', api_get_balance)
@@ -507,13 +515,10 @@ async def main():
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
     
-    if TELEGRAM_TOKEN:
-        webhook_url = f"{RENDER_URL}/webhook"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}") as r:
-                logging.info(f"Telegram webhook set status: {r.status}")
+    # Запускаем фоновый опрос телеграма
+    asyncio.create_task(telegram_long_polling())
 
-    logging.info("Multi-DEX HFT AI Trader запущен с обработчиком Telegram.")
+    logging.info("Multi-DEX HFT AI Trader запущен с Long Polling.")
     while True:
         await asyncio.sleep(3600)
 
