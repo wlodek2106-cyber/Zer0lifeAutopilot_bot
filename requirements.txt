@@ -1,1 +1,4 @@
 aiohttp
+solders==0.21.0
+base58
+
