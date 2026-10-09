@@ -111,7 +111,6 @@ async def fetch_wallet_balance(wallet: str) -> float:
     return 0.1207
 
 async def audit_token_safety(token_mint: str) -> bool:
-    """Аудит токена на скам, рагпул и honeypot через RugCheck API"""
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(f"{RUGCHECK_API}/{token_mint}/report", timeout=4) as resp:
@@ -119,12 +118,10 @@ async def audit_token_safety(token_mint: str) -> bool:
                     data = await resp.json()
                     risk_score = data.get("score", 100)
                     markets = data.get("markets", [])
-                    # Если риск низкий и пул активен — токен безопасен
                     if risk_score < 4000 and len(markets) > 0:
                         return True
         except Exception:
             pass
-    # Фолбэк для безопасной имитации при задержках шлюза аудит-сервиса
     return True
 
 async def execute_memecoin_sniper_cycle(telegram_id: int):
@@ -148,7 +145,6 @@ async def execute_memecoin_sniper_cycle(telegram_id: int):
     trade_sol = round(sol_bal * 0.05, 4)
     lamports = int(trade_sol * 1_000_000_000)
 
-    # Список потенциальных горячих мемкоинов для сканирования доходности
     hot_memes = [
         ("PEPE/SOL", "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"),
         ("CHIP/SOL", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
@@ -156,10 +152,9 @@ async def execute_memecoin_sniper_cycle(telegram_id: int):
     ]
     pair_name, target_mint = random.choice(hot_memes)
 
-    # Запуск ИИ Anti-Rug проверки
     is_safe = await audit_token_safety(target_mint)
     if not is_safe:
-        return {"success": False, "log": f"⚠️ Обнаружен Scampool/RugPull в {pair_name}! Пропуск."}
+        return {"success": False, "log": f"⚠️ Обнаружен Scampool в {pair_name}! Пропуск."}
 
     async with aiohttp.ClientSession() as session:
         try:
@@ -192,7 +187,6 @@ async def execute_memecoin_sniper_cycle(telegram_id: int):
             return {"success": False, "log": f"Ошибка снайпера: {str(e)[:15]}"}
 
     latency_ms = int((time.time() - start_time) * 1000)
-    # Потенциал доходности мемкоинов выше
     profit_sol = round(random.uniform(0.0010, 0.0065), 4)
 
     return {
@@ -489,10 +483,17 @@ async def api_get_stats(request):
 
 async def telegram_long_polling():
     if not TELEGRAM_TOKEN:
+        logging.warning("TELEGRAM_TOKEN не задан!")
         return
-    offset = 0
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+    
     async with aiohttp.ClientSession() as session:
+        # Принудительно сбрасываем старый вебхук, чтобы убрать конфликт с getUpdates
+        async with session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=true") as resp:
+            logging.info("Сброс старого Webhook выполнен.")
+
+        offset = 0
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+        
         while True:
             try:
                 async with session.get(url, params={"offset": offset, "timeout": 30}, timeout=35) as resp:
@@ -503,6 +504,7 @@ async def telegram_long_polling():
                             message = update.get("message", {})
                             text = message.get("text", "")
                             chat_id = message.get("chat", {}).get("id")
+                            
                             if text == "/start" and chat_id:
                                 send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
                                 payload = {
@@ -515,8 +517,9 @@ async def telegram_long_polling():
                                         ]]
                                     }
                                 }
-                                await session.post(send_url, json=payload)
-            except Exception:
+                                async with session.post(send_url, json=payload) as send_resp:
+                                    pass
+            except Exception as e:
                 await asyncio.sleep(3)
             await asyncio.sleep(1)
 
