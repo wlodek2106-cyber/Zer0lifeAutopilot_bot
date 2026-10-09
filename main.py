@@ -7,8 +7,6 @@ import logging
 from datetime import datetime
 import base64
 import json
-import hashlib
-import hmac
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -22,8 +20,6 @@ SOLANA_RPC = "https://api.mainnet-beta.solana.com"
 SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
 MIN_DEPOSIT_SOL = 0.25
 MAX_DEPOSIT_SOL = 100.0
-
-TRADER_PRIVATE_KEY_ENV = os.getenv("TRADER_PRIVATE_KEY", "")
 
 TOKENS = {
     "SOL": "So11111111111111111111111111111111111111112",
@@ -345,7 +341,6 @@ async def api_get_balance(request):
 async def execute_real_swap(amount_lamports: int, slippage: int):
     pubkey_str = SHARED_DEPOSIT_WALLET
     
-    # Проверка баланса пула через RPC
     payload_balance = {"jsonrpc": "2.0", "id": 1, "method": "getBalance", "params": [pubkey_str]}
     async with aiohttp.ClientSession() as session:
         try:
@@ -359,7 +354,6 @@ async def execute_real_swap(amount_lamports: int, slippage: int):
         except Exception:
             pass
 
-        # Получаем котировку через Jupiter v6 API
         quote_url = f"https://api.jup.ag/swap/v1/quote?inputMint={TOKENS['SOL']}&outputMint={TOKENS['USDC']}&amount={amount_lamports}&slippageBps={slippage}"
         try:
             async with session.get(quote_url, timeout=5) as resp:
@@ -369,7 +363,6 @@ async def execute_real_swap(amount_lamports: int, slippage: int):
         except Exception:
             return "Сбой сети Jupiter."
 
-        # Запрос транзакции обмена у Jupiter
         swap_url = "https://api.jup.ag/swap/v1/swap"
         payload = {
             "quoteResponse": quote_data,
@@ -385,7 +378,6 @@ async def execute_real_swap(amount_lamports: int, slippage: int):
         except Exception:
             return "Сбой генерации транзакции."
 
-    # Отправка транзакции в сеть Solana через RPC
     send_payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -480,4 +472,4 @@ async def main():
         await asyncio.sleep(3600)
 
 if __name__ == "__main__":
-    asyncio.run(main))
+    asyncio.run(main())
