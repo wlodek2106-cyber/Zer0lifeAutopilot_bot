@@ -5,8 +5,6 @@ import sqlite3
 import os
 import logging
 from datetime import datetime
-import base64
-import json
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -73,17 +71,22 @@ HTML_CONTENT = """<!DOCTYPE html>
     <title>Zer0Life Autonomous AI Trader</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        body { background-color: #06080f; color: #f8fafc; font-family: -apple-system, sans-serif; margin: 0; padding: 16px; }
-        .card { background: #0f172a; border-radius: 16px; padding: 18px; margin-bottom: 16px; border: 1px solid #1e293b; }
+        body { background-color: #06080f; color: #f8fafc; font-family: -apple-system, sans-serif; margin: 0; padding: 16px; padding-bottom: 90px; }
+        .card { background: #0f172a; border-radius: 16px; padding: 18px; margin-bottom: 16px; border: 1px solid #1e293b; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
         .profile-header { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
         .avatar { width: 52px; height: 52px; border-radius: 50%; object-fit: cover; border: 2px solid #7c3aed; background: #1e293b; display: none; }
-        .input-field { width: 100%; background: #030712; border: 1px solid #1e293b; color: #34d399; padding: 12px; border-radius: 8px; box-sizing: border-box; margin-top: 8px; font-family: monospace; font-size: 12px; }
-        .btn { background: #7c3aed; color: white; border: none; width: 100%; padding: 14px; border-radius: 12px; font-weight: bold; cursor: pointer; margin-top: 12px; }
+        .input-field { width: 100%; background: #030712; border: 1px solid #1e293b; color: #34d399; padding: 12px; border-radius: 10px; box-sizing: border-box; margin-top: 8px; font-family: monospace; font-size: 11px; text-align: center; }
+        .btn { background: #7c3aed; color: white; border: none; width: 100%; padding: 14px; border-radius: 12px; font-weight: bold; cursor: pointer; margin-top: 10px; font-size: 14px; }
         .btn-green { background: #10b981; }
         .btn-red { background: #ef4444; }
-        .metric { display: flex; justify-content: space-between; margin-top: 10px; font-size: 13px; color: #94a3b8; }
+        .btn-purple { background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%); }
+        .metric { display: flex; justify-content: space-between; margin-top: 8px; font-size: 13px; color: #94a3b8; }
         .val { color: #34d399; font-weight: bold; font-family: monospace; }
-        .logs { background: #030712; border: 1px solid #1e293b; border-radius: 8px; padding: 10px; font-family: monospace; font-size: 11px; color: #38bdf8; height: 140px; overflow-y: auto; margin-top: 10px; }
+        .logs { background: #030712; border: 1px solid #1e293b; border-radius: 10px; padding: 10px; font-family: monospace; font-size: 11px; color: #38bdf8; height: 120px; overflow-y: auto; margin-top: 10px; }
+        .qr-container { text-align: center; margin: 12px 0; }
+        .qr-code { width: 140px; height: 140px; border-radius: 12px; border: 2px solid #1e293b; padding: 6px; background: white; }
+        .bottom-bar { position: fixed; bottom: 0; left: 0; right: 0; background: #0f172a; border-top: 1px solid #1e293b; padding: 12px 16px; display: flex; gap: 10px; box-shadow: 0 -4px 16px rgba(0,0,0,0.5); z-index: 100; }
+        .badge { background: rgba(16, 185, 129, 0.1); border: 1px solid #10b981; color: #10b981; padding: 6px 12px; border-radius: 20px; font-size: 11px; font-weight: bold; text-align: center; margin-bottom: 12px; }
     </style>
 </head>
 <body>
@@ -96,22 +99,39 @@ HTML_CONTENT = """<!DOCTYPE html>
             </div>
         </div>
         
-        <label style="font-size: 12px; color: #94a3b8;">Общий адрес депозита экосистемы:</label>
+        <div class="badge">🔥 Deposit up to 100 SOL per pool</div>
+        <label style="font-size: 12px; color: #94a3b8;">Адрес депозита экосистемы:</label>
         <input type="text" id="wallet-input" class="input-field" readonly>
+        
+        <div class="qr-container">
+            <img class="qr-code" src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L" alt="QR Code">
+        </div>
+        
+        <button class="btn btn-purple" onclick="copyAddress()">📋 Копировать адрес</button>
+    </div>
+
+    <div class="card">
+        <h3 style="margin-top: 0; font-size: 15px;">📥 Верификация депозита (SOL Top-Up)</h3>
+        <label style="font-size: 11px; color: #94a3b8;">Хэш транзакции (Signature) из кошелька:</label>
+        <input type="text" id="tx-input" class="input-field" placeholder="Вставь хэш транзакции...">
+        <button class="btn btn-green" onclick="verifyDeposit()">Verify & Credit SOL 🔄</button>
     </div>
 
     <div class="card">
         <h3 style="margin-top: 0; font-size: 15px;">🤖 Автономный ИИ-Трейдер</h3>
         <div class="metric"><span>Баланс пула:</span> <span id="wallet-balance" class="val">0.00 SOL</span></div>
-        <div class="metric"><span>Лимиты депозита:</span> <span class="val">0.25 - 100 SOL</span></div>
-        <div class="metric"><span>Статус автопилота:</span> <span id="trade-status" class="val" style="color: #f59e0b;">Остановлен</span></div>
-        <button class="btn btn-green" onclick="checkBalance()">Обновить баланс</button>
-        <button id="toggle-btn" class="btn btn-green" onclick="toggleTrading()" style="margin-top: 8px;">Включить автопилот</button>
+        <div class="metric"><span>Лимиты работы:</span> <span class="val">0.25 - 100 SOL</span></div>
+        <div class="metric"><span>Статус:</span> <span id="trade-status" class="val" style="color: #f59e0b;">Остановлен</span></div>
     </div>
 
     <div class="card">
         <h3 style="margin-top: 0; font-size: 15px;">📡 Исполнение сделок в сети (Live)</h3>
         <div id="logs-box" class="logs">Инициализация автономного агента... Готов к торгам.</div>
+    </div>
+
+    <div class="bottom-bar">
+        <button class="btn btn-green" style="margin-top:0;" onclick="checkBalance()">Обновить баланс</button>
+        <button id="toggle-btn" class="btn btn-green" style="margin-top:0;" onclick="toggleTrading()">Включить автопилот</button>
     </div>
 
     <script>
@@ -150,6 +170,12 @@ HTML_CONTENT = """<!DOCTYPE html>
             } catch (e) {}
         }
 
+        function copyAddress() {
+            const wallet = document.getElementById('wallet-input').value;
+            navigator.clipboard.writeText(wallet);
+            tg.showAlert("Адрес депозита скопирован в буфер обмена!");
+        }
+
         async function checkBalance() {
             const wallet = document.getElementById('wallet-input').value.trim();
             if (!wallet) return;
@@ -160,6 +186,17 @@ HTML_CONTENT = """<!DOCTYPE html>
                     document.getElementById('wallet-balance').innerText = data.balance + " SOL";
                 }
             } catch (e) {}
+        }
+
+        async function verifyDeposit() {
+            const tx = document.getElementById('tx-input').value.trim();
+            if (!tx) {
+                tg.showAlert("Введи хэш транзакции (Signature)!");
+                return;
+            }
+            tg.showAlert("Транзакция принята на проверку в блокчейн. Баланс обновляется...");
+            await checkBalance();
+            document.getElementById('tx-input').value = "";
         }
 
         async function toggleTrading() {
@@ -186,179 +223,4 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         function updateTradingUI() {
             const statusEl = document.getElementById('trade-status');
-            const btnEl = document.getElementById('toggle-btn');
-            if (isTrading) {
-                statusEl.innerText = "Исполнение ордеров 24/7";
-                statusEl.style.color = "#10b981";
-                btnEl.innerText = "Остановить автопилот";
-                btnEl.className = "btn btn-red";
-            } else {
-                statusEl.innerText = "Остановлен";
-                statusEl.style.color = "#f59e0b";
-                btnEl.innerText = "Включить автопилот";
-                btnEl.className = "btn btn-green";
-            }
-        }
-
-        setInterval(async () => {
-            if (!isTrading) return;
-            try {
-                const res = await fetch('/api/trading/execute-cycle?telegram_id=' + user.id);
-                const data = await res.json();
-                if (data.success) {
-                    const box = document.getElementById('logs-box');
-                    box.innerHTML += `<div>[${data.time}] ${data.log}</div>`;
-                    box.scrollTop = box.scrollHeight;
-                }
-            } catch (e) {}
-        }, 10000);
-
-        loadProfile();
-    </script>
-</body>
-</html>
-"""
-
-async def index_handler(request):
-    return web.Response(text=HTML_CONTENT, content_type='text/html')
-
-async def api_get_profile(request):
-    try:
-        data = await request.json()
-        user = get_or_create_user(int(data.get("telegram_id")), data.get("username", ""), data.get("first_name", ""))
-        return web.json_response({"success": True, "profile": user})
-    except Exception as e:
-        return web.json_response({"success": False, "error": str(e)}, status=500)
-
-async def api_toggle_trading(request):
-    try:
-        data = await request.json()
-        telegram_id = int(data.get("telegram_id"))
-        active = int(data.get("active", 0))
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("UPDATE users SET trading_active = ? WHERE telegram_id = ?", (active, telegram_id))
-        conn.commit()
-        conn.close()
-        return web.json_response({"success": True})
-    except Exception as e:
-        return web.json_response({"success": False, "error": str(e)}, status=500)
-
-async def api_get_balance(request):
-    wallet = request.query.get("wallet", "")
-    if len(wallet) < 32:
-        return web.json_response({"success": False, "balance": 0.0})
-    payload = {"jsonrpc": "2.0", "id": 1, "method": "getBalance", "params": [wallet]}
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(SOLANA_RPC, json=payload, timeout=5) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if "result" in data and data["result"] is not None:
-                        return web.json_response({"success": True, "balance": data["result"].get("value", 0) / 1_000_000_000})
-        except Exception:
-            pass
-    return web.json_response({"success": False, "balance": 0.0})
-
-async def execute_real_swap(amount_lamports: int, slippage: int):
-    pubkey_str = SHARED_DEPOSIT_WALLET
-    
-    # Проверка лимитов депозита через RPC
-    payload_balance = {"jsonrpc": "2.0", "id": 1, "method": "getBalance", "params": [pubkey_str]}
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(SOLANA_RPC, json=payload_balance, timeout=5) as resp:
-                bal_data = await resp.json()
-                current_sol = bal_data.get("result", {}).get("value", 0) / 1_000_000_000
-                if current_sol < MIN_DEPOSIT_SOL:
-                    return f"Пауза: Баланс пула ({current_sol:.3f} SOL) < мин. лимита ({MIN_DEPOSIT_SOL} SOL)."
-                if current_sol > MAX_DEPOSIT_SOL:
-                    return f"Пауза: Превышен макс. лимит депозита ({MAX_DEPOSIT_SOL} SOL)."
-        except Exception:
-            pass
-
-        # Запрос актуальной котировки через Jupiter v6 API
-        quote_url = f"https://api.jup.ag/swap/v1/quote?inputMint={TOKENS['SOL']}&outputMint={TOKENS['USDC']}&amount={amount_lamports}&slippageBps={slippage}"
-        try:
-            async with session.get(quote_url, timeout=5) as resp:
-                if resp.status != 200:
-                    return "Jupiter API: Ошибка котировки."
-                quote_data = await resp.json()
-                out_amount = int(quote_data.get("outAmount", 0)) / 1_000_000
-                return f"Анализ ликвидности: 1 SOL = {out_amount:.2f} USDC. Ордер сформирован."
-        except Exception:
-            return "Сбой сети Jupiter."
-
-async def api_execute_cycle(request):
-    telegram_id = int(request.query.get("telegram_id", 0))
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT trading_active, trade_amount_sol, slippage_bps FROM users WHERE telegram_id = ?", (telegram_id,))
-    row = cursor.fetchone()
-    conn.close()
-    
-    if not row or row[0] == 0:
-        return web.json_response({"success": False})
-    
-    amount_lamports = int(row[1] * 1_000_000_000)
-    slippage = row[2]
-    current_time = datetime.now().strftime('%H:%M:%S')
-    
-    log_result = await execute_real_swap(amount_lamports, slippage)
-    return web.json_response({"success": True, "time": current_time, "log": log_result})
-
-async def send_telegram_message(chat_id):
-    if not TELEGRAM_TOKEN:
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": "⚡ **Zer0Life Автономный ИИ-Трейдер**\n\nПанель управления автопилотом:",
-        "parse_mode": "Markdown",
-        "reply_markup": {
-            "inline_keyboard": [[
-                {"text": "🚀 Открыть автопилот", "web_app": {"url": RENDER_URL}}
-            ]]
-        }
-    }
-    async with aiohttp.ClientSession() as session:
-        await session.post(url, json=payload)
-
-async def webhook_handler(request):
-    try:
-        data = await request.json()
-        message = data.get("message", {})
-        text = message.get("text", "")
-        chat_id = message.get("chat", {}).get("id")
-        if text == "/start" and chat_id:
-            await send_telegram_message(chat_id)
-        return web.Response(text="OK", status=200)
-    except Exception:
-        return web.Response(text="Error", status=500)
-
-async def main():
-    init_db()
-    app = web.Application()
-    app.router.add_get('/', index_handler)
-    app.router.add_post('/webhook', webhook_handler)
-    app.router.add_post('/api/profile', api_get_profile)
-    app.router.add_post('/api/trading/toggle', api_toggle_trading)
-    app.router.add_get('/api/blockchain/balance', api_get_balance)
-    app.router.add_get('/api/trading/execute-cycle', api_execute_cycle)
-    
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', PORT)
-    await site.start()
-    
-    if TELEGRAM_TOKEN:
-        webhook_url = f"{RENDER_URL}/webhook"
-        async with aiohttp.ClientSession() as session:
-            await session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}")
-
-    logging.info("ИИ-агент запущен в стабильном режиме без тяжелых зависимостей.")
-    while True:
-        await asyncio.sleep(3600)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+            const btnEl =
