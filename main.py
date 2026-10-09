@@ -1,16 +1,13 @@
 import asyncio
 import aiohttp
-import json
 import logging
 import os
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Получаем ключи из переменных окружения Render
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-PORT = int(os.getenv("PORT", 10000))  # Render требует поднятия веб-сервера для фоновых процессов
 
 WHITELISTED_ASSETS = {
     "SOL": {"mint": "So11111111111111111111111111111111111111112", "min_liquidity": 10000000},
@@ -76,31 +73,13 @@ async def trading_background_loop():
     while True:
         logging.info("--- Цикл сканирования рынка DEX ---")
         for symbol, data in WHITELISTED_ASSETS.items():
-            # Имитация запроса цены
             price = 145.50 if symbol == "SOL" else 25.80
             logging.info(f"[{symbol}] Проверен DEX. Цена: ${price}")
-            
-            # Пример срабатывания алерта при просадке
-            # if price_dropped:
-            #     await send_telegram_message(f"⚠️ Внимание! {symbol} просел. ИИ анализирует покупку.")
         
-        await asyncio.sleep(300) # Проверка каждые 5 минут
-
-async def web_server_stub(request):
-    """Заглушка веб-сервера для удержания процесса на Render"""
-    return aiohttp.web.Response(text="Zer0lifeAutopilot is running!")
+        await asyncio.sleep(300)
 
 async def main():
-    # Запуск простого веб-сервера (нужно для Render, чтобы сервис не засыпал)
-    app = aiohttp.web.Application()
-    app.router.add_get("/", web_server_stub)
-    runner = aiohttp.web.AppRunner(app)
-    await runner.setup()
-    site = aiohttp.web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-    logging.info(тель := f"Веб-заглушка поднята на порту {PORT}")
-
-    # Параллельный запуск бота в Telegram и торгового цикла
+    # Запускаем параллельно обработчик Telegram и торговый цикл
     await asyncio.gather(
         handle_telegram_updates(),
         trading_background_loop()
