@@ -95,100 +95,81 @@ HTML_CONTENT = """<!DOCTYPE html>
 </html>
 """
 
-async def clear_webhook():
-    """Сбрасывает старый webhook, чтобы getUpdates начал работать"""
-    if not TELEGRAM_TOKEN:
+async def send_telegram_message(chat_id, text):
+    if not TELEGRAM_TOKEN or not chat_id:
         return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=true"
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(url) as resp:
-                logging.info("Webhook успешно сброшен для работы через getUpdates")
-        except Exception as e:
-            logging.error(f"Не удалось сбросить webhook: {e}")
-
-async def send_telegram_message(text, chat_id=None, add_webapp=True):
-    target_chat = chat_id or TELEGRAM_CHAT_ID
-    if not TELEGRAM_TOKEN or not target_chat:
-        return
-    
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
-        "chat_id": target_chat,
+        "chat_id": chat_id,
         "text": f"🤖 **Zer0lifeAutopilot**\n\n{text}",
-        "parse_mode": "Markdown"
-    }
-    
-    if add_webapp:
-        payload["reply_markup"] = {
+        "parse_mode": "Markdown",
+        "reply_markup": {
             "inline_keyboard": [[
                 {"text": "🚀 Открыть Панель Управления", "web_app": {"url": RENDER_URL}}
             ]]
         }
-
+    }
     async with aiohttp.ClientSession() as session:
         try:
             async with session.post(url, json=payload) as resp:
                 pass
         except Exception as e:
-            logging.error(f"Ошибка сети Telegram: {e}")
+            logging.error(f"Ошибка отправки в Telegram: {e}")
 
-async def handle_telegram_updates():
-    if not TELEGRAM_TOKEN:
-        return
-    
-    # Сбрасываем вебхук при старте
-    await clear_webhook()
-    
-    offset = 0
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
-    
-    async with aiohttp.ClientSession() as session:
-        while True:
-            try:
-                async with session.get(url, params={"offset": offset, "timeout": 30}) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        for result in data.get("result", []):
-                            offset = result["update_id"] + 1
-                            message = result.get("message", {})
-                            text = message.get("text", "")
-                            chat_id = message.get("chat", {}).get("id")
-                            
-                            if text == "/start" and chat_id:
-                                welcome_text = (
-                                    "Привет! Автономный ИИ-трейдер **Zer0lifeAutopilot** успешно работает.\n\n"
-                                    "📊 Сканируемые монеты: SOL, AVAX, INJ, XRP, ADA, XMR.\n"
-                                    "🟢 Бот настроен на отслеживание просадок и защиту капитала на DEX."
-                                )
-                                await send_telegram_message(welcome_text, chat_id=chat_id, add_webapp=True)
-            except Exception as e:
-                logging.error(f"Ошибка опроса Telegram: {e}")
+# Обработчик входящих сообщений от Telegram через Webhook
+async def telegram_webhook_handler(request):
+    try:
+        data = await request.json()
+        message = data.get("message", {})
+        text = message.get("text", "")
+        chat_id = message.get("chat", {}).get("id")
+
+        if text == "/start" and chat_id:
+            welcome_text = (
+                "Привет! Автономный ИИ-трейдер **Zer0lifeAutopilot** успешно работает.\n\n"
+                "📊 Сканируемые монеты: SOL, AVAX, INJ, XRP, ADA, XMR.\n"
+                "🟢 Бот настроен на отслеживание просадок и защиту капитала на DEX."
+            )
+            asyncio.create_task(send_telegram_message(chat_id, welcome_text))
             
-            await asyncio.sleep(2)
-
-async def trading_background_loop():
-    while True:
-        logging.info("--- Цикл сканирования рынка DEX (SOL, AVAX, INJ, XRP, ADA, XMR) ---")
-        await asyncio.sleep(300)
+        return web.Response(text="OK", status=200)
+    except Exception as e:
+        logging.error(f"Ошибка обработки webhook: {e}")
+        return web.Response(text="Error", status=500)
 
 async def index_handler(request):
     return web.Response(text=HTML_CONTENT, content_type='text/html')
 
+async def set_webhook():
+    if not TELEGRAM_TOKEN:
+        return
+    webhook_url = f"{RENDER_URL}/webhook"
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}"
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url) as resp:
+                logging.info(f"Webhook установлен на адрес: {webhook_url}")
+        except Exception as e:
+            logging.error(f"Не удалось установить webhook: {e}")
+
 async def main():
     app = web.Application()
     app.router.add_get('/', index_handler)
+    app.router.add_post('/webhook', telegram_webhook_handler)
     
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
-    logging.info(f"Веб-сервер Mini App запущен на порту {PORT}")
+    logging.info(f"Веб-сервер и Webhook запущены на порту {PORT}")
 
-    await asyncio.gather(
-        handle_telegram_updates(),
-        trading_background_loop()
-    )
+    # Автоматически регистрируем webhook в Telegram при старте
+    await set_webhook()
+
+    # Бесконечный цикл для работы фонового трейдера
+    while True:
+        logging.info("--- Цикл сканирования рынка DEX (SOL, AVAX, INJ, XRP, ADA, XMR) ---")
+        await asyncio.sleep(300)
 
 if __name__ == "__main__":
     asyncio.run(main())
