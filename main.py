@@ -6,6 +6,11 @@ import os
 import logging
 from datetime import datetime
 
+# Импорты для реальной работы с криптокошельком и транзакциями Solana
+from solders.keypair import Keypair
+from solders.transaction import VersionedTransaction
+from solana.rpc.async_client import AsyncClient
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
@@ -13,6 +18,22 @@ PORT = int(os.getenv("PORT", 10000))
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://zer0lifeautopilot-bot.onrender.com")
 DB_FILE = "zer0life_users.db"
 SOLANA_RPC = "https://api.mainnet-beta.solana.com"
+
+# Загружаем приватный ключ торгового суб-кошелька из переменных окружения Render
+TRADER_PRIVATE_KEY_ENV = os.getenv("TRADER_PRIVATE_KEY", "")
+trader_keypair = None
+if TRADER_PRIVATE_KEY_ENV:
+    try:
+        # Поддерживаем ввод как массив чисел или base58 строку
+        if "[" in TRADER_PRIVATE_KEY_ENV:
+            import json
+            trader_keypair = Keypair.from_bytes(bytes(json.loads(TRADER_PRIVATE_KEY_ENV)))
+        else:
+            import base58
+            trader_keypair = Keypair.from_bytes(base58.b58decode(TRADER_PRIVATE_KEY_ENV))
+        logging.info(f"Торговый суб-кошелек успешно загружен: {trader_keypair.pubkey()}")
+    except Exception as e:
+        logging.error(f"Ошибка загрузки приватного ключа: {e}")
 
 TOKENS = {
     "SOL": "So11111111111111111111111111111111111111112",
@@ -43,13 +64,16 @@ def get_or_create_user(telegram_id: int, username: str, first_name: str):
     cursor.execute("SELECT telegram_id, username, first_name, solana_wallet, trading_active, trade_amount_sol, slippage_bps FROM users WHERE telegram_id = ?", (telegram_id,))
     row = cursor.fetchone()
     
+    # Если суб-кошелек настроен в ENV, автоматически подставляем его адрес пользователю
+    default_wallet = str(trader_keypair.pubkey()) if trader_keypair else ""
+    
     if not row:
         cursor.execute("INSERT INTO users (telegram_id, username, first_name, solana_wallet, trading_active, trade_amount_sol, slippage_bps) VALUES (?, ?, ?, ?, ?, ?, ?)", 
-                       (telegram_id, username, first_name, "", 0, 0.05, 50))
+                       (telegram_id, username, first_name, default_wallet, 0, 0.05, 50))
         conn.commit()
-        user = {"telegram_id": telegram_id, "username": username, "first_name": first_name, "solana_wallet": "", "trading_active": 0, "trade_amount_sol": 0.05, "slippage_bps": 50}
+        user = {"telegram_id": telegram_id, "username": username, "first_name": first_name, "solana_wallet": default_wallet, "trading_active": 0, "trade_amount_sol": 0.05, "slippage_bps": 50}
     else:
-        user = {"telegram_id": row[0], "username": row[1], "first_name": row[2], "solana_wallet": row[3], "trading_active": row[4], "trade_amount_sol": row[5], "slippage_bps": row[6]}
+        user = {"telegram_id": row[0], "username": row[1], "first_name": row[2], "solana_wallet": row[3] or default_wallet, "trading_active": row[4], "trade_amount_sol": row[5], "slippage_bps": row[6]}
     
     conn.close()
     return user
@@ -85,13 +109,12 @@ HTML_CONTENT = """<!DOCTYPE html>
             </div>
         </div>
         
-        <label style="font-size: 12px; color: #94a3b8;">Ваш Solana кошелек:</label>
-        <input type="text" id="wallet-input" class="input-field" placeholder="Введите адрес кошелька...">
-        <button class="btn" onclick="saveWallet()">Сохранить кошелек</button>
+        <label style="font-size: 12px; color: #94a3b8;">Торговый суб-кошелек (Автопилот):</label>
+        <input type="text" id="wallet-input" class="input-field" readonly>
     </div>
 
     <div class="card">
-        <h3 style="margin-top: 0; font-size: 15px;">🤖 Автономный ИИ-Трейдер</h3>
+        <h3 style="margin-top: 0; font-size: 15px;">🤖 Автономный ИИ-Трейдер (Burner)</h3>
         <div class="metric"><span>Баланс SOL:</span> <span id="wallet-balance" class="val">0.00 SOL</span></div>
         <div class="metric"><span>Статус автопилота:</span> <span id="trade-status" class="val" style="color: #f59e0b;">Остановлен</span></div>
         <button class="btn btn-green" onclick="checkBalance()">Проверить баланс</button>
@@ -99,8 +122,8 @@ HTML_CONTENT = """<!DOCTYPE html>
     </div>
 
     <div class="card">
-        <h3 style="margin-top: 0; font-size: 15px;">📡 Автономный ИИ-Терминал (Live)</h3>
-        <div id="logs-box" class="logs">Инициализация нейросети... Ожидание активации автопилота.</div>
+        <h3 style="margin-top: 0; font-size: 15px;">📡 Исполнение сделок в сети (Live)</h3>
+        <div id="logs-box" class="logs">Инициализация автономного агента... Готов к торгам.</div>
     </div>
 
     <script>
@@ -139,19 +162,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             } catch (e) {}
         }
 
-        async function saveWallet() {
-            const wallet = document.getElementById('wallet-input').value.trim();
-            try {
-                await fetch('/api/wallet/update', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ telegram_id: user.id, solana_wallet: wallet })
-                });
-                tg.showAlert("Кошелек успешно сохранен!");
-                checkBalance();
-            } catch (e) {}
-        }
-
         async function checkBalance() {
             const wallet = document.getElementById('wallet-input').value.trim();
             if (!wallet) return;
@@ -167,7 +177,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         async function toggleTrading() {
             const wallet = document.getElementById('wallet-input').value.trim();
             if (!wallet) {
-                tg.showAlert("Сначала укажи адрес кошелька!");
+                tg.showAlert("Суб-кошелек не настроен в системе!");
                 return;
             }
             isTrading = !isTrading;
@@ -185,7 +195,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             const statusEl = document.getElementById('trade-status');
             const btnEl = document.getElementById('toggle-btn');
             if (isTrading) {
-                statusEl.innerText = "Работает автономно (24/7)";
+                statusEl.innerText = "Исполнение ордеров 24/7";
                 statusEl.style.color = "#10b981";
                 btnEl.innerText = "Остановить автопилот";
                 btnEl.className = "btn btn-red";
@@ -197,19 +207,19 @@ HTML_CONTENT = """<!DOCTYPE html>
             }
         }
 
-        // Автоматический опрос решений ИИ-агента
+        // Автономный опрос бэкенда для выполнения реальных свапов
         setInterval(async () => {
             if (!isTrading) return;
             try {
-                const res = await fetch('/api/trading/market-feed?telegram_id=' + user.id);
+                const res = await fetch('/api/trading/execute-cycle?telegram_id=' + user.id);
                 const data = await res.json();
                 if (data.success) {
                     const box = document.getElementById('logs-box');
-                    box.innerHTML += `<div>[${data.time}] AI Agent: ${data.decision}</div>`;
+                    box.innerHTML += `<div>[${data.time}] ${data.log}</div>`;
                     box.scrollTop = box.scrollHeight;
                 }
             } catch (e) {}
-        }, 7000);
+        }, 10000);
 
         loadProfile();
     </script>
@@ -225,20 +235,6 @@ async def api_get_profile(request):
         data = await request.json()
         user = get_or_create_user(int(data.get("telegram_id")), data.get("username", ""), data.get("first_name", ""))
         return web.json_response({"success": True, "profile": user})
-    except Exception as e:
-        return web.json_response({"success": False, "error": str(e)}, status=500)
-
-async def api_update_wallet(request):
-    try:
-        data = await request.json()
-        telegram_id = int(data.get("telegram_id"))
-        wallet = data.get("solana_wallet", "").strip()
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("UPDATE users SET solana_wallet = ? WHERE telegram_id = ?", (wallet, telegram_id))
-        conn.commit()
-        conn.close()
-        return web.json_response({"success": True})
     except Exception as e:
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
@@ -272,41 +268,77 @@ async def api_get_balance(request):
             pass
     return web.json_response({"success": False, "balance": 0.0})
 
-async def api_market_feed(request):
+async def execute_real_swap(amount_lamports: int, slippage: int):
+    """Реальное формирование и отправка свапа через Jupiter Swap API и подписанное с помощью solders"""
+    if not trader_keypair:
+        return "Ошибка: Торговый суб-кошелек не настроен на сервере."
+    
+    pubkey_str = str(trader_keypair.pubkey())
+    
+    # 1. Получаем котировку и маршрут от Jupiter
+    quote_url = f"https://api.jup.ag/swap/v1/quote?inputMint={TOKENS['SOL']}&outputMint={TOKENS['USDC']}&amount={amount_lamports}&slippageBps={slippage}"
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(quote_url, timeout=5) as resp:
+                if resp.status != 200:
+                    return "Jupiter API: Ошибка получения котировки."
+                quote_data = await resp.json()
+        except Exception:
+            return "Сбой сети при запросе к Jupiter."
+
+        # 2. Запрашиваем сериализованную транзакцию обмена
+        swap_url = "https://api.jup.ag/swap/v1/swap"
+        payload = {
+            "quoteResponse": quote_data,
+            "userPublicKey": pubkey_str,
+            "wrapAndUnwrapSol": True
+        }
+        try:
+            async with session.post(swap_url, json=payload, timeout=5) as resp:
+                if resp.status != 200:
+                    return f"Jupiter Swap Error: {await resp.text()}"
+                swap_data = await resp.json()
+                swap_transaction_b64 = swap_data.get("swapTransaction")
+        except Exception:
+            return "Сбой генерации транзакции свапа."
+
+    # 3. Десериализуем, подписываем ключом суб-кошелька и отправляем в сеть Solana
+    try:
+        import base64
+        raw_tx = base64.b64decode(swap_transaction_b64)
+        tx = VersionedTransaction.from_bytes(raw_tx)
+        
+        # Подписываем транзакцию нашим торговым ключом
+        tx.sign([trader_keypair])
+        
+        # Отправляем через официальный RPC асинхронный клиент
+        async with AsyncClient(SOLANA_RPC) as client:
+            result = await client.send_raw_transaction(bytes(tx))
+            tx_sig = result.value
+            return f"Сделка исполнена! Tx: {str(tx_sig)[:16]}..."
+    except Exception as e:
+        return f"Ошибка отправки в блокчейн: {str(e)[:40]}"
+
+async def api_execute_cycle(request):
     telegram_id = int(request.query.get("telegram_id", 0))
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("SELECT solana_wallet, trade_amount_sol, slippage_bps, trading_active FROM users WHERE telegram_id = ?", (telegram_id,))
+    cursor.execute("SELECT trading_active, trade_amount_sol, slippage_bps FROM users WHERE telegram_id = ?", (telegram_id,))
     row = cursor.fetchone()
     conn.close()
     
-    if not row or not row[0] or not row[3]:
+    if not row or row[0] == 0:
         return web.json_response({"success": False})
     
-    amount_lamports = int(row[1] * 1_000_000_000)
-    slippage = row[2]
+    amount_sol, slippage = row[1], row[2]
+    amount_lamports = int(amount_sol * 1_000_000_000)
     
-    # Автономный опрос Jupiter v6 API и принятие ИИ-решения
-    url = f"https://api.jup.ag/swap/v1/quote?inputMint={TOKENS['SOL']}&outputMint={TOKENS['USDC']}&amount={amount_lamports}&slippageBps={slippage}"
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(url, timeout=5) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    out = int(data.get("outAmount", 0)) / 1_000_000
-                    current_time = datetime.now().strftime('%H:%M:%S')
-                    
-                    # Логика автономного решения ИИ на основе рыночных метрик
-                    price_impact = float(data.get("priceImpactPct", 0))
-                    if price_impact < 1.0:
-                        decision = f"Ликвидность стабильна. Курс: 1 SOL = {out:.2f} USDC. Ордер сформирован и подготовлен к отправке."
-                    else:
-                        decision = f"Высокое проскальзывание ({price_impact}%). ИИ удерживает позицию до лучших условий."
-                        
-                    return web.json_response({"success": True, "time": current_time, "decision": decision})
-        except Exception:
-            pass
-    return web.json_response({"success": False})
+    current_time = datetime.now().strftime('%H:%M:%S')
+    
+    # Запускаем реальный цикл исполнения сделки
+    log_result = await execute_real_swap(amount_lamports, slippage)
+    
+    return web.json_response({"success": True, "time": current_time, "log": log_result})
 
 async def send_telegram_message(chat_id):
     if not TELEGRAM_TOKEN:
@@ -314,7 +346,7 @@ async def send_telegram_message(chat_id):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": chat_id,
-        "text": "⚡ **Zer0Life Автономный ИИ-Трейдер**\n\nОткройте панель управления автопилотом:",
+        "text": "⚡ **Zer0Life Автономный ИИ-Трейдер**\n\nПанель управления автопилотом:",
         "parse_mode": "Markdown",
         "reply_markup": {
             "inline_keyboard": [[
@@ -343,10 +375,9 @@ async def main():
     app.router.add_get('/', index_handler)
     app.router.add_post('/webhook', webhook_handler)
     app.router.add_post('/api/profile', api_get_profile)
-    app.router.add_post('/api/wallet/update', api_update_wallet)
     app.router.add_post('/api/trading/toggle', api_toggle_trading)
     app.router.add_get('/api/blockchain/balance', api_get_balance)
-    app.router.add_get('/api/trading/market-feed', api_market_feed)
+    app.router.add_get('/api/trading/execute-cycle', api_execute_cycle)
     
     runner = web.AppRunner(app)
     await runner.setup()
@@ -358,7 +389,7 @@ async def main():
         async with aiohttp.ClientSession() as session:
             await session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}")
 
-    logging.info("Автономный ИИ-трейдер запущен и готов к работе 24/7.")
+    logging.info("Полноценный автономный торговый движок запущен.")
     while True:
         await asyncio.sleep(3600)
 
