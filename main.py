@@ -10,8 +10,8 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 PORT = int(os.getenv("PORT", 10000))
 
-# Функция отправки сообщения с инлайн-кнопкой для открытия Mini App
-async def send_telegram_message(text, chat_id=None, add_webapp=False):
+# Функция отправки сообщения с кнопкой Mini App (по умолчанию add_webapp=True)
+async def send_telegram_message(text, chat_id=None, add_webapp=True):
     target_chat = chat_id or TELEGRAM_CHAT_ID
     if not TELEGRAM_TOKEN or not target_chat:
         logging.info(f"[TELEGRAM LOG]: {text}")
@@ -24,9 +24,7 @@ async def send_telegram_message(text, chat_id=None, add_webapp=False):
         "parse_mode": "Markdown"
     }
     
-    # Если нужно добавить кнопку открытия приложения (замените URL на ваш адрес от Render после деплоя)
     if add_webapp:
-        # Render выдает вам публичную ссылку вида https://zer0life-autopilot.onrender.com
         render_url = os.getenv("RENDER_EXTERNAL_URL", "https://zer0life-autopilot.onrender.com")
         payload["reply_markup"] = {
             "inline_keyboard": [[
@@ -77,7 +75,6 @@ async def trading_background_loop():
         logging.info("--- Цикл сканирования рынка DEX ---")
         await asyncio.sleep(300)
 
-# Веб-сервер для отдачи index.html (Mini App)
 async def index_handler(request):
     return web.FileResponse('index.html')
 
