@@ -1,21 +1,17 @@
 import asyncio
 import aiohttp
+from aiohttp import web
 import logging
 import os
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+PORT = int(os.getenv("PORT", 10000))
 
-WHITELISTED_ASSETS = {
-    "SOL": {"mint": "So11111111111111111111111111111111111111112", "min_liquidity": 10000000},
-    "AVAX": {"mint": "WAVAX_or_wrapped_on_sol", "min_liquidity": 5000000}
-}
-
-async def send_telegram_message(text, chat_id=None):
-    """Отправка сообщения в Telegram"""
+# Функция отправки сообщения с инлайн-кнопкой для открытия Mini App
+async def send_telegram_message(text, chat_id=None, add_webapp=False):
     target_chat = chat_id or TELEGRAM_CHAT_ID
     if not TELEGRAM_TOKEN or not target_chat:
         logging.info(f"[TELEGRAM LOG]: {text}")
@@ -27,6 +23,17 @@ async def send_telegram_message(text, chat_id=None):
         "text": f"🤖 **Zer0lifeAutopilot**\n\n{text}",
         "parse_mode": "Markdown"
     }
+    
+    # Если нужно добавить кнопку открытия приложения (замените URL на ваш адрес от Render после деплоя)
+    if add_webapp:
+        # Render выдает вам публичную ссылку вида https://zer0life-autopilot.onrender.com
+        render_url = os.getenv("RENDER_EXTERNAL_URL", "https://zer0life-autopilot.onrender.com")
+        payload["reply_markup"] = {
+            "inline_keyboard": [[
+                {"text": "🚀 Открыть Панель Управления", "web_app": {"url": render_url}}
+            ]]
+        }
+
     async with aiohttp.ClientSession() as session:
         try:
             async with session.post(url, json=payload) as resp:
@@ -36,7 +43,6 @@ async def send_telegram_message(text, chat_id=None):
             logging.error(f"Ошибка сети Telegram: {e}")
 
 async def handle_telegram_updates():
-    """Проверка входящих команд от пользователя в Telegram (long polling)"""
     if not TELEGRAM_TOKEN:
         return
     
@@ -58,28 +64,33 @@ async def handle_telegram_updates():
                             if text == "/start" and chat_id:
                                 welcome_text = (
                                     "Привет! Автономный ИИ-трейдер **Zer0lifeAutopilot** успешно работает.\n\n"
-                                    "📊 Сканируемые монеты: SOL, AVAX, INJ, XRP, ADA, XMR.\n"
-                                    "🟢 Бот настроен на отслеживание просадок и защиту капитала на DEX."
+                                    "Нажмите кнопку ниже, чтобы открыть графический интерфейс управления (Mini App):"
                                 )
-                                await send_telegram_message(welcome_text, chat_id=chat_id)
+                                await send_telegram_message(welcome_text, chat_id=chat_id, add_webapp=True)
             except Exception as e:
-                logging.error(f"Ошибка опроса Telegram обновлений: {e}")
+                logging.error(f"Ошибка опроса Telegram: {e}")
             
             await asyncio.sleep(2)
 
 async def trading_background_loop():
-    """Фоновый цикл анализа рынка DEX"""
-    await send_telegram_message("🚀 Автопилот запущен и начал круглосуточный мониторинг пулов ликвидности!")
     while True:
         logging.info("--- Цикл сканирования рынка DEX ---")
-        for symbol, data in WHITELISTED_ASSETS.items():
-            price = 145.50 if symbol == "SOL" else 25.80
-            logging.info(f"[{symbol}] Проверен DEX. Цена: ${price}")
-        
         await asyncio.sleep(300)
 
+# Веб-сервер для отдачи index.html (Mini App)
+async def index_handler(request):
+    return web.FileResponse('index.html')
+
 async def main():
-    # Запускаем параллельно обработчик Telegram и торговый цикл
+    app = web.Application()
+    app.router.add_get('/', index_handler)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    await site.start()
+    logging.info(f"Веб-сервер Mini App запущен на порту {PORT}")
+
     await asyncio.gather(
         handle_telegram_updates(),
         trading_background_loop()
