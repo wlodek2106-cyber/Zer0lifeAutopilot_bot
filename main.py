@@ -11,7 +11,6 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 PORT = int(os.getenv("PORT", 10000))
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://zer0lifeautopilot-bot.onrender.com")
 
-# База данных в памяти для демонстрации (в продакшене переносится в PostgreSQL/SQLite)
 USER_ACCOUNTS = {}
 
 HTML_CONTENT = """<!DOCTYPE html>
@@ -108,7 +107,6 @@ HTML_CONTENT = """<!DOCTYPE html>
 
             tg.HapticFeedback.impactOccurred('medium');
             
-            // Отправляем ключи на бэкенд для привязки к аккаунту пользователя
             const response = await fetch('/api/save_keys', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -135,7 +133,6 @@ async def save_keys_handler(request):
         api_key = data.get("api_key")
         api_secret = data.get("api_secret")
         
-        # Сохраняем в защищенном хранилище привязанного юзера
         USER_ACCOUNTS[user_id] = {
             "api_key": api_key,
             "api_secret": api_secret,
@@ -203,4 +200,4 @@ async def main():
         await asyncio.sleep(300)
 
 if __name__ == "__main__":
-    asyncio.run(main))
+    asyncio.run(main())
