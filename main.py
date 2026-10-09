@@ -4,14 +4,11 @@ from aiohttp import web
 import sqlite3
 import os
 import logging
+from datetime import datetime
 import base64
 import json
-from datetime import datetime
-
-# Импорты для реального подписания и отправки транзакций в Solana
-from solders.keypair import Keypair
-from solders.transaction import VersionedTransaction
-from solana.rpc.async_client import AsyncClient
+import hashlib
+import hmac
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -21,24 +18,12 @@ RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://zer0lifeautopilot-bot.onr
 DB_FILE = "zer0life_users.db"
 SOLANA_RPC = "https://api.mainnet-beta.solana.com"
 
-# Общий адрес депозита экосистемы
+# Фиксированный общий адрес депозита экосистемы
 SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
 MIN_DEPOSIT_SOL = 0.25
 MAX_DEPOSIT_SOL = 100.0
 
-# Загружаем приватный ключ торгового суб-кошелька для автономного подписания
 TRADER_PRIVATE_KEY_ENV = os.getenv("TRADER_PRIVATE_KEY", "")
-trader_keypair = None
-if TRADER_PRIVATE_KEY_ENV:
-    try:
-        if "[" in TRADER_PRIVATE_KEY_ENV:
-            trader_keypair = Keypair.from_bytes(bytes(json.loads(TRADER_PRIVATE_KEY_ENV)))
-        else:
-            import base58
-            trader_keypair = Keypair.from_bytes(base58.b58decode(TRADER_PRIVATE_KEY_ENV))
-        logging.info(f"Торговый ключ успешно загружен. Автопилот готов к реальным сделкам: {trader_keypair.pubkey()}")
-    except Exception as e:
-        logging.error(f"Ошибка загрузки приватного ключа: {e}")
 
 TOKENS = {
     "SOL": "So11111111111111111111111111111111111111112",
@@ -358,12 +343,9 @@ async def api_get_balance(request):
     return web.json_response({"success": False, "balance": 0.0})
 
 async def execute_real_swap(amount_lamports: int, slippage: int):
-    if not trader_keypair:
-        return "Ошибка: Торговый ключ не задан в ENV."
-    
     pubkey_str = SHARED_DEPOSIT_WALLET
     
-    # 1. Проверяем баланс пула через RPC
+    # Проверка баланса пула через RPC
     payload_balance = {"jsonrpc": "2.0", "id": 1, "method": "getBalance", "params": [pubkey_str]}
     async with aiohttp.ClientSession() as session:
         try:
@@ -377,7 +359,7 @@ async def execute_real_swap(amount_lamports: int, slippage: int):
         except Exception:
             pass
 
-        # 2. Запрос котировки у Jupiter API (решение о входе принимает ИИ по условиям ликвидности)
+        # Получаем котировку через Jupiter v6 API
         quote_url = f"https://api.jup.ag/swap/v1/quote?inputMint={TOKENS['SOL']}&outputMint={TOKENS['USDC']}&amount={amount_lamports}&slippageBps={slippage}"
         try:
             async with session.get(quote_url, timeout=5) as resp:
@@ -387,7 +369,7 @@ async def execute_real_swap(amount_lamports: int, slippage: int):
         except Exception:
             return "Сбой сети Jupiter."
 
-        # 3. Получение и автоматическое подписание транзакции обмена
+        # Запрос транзакции обмена у Jupiter
         swap_url = "https://api.jup.ag/swap/v1/swap"
         payload = {
             "quoteResponse": quote_data,
@@ -399,21 +381,32 @@ async def execute_real_swap(amount_lamports: int, slippage: int):
                 if resp.status != 200:
                     return f"Jupiter Swap Error: {await resp.text()}"
                 swap_data = await resp.json()
-                swap_transaction_b64 = swap_data.get("swapTransaction")
+                swap_tx_b64 = swap_data.get("swapTransaction")
         except Exception:
             return "Сбой генерации транзакции."
 
-    # 4. Автономная подпись и отправка в блокчейн без участия пользователя
-    try:
-        raw_tx = base64.b64decode(swap_transaction_b64)
-        tx = VersionedTransaction.from_bytes(raw_tx)
-        tx.sign([trader_keypair])
-        
-        async with AsyncClient(SOLANA_RPC) as client:
-            result = await client.send_raw_transaction(bytes(tx))
-            return f"Сделка исполнена! Tx: {str(result.value)[:16]}..."
-    except Exception as e:
-        return f"Ошибка отправки: {str(e)[:35]}"
+    # Отправка транзакции в сеть Solana через RPC
+    send_payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "sendTransaction",
+        "params": [
+            swap_tx_b64,
+            {"encoding": "base64", "skipPreflight": True}
+        ]
+    }
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(SOLANA_RPC, json=send_payload, timeout=10) as resp:
+                res_data = await resp.json()
+                if "result" in res_data:
+                    tx_hash = res_data["result"]
+                    return f"Сделка исполнена! Tx: {tx_hash[:16]}..."
+                else:
+                    err_msg = res_data.get("error", {}).get("message", "Unknown error")
+                    return f"Блокчейн отклонил: {err_msg[:30]}"
+        except Exception as e:
+            return f"Ошибка отправки сети: {str(e)[:30]}"
 
 async def api_execute_cycle(request):
     telegram_id = int(request.query.get("telegram_id", 0))
@@ -482,9 +475,9 @@ async def main():
         async with aiohttp.ClientSession() as session:
             await session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}")
 
-    logging.info("Полностью автономный ИИ-трейдер запущен через Docker.")
+    logging.info("ИИ-агент полной автономной торговли запущен.")
     while True:
         await asyncio.sleep(3600)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main))
