@@ -60,60 +60,76 @@ def get_or_create_user(telegram_id: int, username: str, first_name: str):
     conn.close()
     return user
 
-HTML_CONTENT = """<!DOCTYPE html>
+HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zer0Life Web4 AI Terminal</title>
+    <title>Zer0Life Cyber Terminal</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         * { box-sizing: border-box; }
-        body { background-color: #03050a; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 16px; padding-bottom: 110px; }
-        
+        body { background-color: #05050a; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 16px; padding-bottom: 100px; }
         .tab-content { display: none; }
-        .tab-content.active { display: block; animation: fadeIn 0.3s ease; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
-
-        .card { background: rgba(15, 23, 42, 0.7); backdrop-filter: blur(12px); border-radius: 20px; padding: 20px; margin-bottom: 18px; border: 1px solid rgba(124, 58, 237, 0.2); box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
-        .profile-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+        .tab-content.active { display: block; }
         
+        .card { 
+            background: linear-gradient(135deg, rgba(15, 23, 42, 0.9) 0%, rgba(10, 14, 26, 0.95) 100%); 
+            backdrop-filter: blur(16px); 
+            border-radius: 24px; 
+            padding: 20px; 
+            margin-bottom: 18px; 
+            border: 1px solid rgba(124, 58, 237, 0.3); 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.05); 
+        }
+        
+        .profile-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+        .badge { 
+            background: rgba(16, 185, 129, 0.12); 
+            border: 1px solid rgba(16, 185, 129, 0.4); 
+            color: #34d399; 
+            padding: 6px 12px; 
+            border-radius: 20px; 
+            font-size: 11px; 
+            font-weight: 700; 
+            text-align: center; 
+            box-shadow: 0 0 15px rgba(16, 185, 129, 0.15);
+        }
+
         .input-field { width: 100%; background: #020617; border: 1px solid rgba(52, 211, 153, 0.3); color: #34d399; padding: 14px; border-radius: 14px; margin-top: 8px; font-family: monospace; font-size: 11px; text-align: center; outline: none; }
         
-        .btn { background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%); color: white; border: none; width: 100%; padding: 14px; border-radius: 14px; font-weight: 700; cursor: pointer; margin-top: 12px; font-size: 14px; box-shadow: 0 4px 15px rgba(124, 58, 237, 0.4); }
+        .btn { background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%); color: white; border: none; width: 100%; padding: 14px; border-radius: 16px; font-weight: 700; cursor: pointer; margin-top: 12px; font-size: 14px; box-shadow: 0 4px 20px rgba(124, 58, 237, 0.4); transition: transform 0.1s; }
         .btn:active { transform: scale(0.98); }
-        .btn-green { background: linear-gradient(135deg, #10b981 0%, #059669 100%); box-shadow: 0 4px 15px rgba(16, 185, 129, 0.4); }
-        .btn-red { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4); }
+        .btn-green { background: linear-gradient(135deg, #10b981 0%, #059669 100%); box-shadow: 0 4px 20px rgba(16, 185, 129, 0.4); }
+        .btn-red { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); box-shadow: 0 4px 20px rgba(239, 68, 68, 0.4); }
         
-        .btn-mode { background: rgba(30, 41, 59, 0.8); color: #94a3b8; border: 1px solid rgba(51, 65, 85, 0.8); margin-top: 8px; width: 100%; padding: 14px; border-radius: 14px; font-weight: bold; cursor: pointer; text-align: left; display: flex; justify-content: space-between; align-items: center; }
-        .btn-mode.active { background: linear-gradient(135deg, rgba(124, 58, 237, 0.3) 0%, rgba(79, 70, 229, 0.3) 100%); color: #fff; border-color: #7c3aed; box-shadow: 0 0 20px rgba(124, 58, 237, 0.3); }
+        .btn-mode { background: rgba(30, 41, 59, 0.6); color: #94a3b8; border: 1px solid rgba(51, 65, 85, 0.6); margin-top: 8px; width: 100%; padding: 14px; border-radius: 16px; font-weight: bold; cursor: pointer; text-align: left; display: flex; justify-content: space-between; align-items: center; }
+        .btn-mode.active { background: linear-gradient(135deg, rgba(124, 58, 237, 0.25) 0%, rgba(79, 70, 229, 0.25) 100%); color: #fff; border-color: #7c3aed; box-shadow: 0 0 20px rgba(124, 58, 237, 0.25); }
 
         .metric { display: flex; justify-content: space-between; margin-top: 12px; font-size: 14px; color: #94a3b8; }
         .val { color: #34d399; font-weight: 700; font-family: monospace; }
         
-        .logs { background: #020617; border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 14px; padding: 12px; font-family: monospace; font-size: 11px; color: #38bdf8; height: 160px; overflow-y: auto; margin-top: 10px; box-shadow: inset 0 2px 10px rgba(0,0,0,0.8); }
+        .logs { background: #020617; border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 16px; padding: 12px; font-family: monospace; font-size: 11px; color: #38bdf8; height: 160px; overflow-y: auto; margin-top: 10px; box-shadow: inset 0 2px 10px rgba(0,0,0,0.8); }
         .qr-container { text-align: center; margin: 16px 0 10px 0; }
-        .qr-code { width: 130px; height: 130px; border-radius: 14px; border: 2px solid rgba(124, 58, 237, 0.3); padding: 6px; background: white; }
-        
-        .badge { background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; color: #34d399; padding: 6px 14px; border-radius: 20px; font-size: 11px; font-weight: 700; text-align: center; margin-bottom: 14px; display: inline-block; }
+        .qr-code { width: 130px; height: 130px; border-radius: 16px; border: 2px solid rgba(124, 58, 237, 0.4); padding: 6px; background: white; box-shadow: 0 0 20px rgba(124, 58, 237, 0.2); }
 
-        /* Нижний таб-бар Web4 */
-        .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(3, 5, 10, 0.9); backdrop-filter: blur(20px); border-top: 1px solid rgba(124, 58, 237, 0.2); padding: 12px 20px; display: flex; justify-content: space-around; z-index: 100; box-shadow: 0 -10px 30px rgba(0,0,0,0.8); }
-        .nav-item { background: transparent; border: none; color: #64748b; font-size: 12px; font-weight: 700; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; transition: color 0.2s; }
-        .nav-item.active { color: #a78bfa; text-shadow: 0 0 12px rgba(167, 139, 250, 0.6); }
+        /* Нижний таб-бар в стиле скриншота */
+        .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(5, 5, 10, 0.95); backdrop-filter: blur(20px); border-top: 1px solid rgba(124, 58, 237, 0.2); padding: 12px 24px; display: flex; justify-content: space-around; z-index: 100; }
+        .nav-item { background: transparent; border: none; color: #64748b; font-size: 11px; font-weight: 600; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; }
+        .nav-item.active { color: #c084fc; text-shadow: 0 0 12px rgba(192, 132, 252, 0.6); }
         .nav-icon { font-size: 20px; }
 
-        #onboarding-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #03050a; z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; text-align: center; }
+        #onboarding-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #05050a; z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; text-align: center; }
     </style>
 </head>
 <body>
     <div id="onboarding-overlay">
-        <h2 style="font-size: 26px; color: #f8fafc; margin-bottom: 8px; background: linear-gradient(135deg, #a78bfa, #34d399); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Zer0Life Web4 AI</h2>
-        <p style="font-size: 14px; color: #94a3b8; margin-bottom: 28px; line-height: 1.5;">Автономный децентрализованный терминал нового поколения на Solana 24/7.</p>
-        <button class="btn" style="max-width: 300px;" onclick="document.getElementById('onboarding-overlay').style.display='none'">🚀 Запустить Web4 Терминал</button>
+        <h2 style="font-size: 26px; color: #f8fafc; margin-bottom: 8px;">Zer0Life Cyber Terminal</h2>
+        <p style="font-size: 14px; color: #94a3b8; margin-bottom: 28px;">Автономный децентрализованный терминал на Solana 24/7.</p>
+        <button class="btn" style="max-width: 300px;" onclick="document.getElementById('onboarding-overlay').style.display='none'">🚀 Войти в Терминал</button>
     </div>
 
-    <!-- Вкладка 1: WALLET -->
+    <!-- Вкладка WALLET -->
     <div id="tab-wallet" class="tab-content active">
         <div class="card">
             <div class="profile-header">
@@ -123,17 +139,11 @@ HTML_CONTENT = """<!DOCTYPE html>
                 </div>
                 <div class="badge">🔥 Pool Limit: 0.25 - 100 SOL</div>
             </div>
-            
             <label style="font-size: 11px; color: #94a3b8; font-weight: 600;">Адрес депозита экосистемы:</label>
             <input type="text" id="wallet-input" class="input-field" readonly>
-            
-            <div class="qr-container">
-                <img class="qr-code" src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L">
-            </div>
-            
+            <div class="qr-container"><img class="qr-code" src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"></div>
             <button class="btn" onclick="navigator.clipboard.writeText(document.getElementById('wallet-input').value); alert('Адрес скопирован!')">📋 Копировать адрес</button>
         </div>
-
         <div class="card">
             <h3 style="margin: 0 0 10px 0; font-size: 15px;">📥 Верификация депозита</h3>
             <label style="font-size: 11px; color: #94a3b8;">Хэш транзакции (Signature):</label>
@@ -142,47 +152,32 @@ HTML_CONTENT = """<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- Вкладка 2: AI TRADER -->
+    <!-- Вкладка AI TRADER -->
     <div id="tab-trader" class="tab-content">
         <div class="card">
-            <h3 style="margin: 0 0 12px 0; font-size: 15px;">🎯 Стратегия ИИ-агента</h3>
-            <button id="mode-sol" class="btn-mode active" onclick="setMode('SOL_USDC')">
-                <span>💎 SOL / USDC Арбитраж</span>
-                <span style="font-size: 11px; color: #34d399;">Стабильно</span>
-            </button>
-            <button id="mode-meme" class="btn-mode" onclick="setMode('MEMECOIN_SNIPER')">
-                <span>🚀 MemeCoin AI Sniper</span>
-                <span style="font-size: 11px; color: #a78bfa;">Агрессивно</span>
-            </button>
+            <h3 style="margin: 0 0 12px 0; font-size: 15px;">🎯 Режим работы ИИ</h3>
+            <button id="mode-sol" class="btn-mode active" onclick="setMode('SOL_USDC')"><span>💎 SOL / USDC Арбитраж</span><span style="font-size: 11px; color: #34d399;">Стабильно</span></button>
+            <button id="mode-meme" class="btn-mode" onclick="setMode('MEMECOIN_SNIPER')"><span>🚀 MemeCoin AI Sniper</span><span style="font-size: 11px; color: #c084fc;">Агрессивно</span></button>
         </div>
-
         <div class="card">
-            <h3 style="margin: 0 0 10px 0; font-size: 15px;">🤖 Состояние автопилота</h3>
+            <h3 style="margin: 0 0 10px 0; font-size: 15px;">🤖 Статус ИИ</h3>
             <div class="metric"><span>Баланс пула:</span> <span id="wallet-balance" class="val">0.00 SOL</span></div>
             <div class="metric"><span>Статус:</span> <span id="trade-status" class="val" style="color: #f59e0b;">Остановлен</span></div>
-            
             <div style="display: flex; gap: 10px; margin-top: 14px;">
                 <button class="btn btn-green" style="margin-top:0;" onclick="checkBalance()">Обновить</button>
                 <button id="toggle-btn" class="btn btn-green" style="margin-top:0;" onclick="toggleTrading()">Включить ИИ</button>
             </div>
         </div>
-
         <div class="card">
             <h3 style="margin: 0 0 8px 0; font-size: 15px;">📡 Исполнение сделок (Live)</h3>
-            <div id="logs-box" class="logs">Инициализация нейросети... Готов к сканированию сети.</div>
+            <div id="logs-box" class="logs">Инициализация агента... Готов к торгам.</div>
         </div>
     </div>
 
-    <!-- Нижняя навигация Web4 -->
+    <!-- Нижняя навигация (Wallet / AI Trader) -->
     <div class="bottom-nav">
-        <button id="nav-wallet" class="nav-item active" onclick="switchTab('wallet')">
-            <span class="nav-icon">👛</span>
-            <span>Wallet</span>
-        </button>
-        <button id="nav-trader" class="nav-item" onclick="switchTab('trader')">
-            <span class="nav-icon">⚡</span>
-            <span>AI Trader</span>
-        </button>
+        <button id="nav-wallet" class="nav-item active" onclick="switchTab('wallet')"><span class="nav-icon">👛</span><span>Wallet</span></button>
+        <button id="nav-trader" class="nav-item" onclick="switchTab('trader')"><span class="nav-icon">⚡</span><span>AI Trader</span></button>
     </div>
 
     <script>
@@ -190,14 +185,12 @@ HTML_CONTENT = """<!DOCTYPE html>
         const user = tg.initDataUnsafe?.user || { id: 42882165, username: "CryptoWlodek", first_name: "CryptoWlodek" };
         document.getElementById('uid').innerText = user.id;
         document.getElementById('uname').innerText = user.first_name;
-
         let isTrading = false;
         let currentMode = 'SOL_USDC';
 
         function switchTab(tab) {
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-            
             if(tab === 'wallet') {
                 document.getElementById('tab-wallet').classList.add('active');
                 document.getElementById('nav-wallet').classList.add('active');
@@ -280,7 +273,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 """
 
 async def index_handler(request):
-    return web.Response(text=HTML_CONTENT, content_type='text/html')
+    return web.Response(text=HTML_TEMPLATE, content_type='text/html')
 
 async def health_handler(request):
     return web.Response(text="OK", status=200)
@@ -376,11 +369,11 @@ async def send_telegram_message(chat_id):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": chat_id,
-        "text": "⚡ **Zer0Life Web4 AI-Terminal**\n\nНажми кнопку ниже, чтобы открыть децентрализованный терминал:",
+        "text": "⚡ **Zer0Life Cyber Terminal**\n\nНажми кнопку ниже, чтобы открыть торговый терминал:",
         "parse_mode": "Markdown",
         "reply_markup": {
             "inline_keyboard": [[
-                {"text": "🚀 Открыть Web4 Терминал", "web_app": {"url": RENDER_URL}}
+                {"text": "🚀 Открыть Терминал", "web_app": {"url": RENDER_URL}}
             ]]
         }
     }
@@ -422,7 +415,7 @@ async def main():
             async with session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}") as r:
                 logging.info(f"Telegram webhook set status: {r.status}")
 
-    logging.info("Web4 AI Terminal успешно запущен.")
+    logging.info("Cyber Terminal запущен.")
     while True:
         await asyncio.sleep(3600)
 
