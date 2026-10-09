@@ -10,9 +10,10 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 PORT = int(os.getenv("PORT", 10000))
 
-RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://zer0life-autopilot.onrender.com")
+# Ваш точный актуальный адрес с Render
+RENDER_URL = "https://zer0lifeautopilot-bot.onrender.com"
 
-# HTML-интерфейс с полным списком отслеживаемых монет
+# HTML-интерфейс со всеми отслеживаемыми монетами
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="ru">
 <head>
