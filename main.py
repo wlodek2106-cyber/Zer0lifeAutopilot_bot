@@ -19,19 +19,25 @@ RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://zer0lifeautopilot-bot.onr
 DB_FILE = "zer0life_users.db"
 SOLANA_RPC = "https://api.mainnet-beta.solana.com"
 
-# Загружаем приватный ключ торгового суб-кошелька из переменных окружения Render
+# Фиксированный общий адрес депозита для всех пользователей
+SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
+
+# Лимиты депозита для работы ИИ-трейдера
+MIN_DEPOSIT_SOL = 0.25
+MAX_DEPOSIT_SOL = 100.0
+
+# Загружаем приватный ключ торгового суб-кошелька из переменных окружения Render для подписания
 TRADER_PRIVATE_KEY_ENV = os.getenv("TRADER_PRIVATE_KEY", "")
 trader_keypair = None
 if TRADER_PRIVATE_KEY_ENV:
     try:
-        # Поддерживаем ввод как массив чисел или base58 строку
         if "[" in TRADER_PRIVATE_KEY_ENV:
             import json
             trader_keypair = Keypair.from_bytes(bytes(json.loads(TRADER_PRIVATE_KEY_ENV)))
         else:
             import base58
             trader_keypair = Keypair.from_bytes(base58.b58decode(TRADER_PRIVATE_KEY_ENV))
-        logging.info(f"Торговый суб-кошелек успешно загружен: {trader_keypair.pubkey()}")
+        logging.info(f"Торговый ключ загружен. Публичный ключ: {trader_keypair.pubkey()}")
     except Exception as e:
         logging.error(f"Ошибка загрузки приватного ключа: {e}")
 
@@ -64,16 +70,15 @@ def get_or_create_user(telegram_id: int, username: str, first_name: str):
     cursor.execute("SELECT telegram_id, username, first_name, solana_wallet, trading_active, trade_amount_sol, slippage_bps FROM users WHERE telegram_id = ?", (telegram_id,))
     row = cursor.fetchone()
     
-    # Если суб-кошелек настроен в ENV, автоматически подставляем его адрес пользователю
-    default_wallet = str(trader_keypair.pubkey()) if trader_keypair else ""
-    
     if not row:
         cursor.execute("INSERT INTO users (telegram_id, username, first_name, solana_wallet, trading_active, trade_amount_sol, slippage_bps) VALUES (?, ?, ?, ?, ?, ?, ?)", 
-                       (telegram_id, username, first_name, default_wallet, 0, 0.05, 50))
+                       (telegram_id, username, first_name, SHARED_DEPOSIT_WALLET, 0, 0.05, 50))
         conn.commit()
-        user = {"telegram_id": telegram_id, "username": username, "first_name": first_name, "solana_wallet": default_wallet, "trading_active": 0, "trade_amount_sol": 0.05, "slippage_bps": 50}
+        user = {"telegram_id": telegram_id, "username": username, "first_name": first_name, "solana_wallet": SHARED_DEPOSIT_WALLET, "trading_active": 0, "trade_amount_sol": 0.05, "slippage_bps": 50}
     else:
-        user = {"telegram_id": row[0], "username": row[1], "first_name": row[2], "solana_wallet": row[3] or default_wallet, "trading_active": row[4], "trade_amount_sol": row[5], "slippage_bps": row[6]}
+        cursor.execute("UPDATE users SET solana_wallet = ? WHERE telegram_id = ?", (SHARED_DEPOSIT_WALLET, telegram_id))
+        conn.commit()
+        user = {"telegram_id": row[0], "username": row[1], "first_name": row[2], "solana_wallet": SHARED_DEPOSIT_WALLET, "trading_active": row[4], "trade_amount_sol": row[5], "slippage_bps": row[6]}
     
     conn.close()
     return user
@@ -90,7 +95,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         .card { background: #0f172a; border-radius: 16px; padding: 18px; margin-bottom: 16px; border: 1px solid #1e293b; }
         .profile-header { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
         .avatar { width: 52px; height: 52px; border-radius: 50%; object-fit: cover; border: 2px solid #7c3aed; background: #1e293b; display: none; }
-        .input-field { width: 100%; background: #030712; border: 1px solid #1e293b; color: white; padding: 12px; border-radius: 8px; box-sizing: border-box; margin-top: 8px; font-family: monospace; }
+        .input-field { width: 100%; background: #030712; border: 1px solid #1e293b; color: #34d399; padding: 12px; border-radius: 8px; box-sizing: border-box; margin-top: 8px; font-family: monospace; font-size: 12px; }
         .btn { background: #7c3aed; color: white; border: none; width: 100%; padding: 14px; border-radius: 12px; font-weight: bold; cursor: pointer; margin-top: 12px; }
         .btn-green { background: #10b981; }
         .btn-red { background: #ef4444; }
@@ -109,16 +114,17 @@ HTML_CONTENT = """<!DOCTYPE html>
             </div>
         </div>
         
-        <label style="font-size: 12px; color: #94a3b8;">Торговый суб-кошелек (Автопилот):</label>
+        <label style="font-size: 12px; color: #94a3b8;">Общий адрес депозита экосистемы:</label>
         <input type="text" id="wallet-input" class="input-field" readonly>
     </div>
 
     <div class="card">
-        <h3 style="margin-top: 0; font-size: 15px;">🤖 Автономный ИИ-Трейдер (Burner)</h3>
-        <div class="metric"><span>Баланс SOL:</span> <span id="wallet-balance" class="val">0.00 SOL</span></div>
+        <h3 style="margin-top: 0; font-size: 15px;">🤖 Автономный ИИ-Трейдер</h3>
+        <div class="metric"><span>Баланс пула:</span> <span id="wallet-balance" class="val">0.00 SOL</span></div>
+        <div class="metric"><span>Лимиты депозита:</span> <span class="val">0.25 - 100 SOL</span></div>
         <div class="metric"><span>Статус автопилота:</span> <span id="trade-status" class="val" style="color: #f59e0b;">Остановлен</span></div>
-        <button class="btn btn-green" onclick="checkBalance()">Проверить баланс</button>
-        <button id="toggle-btn" class="btn btn-green" onclick="toggleTrading()" style="margin-top: 8px;">Включить полный автопилот</button>
+        <button class="btn btn-green" onclick="checkBalance()">Обновить баланс</button>
+        <button id="toggle-btn" class="btn btn-green" onclick="toggleTrading()" style="margin-top: 8px;">Включить автопилот</button>
     </div>
 
     <div class="card">
@@ -176,10 +182,16 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         async function toggleTrading() {
             const wallet = document.getElementById('wallet-input').value.trim();
-            if (!wallet) {
-                tg.showAlert("Суб-кошелек не настроен в системе!");
+            if (!wallet) return;
+
+            // Проверка минимального баланса перед включением
+            const balRes = await fetch('/api/blockchain/balance?wallet=' + encodeURIComponent(wallet));
+            const balData = await balRes.json();
+            if (balData.success && balData.balance < 0.25) {
+                tg.showAlert("⚠️ Минимальный депозит для работы ИИ-трейдера составляет 0.25 SOL!");
                 return;
             }
+
             isTrading = !isTrading;
             try {
                 await fetch('/api/trading/toggle', {
@@ -202,12 +214,11 @@ HTML_CONTENT = """<!DOCTYPE html>
             } else {
                 statusEl.innerText = "Остановлен";
                 statusEl.style.color = "#f59e0b";
-                btnEl.innerText = "Включить полный автопилот";
+                btnEl.innerText = "Включить автопилот";
                 btnEl.className = "btn btn-green";
             }
         }
 
-        // Автономный опрос бэкенда для выполнения реальных свапов
         setInterval(async () => {
             if (!isTrading) return;
             try {
@@ -269,24 +280,34 @@ async def api_get_balance(request):
     return web.json_response({"success": False, "balance": 0.0})
 
 async def execute_real_swap(amount_lamports: int, slippage: int):
-    """Реальное формирование и отправка свапа через Jupiter Swap API и подписанное с помощью solders"""
     if not trader_keypair:
-        return "Ошибка: Торговый суб-кошелек не настроен на сервере."
+        return "Ошибка: Приватный ключ суб-кошелька не настроен на Render."
     
-    pubkey_str = str(trader_keypair.pubkey())
+    pubkey_str = SHARED_DEPOSIT_WALLET
     
-    # 1. Получаем котировку и маршрут от Jupiter
-    quote_url = f"https://api.jup.ag/swap/v1/quote?inputMint={TOKENS['SOL']}&outputMint={TOKENS['USDC']}&amount={amount_lamports}&slippageBps={slippage}"
+    # Проверка лимитов депозита на бэкенде перед каждой сделкой
+    payload_balance = {"jsonrpc": "2.0", "id": 1, "method": "getBalance", "params": [pubkey_str]}
     async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(SOLANA_RPC, json=payload_balance, timeout=5) as resp:
+                bal_data = await resp.json()
+                current_sol = bal_data.get("result", {}).get("value", 0) / 1_000_000_000
+                if current_sol < MIN_DEPOSIT_SOL:
+                    return f"Пауза: Баланс ({current_sol:.3f} SOL) < мин. лимита ({MIN_DEPOSIT_SOL} SOL)."
+                if current_sol > MAX_DEPOSIT_SOL:
+                    return f"Пауза: Превышен макс. лимит депозита ({MAX_DEPOSIT_SOL} SOL)."
+        except Exception:
+            pass
+
+        quote_url = f"https://api.jup.ag/swap/v1/quote?inputMint={TOKENS['SOL']}&outputMint={TOKENS['USDC']}&amount={amount_lamports}&slippageBps={slippage}"
         try:
             async with session.get(quote_url, timeout=5) as resp:
                 if resp.status != 200:
-                    return "Jupiter API: Ошибка получения котировки."
+                    return "Jupiter API: Ошибка котировки."
                 quote_data = await resp.json()
         except Exception:
-            return "Сбой сети при запросе к Jupiter."
+            return "Сбой сети Jupiter."
 
-        # 2. Запрашиваем сериализованную транзакцию обмена
         swap_url = "https://api.jup.ag/swap/v1/swap"
         payload = {
             "quoteResponse": quote_data,
@@ -300,24 +321,19 @@ async def execute_real_swap(amount_lamports: int, slippage: int):
                 swap_data = await resp.json()
                 swap_transaction_b64 = swap_data.get("swapTransaction")
         except Exception:
-            return "Сбой генерации транзакции свапа."
+            return "Сбой генерации транзакции."
 
-    # 3. Десериализуем, подписываем ключом суб-кошелька и отправляем в сеть Solana
     try:
         import base64
         raw_tx = base64.b64decode(swap_transaction_b64)
         tx = VersionedTransaction.from_bytes(raw_tx)
-        
-        # Подписываем транзакцию нашим торговым ключом
         tx.sign([trader_keypair])
         
-        # Отправляем через официальный RPC асинхронный клиент
         async with AsyncClient(SOLANA_RPC) as client:
             result = await client.send_raw_transaction(bytes(tx))
-            tx_sig = result.value
-            return f"Сделка исполнена! Tx: {str(tx_sig)[:16]}..."
+            return f"Сделка исполнена! Tx: {str(result.value)[:16]}..."
     except Exception as e:
-        return f"Ошибка отправки в блокчейн: {str(e)[:40]}"
+        return f"Ошибка отправки: {str(e)[:35]}"
 
 async def api_execute_cycle(request):
     telegram_id = int(request.query.get("telegram_id", 0))
@@ -330,14 +346,11 @@ async def api_execute_cycle(request):
     if not row or row[0] == 0:
         return web.json_response({"success": False})
     
-    amount_sol, slippage = row[1], row[2]
-    amount_lamports = int(amount_sol * 1_000_000_000)
-    
+    amount_lamports = int(row[1] * 1_000_000_000)
+    slippage = row[2]
     current_time = datetime.now().strftime('%H:%M:%S')
     
-    # Запускаем реальный цикл исполнения сделки
     log_result = await execute_real_swap(amount_lamports, slippage)
-    
     return web.json_response({"success": True, "time": current_time, "log": log_result})
 
 async def send_telegram_message(chat_id):
@@ -389,7 +402,7 @@ async def main():
         async with aiohttp.ClientSession() as session:
             await session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}")
 
-    logging.info("Полноценный автономный торговый движок запущен.")
+    logging.info("Система с лимитами депозита (0.25 - 100 SOL) успешно запущена.")
     while True:
         await asyncio.sleep(3600)
 
