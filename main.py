@@ -24,7 +24,6 @@ SOLANA_RPC = "https://api.mainnet-beta.solana.com"
 MIN_DEPOSIT_SOL = 0.25
 MAX_DEPOSIT_SOL = 100.0
 
-# Безопасная загрузка изолированного торгового ключа ИИ
 TRADER_PRIVATE_KEY_ENV = os.getenv("TRADER_PRIVATE_KEY", "")
 trader_keypair = None
 if TRADER_PRIVATE_KEY_ENV:
@@ -33,9 +32,9 @@ if TRADER_PRIVATE_KEY_ENV:
             trader_keypair = Keypair.from_bytes(bytes(json.loads(TRADER_PRIVATE_KEY_ENV)))
         else:
             trader_keypair = Keypair.from_bytes(base58.b58decode(TRADER_PRIVATE_KEY_ENV))
-        logging.info(f"Изолированный ИИ-кошелек успешно подключен: {trader_keypair.pubkey()}")
+        logging.info(f"Изолированный ИИ-кошелек подключен: {trader_keypair.pubkey()}")
     except Exception as e:
-        logging.error(f"Ошибка загрузки торгового ключа: {e}")
+        logging.error(f"Ошибка загрузки ключа: {e}")
 
 SHARED_DEPOSIT_WALLET = str(trader_keypair.pubkey()) if trader_keypair else "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
 
@@ -81,7 +80,7 @@ def get_or_create_user(telegram_id: int, username: str, first_name: str):
     conn.close()
     return user
 
-HTML_TEMPLATE = """<!DOCTYPE html>
+HTML_CONTENT = """<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
@@ -262,7 +261,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 """
 
 async def index_handler(request):
-    return web.Response(text=HTML_TEMPLATE, content_type='text/html')
+    return web.Response(text=HTML_CONTENT, content_type='text/html')
 
 async def health_handler(request):
     return web.Response(text="OK", status=200)
@@ -299,12 +298,11 @@ async def api_get_balance(request):
 
 async def execute_real_swap(amount_lamports: int, trade_mode: str):
     if not trader_keypair:
-        return "Ошибка: TRADER_PRIVATE_KEY не задан в настройках Render!"
+        return "Ошибка: TRADER_PRIVATE_KEY не задан в Render!"
 
     pubkey_str = str(trader_keypair.pubkey())
     
     async with aiohttp.ClientSession() as session:
-        # Проверка баланса торгового кошелька
         payload_balance = {"jsonrpc": "2.0", "id": 1, "method": "getBalance", "params": [pubkey_str]}
         async with session.post(SOLANA_RPC, json=payload_balance, timeout=5) as resp:
             bal_data = await resp.json()
@@ -315,19 +313,16 @@ async def execute_real_swap(amount_lamports: int, trade_mode: str):
         output_mint = TOKENS['MEME_HOT'] if trade_mode == 'MEMECOIN_SNIPER' else TOKENS['USDC']
         mode_label = "MemeCoin Sniper" if trade_mode == 'MEMECOIN_SNIPER' else "SOL/USDC"
 
-        # Запрос котировки Jupiter v6 с проверкой проскальзывания и безопасности
         quote_url = f"https://api.jup.ag/swap/v1/quote?inputMint={TOKENS['SOL']}&outputMint={output_mint}&amount={amount_lamports}&slippageBps=100"
         async with session.get(quote_url, timeout=5) as resp:
             if resp.status != 200:
                 return f"[{mode_label}] Anti-Rug: Сканирование ликвидности..."
             quote_data = await resp.json()
             
-            # Защита от скамов: проверка price impact
             price_impact = float(quote_data.get("priceImpactPct", 0))
             if price_impact > 3.0:
-                return f"[{mode_label}] ⚠️ Сканирование: Высокий риск скама/слипа, ордер отменен."
+                return f"[{mode_label}] ⚠️ Высокий риск скама, ордер отменен."
 
-        # Генерация транзакции обмена
         swap_url = "https://api.jup.ag/swap/v1/swap"
         payload = {"quoteResponse": quote_data, "userPublicKey": pubkey_str, "wrapAndUnwrapSol": True}
         async with session.post(swap_url, json=payload, timeout=5) as resp:
@@ -336,7 +331,6 @@ async def execute_real_swap(amount_lamports: int, trade_mode: str):
             swap_data = await resp.json()
             swap_tx_b64 = swap_data.get("swapTransaction")
 
-    # Подписание транзакции изолированным ключом и отправка в сеть Solana
     try:
         raw_tx = base64.b64decode(swap_tx_b64)
         tx = VersionedTransaction.from_bytes(raw_tx)
@@ -419,7 +413,7 @@ async def main():
             async with session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}") as r:
                 logging.info(f"Telegram webhook set status: {r.status}")
 
-    logging.info("Cyber Terminal с защитой от скамов запущен.")
+    logging.info("Cyber Terminal запущен.")
     while True:
         await asyncio.sleep(3600)
 
