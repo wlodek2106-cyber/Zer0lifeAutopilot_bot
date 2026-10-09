@@ -3,7 +3,6 @@ import aiohttp
 from aiohttp import web
 import logging
 import os
-import random
 from datetime import datetime
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -12,8 +11,15 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 PORT = int(os.getenv("PORT", 10000))
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://zer0lifeautopilot-bot.onrender.com")
 
+# Официальные mint-адреса токенов в Solana
+TOKENS = {
+    "SOL": "So11111111111111111111111111111111111111112",
+    "USDC": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "ZRL": "TokenZRLMintAddressPlaceholderHere" # Замените на реальный mint ZRL при деплое
+}
+
 AI_MEMORY_LOGS = [
-    f"[{datetime.now().strftime('%H:%M:%S')}] Web4 Neural Core: Автономный бот-трейдер запущен."
+    f"[{datetime.now().strftime('%H:%M:%S')}] Jupiter DEX Core: Модуль агрегации ликвидности подключен."
 ]
 
 HTML_CONTENT = """<!DOCTYPE html>
@@ -21,7 +27,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zer0life Web4 Autonomous Terminal</title>
+    <title>Zer0life DEX Terminal</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         body { background-color: #06080f; color: #f8fafc; font-family: 'SF Pro Display', -apple-system, sans-serif; margin: 0; padding: 16px; }
@@ -40,27 +46,22 @@ HTML_CONTENT = """<!DOCTYPE html>
         <div class="profile-header">
             <img id="user-avatar" class="avatar" src="https://i.imgur.com/6VBx3io.png" alt="Avatar">
             <div>
-                <h3 id="user-nickname" style="margin: 0; color: #38bdf8;">Autonomous Master</h3>
-                <p style="margin: 4px 0 0 0; font-size: 11px; color: #94a3b8;">Web4 ID: <span id="user-id">---</span> <span class="badge">AUTONOMOUS GOD</span></p>
+                <h3 id="user-nickname" style="margin: 0; color: #38bdf8;">DEX Master</h3>
+                <p style="margin: 4px 0 0 0; font-size: 11px; color: #94a3b8;">Web4 ID: <span id="user-id">---</span> <span class="badge">SOLANA DEX</span></p>
             </div>
         </div>
     </div>
 
     <div class="card">
-        <h2>⚡ Zer0life Web4 Autonomous Core</h2>
-        <p>Статус агента: <span style="color: #34d399; font-weight: bold;">🟢 Торговля активна</span></p>
-        <p style="color: #94a3b8; font-size: 12px; margin-top: 8px;">ИИ-агент автономно сканирует и торгует по вашим заданным парам (SOL, AVAX, INJ).</p>
+        <h2>⚡ Jupiter DEX Aggregator</h2>
+        <p>Статус: <span style="color: #34d399; font-weight: bold;">🟢 Маршрутизация активна</span></p>
+        <p style="color: #94a3, font-size: 12px; margin-top: 8px; color: #94a3b8;">Запрос реальных котировок и ликвидности через официальный шлюз Jupiter.</p>
         
-        <div class="log-box" id="ai-logs">
-            Загрузка автономного ядра...
-        </div>
-    </div>
+        <button class="btn btn-green" onclick="fetchJupiterQuote()">Запросить котировку SOL -> USDC</button>
 
-    <div class="card">
-        <h3>📊 Активные торговые пары</h3>
-        <div class="metric"><span>SOL / USDT (AI Long)</span><span style="color: #34d399; font-weight: bold;">В позиции</span></div>
-        <div class="metric"><span>AVAX / USDT (AI Scalp)</span><span style="color: #38bdf8; font-weight: bold;">Активен</span></div>
-        <div class="metric"><span>INJ / USDT (AI Grid)</span><span style="color: #38bdf8; font-weight: bold;">Активен</span></div>
+        <div class="log-box" id="ai-logs">
+            Инициализация DEX терминала...
+        </div>
     </div>
 
     <script>
@@ -68,12 +69,29 @@ HTML_CONTENT = """<!DOCTYPE html>
         tg.expand();
 
         const userId = tg.initDataUnsafe?.user?.id || "999999999";
-        const firstName = tg.initDataUnsafe?.user?.first_name || "Autonomous Master";
+        const firstName = tg.initDataUnsafe?.user?.first_name || "DEX Master";
         const photoUrl = tg.initDataUnsafe?.user?.photo_url || "https://i.imgur.com/6VBx3io.png";
 
         document.getElementById('user-id').innerText = userId;
         document.getElementById('user-nickname').innerText = firstName;
         document.getElementById('user-avatar').src = photoUrl;
+
+        async function fetchJupiterQuote() {
+            const box = document.getElementById('ai-logs');
+            box.innerHTML += `<br>[${new Date().toLocaleTimeString()}] Запрос котировки у Jupiter API...`;
+            try {
+                const res = await fetch('/api/jupiter_quote?inputMint=So11111111111111111111111111111111111111112&outputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&amount=1000000000');
+                const data = await res.json();
+                if (data.success) {
+                    box.innerHTML += `<br><span style="color: #38bdf8;">[OK] Лучший маршрут найден. Выходное количество: ${data.outAmount} микро-USDC</span>`;
+                } else {
+                    box.innerHTML += `<br><span style="color: #ef4444;">[Error] ${data.error}</span>`;
+                }
+            } catch(e) {
+                box.innerHTML += `<br><span style="color: #ef4444;">[Error] Сбой сети</span>`;
+            }
+            box.scrollTop = box.scrollHeight;
+        }
 
         async function fetchLogs() {
             try {
@@ -84,38 +102,34 @@ HTML_CONTENT = """<!DOCTYPE html>
                     box.innerHTML = data.logs.join('<br>');
                     box.scrollTop = box.scrollHeight;
                 }
-            } catch (e) {
-                console.error(e);
-            }
+            } catch (e) {}
         }
 
-        setInterval(fetchLogs, 5000);
-        fetchLogs();
+        setInterval(fetchLogs, 7000);
     </script>
 </body>
 </html>
 """
 
-async def autonomous_trading_agent():
-    pairs = ["SOL/USDT", "AVAX/USDT", "INJ/USDT"]
-    strategies = [
-        "Анализ стакана ордеров. Обнаружена сильная точка входа.",
-        "Оптимизация параметров сетки ордеров (Grid Trading).",
-        "Фиксация локальной прибыли по краткосрочному импульсу.",
-        "Ребалансировка маржинальной позиции."
-    ]
-    while True:
-        await asyncio.sleep(15)
-        pair = random.choice(pairs)
-        action = random.choice(strategies)
-        timestamp = datetime.now().strftime('%H:%M:%S')
-        log_entry = f"[{timestamp}] [AI AGENT - {pair}]: {action}"
-        
-        logging.info(log_entry)
-        AI_MEMORY_LOGS.append(log_entry)
-        
-        if len(AI_MEMORY_LOGS) > 20:
-            AI_MEMORY_LOGS.pop(0)
+async def get_jupiter_quote_handler(request):
+    input_mint = request.query.get("inputMint", TOKENS["SOL"])
+    output_mint = request.query.get("outputMint", TOKENS["USDC"])
+    amount = request.query.get("amount", "1000000000") # 1 SOL в лампортах
+    
+    url = f"https://quote-api.jup.ag/v6/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount}&slippageBps=50"
+    
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url, timeout=10) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    out_amount = data.get("outAmount", "0")
+                    return web.json_response({"success": True, "outAmount": out_amount, "raw": data})
+                else:
+                    text = await resp.text()
+                    return web.json_response({"success": False, "error": text}, status=400)
+        except Exception as e:
+            return web.json_response({"success": False, "error": str(e)}, status=500)
 
 async def logs_handler(request):
     return web.json_response({"logs": AI_MEMORY_LOGS})
@@ -123,56 +137,16 @@ async def logs_handler(request):
 async def index_handler(request):
     return web.Response(text=HTML_CONTENT, content_type='text/html')
 
-async def send_telegram_message(chat_id, text):
-    if not TELEGRAM_TOKEN or not chat_id:
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": f"⚡ **Zer0life Web4 Autonomous Core**\n\n{text}",
-        "parse_mode": "Markdown",
-        "reply_markup": {
-            "inline_keyboard": [
-                [{"text": "⚡ Открыть Autonomous Терминал", "web_app": {"url": RENDER_URL}}]
-            ]
-        }
-    }
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(url, json=payload) as resp:
-                pass
-        except Exception as e:
-            logging.error(f"Ошибка: {e}")
-
-async def webhook_handler(request):
-    try:
-        data = await request.json()
-        message = data.get("message", {})
-        text = message.get("text", "")
-        chat_id = message.get("chat", {}).get("id")
-        if text == "/start" and chat_id:
-            await send_telegram_message(chat_id, "Автономный ИИ-агент переключен на ваши целевые пары (SOL, AVAX, INJ) и ведет торговлю в реальном времени.")
-        return web.Response(text="OK", status=200)
-    except Exception:
-        return web.Response(text="Error", status=500)
-
 async def main():
     app = web.Application()
     app.router.add_get('/', index_handler)
-    app.router.add_post('/webhook', webhook_handler)
+    app.router.add_get('/api/jupiter_quote', get_jupiter_quote_handler)
     app.router.add_get('/api/logs', logs_handler)
     
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
-    
-    if TELEGRAM_TOKEN:
-        webhook_url = f"{RENDER_URL}/webhook"
-        async with aiohttp.ClientSession() as session:
-            await session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}")
-
-    asyncio.create_task(autonomous_trading_agent())
 
     while True:
         await asyncio.sleep(300)
