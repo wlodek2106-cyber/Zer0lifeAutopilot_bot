@@ -10,7 +10,9 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 PORT = int(os.getenv("PORT", 10000))
 
-# Функция отправки сообщения с кнопкой Mini App (по умолчанию add_webapp=True)
+# Жестко прописываем ваш публичный адрес Render, чтобы ссылка никогда не была пустой
+RENDER_URL = "https://zer0life-autopilot.onrender.com"
+
 async def send_telegram_message(text, chat_id=None, add_webapp=True):
     target_chat = chat_id or TELEGRAM_CHAT_ID
     if not TELEGRAM_TOKEN or not target_chat:
@@ -25,10 +27,9 @@ async def send_telegram_message(text, chat_id=None, add_webapp=True):
     }
     
     if add_webapp:
-        render_url = os.getenv("RENDER_EXTERNAL_URL", "https://zer0life-autopilot.onrender.com")
         payload["reply_markup"] = {
             "inline_keyboard": [[
-                {"text": "🚀 Открыть Панель Управления", "web_app": {"url": render_url}}
+                {"text": "🚀 Открыть Панель Управления", "web_app": {"url": RENDER_URL}}
             ]]
         }
 
