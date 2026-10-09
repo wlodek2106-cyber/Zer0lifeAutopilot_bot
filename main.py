@@ -14,7 +14,6 @@ DB_FILE = "zer0life_users.db"
 SOLANA_RPC = "https://api.mainnet-beta.solana.com"
 
 def init_db():
-    """Создаем чистую базу данных для реальных персональных аккаунтов"""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('''
@@ -30,7 +29,6 @@ def init_db():
     conn.close()
 
 def get_or_create_user(telegram_id: int, username: str, first_name: str):
-    """Достаем или создаем персональный аккаунт пользователя по его ID"""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("SELECT telegram_id, username, first_name, solana_wallet FROM users WHERE telegram_id = ?", (telegram_id,))
@@ -47,7 +45,6 @@ def get_or_create_user(telegram_id: int, username: str, first_name: str):
     conn.close()
     return user
 
-# Чистый HTML интерфейс профиля с выводом аватарки и баланса из блокчейна
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -104,29 +101,37 @@ HTML_CONTENT = """<!DOCTYPE html>
         }
 
         async function loadProfile() {
-            const res = await fetch('/api/profile', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ telegram_id: user.id, username: user.username || "", first_name: user.first_name || "" })
-            });
-            const data = await res.json();
-            if (data.success && data.profile.solana_wallet) {
-                document.getElementById('wallet-input').value = data.profile.solana_wallet;
-                checkBalance();
+            try {
+                const res = await fetch('/api/profile', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ telegram_id: user.id, username: user.username || "", first_name: user.first_name || "" })
+                });
+                const data = await res.json();
+                if (data.success && data.profile.solana_wallet) {
+                    document.getElementById('wallet-input').value = data.profile.solana_wallet;
+                    checkBalance();
+                }
+            } catch (e) {
+                console.error(e);
             }
         }
 
         async function saveWallet() {
             const wallet = document.getElementById('wallet-input').value.trim();
-            const res = await fetch('/api/wallet/update', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ telegram_id: user.id, solana_wallet: wallet })
-            });
-            const data = await res.json();
-            if (data.success) {
-                tg.showAlert("Кошелек успешно сохранен в базе данных!");
-                checkBalance();
+            try {
+                const res = await fetch('/api/wallet/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ telegram_id: user.id, solana_wallet: wallet })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    tg.showAlert("Кошелек успешно сохранен в базе данных!");
+                    checkBalance();
+                }
+            } catch (e) {
+                console.error(e);
             }
         }
 
@@ -134,12 +139,16 @@ HTML_CONTENT = """<!DOCTYPE html>
             const wallet = document.getElementById('wallet-input').value.trim();
             if (!wallet) return;
             document.getElementById('wallet-balance').innerText = "Запрос...";
-            const res = await fetch('/api/blockchain/balance?wallet=' + wallet);
-            const data = await res.json();
-            if (data.success) {
-                document.getElementById('wallet-balance').innerText = data.balance + " SOL";
-            } else {
-                document.getElementById('wallet-balance').innerText = "Ошибка";
+            try {
+                const res = await fetch('/api/blockchain/balance?wallet=' + encodeURIComponent(wallet));
+                const data = await res.json();
+                if (data.success) {
+                    document.getElementById('wallet-balance').innerText = data.balance + " SOL";
+                } else {
+                    document.getElementById('wallet-balance').innerText = "Ошибка";
+                }
+            } catch (e) {
+                document.getElementById('wallet-balance').innerText = "Ошибка с сети";
             }
         }
 
@@ -160,4 +169,97 @@ async def api_get_profile(request):
     except Exception as e:
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
-async def api_update_wallet(request
+async def api_update_wallet(request):
+    try:
+        data = await request.json()
+        telegram_id = int(data.get("telegram_id"))
+        wallet = data.get("solana_wallet", "").strip()
+        
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET solana_wallet = ? WHERE telegram_id = ?", (wallet, telegram_id))
+        conn.commit()
+        conn.close()
+        
+        return web.json_response({"success": True})
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
+async def api_get_balance(request):
+    wallet = request.query.get("wallet", "")
+    if len(wallet) < 32:
+        return web.json_response({"success": False, "balance": 0.0})
+    
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getBalance",
+        "params": [wallet]
+    }
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(SOLANA_RPC, json=payload, timeout=5) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if "result" in data and data["result"] is not None:
+                        lamports = data["result"].get("value", 0)
+                        return web.json_response({"success": True, "balance": lamports / 1_000_000_000})
+        except Exception:
+            pass
+    return web.json_response({"success": False, "balance": 0.0})
+
+async def send_telegram_message(chat_id):
+    if not TELEGRAM_TOKEN:
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": "⚡ **Zer0Life Профиль**\n\nОткройте ваш персональный кабинет:",
+        "parse_mode": "Markdown",
+        "reply_markup": {
+            "inline_keyboard": [[
+                {"text": "🚀 Открыть кабинет", "web_app": {"url": RENDER_URL}}
+            ]]
+        }
+    }
+    async with aiohttp.ClientSession() as session:
+        await session.post(url, json=payload)
+
+async def webhook_handler(request):
+    try:
+        data = await request.json()
+        message = data.get("message", {})
+        text = message.get("text", "")
+        chat_id = message.get("chat", {}).get("id")
+        
+        if text == "/start" and chat_id:
+            await send_telegram_message(chat_id)
+        return web.Response(text="OK", status=200)
+    except Exception:
+        return web.Response(text="Error", status=500)
+
+async def main():
+    init_db()
+    app = web.Application()
+    app.router.add_get('/', index_handler)
+    app.router.add_post('/webhook', webhook_handler)
+    app.router.add_post('/api/profile', api_get_profile)
+    app.router.add_post('/api/wallet/update', api_update_wallet)
+    app.router.add_get('/api/blockchain/balance', api_get_balance)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    await site.start()
+    
+    if TELEGRAM_TOKEN:
+        webhook_url = f"{RENDER_URL}/webhook"
+        async with aiohttp.ClientSession() as session:
+            await session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}")
+
+    logging.info("Бот и сервер профилей успешно запущены.")
+    while True:
+        await asyncio.sleep(3600)
+
+if __name__ == "__main__":
+    asyncio.run(main())
