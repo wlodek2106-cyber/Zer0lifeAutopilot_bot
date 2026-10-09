@@ -33,13 +33,13 @@ HTML_CONTENT = """<!DOCTYPE html>
     </div>
     
     <div class="card">
-        <h3>🔗 Web3 Кошелек</h3>
-        <p id="wallet-status" style="color: #94a3b8; font-size: 13px;">Статус: Ожидание подключения</p>
+        <h3>🔗 Реальный Web3 Кошелек</h3>
+        <p id="wallet-status" style="color: #94a3b8; font-size: 13px;">Статус: Не подключен</p>
         <div id="balances-container" style="display:none; margin-top: 10px;">
-            <div class="coin"><span>Solana (SOL)</span><span class="balance-val" id="bal-sol">0.207 SOL</span></div>
-            <div class="coin"><span>USDC</span><span class="balance-val" id="bal-usdc">0.003 USDC</span></div>
+            <div class="coin"><span>Адрес</span><span id="wallet-addr" style="color: #38bdf8; font-size: 12px;">---</span></div>
+            <div class="coin"><span>Solana (SOL)</span><span class="balance-val" id="bal-sol">Запрос...</span></div>
         </div>
-        <button class="btn" id="conn-btn" onclick="connectWalletUniversal()">Подключить кошелек</button>
+        <button class="btn" id="conn-btn" onclick="connectRealWallet()">Подключить Phantom</button>
     </div>
 
     <div class="card">
@@ -56,24 +56,55 @@ HTML_CONTENT = """<!DOCTYPE html>
         let tg = window.Telegram.WebApp;
         tg.expand();
 
-        function connectWalletUniversal() {
-            // Обход изоляции iOS через универсальный диплинк Phantom с принудительным возвратом в Telegram WebApp
-            const appUrl = encodeURIComponent(window.location.href);
-            const deepLink = `https://phantom.app/ul/v1/connect?app_url=${appUrl}&redirect_link=${appUrl}&cluster=mainnet-beta`;
-            
-            tg.HapticFeedback.impactOccurred('medium');
-            
-            // Если у пользователя установлен Phantom, диплинк перехватит запрос и вернет сессию
-            window.location.href = deepLink;
+        async function connectRealWallet() {
+            try {
+                tg.HapticFeedback.impactOccurred('medium');
+                
+                // Проверяем доступность провайдера Phantom в окружении
+                const provider = window.solana || window.phantom?.solana;
+                
+                if (provider) {
+                    const response = await provider.connect();
+                    const pubKey = response.publicKey.toString();
+                    
+                    document.getElementById('wallet-status').innerText = "Статус: Подключено";
+                    document.getElementById('wallet-addr').innerText = pubKey.slice(0, 4) + '...' + pubKey.slice(-4);
+                    document.getElementById('balances-container').style.display = 'block';
+                    document.getElementById('conn-btn').innerText = 'Кошелек синхронизирован';
+                    document.getElementById('conn-btn').style.background = '#10b981';
+                    
+                    // Запрос реального баланса SOL через публичную RPC ноду Solana
+                    fetchSolanaBalance(pubKey);
+                } else {
+                    // Корректный вызов прокола Phantom без увода в сторонние браузеры
+                    const refUrl = encodeURIComponent(window.location.origin);
+                    window.location.href = `https://phantom.app/ul/v1/connect?app_url=${refUrl}&redirect_link=${encodeURIComponent(window.location.href)}&cluster=mainnet-beta`;
+                }
+            } catch (err) {
+                alert("Ошибка подключения: " + err.message);
+            }
+        }
 
-            // Демо-активация интерфейса для проверки отображения балансов сразу при клике
-            setTimeout(() => {
-                document.getElementById('wallet-status').innerText = "Адрес: 5K3n...9xL2 (Подключено)";
-                document.getElementById('wallet-status').style.color = "#10b981";
-                document.getElementById('balances-container').style.display = 'block';
-                document.getElementById('conn-btn').innerText = 'Кошелек синхронизирован';
-                document.getElementById('conn-btn').style.background = '#10b981';
-            }, 1500);
+        async function fetchSolanaBalance(pubKey) {
+            try {
+                const res = await fetch('https://api.mainnet-beta.solana.com', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        jsonrpc: "2.0",
+                        id: 1,
+                        method: "getBalance",
+                        params: [pubKey]
+                    })
+                });
+                const data = await res.json();
+                if (data.result && data.result.value !== undefined) {
+                    const solBalance = (data.result.value / 1e9).toFixed(4);
+                    document.getElementById('bal-sol').innerText = solBalance + " SOL";
+                }
+            } catch (e) {
+                document.getElementById('bal-sol').innerText = "Ошибка сети";
+            }
         }
     </script>
 </body>
