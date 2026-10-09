@@ -16,8 +16,9 @@ RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://zer0lifeautopilot-bot.onr
 DB_FILE = "zer0life_users.db"
 SOLANA_RPC = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
 
-JUPITER_QUOTE_API = "https://public.jupiterapi.com/quote"
-JUPITER_SWAP_API = "https://public.jupiterapi.com/swap"
+# Актуальный Jupiter API v6
+JUPITER_QUOTE_API = "https://quote-api.jup.ag/v6/quote"
+JUPITER_SWAP_API = "https://quote-api.jup.ag/v6/swap"
 
 SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
 
@@ -31,10 +32,8 @@ try:
     from solders.keypair import Keypair
     from solders.transaction import VersionedTransaction
     SOLANA_SDK_AVAILABLE = True
-    logging.info("Solders SDK loaded successfully.")
-except ImportError as e:
+except ImportError:
     SOLANA_SDK_AVAILABLE = False
-    logging.error(f"Solders SDK missing: {e}")
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
@@ -112,7 +111,6 @@ async def fetch_real_balance(wallet: str) -> float:
     return 0.2517307
 
 async def execute_real_onchain_swap(telegram_id: int):
-    """Строгое исполнение реальной ончейн-сделки через Jupiter и подпись ключом"""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("SELECT trading_active, trade_mode, solana_wallet FROM users WHERE telegram_id = ?", (telegram_id,))
@@ -126,13 +124,13 @@ async def execute_real_onchain_swap(telegram_id: int):
     
     signer = get_signer_keypair()
     if not signer:
-        return {"success": False, "log": "Ошибка: не задан SOLANA_PRIVATE_KEY в Render!"}
+        return {"success": False, "log": "Ошибка: не задан SOLANA_PRIVATE_KEY!"}
 
     pool_balance = await fetch_real_balance(wallet)
-    if pool_balance < 0.015:
-        return {"success": False, "log": "Ошибка: недостаточно SOL на пуле для газа и сделки!"}
+    if pool_balance < 0.012:
+        return {"success": False, "log": "Мало SOL на пуле для комиссии сети!"}
 
-    optimal_trade_sol = round(pool_balance * 0.05, 4) # 5% от баланса на ордер
+    optimal_trade_sol = round(pool_balance * 0.05, 4)
     trade_amount_lamports = int(optimal_trade_sol * 1_000_000_000)
     
     output_mint = TOKENS['MEME_HOT'] if trade_mode == 'MEMECOIN_SNIPER' else TOKENS['USDC']
@@ -141,19 +139,19 @@ async def execute_real_onchain_swap(telegram_id: int):
 
     async with aiohttp.ClientSession() as session:
         try:
-            # 1. Запрос котировки у Jupiter
-            q_url = f"{JUPITER_QUOTE_API}?inputMint={TOKENS['SOL']}&outputMint={output_mint}&amount={trade_amount_lamports}&slippageBps={slippage_bps}&dexes=raydium,meteora,orca"
+            # Запрос к Jupiter API v6 с корректными параметрами
+            q_url = f"{JUPITER_QUOTE_API}?inputMint={TOKENS['SOL']}&outputMint={output_mint}&amount={trade_amount_lamports}&slippageBps={slippage_bps}"
             async with session.get(q_url, timeout=8) as q_resp:
                 if q_resp.status != 200:
                     err_txt = await q_resp.text()
-                    return {"success": False, "log": f"Jupiter Quote ошибка: {q_resp.status}"}
+                    logging.error(f"Jupiter v6 Quote error: {err_txt}")
+                    return {"success": False, "log": f"Jupiter v6 Quote ошибка: {q_resp.status}"}
                 q_data = await q_resp.json()
                 out_amt = int(q_data.get('outAmount', 0)) / 1_000_000
                 if out_amt == 0:
-                    return {"success": False, "log": "Ликвидность не найдена по паре."}
+                    return {"success": False, "log": "Нулевая ликвидность в пуле."}
                 buy_price = round(out_amt / optimal_trade_sol, 2)
 
-            # 2. Запрос транзакции свапа
             swap_payload = {
                 "quoteResponse": q_data,
                 "userPublicKey": str(signer.pubkey()),
@@ -161,18 +159,18 @@ async def execute_real_onchain_swap(telegram_id: int):
             }
             async with session.post(JUPITER_SWAP_API, json=swap_payload, timeout=8) as s_resp:
                 if s_resp.status != 200:
-                    return {"success": False, "log": f"Jupiter Swap ошибка: {s_resp.status}"}
+                    err_txt = await s_resp.text()
+                    logging.error(f"Jupiter v6 Swap error: {err_txt}")
+                    return {"success": False, "log": f"Jupiter v6 Swap ошибка: {s_resp.status}"}
                 s_data = await s_resp.json()
                 swap_tx_b64 = s_data.get("swapTransaction")
                 if not swap_tx_b64:
-                    return {"success": False, "log": "Пустой ответ транзакции от Jupiter."}
+                    return {"success": False, "log": "Пустой буфер транзакции от Jupiter."}
 
-            # 3. Подписание транзакции приватным ключом
             raw_tx = base64.b64decode(swap_tx_b64)
             transaction = VersionedTransaction.from_bytes(raw_tx)
             signed_txn = VersionedTransaction(transaction.message, [signer])
             
-            # 4. Отправка в реальную сеть Solana через RPC
             rpc_payload = {
                 "jsonrpc": "2.0", "id": 1,
                 "method": "sendTransaction",
@@ -188,11 +186,11 @@ async def execute_real_onchain_swap(telegram_id: int):
                     logging.info(f"Real on-chain TX success: {tx_signature}")
                 else:
                     err_msg = rpc_data.get('error', {}).get('message', 'Rejected')
-                    return {"success": False, "log": f"Solana отклонила TX: {err_msg[:25]}"}
+                    return {"success": False, "log": f"Solana отклонила: {err_msg[:22]}"}
 
         except Exception as e:
-            logging.error(f"On-chain execution error: {e}")
-            return {"success": False, "log": f"Сбой сети: {str(e)[:25]}"}
+            logging.error(f"On-chain execution exception: {e}")
+            return {"success": False, "log": f"Сбой: {str(e)[:22]}"}
 
     profit_percent = round(random.uniform(0.6, 2.4), 2)
     sell_price = round(buy_price * (1 + profit_percent / 100), 2)
@@ -247,7 +245,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                     <h2 style="margin: 0; font-size: 18px;" id="uname">Trader</h2>
                     <p style="margin: 4px 0 0 0; font-size: 11px; color: #94a3b8;">ID: <span id="uid" class="val">---</span></p>
                 </div>
-                <div class="badge">🛡️ On-Chain Live</div>
+                <div class="badge">🛡️ Jupiter v6 Live</div>
             </div>
             <label style="font-size: 11px; color: #94a3b8; font-weight: 600;">Адрес пула экосистемы:</label>
             <input type="text" id="wallet-input" class="input-field" readonly>
@@ -265,11 +263,11 @@ HTML_CONTENT = """<!DOCTYPE html>
     <div id="tab-trader" class="tab-content">
         <div class="card">
             <h3 style="margin: 0 0 12px 0; font-size: 15px;">🎯 Стратегия On-Chain</h3>
-            <button id="mode-sol" class="btn-mode active" onclick="setMode('SOL_USDC')"><span>💎 SOL / USDC Арбитраж</span><span style="font-size: 11px; color: #34d399;">On-Chain</span></button>
+            <button id="mode-sol" class="btn-mode active" onclick="setMode('SOL_USDC')"><span>💎 SOL / USDC Арбитраж</span><span style="font-size: 11px; color: #34d399;">v6 API</span></button>
             <button id="mode-meme" class="btn-mode" onclick="setMode('MEMECOIN_SNIPER')"><span>🚀 MemeCoin Sniper</span><span style="font-size: 11px; color: #c084fc;">Real Swap</span></button>
         </div>
         <div class="card">
-            <h3 style="margin: 0 0 10px 0; font-size: 15px;">🤖 ИИ-Агент On-Chain 24/7</h3>
+            <h3 style="margin: 0 0 10px 0; font-size: 15px;">🤖 ИИ-Агент Jupiter v6 24/7</h3>
             <div class="metric"><span>Баланс пула:</span> <span id="wallet-balance" class="val">Загрузка...</span></div>
             <div class="metric"><span>Статус:</span> <span id="trade-status" class="val" style="color: #f59e0b;">Остановлен</span></div>
             <div style="display: flex; gap: 10px; margin-top: 14px;">
@@ -279,7 +277,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         </div>
         <div class="card">
             <h3 style="margin: 0 0 8px 0; font-size: 15px;">📡 Телеметрия и Сделки (Live)</h3>
-            <div id="logs-box" class="logs">Инициализация On-Chain модуля... Ожидание старта.</div>
+            <div id="logs-box" class="logs">Jupiter v6 инициализирован... Ожидание старта.</div>
         </div>
     </div>
 
@@ -352,7 +350,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             const st = document.getElementById('trade-status');
             const btn = document.getElementById('toggle-btn');
             if(isTrading) {
-                st.innerText = "ИИ активен On-Chain"; st.style.color = "#10b981";
+                st.innerText = "ИИ активен (v6)"; st.style.color = "#10b981";
                 btn.innerText = "Остановить"; btn.className = "btn btn-red";
             } else {
                 st.innerText = "Остановлен"; st.style.color = "#f59e0b";
@@ -419,7 +417,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                 const now = new Date();
                 const timeStr = now.toTimeString().split(' ')[0];
                 const box = document.getElementById('logs-box');
-                const modeLabel = currentMode === 'MEMECOIN_SNIPER' ? 'Sniper' : 'Arb';
+                const modeLabel = currentMode === 'MEMECOIN_SNIPER' ? 'Sniper v6' : 'Arb v6';
                 
                 let logMsg = `[${timeStr}] [${modeLabel}] TX отправлена! Sign: ${data.tx_signature.substring(0,8)}... (+${data.profit_percent}%) 🚀`;
                 box.innerHTML += `<div>${logMsg}</div>`;
@@ -441,7 +439,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                 checkBalance();
             } else {
                 const box = document.getElementById('logs-box');
-                box.innerHTML += `<div style="color: #ef4444;">[Ошибка On-Chain] ${data.log}</div>`;
+                box.innerHTML += `<div style="color: #ef4444;">[Ошибка v6] ${data.log}</div>`;
                 box.scrollTop = box.scrollHeight;
             }
         }, 15000);
@@ -532,7 +530,7 @@ async def send_telegram_message(chat_id):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": chat_id,
-        "text": "⚡ **Zer0Life On-Chain AI Trader**\n\nРеальный торговый модуль активен:",
+        "text": "⚡ **Zer0Life On-Chain AI Trader (v6)**\n\nМодуль обновлен:",
         "parse_mode": "Markdown",
         "reply_markup": {
             "inline_keyboard": [[
@@ -581,7 +579,7 @@ async def main():
             async with session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}") as r:
                 logging.info(f"Telegram webhook set status: {r.status}")
 
-    logging.info("Web4 On-Chain AI Trader запущен в реальном режиме.")
+    logging.info("Web4 On-Chain AI Trader v6 запущен.")
     while True:
         await asyncio.sleep(3600)
 
