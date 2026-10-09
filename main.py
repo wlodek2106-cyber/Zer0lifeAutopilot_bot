@@ -3,17 +3,13 @@ import aiohttp
 from aiohttp import web
 import logging
 import os
-import hashlib
-import hmac
-import base64
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 PORT = int(os.getenv("PORT", 10000))
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://zer0lifeautopilot-bot.onrender.com")
-
-USER_WALLETS = {}
+DEX_LAUNCHPAD_URL = "https://jup.ag/swap/SOL-ZRL" # Или ваша ссылка на Raydium / Launchpad
 
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="ru">
@@ -25,13 +21,11 @@ HTML_CONTENT = """<!DOCTYPE html>
     <style>
         body { background-color: #0b0f19; color: #f8fafc; font-family: sans-serif; margin: 0; padding: 16px; }
         .card { background: #131c2e; border-radius: 14px; padding: 16px; margin-bottom: 16px; border: 1px solid #1e293b; }
-        .btn { background: #7c3aed; color: white; border: none; width: 100%; padding: 12px; border-radius: 10px; font-size: 14px; font-weight: bold; cursor: pointer; margin-top: 10px; }
+        .btn { background: #7c3aed; color: white; border: none; width: 100%; padding: 14px; border-radius: 10px; font-size: 14px; font-weight: bold; cursor: pointer; margin-top: 10px; text-decoration: none; display: block; text-align: center; box-sizing: border-box; }
         .btn-green { background: #10b981; }
-        .coin { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #1e293b; font-size: 14px; }
-        .balance-val { color: #10b981; font-weight: bold; }
+        .coin { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #1e293b; font-size: 14px; }
         .profile-header { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
         .avatar { width: 48px; height: 48px; border-radius: 50%; background: #334155; object-fit: cover; }
-        .address-box { background: #0b0f19; padding: 8px; border-radius: 8px; font-size: 11px; color: #38bdf8; word-break: break-all; margin-top: 6px; }
     </style>
 </head>
 <body>
@@ -47,28 +41,17 @@ HTML_CONTENT = """<!DOCTYPE html>
 
     <div class="card">
         <h2>🛡 Zer0life DEX Autopilot</h2>
-        <p>Статус: <span style="color: #10b981; font-weight: bold;">🟢 Торговый агент на Solana</span></p>
-    </div>
-    
-    <div class="card">
-        <h3>👛 Ваш персональный DEX-кошелек</h3>
-        <p style="color: #94a3b8; font-size: 12px;">Пополните этот адрес в сети Solana (SOL), чтобы AI-бот начал автономную торговлю.</p>
+        <p>Статус: <span style="color: #10b981; font-weight: bold;">🟢 Сеть Solana активна</span></p>
+        <p style="color: #94a3b8; font-size: 12px; margin-top: 8px;">Автономный торговый терминал экосистемы. Управление ликвидностью и пулами ZRL.</p>
         
-        <div class="address-box" id="wallet-address">Генерация кошелька...</div>
-        
-        <div style="margin-top: 12px;" class="coin">
-            <span>Баланс SOL:</span>
-            <span class="balance-val" id="wallet-balance">0.00 SOL</span>
-        </div>
-
-        <button class="btn" onclick="refreshBalance()">Обновить баланс</button>
-        <button class="btn btn-green" onclick="toggleAutopilot()" id="autopilot-btn">Запустить AI Автопилот</button>
+        <a href="https://jup.ag/swap/SOL-ZRL" target="_blank" class="btn btn-green">🚀 Открыть DEX Launchpad (ZRL)</a>
     </div>
 
     <div class="card">
-        <h3>📊 DEX Пул ликвидности</h3>
-        <div class="coin"><span>ZRL / SOL (Raydium)</span><span style="color: #10b981;">Сканирование</span></div>
-        <div class="coin"><span>SOL / USDC (Jupiter)</span><span style="color: #10b981;">Активен</span></div>
+        <h3>📊 Мониторинг пулов ликвидности</h3>
+        <div class="coin"><span>ZRL / SOL (Raydium)</span><span style="color: #10b981; font-weight: bold;">Ликвидность OK</span></div>
+        <div class="coin"><span>SOL / USDC (Jupiter)</span><span style="color: #10b981; font-weight: bold;">Активен</span></div>
+        <div class="coin"><span>AVAX / USDC (CEX)</span><span style="color: #38bdf8; font-weight: bold;">Мониторинг</span></div>
     </div>
 
     <script>
@@ -82,92 +65,10 @@ HTML_CONTENT = """<!DOCTYPE html>
         document.getElementById('user-id').innerText = userId;
         document.getElementById('user-nickname').innerText = firstName;
         document.getElementById('user-avatar').src = photoUrl;
-
-        let userPubKey = "";
-
-        async function initWallet() {
-            try {
-                const response = await fetch('/api/get_wallet', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ user_id: userId })
-                });
-                const data = await response.json();
-                if (data.status === "success") {
-                    userPubKey = data.pubkey;
-                    document.getElementById('wallet-address').innerText = userPubKey;
-                    document.getElementById('wallet-balance').innerText = data.balance + " SOL";
-                }
-            } catch (e) {
-                console.error(e);
-            }
-        }
-
-        async function refreshBalance() {
-            tg.HapticFeedback.impactOccurred('light');
-            await initWallet();
-            tg.showAlert("Баланс обновлен из блокчейна Solana!");
-        }
-
-        function toggleAutopilot() {
-            tg.HapticFeedback.notificationOccurred('success');
-            const btn = document.getElementById('autopilot-btn');
-            if (btn.innerText.includes("Запустить")) {
-                btn.innerText = "Остановить Автопилот";
-                btn.style.background = "#ef4444";
-                tg.showAlert("AI Автопилот успешно запущен на вашем DEX-кошельке!");
-            } else {
-                btn.innerText = "Запустить AI Автопилот";
-                btn.style.background = "#10b981";
-                tg.showAlert("AI Автопилот остановлен.");
-            }
-        }
-
-        initWallet();
     </script>
 </body>
 </html>
 """
-
-# Генерация детерминированного Solana-подобного адреса на чистом Python без внешних либ
-def generate_solana_address(user_id):
-    # Создаем уникальный хэш на основе Telegram ID для демонстрации адреса в сети
-    h = hashlib.sha256(str(user_id).encode()).hexdigest()
-    # Имитируем префикс и структуру валидного Solana base58 адреса
-    alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-    num = int(h[:16], 16)
-    res = []
-    while num > 0:
-        res.append(alphabet[num % 58])
-        num //= 58
-    addr = "".join(res)
-    # Гарантируем стандартную длину Solana адреса (около 44 символов)
-    return "ZER0" + addr[:40]
-
-async def get_solana_balance(pubkey_str):
-    # Если это сгенерированный тестовый адрес, возвращаем баланс для проверки UI
-    return "0.0000"
-
-async def get_wallet_handler(request):
-    try:
-        data = await request.json()
-        user_id = str(data.get("user_id"))
-        
-        if user_id not in USER_WALLETS:
-            pubkey = generate_solana_address(user_id)
-            USER_WALLETS[user_id] = {"pubkey": pubkey}
-            logging.info(f"Создан новый DEX-кошелек для юзера {user_id}: {pubkey}")
-        
-        pubkey = USER_WALLETS[user_id]["pubkey"]
-        balance = await get_solana_balance(pubkey)
-        
-        return web.json_response({
-            "status": "success",
-            "pubkey": pubkey,
-            "balance": balance
-        })
-    except Exception as e:
-        return web.json_response({"status": "error", "message": str(e)}, status=400)
 
 async def index_handler(request):
     return web.Response(text=HTML_CONTENT, content_type='text/html')
@@ -178,12 +79,13 @@ async def send_telegram_message(chat_id, text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": chat_id,
-        "text": f"🤖 **Zer0life DEX**\n\n{text}",
+        "text": f"🛡 **Zer0life DEX Terminal**\n\n{text}",
         "parse_mode": "Markdown",
         "reply_markup": {
-            "inline_keyboard": [[
-                {"text": "🚀 Открыть DEX Терминал", "web_app": {"url": RENDER_URL}}
-            ]]
+            "inline_keyboard": [
+                [{"text": "🚀 Запустить DEX Терминал", "web_app": {"url": RENDER_URL}}],
+                [{"text": "💎 Открыть DEX Launchpad (ZRL)", "url": DEX_LAUNCHPAD_URL}]
+            ]
         }
     }
     async with aiohttp.ClientSession() as session:
@@ -200,7 +102,7 @@ async def webhook_handler(request):
         text = message.get("text", "")
         chat_id = message.get("chat", {}).get("id")
         if text == "/start" and chat_id:
-            await send_telegram_message(chat_id, "Ваш персональный DEX-терминал на Solana инициализирован. Нажмите кнопку ниже:")
+            await send_telegram_message(chat_id, "Экосистема инициализирована. Выберите нужный раздел в управлении ниже:")
         return web.Response(text="OK", status=200)
     except Exception:
         return web.Response(text="Error", status=500)
@@ -209,7 +111,6 @@ async def main():
     app = web.Application()
     app.router.add_get('/', index_handler)
     app.router.add_post('/webhook', webhook_handler)
-    app.router.add_post('/api/get_wallet', get_wallet_handler)
     
     runner = web.AppRunner(app)
     await runner.setup()
