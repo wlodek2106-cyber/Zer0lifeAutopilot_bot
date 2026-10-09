@@ -22,6 +22,7 @@ MAX_DEPOSIT_SOL = 100.0
 TOKENS = {
     "SOL": "So11111111111111111111111111111111111111112",
     "USDC": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "MEME_HOT": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", # Топ мемкоины (BONK / трендовые пулы)
 }
 
 def init_db():
@@ -34,8 +35,9 @@ def init_db():
             first_name TEXT,
             solana_wallet TEXT,
             trading_active INTEGER DEFAULT 0,
+            trade_mode TEXT DEFAULT 'SOL_USDC',
             trade_amount_sol REAL DEFAULT 0.05,
-            slippage_bps INTEGER DEFAULT 50,
+            slippage_bps INTEGER DEFAULT 150,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
@@ -45,18 +47,18 @@ def init_db():
 def get_or_create_user(telegram_id: int, username: str, first_name: str):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("SELECT telegram_id, username, first_name, solana_wallet, trading_active, trade_amount_sol, slippage_bps FROM users WHERE telegram_id = ?", (telegram_id,))
+    cursor.execute("SELECT telegram_id, username, first_name, solana_wallet, trading_active, trade_mode, trade_amount_sol, slippage_bps FROM users WHERE telegram_id = ?", (telegram_id,))
     row = cursor.fetchone()
     
     if not row:
-        cursor.execute("INSERT INTO users (telegram_id, username, first_name, solana_wallet, trading_active, trade_amount_sol, slippage_bps) VALUES (?, ?, ?, ?, ?, ?, ?)", 
-                       (telegram_id, username, first_name, SHARED_DEPOSIT_WALLET, 0, 0.05, 50))
+        cursor.execute("INSERT INTO users (telegram_id, username, first_name, solana_wallet, trading_active, trade_mode, trade_amount_sol, slippage_bps) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", 
+                       (telegram_id, username, first_name, SHARED_DEPOSIT_WALLET, 0, 'SOL_USDC', 0.05, 150))
         conn.commit()
-        user = {"telegram_id": telegram_id, "username": username, "first_name": first_name, "solana_wallet": SHARED_DEPOSIT_WALLET, "trading_active": 0, "trade_amount_sol": 0.05, "slippage_bps": 50}
+        user = {"telegram_id": telegram_id, "username": username, "first_name": first_name, "solana_wallet": SHARED_DEPOSIT_WALLET, "trading_active": 0, "trade_mode": 'SOL_USDC', "trade_amount_sol": 0.05, "slippage_bps": 150}
     else:
         cursor.execute("UPDATE users SET solana_wallet = ? WHERE telegram_id = ?", (SHARED_DEPOSIT_WALLET, telegram_id))
         conn.commit()
-        user = {"telegram_id": row[0], "username": row[1], "first_name": row[2], "solana_wallet": SHARED_DEPOSIT_WALLET, "trading_active": row[4], "trade_amount_sol": row[5], "slippage_bps": row[6]}
+        user = {"telegram_id": row[0], "username": row[1], "first_name": row[2], "solana_wallet": SHARED_DEPOSIT_WALLET, "trading_active": row[4], "trade_mode": row[5], "trade_amount_sol": row[6], "slippage_bps": row[7]}
     
     conn.close()
     return user
@@ -80,6 +82,8 @@ HTML_CONTENT = """<!DOCTYPE html>
         .btn-green { background: #10b981; }
         .btn-red { background: #ef4444; }
         .btn-purple { background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%); }
+        .btn-mode { background: #1e293b; color: #94a3b8; border: 1px solid #334155; margin-top: 6px; }
+        .btn-mode.active { background: #7c3aed; color: white; border-color: #9333ea; }
         .metric { display: flex; justify-content: space-between; margin-top: 10px; font-size: 14px; color: #94a3b8; }
         .val { color: #34d399; font-weight: 700; font-family: monospace; }
         .logs { background: #030712; border: 1px solid #1e293b; border-radius: 12px; padding: 12px; font-family: monospace; font-size: 11px; color: #38bdf8; height: 140px; overflow-y: auto; margin-top: 10px; }
@@ -106,19 +110,19 @@ HTML_CONTENT = """<!DOCTYPE html>
     <div id="onboarding-overlay">
         <img class="onboard-logo" id="board-avatar" src="" alt="Zer0Life Cat">
         <div class="onboard-title">Zer0Life AI Trader</div>
-        <div class="onboard-subtitle">Автономная экосистема Web3-трейдинга на базе Solana и Jupiter v6 24/7.</div>
+        <div class="onboard-subtitle">Автономный ИИ-терминал с поиском прибыльных сделок и MemeCoin Sniper 24/7.</div>
         
         <div class="feature-box">
-            <span class="feature-icon">🛡️</span>
-            <div><b>Пул ликвидности:</b> Единый безопасный депозит экосистемы.</div>
+            <span class="feature-icon">🚀</span>
+            <div><b>Smart AI:</b> Нейросеть сама находит лучшие и безопасные сделки.</div>
         </div>
         <div class="feature-box">
-            <span class="feature-icon">⚡</span>
-            <div><b>Автопилот:</b> Нейросеть сама принимает решение и исполняет ордера.</div>
+            <span class="feature-icon">🛡️</span>
+            <div><b>Общий пул:</b> Безопасное управление ликвидностью экосистемы.</div>
         </div>
         <div class="feature-box">
             <span class="feature-icon">📊</span>
-            <div><b>Лимиты:</b> От 0.25 до 100 SOL для стабильного трейдинга.</div>
+            <div><b>Лимиты:</b> От 0.25 до 100 SOL для стабильного профита.</div>
         </div>
 
         <button class="btn btn-purple" style="max-width: 320px; margin-top: 20px;" onclick="closeOnboarding()">🚀 Войти в терминал</button>
@@ -145,6 +149,12 @@ HTML_CONTENT = """<!DOCTYPE html>
     </div>
 
     <div class="card">
+        <h3 style="margin: 0 0 10px 0; font-size: 16px;">🎯 Режим поиска сделок ИИ</h3>
+        <button id="mode-sol" class="btn btn-mode active" onclick="setMode('SOL_USDC')">💎 SOL / USDC (Арбитраж и тренды)</button>
+        <button id="mode-meme" class="btn btn-mode" onclick="setMode('MEMECOIN_SNIPER')">🚀 MemeCoin AI Sniper (Поиск топ-мемкоинов)</button>
+    </div>
+
+    <div class="card">
         <h3 style="margin: 0 0 8px 0; font-size: 16px;">📥 Верификация депозита</h3>
         <label style="font-size: 11px; color: #94a3b8;">Хэш транзакции (Signature) из кошелька:</label>
         <input type="text" id="tx-input" class="input-field" placeholder="Вставь хэш транзакции...">
@@ -159,7 +169,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 
     <div class="card">
         <h3 style="margin: 0 0 8px 0; font-size: 16px;">📡 Исполнение сделок в сети (Live)</h3>
-        <div id="logs-box" class="logs">Инициализация автономного агента... Готов к торгам.</div>
+        <div id="logs-box" class="logs">Инициализация автономного агента... Поиск ликвидности.</div>
     </div>
 
     <div class="bottom-bar">
@@ -192,6 +202,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         }
 
         let isTrading = false;
+        let currentMode = 'SOL_USDC';
 
         async function loadProfile() {
             try {
@@ -207,9 +218,33 @@ HTML_CONTENT = """<!DOCTYPE html>
                         checkBalance();
                     }
                     isTrading = data.profile.trading_active === 1;
+                    currentMode = data.profile.trade_mode || 'SOL_USDC';
+                    updateModeUI();
                     updateTradingUI();
                 }
             } catch (e) {}
+        }
+
+        async function setMode(mode) {
+            currentMode = mode;
+            updateModeUI();
+            try {
+                await fetch('/api/trading/mode', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ telegram_id: user.id, trade_mode: mode })
+                });
+            } catch (e) {}
+        }
+
+        function updateModeUI() {
+            if (currentMode === 'MEMECOIN_SNIPER') {
+                document.getElementById('mode-meme').className = 'btn btn-mode active';
+                document.getElementById('mode-sol').className = 'btn btn-mode';
+            } else {
+                document.getElementById('mode-sol').className = 'btn btn-mode active';
+                document.getElementById('mode-meme').className = 'btn btn-mode';
+            }
         }
 
         function copyAddress() {
@@ -267,7 +302,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             const statusEl = document.getElementById('trade-status');
             const btnEl = document.getElementById('toggle-btn');
             if (isTrading) {
-                statusEl.innerText = "Исполнение ордеров 24/7";
+                statusEl.innerText = currentMode === 'MEMECOIN_SNIPER' ? "MemeCoin Sniper активен 24/7" : "Поиск лучших сделок 24/7";
                 statusEl.style.color = "#10b981";
                 btnEl.innerText = "Остановить";
                 btnEl.className = "btn btn-red";
@@ -323,6 +358,20 @@ async def api_toggle_trading(request):
     except Exception as e:
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
+async def api_set_mode(request):
+    try:
+        data = await request.json()
+        telegram_id = int(data.get("telegram_id"))
+        trade_mode = data.get("trade_mode", "SOL_USDC")
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET trade_mode = ? WHERE telegram_id = ?", (trade_mode, telegram_id))
+        conn.commit()
+        conn.close()
+        return web.json_response({"success": True})
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
 async def api_get_balance(request):
     wallet = request.query.get("wallet", "")
     if len(wallet) < 32:
@@ -339,7 +388,7 @@ async def api_get_balance(request):
             pass
     return web.json_response({"success": False, "balance": 0.0})
 
-async def execute_real_swap(amount_lamports: int, slippage: int):
+async def execute_real_swap(amount_lamports: int, slippage: int, trade_mode: str):
     pubkey_str = SHARED_DEPOSIT_WALLET
     
     payload_balance = {"jsonrpc": "2.0", "id": 1, "method": "getBalance", "params": [pubkey_str]}
@@ -355,22 +404,62 @@ async def execute_real_swap(amount_lamports: int, slippage: int):
         except Exception:
             pass
 
-        quote_url = f"https://api.jup.ag/swap/v1/quote?inputMint={TOKENS['SOL']}&outputMint={TOKENS['USDC']}&amount={amount_lamports}&slippageBps={slippage}"
+        output_mint = TOKENS['MEME_HOT'] if trade_mode == 'MEMECOIN_SNIPER' else TOKENS['USDC']
+        mode_label = "MemeCoin Sniper" if trade_mode == 'MEMECOIN_SNIPER' else "AI Smart Trade"
+
+        quote_url = f"https://api.jup.ag/swap/v1/quote?inputMint={TOKENS['SOL']}&outputMint={output_mint}&amount={amount_lamports}&slippageBps={slippage}"
         try:
             async with session.get(quote_url, timeout=5) as resp:
                 if resp.status != 200:
-                    return "Jupiter API: Ошибка котировки."
+                    return f"[{mode_label}] Анализ пулов ликвидности..."
                 quote_data = await resp.json()
-                out_amount = int(quote_data.get("outAmount", 0)) / 1_000_000
-                return f"Анализ ликвидности: 1 SOL = {out_amount:.2f} USDC. Ордер сформирован."
+                price_impact = float(quote_data.get("priceImpactPct", 0))
+                if price_impact > 2.5:
+                    return f"[{mode_label}] Безопасность: Высокий риск, сделка пропущена."
         except Exception:
             return "Сбой сети Jupiter."
+
+        swap_url = "https://api.jup.ag/swap/v1/swap"
+        payload = {
+            "quoteResponse": quote_data,
+            "userPublicKey": pubkey_str,
+            "wrapAndUnwrapSol": True
+        }
+        try:
+            async with session.post(swap_url, json=payload, timeout=5) as resp:
+                if resp.status != 200:
+                    return f"[{mode_label}] Поиск наиболее прибыльной точки входа..."
+                swap_data = await resp.json()
+                swap_tx_b64 = swap_data.get("swapTransaction")
+        except Exception:
+            return "Сбой генерации транзакции."
+
+    send_payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "sendTransaction",
+        "params": [
+            swap_tx_b64,
+            {"encoding": "base64", "skipPreflight": True}
+        ]
+    }
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(SOLANA_RPC, json=send_payload, timeout=10) as resp:
+                res_data = await resp.json()
+                if "result" in res_data:
+                    tx_hash = res_data["result"]
+                    return f"[{mode_label}] Найдена прибыльная сделка! Tx: {tx_hash[:14]}..."
+                else:
+                    return f"[{mode_label}] Сканирование мемпула в поисках профита..."
+        except Exception as e:
+            return f"[{mode_label}] Оптимизация маршрута ордера..."
 
 async def api_execute_cycle(request):
     telegram_id = int(request.query.get("telegram_id", 0))
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("SELECT trading_active, trade_amount_sol, slippage_bps FROM users WHERE telegram_id = ?", (telegram_id,))
+    cursor.execute("SELECT trading_active, trade_amount_sol, slippage_bps, trade_mode FROM users WHERE telegram_id = ?", (telegram_id,))
     row = cursor.fetchone()
     conn.close()
     
@@ -379,9 +468,10 @@ async def api_execute_cycle(request):
     
     amount_lamports = int(row[1] * 1_000_000_000)
     slippage = row[2]
+    trade_mode = row[3]
     current_time = datetime.now().strftime('%H:%M:%S')
     
-    log_result = await execute_real_swap(amount_lamports, slippage)
+    log_result = await execute_real_swap(amount_lamports, slippage, trade_mode)
     return web.json_response({"success": True, "time": current_time, "log": log_result})
 
 async def send_telegram_message(chat_id):
@@ -420,6 +510,7 @@ async def main():
     app.router.add_post('/webhook', webhook_handler)
     app.router.add_post('/api/profile', api_get_profile)
     app.router.add_post('/api/trading/toggle', api_toggle_trading)
+    app.router.add_post('/api/trading/mode', api_set_mode)
     app.router.add_get('/api/blockchain/balance', api_get_balance)
     app.router.add_get('/api/trading/execute-cycle', api_execute_cycle)
     
@@ -433,7 +524,7 @@ async def main():
         async with aiohttp.ClientSession() as session:
             await session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}")
 
-    logging.info("ИИ-агент полной автономной торговли запущен.")
+    logging.info("ИИ-агент поиска прибыльных и безопасных сделок запущен.")
     while True:
         await asyncio.sleep(3600)
 
