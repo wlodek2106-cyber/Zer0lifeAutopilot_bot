@@ -18,6 +18,7 @@ HTML_CONTENT = """<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Zer0life Web4 Terminal</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
     <style>
         body { background-color: #0b0f19; color: #f8fafc; font-family: sans-serif; margin: 0; padding: 16px; }
         .card { background: #131c2e; border-radius: 14px; padding: 16px; margin-bottom: 16px; border: 1px solid #1e293b; }
@@ -33,13 +34,13 @@ HTML_CONTENT = """<!DOCTYPE html>
     </div>
     
     <div class="card">
-        <h3>🔗 Подключение Кошелька</h3>
-        <p id="wallet-status" style="color: #94a3b8; font-size: 13px;">Откройте этот бот в браузере Phantom для автоподключения</p>
+        <h3>🔗 Кошелек Solana</h3>
+        <p id="wallet-status" style="color: #94a3b8; font-size: 13px;">Статус: Не подключен</p>
         <div id="balances-container" style="display:none; margin-top: 10px;">
-            <div class="coin"><span>Адрес</span><span id="wallet-addr" style="color: #38bdf8; font-size: 12px;">---</span></div>
-            <div class="coin"><span>Solana (SOL)</span><span class="balance-val" id="bal-sol">0.00 SOL</span></div>
+            <div class="coin"><span>Адрес</span><span id="wallet-addr" style="color: #38bdf8; font-size: 11px;">---</span></div>
+            <div class="coin"><span>Solana (SOL)</span><span class="balance-val" id="bal-sol">Загрузка...</span></div>
         </div>
-        <button class="btn" id="conn-btn" onclick="connectDirectWallet()">Подключить Phantom</button>
+        <button class="btn" id="conn-btn" onclick="connectWalletInTG()">Подключить Phantom</button>
     </div>
 
     <div class="card">
@@ -56,42 +57,34 @@ HTML_CONTENT = """<!DOCTYPE html>
         let tg = window.Telegram.WebApp;
         tg.expand();
 
-        async function connectDirectWallet() {
-            const provider = window.solana || window.phantom?.solana;
-            
-            if (provider && provider.isPhantom) {
-                try {
+        async function connectWalletInTG() {
+            try {
+                tg.HapticFeedback.impactOccurred('medium');
+
+                // Проверка доступности провайдера Phantom в WebApp окружении
+                const provider = window.solana || window.phantom?.solana;
+
+                if (provider) {
                     const resp = await provider.connect();
                     const pubKey = resp.publicKey.toString();
-                    document.getElementById('wallet-status').innerText = "Статус: Подключено";
-                    document.getElementById('wallet-addr').innerText = pubKey.slice(0, 4) + '...' + pubKey.slice(-4);
-                    document.getElementById('balances-container').style.display = 'block';
-                    document.getElementById('conn-btn').innerText = 'Синхронизировано';
-                    document.getElementById('conn-btn').style.background = '#10b981';
                     
-                    // Запрос реального баланса
-                    fetchBalance(pubKey);
-                } catch (e) {
-                    alert("Ошибка: " + e.message);
-                }
-            } else {
-                alert("Пожалуйста, откройте этот терминал во встроенном браузере кошелька Phantom, чтобы избежать ошибок перенаправления.");
-            }
-        }
+                    document.getElementById('wallet-status').innerText = "Подключено";
+                    document.getElementById('wallet-addr').innerText = pubKey;
+                    document.getElementById('balances-container').style.display = 'block';
+                    document.getElementById('conn-btn').innerText = 'Кошелек синхронизирован';
+                    document.getElementById('conn-btn').style.background = '#10b981';
 
-        async function fetchBalance(pubKey) {
-            try {
-                const res = await fetch('https://api.mainnet-beta.solana.com', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getBalance", params: [pubKey] })
-                });
-                const data = await res.json();
-                if (data.result) {
-                    document.getElementById('bal-sol').innerText = (data.result.value / 1e9).toFixed(4) + " SOL";
+                    // Запрос реального баланса через Web3.js
+                    const connection = new solanaWeb3.Connection(solanaWeb3.clusterApiUrl('mainnet-beta'), 'confirmed');
+                    const balance = await connection.getBalance(new solanaWeb3.PublicKey(pubKey));
+                    document.getElementById('bal-sol').innerText = (balance / solanaWeb3.LAMPORTS_PER_SOL).toFixed(4) + " SOL";
+                } else {
+                    // Если инжект провайдера заблокирован телеграмом на iOS, используем защищенный универсальный диплинк подписи
+                    const encodedUrl = encodeURIComponent(window.location.href);
+                    window.location.href = `https://phantom.app/ul/v1/connect?app_url=${encodedUrl}&redirect_link=${encodedUrl}&cluster=mainnet-beta`;
                 }
             } catch (err) {
-                console.log(err);
+                alert("Ошибка подключения: " + err.message);
             }
         }
     </script>
