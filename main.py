@@ -10,10 +10,8 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 PORT = int(os.getenv("PORT", 10000))
 
-# Ваш точный актуальный адрес с Render
 RENDER_URL = "https://zer0lifeautopilot-bot.onrender.com"
 
-# HTML-интерфейс со всеми отслеживаемыми монетами
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -97,6 +95,18 @@ HTML_CONTENT = """<!DOCTYPE html>
 </html>
 """
 
+async def clear_webhook():
+    """Сбрасывает старый webhook, чтобы getUpdates начал работать"""
+    if not TELEGRAM_TOKEN:
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=true"
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url) as resp:
+                logging.info("Webhook успешно сброшен для работы через getUpdates")
+        except Exception as e:
+            logging.error(f"Не удалось сбросить webhook: {e}")
+
 async def send_telegram_message(text, chat_id=None, add_webapp=True):
     target_chat = chat_id or TELEGRAM_CHAT_ID
     if not TELEGRAM_TOKEN or not target_chat:
@@ -126,6 +136,9 @@ async def send_telegram_message(text, chat_id=None, add_webapp=True):
 async def handle_telegram_updates():
     if not TELEGRAM_TOKEN:
         return
+    
+    # Сбрасываем вебхук при старте
+    await clear_webhook()
     
     offset = 0
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
