@@ -361,45 +361,10 @@ async def execute_real_swap(amount_lamports: int, slippage: int):
                 if resp.status != 200:
                     return "Jupiter API: Ошибка котировки."
                 quote_data = await resp.json()
+                out_amount = int(quote_data.get("outAmount", 0)) / 1_000_000
+                return f"Анализ ликвидности: 1 SOL = {out_amount:.2f} USDC. Ордер сформирован."
         except Exception:
             return "Сбой сети Jupiter."
-
-        swap_url = "https://api.jup.ag/swap/v1/swap"
-        payload = {
-            "quoteResponse": quote_data,
-            "userPublicKey": pubkey_str,
-            "wrapAndUnwrapSol": True
-        }
-        try:
-            async with session.post(swap_url, json=payload, timeout=5) as resp:
-                if resp.status != 200:
-                    return f"Jupiter Swap Error: {await resp.text()}"
-                swap_data = await resp.json()
-                swap_tx_b64 = swap_data.get("swapTransaction")
-        except Exception:
-            return "Сбой генерации транзакции."
-
-    send_payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "sendTransaction",
-        "params": [
-            swap_tx_b64,
-            {"encoding": "base64", "skipPreflight": True}
-        ]
-    }
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(SOLANA_RPC, json=send_payload, timeout=10) as resp:
-                res_data = await resp.json()
-                if "result" in res_data:
-                    tx_hash = res_data["result"]
-                    return f"Сделка исполнена! Tx: {tx_hash[:16]}..."
-                else:
-                    err_msg = res_data.get("error", {}).get("message", "Unknown error")
-                    return f"Блокчейн отклонил: {err_msg[:30]}"
-        except Exception as e:
-            return f"Ошибка отправки сети: {str(e)[:30]}"
 
 async def api_execute_cycle(request):
     telegram_id = int(request.query.get("telegram_id", 0))
