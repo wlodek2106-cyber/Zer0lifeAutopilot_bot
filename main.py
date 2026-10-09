@@ -33,13 +33,13 @@ HTML_CONTENT = """<!DOCTYPE html>
     </div>
     
     <div class="card">
-        <h3>🔗 Реальный Web3 Кошелек</h3>
-        <p id="wallet-status" style="color: #94a3b8; font-size: 13px;">Статус: Не подключен</p>
+        <h3>🔗 Подключение Кошелька</h3>
+        <p id="wallet-status" style="color: #94a3b8; font-size: 13px;">Откройте этот бот в браузере Phantom для автоподключения</p>
         <div id="balances-container" style="display:none; margin-top: 10px;">
             <div class="coin"><span>Адрес</span><span id="wallet-addr" style="color: #38bdf8; font-size: 12px;">---</span></div>
-            <div class="coin"><span>Solana (SOL)</span><span class="balance-val" id="bal-sol">Запрос...</span></div>
+            <div class="coin"><span>Solana (SOL)</span><span class="balance-val" id="bal-sol">0.00 SOL</span></div>
         </div>
-        <button class="btn" id="conn-btn" onclick="connectRealWallet()">Подключить Phantom</button>
+        <button class="btn" id="conn-btn" onclick="connectDirectWallet()">Подключить Phantom</button>
     </div>
 
     <div class="card">
@@ -56,54 +56,42 @@ HTML_CONTENT = """<!DOCTYPE html>
         let tg = window.Telegram.WebApp;
         tg.expand();
 
-        async function connectRealWallet() {
-            try {
-                tg.HapticFeedback.impactOccurred('medium');
-                
-                // Проверяем доступность провайдера Phantom в окружении
-                const provider = window.solana || window.phantom?.solana;
-                
-                if (provider) {
-                    const response = await provider.connect();
-                    const pubKey = response.publicKey.toString();
-                    
+        async function connectDirectWallet() {
+            const provider = window.solana || window.phantom?.solana;
+            
+            if (provider && provider.isPhantom) {
+                try {
+                    const resp = await provider.connect();
+                    const pubKey = resp.publicKey.toString();
                     document.getElementById('wallet-status').innerText = "Статус: Подключено";
                     document.getElementById('wallet-addr').innerText = pubKey.slice(0, 4) + '...' + pubKey.slice(-4);
                     document.getElementById('balances-container').style.display = 'block';
-                    document.getElementById('conn-btn').innerText = 'Кошелек синхронизирован';
+                    document.getElementById('conn-btn').innerText = 'Синхронизировано';
                     document.getElementById('conn-btn').style.background = '#10b981';
                     
-                    // Запрос реального баланса SOL через публичную RPC ноду Solana
-                    fetchSolanaBalance(pubKey);
-                } else {
-                    // Корректный вызов прокола Phantom без увода в сторонние браузеры
-                    const refUrl = encodeURIComponent(window.location.origin);
-                    window.location.href = `https://phantom.app/ul/v1/connect?app_url=${refUrl}&redirect_link=${encodeURIComponent(window.location.href)}&cluster=mainnet-beta`;
+                    // Запрос реального баланса
+                    fetchBalance(pubKey);
+                } catch (e) {
+                    alert("Ошибка: " + e.message);
                 }
-            } catch (err) {
-                alert("Ошибка подключения: " + err.message);
+            } else {
+                alert("Пожалуйста, откройте этот терминал во встроенном браузере кошелька Phantom, чтобы избежать ошибок перенаправления.");
             }
         }
 
-        async function fetchSolanaBalance(pubKey) {
+        async function fetchBalance(pubKey) {
             try {
                 const res = await fetch('https://api.mainnet-beta.solana.com', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        jsonrpc: "2.0",
-                        id: 1,
-                        method: "getBalance",
-                        params: [pubKey]
-                    })
+                    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getBalance", params: [pubKey] })
                 });
                 const data = await res.json();
-                if (data.result && data.result.value !== undefined) {
-                    const solBalance = (data.result.value / 1e9).toFixed(4);
-                    document.getElementById('bal-sol').innerText = solBalance + " SOL";
+                if (data.result) {
+                    document.getElementById('bal-sol').innerText = (data.result.value / 1e9).toFixed(4) + " SOL";
                 }
-            } catch (e) {
-                document.getElementById('bal-sol').innerText = "Ошибка сети";
+            } catch (err) {
+                console.log(err);
             }
         }
     </script>
