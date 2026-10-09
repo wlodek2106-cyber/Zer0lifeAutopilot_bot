@@ -18,7 +18,6 @@ RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://zer0lifeautopilot-bot.onr
 DB_FILE = "zer0life_users.db"
 SOLANA_RPC = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
 
-# Мульти-агрегатор DEX маршрутов (Jupiter v6 + Raydium + Orca direct endpoints)
 JUPITER_QUOTE_API = "https://public.jupiterapi.com/quote"
 JUPITER_SWAP_API = "https://public.jupiterapi.com/swap"
 
@@ -113,7 +112,6 @@ async def fetch_wallet_balance(wallet: str) -> float:
     return 0.1207
 
 async def execute_multi_dex_arbitrage(telegram_id: int):
-    """Параллельный опрос всех DEX и выбор лучшей котировки с молниеносным исполнением"""
     start_time = time.time()
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -134,7 +132,6 @@ async def execute_multi_dex_arbitrage(telegram_id: int):
     trade_sol = round(sol_bal * 0.04, 4)
     lamports = int(trade_sol * 1_000_000_000)
 
-    # Выбираем случайную пару из пула ликвидности топовых DEX (Raydium, Orca, Meteora через Jupiter Aggregator)
     target_pairs = [
         ("SOL / USDC", TOKENS['USDC'], "Raydium/Orca"),
         ("SOL / RAY", TOKENS['RAY'], "Raydium AMM"),
@@ -144,7 +141,6 @@ async def execute_multi_dex_arbitrage(telegram_id: int):
 
     async with aiohttp.ClientSession() as session:
         try:
-            # Параллельный запрос котировок для поиска лучших условий
             q_url = f"{JUPITER_QUOTE_API}?inputMint={TOKENS['SOL']}&outputMint={out_mint}&amount={lamports}&slippageBps=75"
             async with session.get(q_url, timeout=4) as resp:
                 if resp.status != 200:
@@ -248,7 +244,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             </div>
         </div>
         <div class="card">
-            <h3 style="margin: 0 0 8px 0; font-size: 15px;">📡 Телеметрия и Задержка (Microsecond/ms)</h3>
+            <h3 style="margin: 0 0 8px 0; font-size: 15px;">📡 Телеметрия и Задержка (ms)</h3>
             <div id="logs-box" class="logs">Multi-DEX сканер подключен... Ожидание ордеров.</div>
         </div>
     </div>
@@ -371,7 +367,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                 const timeStr = now.toTimeString().split(' ')[0];
                 const box = document.getElementById('logs-box');
                 
-                let logMsg = `[${timeStr}] [${data.latency || 120}ms] ${data.pair}: +${data.profit_sol} SOL 🚀`;
+                let logMsg = `[${timeStr}] [${data.latency || 110}ms] ${data.pair}: +${data.profit_sol} SOL 🚀`;
                 box.innerHTML += `<div>${logMsg}</div>`;
                 box.scrollTop = box.scrollHeight;
                 
@@ -464,11 +460,41 @@ async def api_get_stats(request):
         "trades": trades
     })
 
+async def send_telegram_message(chat_id):
+    if not TELEGRAM_TOKEN:
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": "⚡ **Zer0Life Multi-DEX HFT Trader**\n\nТерминал успешно подключен:",
+        "parse_mode": "Markdown",
+        "reply_markup": {
+            "inline_keyboard": [[
+                {"text": "🚀 Открыть Web4 Терминал", "web_app": {"url": RENDER_URL}}
+            ]]
+        }
+    }
+    async with aiohttp.ClientSession() as session:
+        await session.post(url, json=payload)
+
+async def webhook_handler(request):
+    try:
+        data = await request.json()
+        message = data.get("message", {})
+        text = message.get("text", "")
+        chat_id = message.get("chat", {}).get("id")
+        if text == "/start" and chat_id:
+            asyncio.create_task(send_telegram_message(chat_id))
+        return web.Response(text="OK", status=200)
+    except Exception:
+        return web.Response(text="Error", status=500)
+
 async def main():
     init_db()
     app = web.Application()
     app.router.add_get('/', index_handler)
-    app.router.get('/health', health_handler)
+    app.router.add_get('/health', health_handler)
+    app.router.add_post('/webhook', webhook_handler)
     app.router.add_post('/api/profile', api_get_profile)
     app.router.add_post('/api/trading/toggle', api_toggle_trading)
     app.router.add_get('/api/blockchain/balance', api_get_balance)
@@ -480,7 +506,14 @@ async def main():
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
-    logging.info("Multi-DEX HFT AI Trader запущен.")
+    
+    if TELEGRAM_TOKEN:
+        webhook_url = f"{RENDER_URL}/webhook"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}") as r:
+                logging.info(f"Telegram webhook set status: {r.status}")
+
+    logging.info("Multi-DEX HFT AI Trader запущен с обработчиком Telegram.")
     while True:
         await asyncio.sleep(3600)
 
