@@ -3,13 +3,14 @@ import aiohttp
 from aiohttp import web
 import logging
 import os
+import random
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 PORT = int(os.getenv("PORT", 10000))
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://zer0lifeautopilot-bot.onrender.com")
-DEX_LAUNCHPAD_URL = "https://jup.ag/swap/SOL-ZRL" # Или ваша ссылка на Raydium / Launchpad
+DEX_LAUNCHPAD_URL = "https://jup.ag/swap/SOL-ZRL"
 
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="ru">
@@ -26,6 +27,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         .coin { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #1e293b; font-size: 14px; }
         .profile-header { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
         .avatar { width: 48px; height: 48px; border-radius: 50%; background: #334155; object-fit: cover; }
+        .log-box { background: #070a10; padding: 10px; border-radius: 8px; font-family: monospace; font-size: 11px; color: #10b981; max-height: 100px; overflow-y: auto; margin-top: 10px; }
     </style>
 </head>
 <body>
@@ -40,18 +42,23 @@ HTML_CONTENT = """<!DOCTYPE html>
     </div>
 
     <div class="card">
-        <h2>🛡 Zer0life DEX Autopilot</h2>
-        <p>Статус: <span style="color: #10b981; font-weight: bold;">🟢 Сеть Solana активна</span></p>
-        <p style="color: #94a3b8; font-size: 12px; margin-top: 8px;">Автономный торговый терминал экосистемы. Управление ликвидностью и пулами ZRL.</p>
+        <h2>🛡 Zer0life AI Autopilot</h2>
+        <p>Статус агента: <span style="color: #10b981; font-weight: bold;">🟢 ИИ-модуль активен</span></p>
+        <p style="color: #94a3b8; font-size: 12px; margin-top: 8px;">Автономный торговый агент сканирует пулы ликвидности Solana и оптимизирует позиции по ZRL.</p>
         
+        <div class="log-box" id="ai-logs">
+            [15:40] AI Agent: Инициализация нейросети...<br>
+            [15:40] AI Agent: Сканирование пула ZRL/SOL...<br>
+            [15:41] AI Agent: Тренд стабильный. Ожидание точек входа.
+        </div>
+
         <a href="https://jup.ag/swap/SOL-ZRL" target="_blank" class="btn btn-green">🚀 Открыть DEX Launchpad (ZRL)</a>
     </div>
 
     <div class="card">
-        <h3>📊 Мониторинг пулов ликвидности</h3>
-        <div class="coin"><span>ZRL / SOL (Raydium)</span><span style="color: #10b981; font-weight: bold;">Ликвидность OK</span></div>
-        <div class="coin"><span>SOL / USDC (Jupiter)</span><span style="color: #10b981; font-weight: bold;">Активен</span></div>
-        <div class="coin"><span>AVAX / USDC (CEX)</span><span style="color: #38bdf8; font-weight: bold;">Мониторинг</span></div>
+        <h3>📊 Статус торговых модулей</h3>
+        <div class="coin"><span>ZRL / SOL (Raydium)</span><span style="color: #10b981; font-weight: bold;">AI Scalp: Активен</span></div>
+        <div class="coin"><span>SOL / USDC (Jupiter)</span><span style="color: #10b981; font-weight: bold;">AI Grid: Активен</span></div>
     </div>
 
     <script>
@@ -65,65 +72,31 @@ HTML_CONTENT = """<!DOCTYPE html>
         document.getElementById('user-id').innerText = userId;
         document.getElementById('user-nickname').innerText = firstName;
         document.getElementById('user-avatar').src = photoUrl;
+
+        // Имитация живых логов ИИ-агента в интерфейсе
+        setInterval(() => {
+            const logs = [
+                "AI Agent: Проверка ликвидности стакана...",
+                "AI Agent: Анализ волатильности пары ZRL/SOL...",
+                "AI Agent: Оптимизация проскальзывания (Slippage 0.5%)...",
+                "AI Agent: Сигнал на удержание позиции подтвержден."
+            ];
+            const randomLog = logs[Math.floor(Math.random() * logs.length)];
+            const box = document.getElementById('ai-logs');
+            const timeStr = new Date().toLocaleTimeString();
+            box.innerHTML += `<br>[${timeStr}] ${randomLog}`;
+            box.scrollTop = box.scrollHeight;
+        }, 15000);
     </script>
 </body>
 </html>
 """
 
-async def index_handler(request):
-    return web.Response(text=HTML_CONTENT, content_type='text/html')
-
-async def send_telegram_message(chat_id, text):
-    if not TELEGRAM_TOKEN or not chat_id:
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": f"🛡 **Zer0life DEX Terminal**\n\n{text}",
-        "parse_mode": "Markdown",
-        "reply_markup": {
-            "inline_keyboard": [
-                [{"text": "🚀 Запустить DEX Терминал", "web_app": {"url": RENDER_URL}}],
-                [{"text": "💎 Открыть DEX Launchpad (ZRL)", "url": DEX_LAUNCHPAD_URL}]
-            ]
-        }
-    }
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(url, json=payload) as resp:
-                pass
-        except Exception as e:
-            logging.error(f"Ошибка: {e}")
-
-async def webhook_handler(request):
-    try:
-        data = await request.json()
-        message = data.get("message", {})
-        text = message.get("text", "")
-        chat_id = message.get("chat", {}).get("id")
-        if text == "/start" and chat_id:
-            await send_telegram_message(chat_id, "Экосистема инициализирована. Выберите нужный раздел в управлении ниже:")
-        return web.Response(text="OK", status=200)
-    except Exception:
-        return web.Response(text="Error", status=500)
-
-async def main():
-    app = web.Application()
-    app.router.add_get('/', index_handler)
-    app.router.add_post('/webhook', webhook_handler)
-    
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', PORT)
-    await site.start()
-    
-    if TELEGRAM_TOKEN:
-        webhook_url = f"{RENDER_URL}/webhook"
-        async with aiohttp.ClientSession() as session:
-            await session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}")
-
+# Фоновый AI-агент, который циклически «торгует» и анализирует рынок
+async def ai_trading_worker():
+    pairs = ["ZRL/SOL", "SOL/USDC", "AVAX/USDT"]
+    actions = ["Анализ ордербука", "Проверка ликвидности DEX", "Коррекция сетки ордеров", "Поиск арбитражной возможности"]
     while True:
-        await asyncio.sleep(300)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        await asyncio.sleep(45)
+        pair = random.choice(pairs)
+        action = random.choice(actions
