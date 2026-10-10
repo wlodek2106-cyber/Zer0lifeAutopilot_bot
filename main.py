@@ -24,7 +24,7 @@ SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
 MIN_SOL_RESERVE = 0.3
 MAX_TRADE_SOL_LIMIT = 0.1
 
-RECENT_LOGS = ["🌐 Web4 Neural Sidebar запущен."]
+RECENT_LOGS = ["🌐 Web4 Core запущен. Верхнее меню удалено."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -57,7 +57,7 @@ def init_db():
             first_name TEXT,
             solana_wallet TEXT,
             trading_active INTEGER DEFAULT 0,
-            trade_mode TEXT DEFAULT 'WEB4_SIDEBAR',
+            trade_mode TEXT DEFAULT 'WEB4_CLEAN',
             trade_amount_sol REAL DEFAULT 0.04,
             initial_sol REAL DEFAULT 0.2517,
             daily_loss_sol REAL DEFAULT 0.0,
@@ -86,7 +86,7 @@ def get_or_create_user(telegram_id: int, username: str, first_name: str):
     row = cursor.fetchone()
     if not row:
         cursor.execute("INSERT INTO users (telegram_id, username, first_name, solana_wallet, initial_sol, trade_mode) VALUES (?, ?, ?, ?, ?, ?)", 
-                       (telegram_id, username, first_name, SHARED_DEPOSIT_WALLET, 0.2517, 'WEB4_SIDEBAR'))
+                       (telegram_id, username, first_name, SHARED_DEPOSIT_WALLET, 0.2517, 'WEB4_CLEAN'))
         conn.commit()
         cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
         row = cursor.fetchone()
@@ -186,7 +186,7 @@ async def execute_strict_trade(telegram_id: int, pair_name: str, target_mint: st
     if base_trade_sol <= 0.001:
         return
     base_lamports = int(base_trade_sol * 1_000_000_000)
-    add_log(f"⚡ [Web4 Sidebar] Вход по {pair_name} на {base_trade_sol} SOL")
+    add_log(f"⚡ [Web4] Вход по {pair_name} на {base_trade_sol} SOL")
 
     try:
         buy_q_url = f"{JUPITER_QUOTE_API}?inputMint={WHITELISTED_TOKENS['SOL']}&outputMint={target_mint}&amount={base_lamports}&slippageBps=50"
@@ -247,7 +247,7 @@ async def execute_strict_trade(telegram_id: int, pair_name: str, target_mint: st
             }
             async with session.post(SOLANA_RPC, json=sell_rpc_payload, timeout=3) as sell_rpc_resp:
                 sell_rpc_data = await sell_rpc_resp.json()
-                tx_sig = sell_rpc_data.get("result", "tx_sidebar")
+                tx_sig = sell_rpc_data.get("result", "tx_clean")
 
         actual_profit_sol = round((sol_back_amount - total_invested_lamports) / 1_000_000_000, 4)
         add_log(f"💎 Profit: +{actual_profit_sol} SOL")
@@ -288,7 +288,7 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
             await execute_strict_trade(telegram_id, pair_name, target_mint, sol_bal, signer, session)
 
 async def background_mov_trader_daemon():
-    add_log("🌐 Web4 Sidebar Core активен.")
+    add_log("🌐 Web4 Core активен.")
     while True:
         try:
             conn = sqlite3.connect(DB_FILE)
@@ -328,11 +328,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             min-height: 100vh; 
             overflow-x: hidden; 
         }
-        .main-menu-view { display: block; }
-        .trader-view { display: none; }
-        .tab-content { display: none; width: 100%; }
-        .tab-content.active { display: block; }
-        
         .card { background: rgba(4, 8, 20, 0.75); backdrop-filter: blur(30px); border-radius: 28px; padding: 20px; margin-bottom: 18px; border: 1px solid rgba(52, 211, 153, 0.2); box-shadow: 0 12px 40px rgba(0,0,0,0.8); }
         .btn { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: none; width: 100%; padding: 14px; border-radius: 18px; font-weight: 700; cursor: pointer; margin-top: 12px; font-size: 14px; box-shadow: 0 4px 25px rgba(16, 185, 129, 0.4); }
         .btn-green { background: linear-gradient(135deg, #10b981 0%, #059669 100%); box-shadow: 0 4px 25px rgba(16, 185, 129, 0.4); }
@@ -364,50 +359,21 @@ HTML_CONTENT = """<!DOCTYPE html>
         .nav-item.active { color: #34d399; text-shadow: 0 0 20px rgba(52, 211, 153, 0.8); }
         .nav-icon { font-size: 20px; }
         
-        .top-navbar { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 10px; margin-bottom: 16px; }
-        .top-nav-btn { background: rgba(30, 41, 59, 0.4); border: 1px solid rgba(52, 211, 153, 0.2); color: #94a3b8; padding: 8px 16px; border-radius: 16px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
-        .top-nav-btn.active { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: #fff; border-color: #10b981; box-shadow: 0 4px 20px rgba(16, 185, 129, 0.4); }
+        .tab-content { display: none; width: 100%; }
+        .tab-content.active { display: block; }
     </style>
 </head>
 <body>
-    <div id="main-menu-view" class="main-menu-view">
-        <div class="top-navbar">
-            <button class="top-nav-btn active" onclick="switchMainTab('glavnaya')">Главная</button>
-            <button class="top-nav-btn" onclick="switchMainTab('torgovlya')">Торговля</button>
-            <button class="top-nav-btn" onclick="switchMainTab('prognoz')">Прогноз</button>
-            <button class="top-nav-btn" onclick="switchMainTab('obzor')">Обзор</button>
-        </div>
-        <div id="main-tab-glavnaya" class="main-tab-content card">
-            <h2 style="margin-top:0; color: #34d399;">Zer0Life Web4 🌐</h2>
-            <p style="color: #94a3b8; font-size: 13px;">Интеллектуальная экосистема автономного прироста SOL.</p>
-            <button class="btn btn-green" onclick="openAiTrader()">⚡ Запустить Neural Core</button>
-        </div>
-        <div id="main-tab-torgovlya" class="main-tab-content card" style="display:none;">
-            <h2 style="margin-top:0; color: #34d399;">📈 Neural Terminal</h2>
-            <p style="color: #94a3b8; font-size: 13px;">Мониторинг импульсов и защита пула.</p>
-            <button class="btn btn-green" onclick="openAiTrader()">🚀 Открыть Терминал</button>
-        </div>
-        <div id="main-tab-prognoz" class="main-tab-content card" style="display:none;">
-            <h2 style="margin-top:0; color: #34d399;">🔮 Нейропрогноз</h2>
-            <p style="color: #94a3b8; font-size: 13px;">Анализ ликвидности сети в реальном времени.</p>
-        </div>
-        <div id="main-tab-obzor" class="main-tab-content card" style="display:none;">
-            <h2 style="margin-top:0; color: #34d399;">🌐 Обзор Web4</h2>
-            <p style="color: #94a3b8; font-size: 13px;">Децентрализованные микросервисы и ZRL.</p>
-        </div>
-    </div>
-
-    <div id="trader-view" class="trader-view">
-        <div style="margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center;">
-            <button class="btn" style="width: auto; padding: 8px 16px; margin-top:0; background: rgba(30,41,59,0.6);" onclick="backToMainMenu()">⬅️ Назад</button>
-            <button class="btn" style="width: auto; padding: 8px 16px; margin-top:0; background: linear-gradient(135deg, #10b981 0%, #047857 100%);" onclick="toggleDrawer(true)">👛 Кошелек & Штрихкод</button>
+    <div style="width: 100%;">
+        <div style="display: flex; justify-content: flex-end; margin-bottom: 14px;">
+            <button class="btn" style="width: auto; padding: 10px 18px; margin-top:0; background: linear-gradient(135deg, #10b981 0%, #047857 100%);" onclick="toggleDrawer(true)">👛 Кошелек & Штрихкод</button>
         </div>
 
         <div id="tab-wallet" class="tab-content active">
             <div class="card">
-                <h2 style="margin-top: 0; color: #34d399;">👛 Управление кошельком</h2>
-                <p style="color: #94a3b8; font-size: 13px;">Нажмите кнопку выше или ниже, чтобы открыть боковую панель со штрихкодом и верификацией транзакции.</p>
-                <button class="btn-neural" onclick="toggleDrawer(true)">⚡ Открыть боковую панель кошелька</button>
+                <h2 style="margin-top: 0; color: #34d399;">Zer0Life Web4 🌐</h2>
+                <p style="color: #94a3b8; font-size: 13px;">Интеллектуальная экосистема автономного прироста SOL. Нажмите кнопку выше, чтобы открыть панель кошелька со штрихкодом.</p>
+                <button class="btn-neural" onclick="toggleDrawer(true)">⚡ Открыть панель кошелька</button>
             </div>
         </div>
 
@@ -497,24 +463,13 @@ HTML_CONTENT = """<!DOCTYPE html>
             }
         }
 
-        function switchMainTab(tab) {
-            document.querySelectorAll('.top-nav-btn').forEach(el => el.classList.remove('active'));
-            document.querySelectorAll('.main-tab-content').forEach(el => el.style.display = 'none');
-            if(tab === 'glavnaya') { document.getElementById('main-tab-glavnaya').style.display = 'block'; event.target.classList.add('active'); }
-            else if(tab === 'torgovlya') { document.getElementById('main-tab-torgovlya').style.display = 'block'; event.target.classList.add('active'); }
-            else if(tab === 'prognoz') { document.getElementById('main-tab-prognoz').style.display = 'block'; event.target.classList.add('active'); }
-            else if(tab === 'obzor') { document.getElementById('main-tab-obzor').style.display = 'block'; event.target.classList.add('active'); }
-        }
-        function openAiTrader() { document.getElementById('main-menu-view').style.display = 'none'; document.getElementById('trader-view').style.display = 'block'; loadProfile(); checkBalance(); loadStats(); loadLogs(); }
-        function backToMainMenu() { document.getElementById('trader-view').style.display = 'none'; document.getElementById('main-menu-view').style.display = 'block'; }
         let isTrading = false;
         function switchTab(tab) {
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
             if(tab === 'wallet') { 
                 document.getElementById('tab-wallet').classList.add('active'); 
-                document.getElementById('nav-wallet').classList.add('active');
-                toggleDrawer(true); // Автоматически открываем шторку кошелька при нажатии на таб
+                document.getElementById('nav-wallet').classList.add('active'); 
             } else if(tab === 'trader') { 
                 document.getElementById('tab-trader').classList.add('active'); 
                 document.getElementById('nav-trader').classList.add('active'); 
@@ -525,6 +480,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                 loadStats(); 
             }
         }
+        
         async function loadProfile() {
             const res = await fetch('/api/profile', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({telegram_id: user.id, username: user.username, first_name: user.first_name})});
             const data = await res.json();
@@ -537,12 +493,14 @@ HTML_CONTENT = """<!DOCTYPE html>
                 checkBalance();
             }
         }
+        
         function updateUI() {
             const st = document.getElementById('trade-status');
             const btn = document.getElementById('toggle-btn');
             if(isTrading) { st.innerText = "Активен (24/7)"; st.style.color = "#10b981"; btn.innerText = "Остановить"; btn.className = "btn btn-red"; }
             else { st.innerText = "Остановлен"; st.style.color = "#f59e0b"; btn.innerText = "Включить"; btn.className = "btn btn-green"; }
         }
+        
         async function checkBalance() {
             const w = document.getElementById('wallet-input').value;
             if(!w) return;
@@ -550,6 +508,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             const data = await res.json();
             if(data.success) { document.getElementById('wallet-balance').innerText = data.balance.toFixed(4) + " SOL"; }
         }
+        
         async function verifyDeposit() {
             const txHash = document.getElementById('tx-hash-input').value.trim();
             if(!txHash) { alert("Введите хэш!"); return; }
@@ -557,11 +516,13 @@ HTML_CONTENT = """<!DOCTYPE html>
             const data = await res.json();
             if(data.success) { alert("✅ Успешно верифицировано!"); document.getElementById('tx-hash-input').value = ""; checkBalance(); toggleDrawer(false); }
         }
+        
         async function toggleTrading() {
             isTrading = !isTrading;
             await fetch('/api/trading/toggle', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({telegram_id: user.id, active: isTrading ? 1 : 0})});
             updateUI();
         }
+        
         async function loadLogs() {
             try {
                 const res = await fetch('/api/logs');
@@ -569,6 +530,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                 if(data.success) { document.getElementById('logs-box').innerText = data.logs.join('\\n'); }
             } catch(e) {}
         }
+        
         async function loadStats() {
             const res = await fetch('/api/stats?telegram_id=' + user.id);
             const data = await res.json();
@@ -594,6 +556,8 @@ HTML_CONTENT = """<!DOCTYPE html>
                 }
             }
         }
+        
+        loadProfile();
         setInterval(async () => { if(!isTrading) return; checkBalance(); loadStats(); loadLogs(); }, 5000);
     </script>
 </body>
@@ -669,14 +633,14 @@ async def telegram_long_polling():
                                 send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
                                 payload = {
                                     "chat_id": chat_id,
-                                    "text": "🌐 *Zer0Life Web4 Core*\n\nБоковая панель кошелька готова:",
+                                    "text": "🌐 *Zer0Life Web4 Core*\n\nИнтерфейс очищен:",
                                     "parse_mode": "Markdown",
                                     "reply_markup": {"inline_keyboard": [[{"text": "🚀 Открыть Web4 Терминал", "web_app": {"url": RENDER_URL}}]]}
                                 }
                                 async with session.post(send_url, json=payload) as send_resp:
                                     pass
             except Exception:
-                asyncio.sleep(3)
+                await asyncio.sleep(3)
             await asyncio.sleep(1)
 
 async def main():
@@ -698,7 +662,7 @@ async def main():
     
     asyncio.create_task(telegram_long_polling())
     asyncio.create_task(background_mov_trader_daemon())
-    add_log("Web4 Sidebar запущен 24/7.")
+    add_log("Web4 Core запущен без верхнего меню.")
     while True:
         await asyncio.sleep(3600)
 
