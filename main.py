@@ -678,8 +678,6 @@ async def telegram_long_polling():
                                 async with session.post(send_url, json=payload) as send_resp:
                                     res_json = await send_resp.json()
                                     if not res_json.get("ok"):
-                                        # Если file_id не подошел, шлем fallback-сообщение с текстом и кнопкой, чтобы бот не молчал
-                                        err_desc = res_json.get("description", "Unknown error")
                                         fallback_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
                                         fallback_payload = {
                                             "chat_id": chat_id,
@@ -715,7 +713,7 @@ async def main():
     asyncio.create_task(telegram_long_polling())
     asyncio.create_task(background_mov_trader_daemon())
     add_log("Web4 Ai Trader запущен.")
-    while` True:
+    while True:
         await asyncio.sleep(3600)
 
 if __name__ == "__main__":
