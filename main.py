@@ -375,6 +375,11 @@ HTML_CONTENT = """<!DOCTYPE html>
                 <p style="color: #94a3b8; font-size: 13px;">Интеллектуальная экосистема автономного прироста SOL. Нажмите кнопку выше, чтобы открыть панель кошелька со штрихкодом.</p>
                 <button class="btn-neural" onclick="toggleDrawer(true)">⚡ Открыть панель кошелька</button>
             </div>
+
+            <!-- ВСТАВЛЕННОЕ ИЗОБРАЖЕНИЕ НА ГЛАВНЫЙ ЭКРАН -->
+            <div class="card" style="padding: 0; overflow: hidden; border: 1px solid rgba(52, 211, 153, 0.3);">
+                <img id="dashboard-cat-img" src="" alt="Zer0Life Web4 AI Trader" style="width: 100%; display: block; border-radius: 26px;">
+            </div>
         </div>
 
         <div id="tab-trader" class="tab-content">
@@ -451,6 +456,18 @@ HTML_CONTENT = """<!DOCTYPE html>
         let tg = window.Telegram.WebApp; tg.expand();
         const user = tg.initDataUnsafe?.user || { id: 42882165, username: "CryptoWlodek", first_name: "CryptoWlodek" };
         
+        // Автоматически получаем URL картинки по file_id через API Телеграма
+        async function loadDashboardImage() {
+            try {
+                const res = await fetch('/api/get-image-url');
+                const data = await res.json();
+                if(data.success && data.url) {
+                    document.getElementById('dashboard-cat-img').src = data.url;
+                }
+            } catch(e) {}
+        }
+        loadDashboardImage();
+
         function toggleDrawer(open) {
             const drawer = document.getElementById('sidebar-drawer');
             const overlay = document.getElementById('drawer-overlay');
@@ -570,6 +587,20 @@ async def index_handler(request):
 async def health_handler(request):
     return web.Response(text="OK", status=200)
 
+async def api_get_image_url(request):
+    if not TELEGRAM_TOKEN:
+        return web.json_response({"success": False})
+    file_id = "AgACAgIAAxkBAAIs3mrKFwzYWkbKh15vBaUwG-L4AYWCAALXHmsbMplRSrqZEGMJBBzxAQADAgADcwADPQQ"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}") as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                file_path = data.get("result", {}).get("file_path")
+                if file_path:
+                    download_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
+                    return web.json_response({"success": True, "url": download_url})
+    return web.json_response({"success": False})
+
 async def api_get_profile(request):
     data = await request.json()
     user = get_or_create_user(int(data.get("telegram_id")), data.get("username", ""), data.get("first_name", ""))
@@ -634,8 +665,6 @@ async def telegram_long_polling():
                                 payload = {
                                     "chat_id": chat_id,
                                     "photo": "AgACAgIAAxkBAAIs3mrKFwzYWkbKh15vBaUwG-L4AYWCAALXHmsbMplRSrqZEGMJBBzxAQADAgADcwADPQQ",
-                                    "caption": "🌐 *Zer0Life Web4 Core*\n\nИнтерфейс активирован:",
-                                    "parse_mode": "Markdown",
                                     "reply_markup": {"inline_keyboard": [[{"text": "🚀 Открыть Web4 Терминал", "web_app": {"url": RENDER_URL}}]]}
                                 }
                                 async with session.post(send_url, json=payload) as send_resp:
@@ -649,6 +678,7 @@ async def main():
     app = web.Application()
     app.router.add_get('/', index_handler)
     app.router.add_get('/health', health_handler)
+    app.router.add_get('/api/get-image-url', api_get_image_url)
     app.router.add_post('/api/profile', api_get_profile)
     app.router.add_post('/api/verify-tx', api_verify_tx)
     app.router.add_post('/api/trading/toggle', api_toggle_trading)
