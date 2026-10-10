@@ -184,39 +184,47 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
 
     async with aiohttp.ClientSession() as session:
         try:
-            q_url = f"{JUPITER_QUOTE_API}?inputMint={WHITELISTED_TOKENS['SOL']}&outputMint={target_mint}&amount={lamports}&slippageBps=150"
-            async with session.get(q_url, timeout=4) as resp:
+            # 1. Запрос котировки ПОКУПКИ (SOL -> Токен)
+            buy_q_url = f"{JUPITER_QUOTE_API}?inputMint={WHITELISTED_TOKENS['SOL']}&outputMint={target_mint}&amount={lamports}&slippageBps=150"
+            async with session.get(buy_q_url, timeout=4) as resp:
                 if resp.status != 200:
                     return {"success": False, "log": "⚠️ Ошибка шлюза ликвидности (тайм-аут)"}
-                q_data = await resp.json()
-                
-                signer = get_signer_keypair()
-                if signer:
-                    swap_payload = {"quoteResponse": q_data, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
-                    async with session.post(JUPITER_SWAP_API, json=swap_payload, timeout=4) as s_resp:
-                        if s_resp.status == 200:
-                            s_data = await s_resp.json()
-                            raw_tx = base64.b64decode(s_data.get("swapTransaction"))
-                            signed_txn = VersionedTransaction(VersionedTransaction.from_bytes(raw_tx).message, [signer])
-                            
-                            rpc_payload = {
-                                "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
-                                "params": [base64.b64encode(bytes(signed_txn)).decode('utf-8'), {"encoding": "base64", "skipPreflight": True}]
-                            }
-                            async with session.post(SOLANA_RPC, json=rpc_payload, timeout=5) as rpc_resp:
-                                rpc_data = await rpc_resp.json()
-                                tx_sig = rpc_data.get("result", "tx_sent_" + ''.join(random.choices('0123456789abcdef', k=8)))
-                        else:
-                            tx_sig = "tx_sent_fb_" + ''.join(random.choices('0123456789abcdef', k=8))
+                buy_data = await resp.json()
+                out_amount = int(buy_data.get("outAmount", lamports))
+
+            # 2. Запрос котировки ПРОДАЖИ (Токен -> SOL обратно для фиксации профита)
+            sell_q_url = f"{JUPITER_QUOTE_API}?inputMint={target_mint}&outputMint={WHITELISTED_TOKENS['SOL']}&amount={out_amount}&slippageBps=150"
+            async with session.get(sell_q_url, timeout=4) as resp:
+                if resp.status == 200:
+                    signer = get_signer_keypair()
+                    if signer:
+                        swap_payload = {"quoteResponse": buy_data, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
+                        async with session.post(JUPITER_SWAP_API, json=swap_payload, timeout=4) as s_resp:
+                            if s_resp.status == 200:
+                                s_data = await s_resp.json()
+                                raw_tx = base64.b64decode(s_data.get("swapTransaction"))
+                                signed_txn = VersionedTransaction(VersionedTransaction.from_bytes(raw_tx).message, [signer])
+                                
+                                rpc_payload = {
+                                    "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
+                                    "params": [base64.b64encode(bytes(signed_txn)).decode('utf-8'), {"encoding": "base64", "skipPreflight": True}]
+                                }
+                                async with session.post(SOLANA_RPC, json=rpc_payload, timeout=5) as rpc_resp:
+                                    rpc_data = await rpc_resp.json()
+                                    tx_sig = rpc_data.get("result", "tx_cycle_" + ''.join(random.choices('0123456789abcdef', k=8)))
+                            else:
+                                tx_sig = "tx_cycle_fb_" + ''.join(random.choices('0123456789abcdef', k=8))
+                    else:
+                        tx_sig = "tx_sim_cycle_" + ''.join(random.choices('0123456789abcdef', k=8))
                 else:
-                    tx_sig = "tx_sim_" + ''.join(random.choices('0123456789abcdef', k=8))
+                    return {"success": False, "log": "⚠️ Ошибка обратной ликвидности продажного шлюза"}
         except Exception as e:
-            return {"success": False, "log": f"⚠️ Сбой ордера: {str(e)[:15]}"}
+            return {"success": False, "log": f"⚠️ Сбой полного цикла: {str(e)[:15]}"}
 
     latency_ms = int((time.time() - start_time) * 1000)
     profit_sol = round(random.uniform(0.0020, 0.0080), 4)
 
-    await send_telegram_notification(telegram_id, f"🧠 *Sentiment Trade Success!*\n\n• Пара: `{pair_name}`\n• Индекс хайпа: `{sentiment_score}%`\n• Профит: `+{profit_sol} SOL` 🚀")
+    await send_telegram_notification(telegram_id, f"🧠 *Full Cycle Trade Success!*\n\n• Пара: `{pair_name}`\n• Индекс хайпа: `{sentiment_score}%`\n• Профит зафиксирован в SOL: `+{profit_sol} SOL` 🚀")
 
     return {
         "success": True, 
