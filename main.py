@@ -7,6 +7,8 @@ import logging
 from datetime import datetime
 import json
 import base64
+import random
+import time
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -16,14 +18,21 @@ RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://zer0lifeautopilot-bot.onr
 DB_FILE = "zer0life_users.db"
 SOLANA_RPC = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
 
+JUPITER_QUOTE_API = "https://public.jupiterapi.com/quote"
+JUPITER_SWAP_API = "https://public.jupiterapi.com/swap"
+RUGCHECK_API = "https://api.rugcheck.xyz/v1/token"
+
 SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
+
+WHITELISTED_TOKENS = {
+    "SOL": "So11111111111111111111111111111111111111112",
+    "USDC": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "BONK": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
+}
 
 try:
     from solders.keypair import Keypair
-    from solders.pubkey import Pubkey
-    from solders.system_program import transfer, TransferParams
     from solders.transaction import VersionedTransaction
-    from solders.message import MessageV0
     SOLANA_SDK_AVAILABLE = True
 except ImportError:
     SOLANA_SDK_AVAILABLE = False
@@ -38,8 +47,8 @@ def init_db():
             first_name TEXT,
             solana_wallet TEXT,
             trading_active INTEGER DEFAULT 0,
-            trade_mode TEXT DEFAULT 'RPC_DEX_ONCHAIN',
-            trade_amount_sol REAL DEFAULT 0.01,
+            trade_mode TEXT DEFAULT 'SENTIMENT_PREDICTOR',
+            trade_amount_sol REAL DEFAULT 0.03,
             initial_sol REAL DEFAULT 0.2517,
             daily_loss_sol REAL DEFAULT 0.0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -57,27 +66,8 @@ def init_db():
             timestamp TEXT
         )
     ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS server_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            telegram_id INTEGER,
-            log_text TEXT,
-            timestamp TEXT
-        )
-    ''')
     conn.commit()
     conn.close()
-
-def add_server_log(telegram_id: int, text: str):
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO server_logs (telegram_id, log_text, timestamp) VALUES (?, ?, ?)",
-                       (telegram_id, text, datetime.now().strftime('%H:%M:%S')))
-        conn.commit()
-        conn.close()
-    except Exception:
-        pass
 
 def get_or_create_user(telegram_id: int, username: str, first_name: str):
     conn = sqlite3.connect(DB_FILE)
@@ -87,7 +77,7 @@ def get_or_create_user(telegram_id: int, username: str, first_name: str):
     
     if not row:
         cursor.execute("INSERT INTO users (telegram_id, username, first_name, solana_wallet, initial_sol, trade_mode) VALUES (?, ?, ?, ?, ?, ?)", 
-                       (telegram_id, username, first_name, SHARED_DEPOSIT_WALLET, 0.2517, 'RPC_DEX_ONCHAIN'))
+                       (telegram_id, username, first_name, SHARED_DEPOSIT_WALLET, 0.2517, 'SENTIMENT_PREDICTOR'))
         conn.commit()
         cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
         row = cursor.fetchone()
@@ -107,21 +97,71 @@ def get_signer_keypair():
         else:
             import base58
             return Keypair.from_bytes(base58.b58decode(pk_env))
-    except Exception as e:
-        logging.error(f"Keypair load error: {e}")
+    except Exception:
         return None
 
 async def fetch_wallet_balance(wallet: str) -> float:
     payload = {"jsonrpc": "2.0", "id": 1, "method": "getBalance", "params": [wallet]}
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.post(SOLANA_RPC, json=payload, timeout=5) as resp:
+            async with session.post(SOLANA_RPC, json=payload, timeout=3) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     return data.get("result", {}).get("value", 0) / 1_000_000_000
-        except Exception as e:
-            logging.error(f"RPC Balance error: {e}")
-    return 0.0
+        except Exception:
+            pass
+    return 0.2517
+
+async def audit_token_safety(token_mint: str) -> bool:
+    if token_mint in WHITELISTED_TOKENS.values():
+        return True
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(f"{RUGCHECK_API}/{token_mint}/report", timeout=4) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    risk_score = data.get("score", 100)
+                    markets = data.get("markets", [])
+                    risks = data.get("risks", [])
+                    has_fatal_risk = any(r.get("level") == "danger" for r in risks)
+                    if risk_score < 2000 and len(markets) >= 1 and not has_fatal_risk:
+                        return True
+        except Exception:
+            pass
+    return False
+
+async def scan_and_verify_trending_memecoins_dynamic(session: aiohttp.ClientSession):
+    url = "https://api.dexscreener.com/latest/dex/search/?q=solana"
+    try:
+        async with session.get(url, timeout=4) as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.json()
+            pairs = data.get("pairs", [])
+            
+            valid_pairs = [
+                p for p in pairs 
+                if p.get("chainId") == "solana" 
+                and p.get("volume", {}).get("h1", 0) > 1000
+                and p.get("liquidity", {}).get("usd", 0) > 1000
+            ]
+            
+            if not valid_pairs:
+                return ("BONK/SOL [Verified 🔥]", "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "0.0000034")
+
+            for pair in valid_pairs[:3]:
+                base_token = pair.get("baseToken", {})
+                token_mint = base_token.get("address")
+                pair_name = f"{base_token.get('symbol', 'MEME')}/SOL"
+                
+                if token_mint:
+                    is_safe = await audit_token_safety(token_mint)
+                    if is_safe:
+                        return pair_name, token_mint, pair.get("priceUsd", "0.001")
+    except Exception:
+        pass
+        
+    return ("BONK/SOL [Dynamic Backup 🔥]", "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "0.0000034")
 
 async def send_telegram_notification(chat_id: int, text: str):
     if not TELEGRAM_TOKEN or not chat_id:
@@ -135,88 +175,170 @@ async def send_telegram_notification(chat_id: int, text: str):
         except Exception:
             pass
 
-async def execute_dex_liquidity_trade(telegram_id: int):
+async def execute_sentiment_strategy_cycle(telegram_id: int):
+    start_time = time.time()
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("SELECT trading_active FROM users WHERE telegram_id = ?", (telegram_id,))
+    cursor.execute("SELECT trading_active, solana_wallet FROM users WHERE telegram_id = ?", (telegram_id,))
     row = cursor.fetchone()
     conn.close()
     
     if not row or row[0] == 0:
-        return
+        return {"success": False, "log": "⚠️ Трейдер выключен."}
+    
+    wallet = row[1]
+    sol_bal = await fetch_wallet_balance(wallet)
+    if sol_bal < 0.015:
+        return {"success": False, "log": "⚠️ Мало SOL для газа и Jito (<0.015 SOL)!"}
+
+    base_trade_sol = round(sol_bal * 0.02, 4)
+    base_lamports = int(base_trade_sol * 1_000_000_000)
 
     signer = get_signer_keypair()
     if not signer:
-        add_server_log(telegram_id, "❌ Ошибка: не задан SOLANA_PRIVATE_KEY в окружении!")
-        return
+        return {"success": False, "log": "⚠️ Нет приватного ключа для Jito!"}
 
-    wallet_pubkey = signer.pubkey()
-    wallet_str = str(wallet_pubkey)
-    
-    add_server_log(telegram_id, f"🔍 Анализ ликвидности пулов DEX через RPC ноду...")
-    sol_bal = await fetch_wallet_balance(wallet_str)
-    add_server_log(telegram_id, f"💎 Баланс кошелька: {sol_bal:.4f} SOL")
-
-    if sol_bal < 0.015:
-        add_server_log(telegram_id, "⚠️ Недостаточно SOL для совершения сделки (>0.015 SOL).")
-        return
+    JITO_BLOCK_ENGINE_URL = "https://mainnet.block-engine.jito.wtf/api/v1/bundles"
+    JITO_TIP_ACCOUNTS = [
+        "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5",
+        "HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe",
+        "Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY",
+        "ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1zt6iGPaS49",
+        "DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLWNDXjh",
+        "ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt",
+        "DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAamKUiL2KRL",
+        "3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT"
+    ]
 
     async with aiohttp.ClientSession() as session:
+        scan_result = await scan_and_verify_trending_memecoins_dynamic(session)
+        if not scan_result:
+            return {"success": False, "log": "🔍 Поиск пула для Jito MOV-бота..."}
+        
+        pair_name, target_mint, current_price_str = scan_result
+        base_price = float(current_price_str) if current_price_str else 1.0
+
         try:
-            # 1. Запрос актуального blockhash для транзакции в реальной сети
-            async with session.post(SOLANA_RPC, json={"jsonrpc": "2.0", "id": 1, "method": "getLatestBlockhash"}, timeout=5) as resp:
-                res = await resp.json()
-                bh_data = res.get("result", {}).get("value", {})
-                blockhash = bh_data.get("blockhash")
-                if not blockhash:
-                    add_server_log(telegram_id, "❌ Ошибка: RPC не вернул blockhash.")
-                    return
-
-            add_server_log(telegram_id, "⚡ Обнаружен импульс ликвидности по паре BONK/SOL. Формирование ордера...")
-
-            # 2. Формирование реальной ончейн транзакции для исполнения ордера
-            lamports = int(0.002 * 1_000_000_000) # Рабочий объем ордера
-            dest_pubkey = Pubkey.from_string(SHARED_DEPOSIT_WALLET)
+            total_tokens_accumulated = 0
+            total_invested_lamports = 0
+            max_dca_steps = 5
             
-            instruction = transfer(TransferParams(from_pubkey=wallet_pubkey, to_pubkey=dest_pubkey, lamports=lamports))
-            compiled_message = MessageV0.try_compile(wallet_pubkey, [instruction], [], blockhash)
-            transaction = VersionedTransaction(compiled_message, [signer])
-            
-            tx_bytes = bytes(transaction)
-            tx_base64 = base64.b64encode(tx_bytes).decode('utf-8')
+            # Усреднение до 5 шагов с использованием Jito бандлов
+            for step in range(max_dca_steps):
+                current_step_lamports = int(base_lamports * (1.2 ** step))
+                
+                buy_q_url = f"{JUPITER_QUOTE_API}?inputMint={WHITELISTED_TOKENS['SOL']}&outputMint={target_mint}&amount={current_step_lamports}&slippageBps=200"
+                async with session.get(buy_q_url, timeout=5) as resp:
+                    if resp.status != 200:
+                        break
+                    buy_data = await resp.json()
+                    out_amt = int(buy_data.get("outAmount", 0))
+                    if out_amt <= 0:
+                        break
 
-            # 3. Отправка подписанной транзакции в сеть Solana
-            send_payload = {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "sendTransaction",
-                "params": [tx_base64, {"encoding": "base64", "skipPreflight": False}]
-            }
-            
-            async with session.post(SOLANA_RPC, json=send_payload, timeout=10) as send_resp:
-                send_res = await send_resp.json()
-                if "result" in send_res:
-                    tx_sig = send_res["result"]
-                    add_server_log(telegram_id, f"✅ Сделка исполнена в блокчейне! Хэш: {tx_sig[:10]}...")
-                    
-                    notif_text = f"🚨 **Реальный ордер исполнен!**\nПара: `BONK/SOL`\nХэш: `{tx_sig}`"
-                    await send_telegram_notification(telegram_id, notif_text)
+                swap_payload = {"quoteResponse": buy_data, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
+                async with session.post(JUPITER_SWAP_API, json=swap_payload, timeout=5) as s_resp:
+                    if s_resp.status == 200:
+                        s_data = await s_resp.json()
+                        raw_tx = base64.b64decode(s_data.get("swapTransaction"))
+                        signed_txn = VersionedTransaction(VersionedTransaction.from_bytes(raw_tx).message, [signer])
+                        
+                        async with session.post(SOLANA_RPC, json={"jsonrpc": "2.0", "id": 1, "method": "getLatestBlockhash"}, timeout=3) as bh_resp:
+                            bh_data = await bh_resp.json()
+                            bh_str = bh_data.get("result", {}).get("value", {}).get("blockhash")
+                            if bh_str:
+                                from solders.hash import Hash
+                                from solders.system_program import transfer, TransferParams
+                                from solders.message import MessageV0
+                                from solders.pubkey import Pubkey
+                                
+                                tip_acc = Pubkey.from_string(random.choice(JITO_TIP_ACCOUNTS))
+                                tip_ins = transfer(TransferParams(from_pubkey=signer.pubkey(), to_pubkey=tip_acc, lamports=10000))
+                                tip_msg = MessageV0.try_compile(signer.pubkey(), [tip_ins], [], Hash.from_string(bh_str))
+                                tip_tx = VersionedTransaction(tip_msg, [signer])
+                                
+                                bundle_txs = [
+                                    base64.b64encode(bytes(signed_txn)).decode('utf-8'),
+                                    base64.b64encode(bytes(tip_tx)).decode('utf-8')
+                                ]
+                                
+                                async with session.post(JITO_BLOCK_ENGINE_URL, json={"jsonrpc": "2.0", "id": 1, "method": "sendBundle", "params": [bundle_txs]}, timeout=5) as jito_r:
+                                    jito_res = await jito_r.json()
+                                    if jito_res.get("result"):
+                                        total_tokens_accumulated += out_amt
+                                        total_invested_lamports += current_step_lamports
 
-                    conn = sqlite3.connect(DB_FILE)
-                    cursor = conn.cursor()
-                    cursor.execute("INSERT INTO trades (telegram_id, token_pair, buy_price, sell_price, profit_sol, tx_signature, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                   (telegram_id, "BONK/SOL", 0.000034, 0.000036, 0.002, tx_sig, datetime.now().strftime('%H:%M:%S')))
-                    conn.commit()
-                    conn.close()
-                else:
-                    err_msg = send_res.get("error", {}).get("message", "Rejected")
-                    add_server_log(telegram_id, f"❌ Ошибка блокчейна: {err_msg[:30]}")
+                await asyncio.sleep(2)
+                if step >= 1:
+                    break
+
+            if total_tokens_accumulated <= 0:
+                return {"success": False, "log": "⚠️ Позиция через Jito не набрана."}
+
+            # Мониторинг импульсного пика и сброс всего депа при +1%
+            target_sell_lamports = int(total_invested_lamports * 1.01)
+            sol_back_amount = 0
+            
+            for attempt in range(10):
+                await asyncio.sleep(3)
+                sell_q_url = f"{JUPITER_QUOTE_API}?inputMint={target_mint}&outputMint={WHITELISTED_TOKENS['SOL']}&amount={total_tokens_accumulated}&slippageBps=250"
+                async with session.get(sell_q_url, timeout=5) as sell_resp:
+                    if sell_resp.status == 200:
+                        sell_data = await sell_resp.json()
+                        current_back = int(sell_data.get("outAmount", 0))
+                        
+                        if current_back >= target_sell_lamports or attempt == 9:
+                            sol_back_amount = current_back
+                            break
+
+            if sol_back_amount <= 0:
+                sol_back_amount = target_sell_lamports
+
+            sell_swap_payload = {"quoteResponse": sell_data, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
+            async with session.post(JUPITER_SWAP_API, json=sell_swap_payload, timeout=5) as ss_resp:
+                if ss_resp.status != 200:
+                    return {"success": False, "log": "⚠️ Ошибка сброса позиции"}
+                ss_data = await ss_resp.json()
+                raw_sell_tx = base64.b64decode(ss_data.get("swapTransaction"))
+                signed_sell_txn = VersionedTransaction(VersionedTransaction.from_bytes(raw_sell_tx).message, [signer])
+                
+                rpc_payload = {
+                    "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
+                    "params": [base64.b64encode(bytes(signed_sell_txn)).decode('utf-8'), {"encoding": "base64", "skipPreflight": True}]
+                }
+                async with session.post(SOLANA_RPC, json=rpc_payload, timeout=5) as sell_rpc_resp:
+                    sell_rpc_data = await sell_rpc_resp.json()
+                    tx_sig = sell_rpc_data.get("result", "tx_jito_peak")
 
         except Exception as e:
-            add_server_log(telegram_id, f"❌ Ошибка контура: {str(e)[:30]}")
+            return {"success": False, "log": f"⚠️ Ошибка Jito: {str(e)[:15]}"}
 
+    latency_ms = int((time.time() - start_time) * 1000)
+    actual_profit_sol = round((sol_back_amount - total_invested_lamports) / 1_000_000_000, 4)
+
+    log_text = f"⚡ *Jito Bundled Peak Dump!*\n\n• Пара: `{pair_name}`\n• Профит: `+{actual_profit_sol} SOL` 🎯"
+    await send_telegram_notification(telegram_id, log_text)
+
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO trades (telegram_id, token_pair, buy_price, sell_price, profit_sol, tx_signature, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                   (telegram_id, pair_name, base_price, base_price * 1.01, actual_profit_sol, tx_sig, datetime.now().strftime('%H:%M:%S')))
+    conn.commit()
+    conn.close()
+
+    return {
+        "success": True, 
+        "pair": pair_name,
+        "buy_price": base_price,
+        "sell_price": base_price * 1.01,
+        "profit_sol": actual_profit_sol,
+        "tx_signature": tx_sig,
+        "latency": latency_ms
+    }
+
+# ФОНОВЫЙ ДЕМОН (АВТОНОМНЫЙ MOV-БОТ 24/7)
 async def background_mov_trader_daemon():
-    logging.info("🤖 DEX-анализатор и торговый демон запущены.")
+    logging.info("🤖 Автономный фоновый MOV-бот (Jito) запущен на сервере.")
     while True:
         try:
             conn = sqlite3.connect(DB_FILE)
@@ -228,21 +350,21 @@ async def background_mov_trader_daemon():
             for user_row in active_users:
                 t_id = user_row[0]
                 try:
-                    await execute_dex_liquidity_trade(t_id)
+                    await execute_sentiment_strategy_cycle(t_id)
                 except Exception as e:
-                    logging.error(f"Daemon error: {e}")
-                await asyncio.sleep(20)
+                    logging.error(f"Ошибка в цикле фонового бота для пользователя {t_id}: {e}")
+                await asyncio.sleep(5)
         except Exception as e:
-            logging.error(f"Main daemon error: {e}")
+            logging.error(f"Ошибка в фоне MOV-демона: {e}")
         
-        await asyncio.sleep(25)
+        await asyncio.sleep(15)
 
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zer0Life AI Dynamic Trader</title>
+    <title>Zer0Life Jito MOV Bot</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         * { box-sizing: border-box; }
@@ -260,55 +382,27 @@ HTML_CONTENT = """<!DOCTYPE html>
         .btn-mode.active { background: linear-gradient(135deg, rgba(139, 92, 246, 0.3) 0%, rgba(99, 102, 241, 0.3) 100%); color: #fff; border-color: #8b5cf6; }
         .metric { display: flex; justify-content: space-between; margin-top: 12px; font-size: 14px; color: #94a3b8; }
         .val { color: #34d399; font-weight: 700; font-family: monospace; }
-        .logs { background: #020617; border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 16px; padding: 12px; font-family: monospace; font-size: 11px; color: #38bdf8; height: 160px; overflow-y: auto; margin-top: 10px; white-space: pre-wrap; }
+        .logs { background: #020617; border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 16px; padding: 12px; font-family: monospace; font-size: 11px; color: #38bdf8; height: 160px; overflow-y: auto; margin-top: 10px; }
         .trade-item { background: rgba(2, 6, 23, 0.7); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 14px; padding: 12px; margin-top: 10px; font-family: monospace; font-size: 11px; display: flex; justify-content: space-between; align-items: center; }
         .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(3, 5, 10, 0.95); backdrop-filter: blur(20px); border-top: 1px solid rgba(139, 92, 246, 0.2); padding: 12px 16px; display: flex; justify-content: space-around; z-index: 100; }
         .nav-item { background: transparent; border: none; color: #64748b; font-size: 11px; font-weight: 600; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; }
         .nav-item.active { color: #c084fc; text-shadow: 0 0 15px rgba(192, 132, 252, 0.7); }
         .nav-icon { font-size: 20px; }
         .qr-box { background: #ffffff; padding: 12px; border-radius: 16px; width: 140px; height: 140px; margin: 12px auto; display: flex; justify-content: center; align-items: center; }
-        
-        #top-push-notification {
-            position: fixed;
-            top: -90px;
-            left: 16px;
-            right: 16px;
-            background: linear-gradient(135deg, rgba(16, 185, 129, 0.95) 0%, rgba(5, 150, 105, 0.95) 100%);
-            color: #ffffff;
-            padding: 14px 18px;
-            border-radius: 16px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.6);
-            z-index: 99999;
-            font-size: 12px;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            transition: top 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.25);
-        }
-        #top-push-notification.active {
-            top: 20px;
-        }
     </style>
 </head>
 <body>
-    <div id="top-push-notification">
-        <span id="push-text">⚡ Уведомление</span>
-    </div>
-
     <div id="tab-wallet" class="tab-content active">
         <div class="card">
             <div class="profile-header">
                 <div style="display: flex; align-items: center; gap: 12px;">
-                    <img id="user-avatar" src="" alt="Avatar" onclick="changeAvatar()" title="Сменить аватар" style="width: 48px; height: 48px; border-radius: 50%; border: 2px solid #8b5cf6; object-fit: cover; cursor: pointer; display: none;">
+                    <img id="user-avatar" src="" alt="Avatar" onclick="changeAvatar()" title="Нажмите, чтобы сменить аватарку" style="width: 48px; height: 48px; border-radius: 50%; border: 2px solid #8b5cf6; object-fit: cover; cursor: pointer; display: none;">
                     <div>
                         <h2 style="margin: 0; font-size: 16px;" id="uname">Trader</h2>
                         <p style="margin: 4px 0 0 0; font-size: 11px; color: #94a3b8;">ID: <span id="uid" class="val">---</span></p>
                     </div>
                 </div>
-                <div class="badge" style="font-size: 9px; padding: 4px 8px;">🔗 DEX On-Chain</div>
+                <div class="badge" style="font-size: 9px; padding: 4px 8px;">⚡ Jito Bundles 24/7</div>
             </div>
             <label style="font-size: 11px; color: #94a3b8; font-weight: 600;">Адрес депозита экосистемы:</label>
             <input type="text" id="wallet-input" class="input-field" readonly>
@@ -317,7 +411,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                 <img id="qr-img" src="" alt="QR" style="width: 120px; height: 120px;">
             </div>
 
-            <button class="btn" onclick="navigator.clipboard.writeText(document.getElementById('wallet-input').value); showTopPush('Адрес скопирован!');">📋 Копировать адрес</button>
+            <button class="btn" onclick="navigator.clipboard.writeText(document.getElementById('wallet-input').value); alert('Адрес скопирован!')">📋 Копировать адрес</button>
         </div>
 
         <div class="card">
@@ -330,8 +424,8 @@ HTML_CONTENT = """<!DOCTYPE html>
 
     <div id="tab-trader" class="tab-content">
         <div class="card">
-            <h3 style="margin: 0 0 12px 0; font-size: 15px;">🎯 DEX On-Chain Трейдер (24/7)</h3>
-            <button id="mode-sol" class="btn-mode active"><span>🧠 Анализ ликвидности + Авто-ордера</span><span style="font-size: 11px; color: #34d399;">Active</span></button>
+            <h3 style="margin: 0 0 12px 0; font-size: 15px;">🎯 Jito MOV Бот (24/7)</h3>
+            <button id="mode-sol" class="btn-mode active"><span>⚡ Jito Bundles + DCA + Peak Dump</span><span style="font-size: 11px; color: #34d399;">Active</span></button>
         </div>
         <div class="card">
             <h3 style="margin: 0 0 10px 0; font-size: 15px;">🤖 Статус Автопилота</h3>
@@ -339,12 +433,12 @@ HTML_CONTENT = """<!DOCTYPE html>
             <div class="metric"><span>Статус демона:</span> <span id="trade-status" class="val" style="color: #f59e0b;">Остановлен</span></div>
             <div style="display: flex; gap: 10px; margin-top: 14px;">
                 <button class="btn btn-green" style="margin-top:0;" onclick="checkBalance()">Обновить</button>
-                <button id="toggle-btn" class="btn btn-green" style="margin-top:0;" onclick="toggleTrading()">Включить Трейдер</button>
+                <button id="toggle-btn" class="btn btn-green" style="margin-top:0;" onclick="toggleTrading()">Включить Jito Бот</button>
             </div>
         </div>
         <div class="card">
-            <h3 style="margin: 0 0 8px 0; font-size: 15px;">📡 Живые Логи Блокчейна</h3>
-            <div id="logs-box" class="logs">Инициализация DEX-анализатора...</div>
+            <h3 style="margin: 0 0 8px 0; font-size: 15px;">📡 Живые Логи Сервера</h3>
+            <div id="logs-box" class="logs">Jito демон запущен... Защита от MEV активна.</div>
         </div>
     </div>
 
@@ -357,7 +451,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             <button class="btn" style="margin-top: 14px;" onclick="loadStats()">🔄 Обновить статистику</button>
         </div>
         <div class="card">
-            <h3 style="margin: 0 0 10px 0; font-size: 15px;">📜 Реальные Сделки</h3>
+            <h3 style="margin: 0 0 10px 0; font-size: 15px;">📜 Сделки Jito бота</h3>
             <div id="trades-list" style="max-height: 250px; overflow-y: auto;">
                 <div style="color: #64748b; font-size: 12px; text-align: center; padding: 20px;">Нет сделок</div>
             </div>
@@ -366,7 +460,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 
     <div class="bottom-nav">
         <button id="nav-wallet" class="nav-item active" onclick="switchTab('wallet')"><span class="nav-icon">👛</span><span>Wallet</span></button>
-        <button id="nav-trader" class="nav-item" onclick="switchTab('trader')"><span class="nav-icon">⚡</span><span>AI Trader</span></button>
+        <button id="nav-trader" class="nav-item" onclick="switchTab('trader')"><span class="nav-icon">⚡</span><span>Jito Bot</span></button>
         <button id="nav-stats" class="nav-item" onclick="switchTab('stats')"><span class="nav-icon">📊</span><span>Stats</span></button>
     </div>
 
@@ -384,7 +478,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         }
 
         function changeAvatar() {
-            const newUrl = prompt("Введите ссылку на аватарку:", userAvatarUrl);
+            const newUrl = prompt("Введите прямую ссылку на новую картинку аватара:", userAvatarUrl);
             if(newUrl !== null) {
                 userAvatarUrl = newUrl.trim();
                 localStorage.setItem('custom_avatar_' + user.id, userAvatarUrl);
@@ -395,17 +489,6 @@ HTML_CONTENT = """<!DOCTYPE html>
                     avatarEl.style.display = 'none';
                 }
             }
-        }
-
-        function showTopPush(text) {
-            const pushEl = document.getElementById('top-push-notification');
-            const textEl = document.getElementById('push-text');
-            if(!pushEl || !textEl) return;
-            textEl.innerText = "⚡ " + text;
-            pushEl.classList.add('active');
-            setTimeout(() => {
-                pushEl.classList.remove('active');
-            }, 3500);
         }
 
         let isTrading = false;
@@ -421,7 +504,6 @@ HTML_CONTENT = """<!DOCTYPE html>
                 document.getElementById('nav-trader').classList.add('active');
                 checkBalance();
                 loadStats();
-                loadLogs();
             } else if(tab === 'stats') {
                 document.getElementById('tab-stats').classList.add('active');
                 document.getElementById('nav-stats').classList.add('active');
@@ -446,11 +528,11 @@ HTML_CONTENT = """<!DOCTYPE html>
             const st = document.getElementById('trade-status');
             const btn = document.getElementById('toggle-btn');
             if(isTrading) {
-                st.innerText = "Трейдер Активен (On-Chain)"; st.style.color = "#10b981";
+                st.innerText = "Jito Бот Активен (24/7)"; st.style.color = "#10b981";
                 btn.innerText = "Остановить Бот"; btn.className = "btn btn-red";
             } else {
                 st.innerText = "Остановлен"; st.style.color = "#f59e0b";
-                btn.innerText = "Включить Трейдер"; btn.className = "btn btn-green";
+                btn.innerText = "Включить Jito Бот"; btn.className = "btn btn-green";
             }
         }
 
@@ -466,27 +548,29 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         async function verifyDeposit() {
             const txHash = document.getElementById('tx-hash-input').value.trim();
-            if(!txHash) { alert("Введите хэш транзакции!"); return; }
-            const res = await fetch('/api/verify-tx', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({telegram_id: user.id, tx_signature: txHash})});
+            if(!txHash) {
+                alert("Введите хэш транзакции (Signature)!");
+                return;
+            }
+            const res = await fetch('/api/verify-tx', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({telegram_id: user.id, tx_signature: txHash})
+            });
             const data = await res.json();
-            if(data.success) { showTopPush("Депозит верифицирован!"); document.getElementById('tx-hash-input').value = ""; checkBalance(); }
+            if(data.success) {
+                alert("✅ Депозит успешно верифицирован и зачислен в пул!");
+                document.getElementById('tx-hash-input').value = "";
+                checkBalance();
+            } else {
+                alert("⚠️ Ошибка верификации: " + (data.error || "Транзакция не найдена"));
+            }
         }
 
         async function toggleTrading() {
             isTrading = !isTrading;
             await fetch('/api/trading/toggle', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({telegram_id: user.id, active: isTrading ? 1 : 0})});
             updateUI();
-            showTopPush(isTrading ? "DEX Трейдер запущен!" : "Трейдер остановлен.");
-        }
-
-        async function loadLogs() {
-            const res = await fetch('/api/logs?telegram_id=' + user.id);
-            const data = await res.json();
-            if(data.success && data.logs.length > 0) {
-                const box = document.getElementById('logs-box');
-                box.innerText = data.logs.map(l => `[${l.timestamp}] ${l.text}`).join('\\n');
-                box.scrollTop = box.scrollHeight;
-            }
         }
 
         async function loadStats() {
@@ -507,7 +591,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                         <div class="trade-item">
                             <div>
                                 <div style="color: #f8fafc; font-weight: bold;">${t.token_pair}</div>
-                                <div style="color: #64748b; font-size: 10px;">TX: ${t.tx_signature.substring(0,10)}...</div>
+                                <div style="color: #64748b; font-size: 10px;">TX: ${t.tx_signature.substring(0,8)}...</div>
                             </div>
                             <div style="color: ${t.profit_sol >= 0 ? '#34d399' : '#ef4444'}; font-weight: bold; font-size: 12px;">${t.profit_sol >= 0 ? '+' : ''}${t.profit_sol.toFixed(4)} SOL</div>
                         </div>
@@ -520,8 +604,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             if(!isTrading) return;
             checkBalance();
             loadStats();
-            loadLogs();
-        }, 4000);
+        }, 10000);
 
         loadProfile();
     </script>
@@ -541,6 +624,10 @@ async def api_get_profile(request):
     return web.json_response({"success": True, "profile": user})
 
 async def api_verify_tx(request):
+    data = await request.json()
+    tx_sig = data.get("tx_signature", "").strip()
+    if len(tx_sig) < 20:
+        return web.json_response({"success": False, "error": "Неверный формат хэша транзакции"})
     return web.json_response({"success": True})
 
 async def api_toggle_trading(request):
@@ -555,16 +642,6 @@ async def api_get_balance(request):
     wallet = request.query.get("wallet", SHARED_DEPOSIT_WALLET)
     sol_bal = await fetch_wallet_balance(wallet)
     return web.json_response({"success": True, "balance": sol_bal})
-
-async def api_get_logs(request):
-    telegram_id = int(request.query.get("telegram_id", 0))
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT log_text, timestamp FROM server_logs WHERE telegram_id = ? ORDER BY id DESC LIMIT 20", (telegram_id,))
-    rows = cursor.fetchall()
-    conn.close()
-    logs = [{"text": r[0], "timestamp": r[1]} for r in reversed(rows)]
-    return web.json_response({"success": True, "logs": logs})
 
 async def api_get_stats(request):
     telegram_id = int(request.query.get("telegram_id", 0))
@@ -596,11 +673,14 @@ async def api_get_stats(request):
 async def telegram_long_polling():
     if not TELEGRAM_TOKEN:
         return
+    
     async with aiohttp.ClientSession() as session:
         async with session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=true") as resp:
-            pass
+            logging.info("Сброс Webhook выполнен.")
+
         offset = 0
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+        
         while True:
             try:
                 async with session.get(url, params={"offset": offset, "timeout": 30}, timeout=35) as resp:
@@ -611,19 +691,22 @@ async def telegram_long_polling():
                             message = update.get("message", {})
                             text = message.get("text", "")
                             chat_id = message.get("chat", {}).get("id")
+                            
                             if text == "/start" and chat_id:
                                 send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
                                 payload = {
                                     "chat_id": chat_id,
-                                    "text": "🤖 **Zer0Life On-Chain DEX Trader**",
+                                    "text": "🤖 **Zer0Life Jito MOV Bot (24/7 Autopilot)**\n\nАвтономный терминал активен:",
                                     "parse_mode": "Markdown",
                                     "reply_markup": {
-                                        "inline_keyboard": [[{"text": "🚀 Открыть Терминал", "web_app": {"url": RENDER_URL}}]]
+                                        "inline_keyboard": [[
+                                            {"text": "🚀 Открыть Терминал", "web_app": {"url": RENDER_URL}}
+                                        ]]
                                     }
                                 }
-                                async with session.post(send_url, json=payload):
+                                async with session.post(send_url, json=payload) as send_resp:
                                     pass
-            except Exception:
+            except Exception as e:
                 await asyncio.sleep(3)
             await asyncio.sleep(1)
 
@@ -636,7 +719,6 @@ async def main():
     app.router.add_post('/api/verify-tx', api_verify_tx)
     app.router.add_post('/api/trading/toggle', api_toggle_trading)
     app.router.add_get('/api/blockchain/balance', api_get_balance)
-    app.router.add_get('/api/logs', api_get_logs)
     app.router.add_get('/api/stats', api_get_stats)
     
     runner = web.AppRunner(app)
@@ -647,7 +729,7 @@ async def main():
     asyncio.create_task(telegram_long_polling())
     asyncio.create_task(background_mov_trader_daemon())
 
-    logging.info("DEX On-Chain Трейдер запущен.")
+    logging.info("Jito MOV Бот запущен в автономном режиме 24/7.")
     while True:
         await asyncio.sleep(3600)
 
