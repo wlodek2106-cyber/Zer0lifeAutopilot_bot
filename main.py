@@ -667,10 +667,12 @@ async def telegram_long_polling():
                             text = message.get("text", "")
                             chat_id = message.get("chat", {}).get("id")
                             if text == "/start" and chat_id:
-                                send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument"
+                                send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
                                 payload = {
                                     "chat_id": chat_id,
-                                    "document": "BQACAgIAAxkBAAIs5WrKHdZEC_o9AAFA8I4DJ9bwtxNgUAACYqoAAjKZUUqVAAGch_gphqE9BA",
+                                    "photo": "BQACAgIAAxkBAAIs5WrKHdZEC_o9AAFA8I4DJ9bwtxNgUAACYqoAAjKZUUqVAAGch_gphqE9BA",
+                                    "caption": "🌐 *Добро пожаловать в Zer0Life Web4 Ai Trader*\n\nИнтеллектуальная экосистема автономного прироста SOL и нейросканирования рынка активирована.\n\n👇 Нажмите кнопку ниже для запуска терминала:",
+                                    "parse_mode": "Markdown",
                                     "reply_markup": {"inline_keyboard": [[{"text": "🚀 Открыть Web4 Терминал", "web_app": {"url": RENDER_URL}}]]}
                                 }
                                 async with session.post(send_url, json=payload) as send_resp:
