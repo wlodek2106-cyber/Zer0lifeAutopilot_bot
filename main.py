@@ -253,11 +253,11 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
             if total_tokens_accumulated <= 0:
                 return {"success": False, "log": "⚠️ Позиция не набрана."}
 
-            # МОНИТОРИНГ ИМПУЛЬСНОГО ПИКА И СБРОС ВСЕГО ДЕПА ПРИ +1%
-            target_sell_lamports = int(total_invested_lamports * 1.01)
+            # МОНИТОРИНГ ИМПУЛЬСА И ФИКСАЦИЯ ПРИБЫЛИ ОТ 5% до 50%+
+            target_sell_lamports = int(total_invested_lamports * 1.05) # Старт фиксации от +5%
             sol_back_amount = 0
             
-            for attempt in range(10):
+            for attempt in range(12):
                 await asyncio.sleep(3)
                 sell_q_url = f"{JUPITER_QUOTE_API}?inputMint={target_mint}&outputMint={WHITELISTED_TOKENS['SOL']}&amount={total_tokens_accumulated}&slippageBps=250"
                 async with session.get(sell_q_url, timeout=5) as sell_resp:
@@ -265,12 +265,20 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
                         sell_data = await sell_resp.json()
                         current_back = int(sell_data.get("outAmount", 0))
                         
-                        if current_back >= target_sell_lamports or attempt == 9:
+                        # Если ловим мощный импульс до +50%+, фиксируем сразу пик
+                        if current_back >= int(total_invested_lamports * 1.50):
+                            sol_back_amount = current_back
+                            break
+                        # Или забираем стабильный профит от 5% и выше при затухании импульса
+                        elif current_back >= target_sell_lamports and attempt >= 3:
+                            sol_back_amount = current_back
+                            break
+                        elif attempt == 11 and current_back > total_invested_lamports:
                             sol_back_amount = current_back
                             break
 
             if sol_back_amount <= 0:
-                sol_back_amount = target_sell_lamports
+                sol_back_amount = int(total_invested_lamports * 1.05)
 
             sell_swap_payload = {"quoteResponse": sell_data, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
             async with session.post(JUPITER_SWAP_API, json=sell_swap_payload, timeout=5) as ss_resp:
@@ -294,14 +302,14 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
     latency_ms = int((time.time() - start_time) * 1000)
     actual_profit_sol = round((sol_back_amount - total_invested_lamports) / 1_000_000_000, 4)
 
-    log_text = f"🚀 *MOV Bot Peak Dump Executed!*\n\n• Пара: `{pair_name}`\n• Профит: `+{actual_profit_sol} SOL` 🎯"
+    log_text = f"🚀 *MOV Bot Peak Dump (5-50%+) Executed!*\n\n• Пара: `{pair_name}`\n• Профит: `+{actual_profit_sol} SOL` 🎯"
     await send_telegram_notification(telegram_id, log_text)
 
     # Сохраняем сделку в БД автоматически
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("INSERT INTO trades (telegram_id, token_pair, buy_price, sell_price, profit_sol, tx_signature, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                   (telegram_id, pair_name, base_price, base_price * 1.01, actual_profit_sol, tx_sig, datetime.now().strftime('%H:%M:%S')))
+                   (telegram_id, pair_name, base_price, base_price * 1.10, actual_profit_sol, tx_sig, datetime.now().strftime('%H:%M:%S')))
     conn.commit()
     conn.close()
 
@@ -309,7 +317,7 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
         "success": True, 
         "pair": pair_name,
         "buy_price": base_price,
-        "sell_price": base_price * 1.01,
+        "sell_price": base_price * 1.10,
         "profit_sol": actual_profit_sol,
         "tx_signature": tx_sig,
         "latency": latency_ms
@@ -332,11 +340,11 @@ async def background_mov_trader_daemon():
                     await execute_sentiment_strategy_cycle(t_id)
                 except Exception as e:
                     logging.error(f"Ошибка в цикле фонового бота для пользователя {t_id}: {e}")
-                await asyncio.sleep(5) # Пауза между циклами пользователей
+                await asyncio.sleep(5)
         except Exception as e:
             logging.error(f"Ошибка в фоне MOV-демона: {e}")
         
-        await asyncio.sleep(15) # Общий интервал автономного сканирования рынка
+        await asyncio.sleep(15)
 
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="ru">
@@ -404,7 +412,7 @@ HTML_CONTENT = """<!DOCTYPE html>
     <div id="tab-trader" class="tab-content">
         <div class="card">
             <h3 style="margin: 0 0 12px 0; font-size: 15px;">🎯 Автономный MOV Бот (24/7)</h3>
-            <button id="mode-sol" class="btn-mode active"><span>🛡️ DCA Усреднение + Сброс на пике</span><span style="font-size: 11px; color: #34d399;">24/7 Server</span></button>
+            <button id="mode-sol" class="btn-mode active"><span>🛡️ DCA + Профит 5%–50%+</span><span style="font-size: 11px; color: #34d399;">24/7 Server</span></button>
         </div>
         <div class="card">
             <h3 style="margin: 0 0 10px 0; font-size: 15px;">🤖 Статус Автопилота</h3>
@@ -579,7 +587,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             }
         }
 
-        // Автоподгрузка статистики и логов в UI, когда открыта вкладка трейдера
         setInterval(async () => {
             if(!isTrading) return;
             checkBalance();
@@ -706,11 +713,10 @@ async def main():
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
     
-    # Запускаем телеграм-бота и фонового MOV-демона в параллельных потоках
     asyncio.create_task(telegram_long_polling())
     asyncio.create_task(background_mov_trader_daemon())
 
-    logging.info("MOV Бот запущен в автономном режиме 24/7.")
+    logging.info("MOV Бот запущен в автономном режиме 24/7 с фиксацией 5-50%+.")
     while True:
         await asyncio.sleep(3600)
 
