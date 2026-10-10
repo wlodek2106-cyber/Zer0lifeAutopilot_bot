@@ -24,7 +24,7 @@ SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
 MIN_SOL_RESERVE = 0.3
 MAX_TRADE_SOL_LIMIT = 0.1
 
-RECENT_LOGS = ["🌐 Web4 Core запущен с обновленным ассетом."]
+RECENT_LOGS = ["🌐 Web4 Core запущен с HD ассетом."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -338,6 +338,15 @@ HTML_CONTENT = """<!DOCTYPE html>
         .logs { background: #010409; border: 1px solid rgba(52, 211, 153, 0.25); border-radius: 18px; padding: 14px; font-family: monospace; font-size: 11px; color: #34d399; height: 160px; overflow-y: auto; margin-top: 10px; white-space: pre-line; box-shadow: inset 0 2px 8px rgba(0,0,0,0.9); }
         .trade-item { background: rgba(2, 6, 23, 0.8); border: 1px solid rgba(52, 211, 153, 0.2); border-radius: 16px; padding: 12px; margin-top: 10px; font-family: monospace; font-size: 11px; display: flex; justify-content: space-between; align-items: center; }
         
+        /* Идеальная четкость изображения в WebApp */
+        #dashboard-cat-img {
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: crisp-edges;
+            width: 100%;
+            display: block;
+            border-radius: 26px;
+        }
+
         /* SIDEBAR DRAWER STYLING */
         .drawer-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(1, 3, 8, 0.8); backdrop-filter: blur(10px); z-index: 999; display: none; opacity: 0; transition: opacity 0.3s ease; }
         .drawer-overlay.open { display: block; opacity: 1; }
@@ -376,9 +385,9 @@ HTML_CONTENT = """<!DOCTYPE html>
                 <button class="btn-neural" onclick="toggleDrawer(true)">⚡ Открыть панель кошелька</button>
             </div>
 
-            <!-- ВСТАВЛЕННОЕ ИЗОБРАЖЕНИЕ НА ГЛАВНЫЙ ЭКРАН -->
+            <!-- HD КАРТИНКА НА ГЛАВНОМ ЭКРАНЕ -->
             <div class="card" style="padding: 0; overflow: hidden; border: 1px solid rgba(52, 211, 153, 0.3);">
-                <img id="dashboard-cat-img" src="" alt="Zer0Life Web4 AI Trader" style="width: 100%; display: block; border-radius: 26px;">
+                <img id="dashboard-cat-img" src="" alt="Zer0Life Web4 AI Trader">
             </div>
         </div>
 
@@ -456,7 +465,6 @@ HTML_CONTENT = """<!DOCTYPE html>
         let tg = window.Telegram.WebApp; tg.expand();
         const user = tg.initDataUnsafe?.user || { id: 42882165, username: "CryptoWlodek", first_name: "CryptoWlodek" };
         
-        // Автоматически получаем URL картинки по file_id через API Телеграма
         async function loadDashboardImage() {
             try {
                 const res = await fetch('/api/get-image-url');
@@ -590,7 +598,7 @@ async def health_handler(request):
 async def api_get_image_url(request):
     if not TELEGRAM_TOKEN:
         return web.json_response({"success": False})
-    file_id = "AgACAgIAAxkBAAIs3mrKFwzYWkbKh15vBaUwG-L4AYWCAALXHmsbMplRSrqZEGMJBBzxAQADAgADcwADPQQ"
+    file_id = "BQACAgIAAxkBAAIs5WrKHdZEC_o9AAFA8I4DJ9bwtxNgUAACYqoAAjKZUUqVAAGch_gphqE9BA"
     async with aiohttp.ClientSession() as session:
         async with session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}") as resp:
             if resp.status == 200:
@@ -661,10 +669,11 @@ async def telegram_long_polling():
                             text = message.get("text", "")
                             chat_id = message.get("chat", {}).get("id")
                             if text == "/start" and chat_id:
-                                send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
+                                # Отправляем документ вместо фото, чтобы файл не пережимался Телеграмом
+                                send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument"
                                 payload = {
                                     "chat_id": chat_id,
-                                    "photo": "AgACAgIAAxkBAAIs3mrKFwzYWkbKh15vBaUwG-L4AYWCAALXHmsbMplRSrqZEGMJBBzxAQADAgADcwADPQQ",
+                                    "document": "BQACAgIAAxkBAAIs5WrKHdZEC_o9AAFA8I4DJ9bwtxNgUAACYqoAAjKZUUqVAAGch_gphqE9BA",
                                     "reply_markup": {"inline_keyboard": [[{"text": "🚀 Открыть Web4 Терминал", "web_app": {"url": RENDER_URL}}]]}
                                 }
                                 async with session.post(send_url, json=payload) as send_resp:
