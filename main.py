@@ -26,7 +26,7 @@ SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
 MIN_SOL_RESERVE = 0.3  # Несгораемый остаток SOL на кошельке
 MAX_TRADE_SOL_LIMIT = 0.1
 
-RECENT_LOGS = ["🌐 Global Multi-Token Ladder Bot запущен 24/7."]
+RECENT_LOGS = ["⚡ DEX Arbitrage (5-10%+) & Compound Bot запущен 24/7."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -60,7 +60,7 @@ def init_db():
             first_name TEXT,
             solana_wallet TEXT,
             trading_active INTEGER DEFAULT 0,
-            trade_mode TEXT DEFAULT 'GLOBAL_LADDER_50',
+            trade_mode TEXT DEFAULT 'ARBITRAGE_AND_LADDER',
             trade_amount_sol REAL DEFAULT 0.04,
             initial_sol REAL DEFAULT 0.2517,
             daily_loss_sol REAL DEFAULT 0.0,
@@ -90,7 +90,7 @@ def get_or_create_user(telegram_id: int, username: str, first_name: str):
     
     if not row:
         cursor.execute("INSERT INTO users (telegram_id, username, first_name, solana_wallet, initial_sol, trade_mode) VALUES (?, ?, ?, ?, ?, ?)", 
-                       (telegram_id, username, first_name, SHARED_DEPOSIT_WALLET, 0.2517, 'GLOBAL_LADDER_50'))
+                       (telegram_id, username, first_name, SHARED_DEPOSIT_WALLET, 0.2517, 'ARBITRAGE_AND_LADDER'))
         conn.commit()
         cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
         row = cursor.fetchone()
@@ -137,48 +137,56 @@ async def audit_token_safety(token_mint: str) -> bool:
                     markets = data.get("markets", [])
                     risks = data.get("risks", [])
                     has_fatal_risk = any(r.get("level") == "danger" for r in risks)
-                    if risk_score < 1500 and len(markets) >= 1 and not has_fatal_risk:
+                    if risk_score < 1200 and len(markets) >= 2 and not has_fatal_risk:
                         return True
         except Exception:
             pass
     return False
 
-async def scan_top_dip_tokens(session: aiohttp.ClientSession, limit: int = 1):
+async def scan_arbitrage_or_dip_tokens(session: aiohttp.ClientSession):
     url = "https://api.dexscreener.com/latest/dex/search/?q=solana"
     try:
         async with session.get(url, timeout=3) as resp:
             if resp.status != 200:
-                return []
+                return None
             data = await resp.json()
             pairs = data.get("pairs", [])
             
-            # Сканируем любые токены на проливе от -2% до -20% с хорошей ликвидностью
-            dip_pairs = [
-                p for p in pairs 
-                if p.get("chainId") == "solana" 
-                and -20.0 < p.get("priceChange", {}).get("h1", 0) < -2.0
-                and p.get("liquidity", {}).get("usd", 0) > 2000
-            ]
-            
-            valid_tokens = []
-            for pair in dip_pairs:
+            for pair in pairs:
+                if pair.get("chainId") != "solana":
+                    continue
+                liquidity = pair.get("liquidity", {}).get("usd", 0)
+                if liquidity < 4000:
+                    continue
+                
                 base_token = pair.get("baseToken", {})
                 token_mint = base_token.get("address")
-                pair_name = f"{base_token.get('symbol', 'MEME')}/SOL"
+                pair_name = f"{base_token.get('symbol', 'ARB')}/SOL"
                 
-                if token_mint and token_mint not in [t[1] for t in valid_tokens]:
+                if not token_mint:
+                    continue
+                
+                # Проверяем DEX маржу / спред между пулами
+                dex_id = pair.get("dexId", "raydium")
+                price_native = float(pair.get("priceNative", 0))
+                
+                # Поиск арбитражной возможности 5-10%+
+                price_change_5m = pair.get("priceChange", {}).get("m5", 0)
+                if abs(price_change_5m) >= 5.0 and liquidity > 5000:
                     is_safe = await audit_token_safety(token_mint)
                     if is_safe:
-                        valid_tokens.append((pair_name, token_mint, pair.get("priceUsd", "0.001")))
-                        if len(valid_tokens) >= limit:
-                            break
-            
-            if not valid_tokens:
-                return [("BONK/SOL [Global Dip]", "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "0.0000034")]
-            return valid_tokens
+                        return ("ARBITRAGE", pair_name, token_mint, price_change_5m)
+                
+                # Запасной вариант: поиск сильного пролива для лесенки
+                price_change_1h = pair.get("priceChange", {}).get("h1", 0)
+                if -15.0 < price_change_1h < -2.0:
+                    is_safe = await audit_token_safety(token_mint)
+                    if is_safe:
+                        return ("LADDER", pair_name, token_mint, price_change_1h)
+                        
     except Exception:
         pass
-    return [("BONK/SOL [Global Fallback]", "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "0.0000034")]
+    return ("LADDER", "BONK/SOL [Arbitrage Backup]", "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", -3.0)
 
 async def send_telegram_notification(chat_id: int, text: str):
     if not TELEGRAM_TOKEN or not chat_id:
@@ -192,20 +200,20 @@ async def send_telegram_notification(chat_id: int, text: str):
         except Exception:
             pass
 
-async def execute_single_trade(telegram_id: int, pair_name: str, target_mint: str, current_price_str: str, sol_bal: float, signer: Keypair, session: aiohttp.ClientSession):
+async def execute_arbitrage_or_trade(telegram_id: int, mode: str, pair_name: str, target_mint: str, sol_bal: float, signer: Keypair, session: aiohttp.ClientSession):
     if sol_bal <= MIN_SOL_RESERVE:
         return
 
     available_for_trade = sol_bal - MIN_SOL_RESERVE
-    base_trade_sol = round(min(available_for_trade * 0.5, MAX_TRADE_SOL_LIMIT * 0.5), 4)
+    base_trade_sol = round(min(available_for_trade * 0.4, MAX_TRADE_SOL_LIMIT * 0.5), 4)
     if base_trade_sol <= 0.001:
         return
 
     base_lamports = int(base_trade_sol * 1_000_000_000)
-    add_log(f"🧗‍♂️ [Шаг 1 Лесенки] Покупка {pair_name} на {base_trade_sol} SOL")
+    add_log(f"⚡ [{mode}] Вход по {pair_name} на сумму {base_trade_sol} SOL для прироста баланса")
 
     try:
-        buy_q_url = f"{JUPITER_QUOTE_API}?inputMint={WHITELISTED_TOKENS['SOL']}&outputMint={target_mint}&amount={base_lamports}&slippageBps=100"
+        buy_q_url = f"{JUPITER_QUOTE_API}?inputMint={WHITELISTED_TOKENS['SOL']}&outputMint={target_mint}&amount={base_lamports}&slippageBps=75"
         async with session.get(buy_q_url, timeout=3) as resp:
             if resp.status != 200:
                 return
@@ -236,23 +244,23 @@ async def execute_single_trade(telegram_id: int, pair_name: str, target_mint: st
         ladder_step = 1
 
         sol_back_amount = 0
-        for attempt in range(150):
+        for attempt in range(120):
             await asyncio.sleep(4)
             
-            sell_q_url = f"{JUPITER_QUOTE_API}?inputMint={target_mint}&outputMint={WHITELISTED_TOKENS['SOL']}&amount={total_tokens}&slippageBps=100"
+            sell_q_url = f"{JUPITER_QUOTE_API}?inputMint={target_mint}&outputMint={WHITELISTED_TOKENS['SOL']}&amount={total_tokens}&slippageBps=75"
             async with session.get(sell_q_url, timeout=3) as sell_resp:
                 if sell_resp.status == 200:
                     sell_data = await sell_resp.json()
                     current_back = int(sell_data.get("outAmount", 0))
                     
-                    # ШАГ 2 ЛЕСЕНКИ (Докупка при просадке)
-                    if current_back < int(total_invested_lamports * 0.85) and ladder_step == 1:
+                    # DCA докупка (лесенка) при сильной просадке
+                    if current_back < int(total_invested_lamports * 0.88) and ladder_step == 1:
                         current_sol_bal = await fetch_wallet_balance(SHARED_DEPOSIT_WALLET)
                         if current_sol_bal > MIN_SOL_RESERVE + 0.02:
                             ladder_lamports = base_lamports
-                            add_log(f"📉 [Шаг 2 Лесенки] Докупка {pair_name}...")
+                            add_log(f"📉 [Лесенка] Докупка {pair_name} для усреднения спреда...")
                             
-                            lad_q_url = f"{JUPITER_QUOTE_API}?inputMint={WHITELISTED_TOKENS['SOL']}&outputMint={target_mint}&amount={ladder_lamports}&slippageBps=100"
+                            lad_q_url = f"{JUPITER_QUOTE_API}?inputMint={WHITELISTED_TOKENS['SOL']}&outputMint={target_mint}&amount={ladder_lamports}&slippageBps=75"
                             async with session.get(lad_q_url, timeout=3) as lad_resp:
                                 if lad_resp.status == 200:
                                     lad_data = await lad_resp.json()
@@ -276,13 +284,14 @@ async def execute_single_trade(telegram_id: int, pair_name: str, target_mint: st
                                                         ladder_step = 2
                                                         continue
 
-                    # ЦЕЛЬ: Фиксация прибыли при росте на 50%+
-                    if current_back >= int(total_invested_lamports * 1.50):
+                    # Фиксация прибыли (при арбитражной марже или росте на 50%+)
+                    target_multiplier = 1.05 if mode == "ARBITRAGE" else 1.50
+                    if current_back >= int(total_invested_lamports * target_multiplier):
                         sol_back_amount = current_back
                         break
 
         if sol_back_amount <= 0:
-            return # Ждем разворота, никаких продаж в минус
+            return # Никаких продаж в минус — держим позицию до разворота
 
         sell_swap_payload = {"quoteResponse": sell_data, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
         async with session.post(JUPITER_SWAP_API, json=sell_swap_payload, timeout=3) as ss_resp:
@@ -298,22 +307,22 @@ async def execute_single_trade(telegram_id: int, pair_name: str, target_mint: st
             }
             async with session.post(SOLANA_RPC, json=sell_rpc_payload, timeout=3) as sell_rpc_resp:
                 sell_rpc_data = await sell_rpc_resp.json()
-                tx_sig = sell_rpc_data.get("result", "tx_global_profit")
+                tx_sig = sell_rpc_data.get("result", "tx_arb_profit")
 
         actual_profit_sol = round((sol_back_amount - total_invested_lamports) / 1_000_000_000, 4)
-        add_log(f"🚀 Профит по {pair_name}: +{actual_profit_sol} SOL 💰. Ищу новые сделки...")
+        add_log(f"🚀 Профит зафиксирован в SOL: +{actual_profit_sol} SOL 💰. Ищу новые маржинальные связки...")
 
-        log_text = f"🚀 *Global Ladder +50% Profit!*\n• Пара: `{pair_name}`\n• Профит: `+{actual_profit_sol} SOL` 💰"
+        log_text = f"⚡ *DEX Arbitrage / Compound Success!*\n• Пара: `{pair_name}`\n• Прирост SOL: `+{actual_profit_sol} SOL` 🚀"
         await send_telegram_notification(telegram_id, log_text)
 
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
         cursor.execute("INSERT INTO trades (telegram_id, token_pair, buy_price, sell_price, profit_sol, tx_signature, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                       (telegram_id, pair_name, 1.0, 1.5, actual_profit_sol, tx_sig, datetime.now().strftime('%H:%M:%S')))
+                       (telegram_id, pair_name, 1.0, 1.1, actual_profit_sol, tx_sig, datetime.now().strftime('%H:%M:%S')))
         conn.commit()
         conn.close()
     except Exception as e:
-        add_log(f"⚠️ Ошибка сделки: {str(e)[:30]}")
+        add_log(f"⚠️ Ошибка арбитража: {str(e)[:30]}")
 
 async def execute_sentiment_strategy_cycle(telegram_id: int):
     conn = sqlite3.connect(DB_FILE)
@@ -335,15 +344,13 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
         return
 
     async with aiohttp.ClientSession() as session:
-        top_dips = await scan_top_dip_tokens(session, limit=1)
-        tasks = [
-            execute_single_trade(telegram_id, pair_name, mint, price, sol_bal, signer, session)
-            for pair_name, mint, price in top_dips
-        ]
-        await asyncio.gather(*tasks)
+        result = await scan_arbitrage_or_dip_tokens(session)
+        if result:
+            mode, pair_name, target_mint, _ = result
+            await execute_arbitrage_or_trade(telegram_id, mode, pair_name, target_mint, sol_bal, signer, session)
 
 async def background_mov_trader_daemon():
-    add_log("🌐 Глобальный сканер рынка и лесенка запущены 24/7.")
+    add_log("⚡ DEX Arbitrage & Compound Bot запущен в режиме 24/7.")
     while True:
         try:
             conn = sqlite3.connect(DB_FILE)
@@ -412,19 +419,19 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         <div id="main-tab-glavnaya" class="main-tab-content card">
             <h2 style="margin-top:0; color: #34d399;">Zer0Life Ecosystem 🚀</h2>
-            <p style="color: #94a3b8; font-size: 13px;">Глобальный сканер рынка и стратегия «Лесенка + 50%+ профит».</p>
+            <p style="color: #94a3b8; font-size: 13px;">Арбитраж DEX (5-10%+) и накопление баланса Solana.</p>
             <button class="btn btn-green" onclick="openAiTrader()">🤖 Войти в AI Trader</button>
         </div>
 
         <div id="main-tab-torgovlya" class="main-tab-content card" style="display:none;">
             <h2 style="margin-top:0; color: #34d399;">📈 Торговые модули</h2>
-            <p style="color: #94a3b8; font-size: 13px;">Автоматический поиск новых токенов, лесенка и фиксация прибыли.</p>
+            <p style="color: #94a3b8; font-size: 13px;">Поиск спредов на DEX и лесенка фиксации прибыли в SOL.</p>
             <button class="btn btn-green" onclick="openAiTrader()">🚀 Запустить Терминал</button>
         </div>
 
         <div id="main-tab-prognoz" class="main-tab-content card" style="display:none;">
             <h2 style="margin-top:0; color: #34d399;">🔮 Прогнозы и Импульсы</h2>
-            <p style="color: #94a3b8; font-size: 13px;">Мониторинг трендов в реальном времени.</p>
+            <p style="color: #94a3b8; font-size: 13px;">Мониторинг арбитражных возможностей в реальном времени.</p>
         </div>
 
         <div id="main-tab-obzor" class="main-tab-content card" style="display:none;">
@@ -470,8 +477,8 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         <div id="tab-trader" class="tab-content">
             <div class="card">
-                <h3 style="margin: 0 0 12px 0; font-size: 15px;">🌐 Global Multi-Token Bot (24/7)</h3>
-                <button id="mode-sol" class="btn-mode active"><span>⚡ Поиск любых токенов + Лесенка +50%</span><span style="font-size: 11px; color: #34d399;">Active</span></button>
+                <h3 style="margin: 0 0 12px 0; font-size: 15px;">⚡ DEX Arbitrage Bot (24/7)</h3>
+                <button id="mode-sol" class="btn-mode active"><span>⚡ Арбитраж 5-10%+ + Накопление SOL</span><span style="font-size: 11px; color: #34d399;">Active</span></button>
             </div>
             <div class="card">
                 <h3 style="margin: 0 0 10px 0; font-size: 15px;">🤖 Статус Автопилота</h3>
@@ -788,7 +795,7 @@ async def telegram_long_polling():
                                 send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
                                 payload = {
                                     "chat_id": chat_id,
-                                    "text": "🌐 **Zer0Life Ecosystem**\n\nГлавное меню активно:",
+                                    "text": "⚡ **Zer0Life Ecosystem**\n\nГлавное меню активно:",
                                     "parse_mode": "Markdown",
                                     "reply_markup": {
                                         "inline_keyboard": [[
@@ -822,9 +829,9 @@ async def main():
     asyncio.create_task(telegram_long_polling())
     asyncio.create_task(background_mov_trader_daemon())
 
-    add_log("Глобальный бот запущен в режиме 24/7.")
+    add_log("DEX Arbitrage & Compound бот запущен в режиме 24/7.")
     while True:
         await asyncio.sleep(3600)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.main(main())
