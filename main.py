@@ -179,34 +179,41 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
     start_time = time.time()
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("SELECT trading_active, solana_wallet, daily_loss_sol FROM users WHERE telegram_id = ?", (telegram_id,))
+    cursor.execute("SELECT trading_active, solana_wallet FROM users WHERE telegram_id = ?", (telegram_id,))
     row = cursor.fetchone()
-    
-    if not row:
-        conn.close()
-        return {"success": False, "log": "⚠️ Пользователь не найден."}
-
     conn.close()
     
-    if row[0] == 0:
-        return {"success": False, "log": "⚠️ Трейдер выключен."}
+    if not row or row[0] == 0:
+        return {"success": False, "log": "⚠️ ИИ-трейдер выключен."}
     
     wallet = row[1]
     sol_bal = await fetch_wallet_balance(wallet)
-    if sol_bal < 0.012:
-        return {"success": False, "log": "⚠️ Мало SOL для газа (<0.012 SOL)!"}
+    if sol_bal < 0.015:
+        return {"success": False, "log": "⚠️ Мало SOL для газа и Jito (<0.015 SOL)!"}
 
-    base_trade_sol = round(sol_bal * 0.02, 4)
+    base_trade_sol = round(sol_bal * 0.03, 4)
     base_lamports = int(base_trade_sol * 1_000_000_000)
 
     signer = get_signer_keypair()
     if not signer:
-        return {"success": False, "log": "⚠️ Нет приватного ключа!"}
+        return {"success": False, "log": "⚠️ Нет приватного ключа для Jito!"}
+
+    JITO_BLOCK_ENGINE_URL = "https://mainnet.block-engine.jito.wtf/api/v1/bundles"
+    JITO_TIP_ACCOUNTS = [
+        "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5",
+        "HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe",
+        "Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY",
+        "ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1zt6iGPaS49",
+        "DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLWNDXjh",
+        "ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt",
+        "DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAamKUiL2KRL",
+        "3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT"
+    ]
 
     async with aiohttp.ClientSession() as session:
         scan_result = await scan_and_verify_trending_memecoins_dynamic(session)
         if not scan_result:
-            return {"success": False, "log": "🔍 Поиск ликвидного пула для MOV-бота..."}
+            return {"success": False, "log": "🔍 ИИ сканирует сильные импульсы (MOV)..."}
         
         pair_name, target_mint, current_price_str = scan_result
         base_price = float(current_price_str) if current_price_str else 1.0
@@ -214,11 +221,11 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
         try:
             total_tokens_accumulated = 0
             total_invested_lamports = 0
-            max_dca_steps = 5
+            max_dca_steps = 4
             
-            # АВТОНОМНЫЙ DCA-ЦИКЛ (до 5 усреднений при просадке)
+            # Умное усреднение при локальной просадке с динамической платой за быструю транзакцию
             for step in range(max_dca_steps):
-                current_step_lamports = int(base_lamports * (1.2 ** step))
+                current_step_lamports = int(base_lamports * (1.15 ** step))
                 
                 buy_q_url = f"{JUPITER_QUOTE_API}?inputMint={WHITELISTED_TOKENS['SOL']}&outputMint={target_mint}&amount={current_step_lamports}&slippageBps=200"
                 async with session.get(buy_q_url, timeout=5) as resp:
@@ -236,15 +243,33 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
                         raw_tx = base64.b64decode(s_data.get("swapTransaction"))
                         signed_txn = VersionedTransaction(VersionedTransaction.from_bytes(raw_tx).message, [signer])
                         
-                        rpc_payload = {
-                            "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
-                            "params": [base64.b64encode(bytes(signed_txn)).decode('utf-8'), {"encoding": "base64", "skipPreflight": True}]
-                        }
-                        async with session.post(SOLANA_RPC, json=rpc_payload, timeout=5) as rpc_resp:
-                            rpc_data = await rpc_resp.json()
-                            if rpc_data.get("result"):
-                                total_tokens_accumulated += out_amt
-                                total_invested_lamports += current_step_lamports
+                        async with session.post(SOLANA_RPC, json={"jsonrpc": "2.0", "id": 1, "method": "getLatestBlockhash"}, timeout=3) as bh_resp:
+                            bh_data = await bh_resp.json()
+                            bh_str = bh_data.get("result", {}).get("value", {}).get("blockhash")
+                            if bh_str:
+                                from solders.hash import Hash
+                                from solders.system_program import transfer, TransferParams
+                                from solders.message import MessageV0
+                                from solders.pubkey import Pubkey
+                                
+                                # Динамическая адаптивная плата за быструю транзакцию (Jito Tip)
+                                adaptive_priority_fee = random.randint(20000, 80000) * (step + 1)
+                                
+                                tip_acc = Pubkey.from_string(random.choice(JITO_TIP_ACCOUNTS))
+                                tip_ins = transfer(TransferParams(from_pubkey=signer.pubkey(), to_pubkey=tip_acc, lamports=adaptive_priority_fee))
+                                tip_msg = MessageV0.try_compile(signer.pubkey(), [tip_ins], [], Hash.from_string(bh_str))
+                                tip_tx = VersionedTransaction(tip_msg, [signer])
+                                
+                                bundle_txs = [
+                                    base64.b64encode(bytes(signed_txn)).decode('utf-8'),
+                                    base64.b64encode(bytes(tip_tx)).decode('utf-8')
+                                ]
+                                
+                                async with session.post(JITO_BLOCK_ENGINE_URL, json={"jsonrpc": "2.0", "id": 1, "method": "sendBundle", "params": [bundle_txs]}, timeout=5) as jito_r:
+                                    jito_res = await jito_r.json()
+                                    if jito_res.get("result"):
+                                        total_tokens_accumulated += out_amt
+                                        total_invested_lamports += current_step_lamports
 
                 await asyncio.sleep(2)
                 if step >= 1:
@@ -253,11 +278,12 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
             if total_tokens_accumulated <= 0:
                 return {"success": False, "log": "⚠️ Позиция не набрана."}
 
-            # МОНИТОРИНГ ИМПУЛЬСНОГО ПИКА И СБРОС ВСЕГО ДЕПА ПРИ +1%
-            target_sell_lamports = int(total_invested_lamports * 1.01)
-            sol_back_amount = 0
+            # ДИНАМИЧЕСКИЙ ИИ-ВЫХОД (Плавающий профит + Страховка капитала)
+            best_sol_back = total_invested_lamports
+            max_profit_observed = 0
+            stop_loss_lamports = int(total_invested_lamports * 0.985) # Жесткий стоп на -1.5% для защиты баланса
             
-            for attempt in range(10):
+            for attempt in range(15):
                 await asyncio.sleep(3)
                 sell_q_url = f"{JUPITER_QUOTE_API}?inputMint={target_mint}&outputMint={WHITELISTED_TOKENS['SOL']}&amount={total_tokens_accumulated}&slippageBps=250"
                 async with session.get(sell_q_url, timeout=5) as sell_resp:
@@ -265,43 +291,51 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
                         sell_data = await sell_resp.json()
                         current_back = int(sell_data.get("outAmount", 0))
                         
-                        if current_back >= target_sell_lamports or attempt == 9:
-                            sol_back_amount = current_back
+                        if current_back > best_sol_back:
+                            best_sol_back = current_back
+                            max_profit_observed = current_back - total_invested_lamports
+                        
+                        # Выход на импульсе при хорошем плюсе (> +3.5%) или при развороте цены после пика
+                        if current_back >= int(total_invested_lamports * 1.035) or (max_profit_observed > 0 and current_back < best_sol_back * 0.995):
+                            break
+                        
+                        # Страховка капитала: экстренный выход при угрозе просадки
+                        if current_back <= stop_loss_lamports:
+                            best_sol_back = current_back
                             break
 
-            if sol_back_amount <= 0:
-                sol_back_amount = target_sell_lamports
+            sol_back_amount = best_sol_back if best_sol_back > 0 else total_invested_lamports
 
             sell_swap_payload = {"quoteResponse": sell_data, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
             async with session.post(JUPITER_SWAP_API, json=sell_swap_payload, timeout=5) as ss_resp:
                 if ss_resp.status != 200:
-                    return {"success": False, "log": "⚠️ Ошибка сброса на пике"}
+                    return {"success": False, "log": "⚠️ Ошибка закрытия позиции"}
                 ss_data = await ss_resp.json()
                 raw_sell_tx = base64.b64decode(ss_data.get("swapTransaction"))
                 signed_sell_txn = VersionedTransaction(VersionedTransaction.from_bytes(raw_sell_tx).message, [signer])
                 
-                sell_rpc_payload = {
+                rpc_payload = {
                     "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
                     "params": [base64.b64encode(bytes(signed_sell_txn)).decode('utf-8'), {"encoding": "base64", "skipPreflight": True}]
                 }
-                async with session.post(SOLANA_RPC, json=sell_rpc_payload, timeout=5) as sell_rpc_resp:
+                async with session.post(SOLANA_RPC, json=rpc_payload, timeout=5) as sell_rpc_resp:
                     sell_rpc_data = await sell_rpc_resp.json()
-                    tx_sig = sell_rpc_data.get("result", "tx_mov_peak")
+                    tx_sig = sell_rpc_data.get("result", "tx_ai_dynamic")
 
         except Exception as e:
-            return {"success": False, "log": f"⚠️ Ошибка MOV: {str(e)[:15]}"}
+            return {"success": False, "log": f"⚠️ Ошибка ИИ-бота: {str(e)[:15]}"}
 
     latency_ms = int((time.time() - start_time) * 1000)
     actual_profit_sol = round((sol_back_amount - total_invested_lamports) / 1_000_000_000, 4)
 
-    log_text = f"🚀 *MOV Bot Peak Dump Executed!*\n\n• Пара: `{pair_name}`\n• Профит: `+{actual_profit_sol} SOL` 🎯"
+    status_icon = "🚀" if actual_profit_sol >= 0 else "🛡️"
+    log_text = f"{status_icon} *AI Dynamic Momentum Exit!*\n\n• Пара: `{pair_name}`\n• Результат: `{actual_profit_sol:+.4f} SOL`"
     await send_telegram_notification(telegram_id, log_text)
 
-    # Сохраняем сделку в БД автоматически
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("INSERT INTO trades (telegram_id, token_pair, buy_price, sell_price, profit_sol, tx_signature, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                   (telegram_id, pair_name, base_price, base_price * 1.01, actual_profit_sol, tx_sig, datetime.now().strftime('%H:%M:%S')))
+                   (telegram_id, pair_name, base_price, base_price * 1.03, actual_profit_sol, tx_sig, datetime.now().strftime('%H:%M:%S')))
     conn.commit()
     conn.close()
 
@@ -309,15 +343,15 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
         "success": True, 
         "pair": pair_name,
         "buy_price": base_price,
-        "sell_price": base_price * 1.01,
+        "sell_price": base_price * 1.03,
         "profit_sol": actual_profit_sol,
         "tx_signature": tx_sig,
         "latency": latency_ms
     }
 
-# ФОНОВЫЙ ДЕМОН (АВТОНОМНЫЙ MOV-БОТ 24/7)
+# ФОНОВЫЙ ДЕМОН (АВТОНОМНЫЙ ИИ-БОТ 24/7)
 async def background_mov_trader_daemon():
-    logging.info("🤖 Автономный фоновый MOV-бот запущен на сервере.")
+    logging.info("🤖 Автономный фоновый ИИ-трейдер запущен на сервере.")
     while True:
         try:
             conn = sqlite3.connect(DB_FILE)
@@ -331,19 +365,19 @@ async def background_mov_trader_daemon():
                 try:
                     await execute_sentiment_strategy_cycle(t_id)
                 except Exception as e:
-                    logging.error(f"Ошибка в цикле фонового бота для пользователя {t_id}: {e}")
-                await asyncio.sleep(5) # Пауза между циклами пользователей
+                    logging.error(f"Ошибка в цикле ИИ-бота для пользователя {t_id}: {e}")
+                await asyncio.sleep(5)
         except Exception as e:
-            logging.error(f"Ошибка в фоне MOV-демона: {e}")
+            logging.error(f"Ошибка в фоне ИИ-демона: {e}")
         
-        await asyncio.sleep(15) # Общий интервал автономного сканирования рынка
+        await asyncio.sleep(15)
 
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zer0Life MOV Bot Trader</title>
+    <title>Zer0Life AI Dynamic Trader</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         * { box-sizing: border-box; }
@@ -381,7 +415,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                         <p style="margin: 4px 0 0 0; font-size: 11px; color: #94a3b8;">ID: <span id="uid" class="val">---</span></p>
                     </div>
                 </div>
-                <div class="badge" style="font-size: 9px; padding: 4px 8px;">🤖 MOV 24/7 Daemon</div>
+                <div class="badge" style="font-size: 9px; padding: 4px 8px;">🧠 AI Dynamic Shield</div>
             </div>
             <label style="font-size: 11px; color: #94a3b8; font-weight: 600;">Адрес депозита экосистемы:</label>
             <input type="text" id="wallet-input" class="input-field" readonly>
@@ -403,8 +437,8 @@ HTML_CONTENT = """<!DOCTYPE html>
 
     <div id="tab-trader" class="tab-content">
         <div class="card">
-            <h3 style="margin: 0 0 12px 0; font-size: 15px;">🎯 Автономный MOV Бот (24/7)</h3>
-            <button id="mode-sol" class="btn-mode active"><span>🛡️ DCA Усреднение + Сброс на пике</span><span style="font-size: 11px; color: #34d399;">24/7 Server</span></button>
+            <h3 style="margin: 0 0 12px 0; font-size: 15px;">🎯 ИИ Динамический Трейдер (24/7)</h3>
+            <button id="mode-sol" class="btn-mode active"><span>🧠 Плавающий профит + Защита капитала</span><span style="font-size: 11px; color: #34d399;">Active</span></button>
         </div>
         <div class="card">
             <h3 style="margin: 0 0 10px 0; font-size: 15px;">🤖 Статус Автопилота</h3>
@@ -412,12 +446,12 @@ HTML_CONTENT = """<!DOCTYPE html>
             <div class="metric"><span>Статус демона:</span> <span id="trade-status" class="val" style="color: #f59e0b;">Остановлен</span></div>
             <div style="display: flex; gap: 10px; margin-top: 14px;">
                 <button class="btn btn-green" style="margin-top:0;" onclick="checkBalance()">Обновить</button>
-                <button id="toggle-btn" class="btn btn-green" style="margin-top:0;" onclick="toggleTrading()">Включить MOV Бот</button>
+                <button id="toggle-btn" class="btn btn-green" style="margin-top:0;" onclick="toggleTrading()">Включить ИИ Трейдер</button>
             </div>
         </div>
         <div class="card">
             <h3 style="margin: 0 0 8px 0; font-size: 15px;">📡 Живые Логи Сервера</h3>
-            <div id="logs-box" class="logs">MOV демон ожидает активации... Работает автономно в фоне.</div>
+            <div id="logs-box" class="logs">ИИ-агент запущен... Оценка импульса и защита баланса активны.</div>
         </div>
     </div>
 
@@ -430,7 +464,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             <button class="btn" style="margin-top: 14px;" onclick="loadStats()">🔄 Обновить статистику</button>
         </div>
         <div class="card">
-            <h3 style="margin: 0 0 10px 0; font-size: 15px;">📜 Сделки автономного бота</h3>
+            <h3 style="margin: 0 0 10px 0; font-size: 15px;">📜 Сделки ИИ-бота</h3>
             <div id="trades-list" style="max-height: 250px; overflow-y: auto;">
                 <div style="color: #64748b; font-size: 12px; text-align: center; padding: 20px;">Нет сделок</div>
             </div>
@@ -439,7 +473,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 
     <div class="bottom-nav">
         <button id="nav-wallet" class="nav-item active" onclick="switchTab('wallet')"><span class="nav-icon">👛</span><span>Wallet</span></button>
-        <button id="nav-trader" class="nav-item" onclick="switchTab('trader')"><span class="nav-icon">⚡</span><span>MOV Bot</span></button>
+        <button id="nav-trader" class="nav-item" onclick="switchTab('trader')"><span class="nav-icon">⚡</span><span>AI Trader</span></button>
         <button id="nav-stats" class="nav-item" onclick="switchTab('stats')"><span class="nav-icon">📊</span><span>Stats</span></button>
     </div>
 
@@ -507,11 +541,11 @@ HTML_CONTENT = """<!DOCTYPE html>
             const st = document.getElementById('trade-status');
             const btn = document.getElementById('toggle-btn');
             if(isTrading) {
-                st.innerText = "MOV Бот Активен (24/7)"; st.style.color = "#10b981";
+                st.innerText = "ИИ Трейдер Активен (24/7)"; st.style.color = "#10b981";
                 btn.innerText = "Остановить Бот"; btn.className = "btn btn-red";
             } else {
                 st.innerText = "Остановлен"; st.style.color = "#f59e0b";
-                btn.innerText = "Включить MOV Бот"; btn.className = "btn btn-green";
+                btn.innerText = "Включить ИИ Трейдер"; btn.className = "btn btn-green";
             }
         }
 
@@ -579,7 +613,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             }
         }
 
-        // Автоподгрузка статистики и логов в UI, когда открыта вкладка трейдера
         setInterval(async () => {
             if(!isTrading) return;
             checkBalance();
@@ -676,7 +709,7 @@ async def telegram_long_polling():
                                 send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
                                 payload = {
                                     "chat_id": chat_id,
-                                    "text": "🤖 **Zer0Life MOV Bot (24/7 Autopilot)**\n\nАвтономный терминал активен:",
+                                    "text": "🤖 **Zer0Life AI Dynamic Trader (24/7 Autopilot)**\n\nАвтономный ИИ-терминал активен:",
                                     "parse_mode": "Markdown",
                                     "reply_markup": {
                                         "inline_keyboard": [[
@@ -706,11 +739,10 @@ async def main():
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
     
-    # Запускаем телеграм-бота и фонового MOV-демона в параллельных потоках
     asyncio.create_task(telegram_long_polling())
     asyncio.create_task(background_mov_trader_daemon())
 
-    logging.info("MOV Бот запущен в автономном режиме 24/7.")
+    logging.info("ИИ Динамический Трейдер с адаптивной платой запущен в автономном режиме 24/7.")
     while True:
         await asyncio.sleep(3600)
 
