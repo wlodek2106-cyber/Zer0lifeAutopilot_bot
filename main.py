@@ -24,7 +24,7 @@ SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
 MIN_SOL_RESERVE = 0.3
 MAX_TRADE_SOL_LIMIT = 0.1
 
-RECENT_LOGS = ["🌐 Web4 Core запущен с экраном в стиле Run."]
+RECENT_LOGS = ["🌐 Web4 Ai Trader запущен."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -186,7 +186,7 @@ async def execute_strict_trade(telegram_id: int, pair_name: str, target_mint: st
     if base_trade_sol <= 0.001:
         return
     base_lamports = int(base_trade_sol * 1_000_000_000)
-    add_log(f"⚡ [Web4] Вход по {pair_name} на {base_trade_sol} SOL")
+    add_log(f"⚡ [Ai Trader] Вход по {pair_name} на {base_trade_sol} SOL")
 
     try:
         buy_q_url = f"{JUPITER_QUOTE_API}?inputMint={WHITELISTED_TOKENS['SOL']}&outputMint={target_mint}&amount={base_lamports}&slippageBps=50"
@@ -288,7 +288,7 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
             await execute_strict_trade(telegram_id, pair_name, target_mint, sol_bal, signer, session)
 
 async def background_mov_trader_daemon():
-    add_log("🌐 Web4 Core активен.")
+    add_log("🌐 Web4 Ai Trader активен.")
     while True:
         try:
             conn = sqlite3.connect(DB_FILE)
@@ -327,8 +327,8 @@ HTML_CONTENT = """<!DOCTYPE html>
             overflow: hidden; 
         }
         
-        /* Стили экрана в стиле Zer0Life Run с кнопкой внизу */
-        .run-screen {
+        /* ПРИВЕТСТВЕННЫЙ ЭКРАН */
+        #splash-screen {
             position: fixed;
             top: 0;
             left: 0;
@@ -341,7 +341,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             justify-content: flex-end;
             padding: 24px;
             padding-bottom: 40px;
-            z-index: 200;
+            z-index: 9999;
         }
 
         .run-btn {
@@ -369,23 +369,11 @@ HTML_CONTENT = """<!DOCTYPE html>
         .logs { background: #010409; border: 1px solid rgba(52, 211, 153, 0.25); border-radius: 18px; padding: 14px; font-family: monospace; font-size: 11px; color: #34d399; height: 160px; overflow-y: auto; margin-top: 10px; white-space: pre-line; box-shadow: inset 0 2px 8px rgba(0,0,0,0.9); }
         .trade-item { background: rgba(2, 6, 23, 0.8); border: 1px solid rgba(52, 211, 153, 0.2); border-radius: 16px; padding: 12px; margin-top: 10px; font-family: monospace; font-size: 11px; display: flex; justify-content: space-between; align-items: center; }
         
-        /* SIDEBAR DRAWER STYLING */
-        .drawer-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(1, 3, 8, 0.8); backdrop-filter: blur(10px); z-index: 999; display: none; opacity: 0; transition: opacity 0.3s ease; }
-        .drawer-overlay.open { display: block; opacity: 1; }
-        
-        .sidebar-drawer { position: fixed; top: 0; right: -100%; width: 85%; max-width: 360px; height: 100%; background: rgba(4, 10, 26, 0.95); backdrop-filter: blur(40px); border-left: 1px solid rgba(52, 211, 153, 0.4); box-shadow: -20px 0 50px rgba(0,0,0,0.9); z-index: 1000; transition: right 0.35s cubic-bezier(0.4, 0, 0.2, 1); padding: 20px; display: flex; flex-direction: column; overflow-y: auto; }
-        .sidebar-drawer.open { right: 0; }
-        
-        .drawer-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid rgba(52, 211, 153, 0.2); padding-bottom: 12px; }
-        .close-drawer { background: transparent; border: none; color: #ef4444; font-size: 20px; font-weight: bold; cursor: pointer; }
-        
         .input-group-web4 { width: 100%; background: rgba(2, 6, 23, 0.9); border: 1px solid rgba(52, 211, 153, 0.3); border-radius: 16px; padding: 12px; margin-top: 8px; display: flex; align-items: center; justify-content: space-between; }
         .input-field-web4 { background: transparent; border: none; color: #34d399; font-family: monospace; font-size: 10px; width: 100%; outline: none; }
-        
-        .btn-neural { background: linear-gradient(135deg, #10b981 0%, #047857 100%); color: white; border: none; width: 100%; padding: 14px; border-radius: 16px; font-weight: 800; cursor: pointer; margin-top: 14px; font-size: 13px; text-transform: uppercase; box-shadow: 0 6px 25px rgba(16, 185, 129, 0.4); }
         .qr-container-web4 { background: #ffffff; padding: 14px; border-radius: 20px; width: 160px; height: 160px; margin: 16px auto; display: flex; justify-content: center; align-items: center; box-shadow: 0 8px 30px rgba(16, 185, 129, 0.25); }
 
-        .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(1, 3, 8, 0.92); backdrop-filter: blur(30px); border-top: 1px solid rgba(52, 211, 153, 0.2); padding: 12px 16px; display: flex; justify-content: space-around; z-index: 100; box-shadow: 0 -10px 30px rgba(0,0,0,0.8); }
+        .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(1, 3, 8, 0.92); backdrop-filter: blur(30px); border-top: 1px solid rgba(52, 211, 153, 0.2); padding: 12px 16px; display: flex; justify-content: space-around; z-index: 900; box-shadow: 0 -10px 30px rgba(0,0,0,0.8); }
         .nav-item { background: transparent; border: none; color: #64748b; font-size: 11px; font-weight: 600; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; transition: all 0.2s; }
         .nav-item.active { color: #34d399; text-shadow: 0 0 20px rgba(52, 211, 153, 0.8); }
         .nav-icon { font-size: 20px; }
@@ -395,22 +383,43 @@ HTML_CONTENT = """<!DOCTYPE html>
     </style>
 </head>
 <body>
-    <!-- ГЛАВНЫЙ ЭКРАН В СТИЛЕ RUN (КАРТИНКА НА ФОНЕ + КНОПКА СНИЗУ) -->
-    <div id="tab-wallet" class="tab-content active" style="padding: 0;">
-        <div id="run-splash" class="run-screen">
-            <button class="run-btn" onclick="enterApp()">Get Started</button>
-        </div>
+    <!-- ПРИВЕТСТВЕННЫЙ ЭКРАН -->
+    <div id="splash-screen">
+        <button class="run-btn" onclick="enterApp()">Get Started</button>
     </div>
 
-    <!-- ДОПОЛНИТЕЛЬНЫЙ КОНТЕЙНЕР ПРИЛОЖЕНИЯ -->
-    <div id="app-container" style="display: none; width: 100vw; height: 100vh; overflow-y: auto; padding: 16px; padding-bottom: 110px;">
-        <div style="display: flex; justify-content: flex-end; margin-bottom: 14px;">
-            <button class="btn" style="width: auto; padding: 10px 18px; margin-top:0; background: linear-gradient(135deg, #10b981 0%, #047857 100%);" onclick="toggleDrawer(true)">👛 Кошелек & Штрихкод</button>
+    <!-- ОСНОВНОЙ КОНТЕЙНЕР ПРИЛОЖЕНИЯ -->
+    <div id="app-container" style="display: none; width: 100vw; height: 100vh;">
+        
+        <!-- ВКЛАДКА WALLET -->
+        <div id="tab-wallet" class="tab-content">
+            <div class="card">
+                <h2 style="margin-top: 0; color: #34d399;">⚡ Web4 Wallet Panel</h2>
+                <p style="color: #94a3b8; font-size: 13px;">Ваш персональный депозитный адрес и штрихкод для пополнения SOL.</p>
+                <div style="margin: 16px 0;">
+                    <div style="font-size:10px; color:#94a3b8; font-weight:700; margin-bottom:4px;">ДЕПОЗИТНЫЙ АДРЕС:</div>
+                    <div class="input-group-web4">
+                        <input type="text" id="wallet-input" class="input-field-web4" readonly>
+                    </div>
+                </div>
+                <div class="qr-container-web4">
+                    <img id="qr-img" src="" alt="QR" style="width: 132px; height: 132px; border-radius: 10px;">
+                </div>
+                <button class="btn-neural" onclick="navigator.clipboard.writeText(document.getElementById('wallet-input').value); alert('📋 Адрес скопирован!')" style="background: linear-gradient(135deg, #10b981 0%, #047857 100%); color: white; border: none; width: 100%; padding: 14px; border-radius: 16px; font-weight: 800; cursor: pointer; text-transform: uppercase;">Копировать адрес</button>
+            </div>
+            <div class="card">
+                <div style="font-size:10px; color:#94a3b8; font-weight:700; margin-bottom:4px;">ПРОВЕРКА ТРАНЗАКЦИИ (SIGNATURE):</div>
+                <div class="input-group-web4">
+                    <input type="text" id="tx-hash-input" class="input-field-web4" placeholder="Введите хэш...">
+                </div>
+                <button class="btn" style="background: linear-gradient(135deg, #059669 0%, #064e3b 100%); margin-top: 12px;" onclick="verifyDeposit()">Verify & Credit SOL 🔄</button>
+            </div>
         </div>
 
-        <div id="tab-trader" class="tab-content" style="display: block; height: auto; padding: 0;">
+        <!-- ВКЛАДКА AI TRADER -->
+        <div id="tab-trader" class="tab-content active">
             <div class="card">
-                <h3 style="margin: 0 0 12px 0; font-size: 15px;">🛡️ Web4 Momentum Bot (24/7)</h3>
+                <h3 style="margin: 0 0 12px 0; font-size: 15px;">🛡️ Web4 Ai Trader (24/7)</h3>
                 <button class="btn-mode active"><span>⚡ Нейросканирование импульсов</span><span style="font-size: 11px; color: #34d399;">Active</span></button>
             </div>
             <div class="card">
@@ -428,7 +437,8 @@ HTML_CONTENT = """<!DOCTYPE html>
             </div>
         </div>
 
-        <div id="tab-stats" class="tab-content" style="display: none; height: auto; padding: 0;">
+        <!-- ВКЛАДКА STATS -->
+        <div id="tab-stats" class="tab-content">
             <div class="card">
                 <h3 style="margin: 0 0 12px 0; font-size: 16px; color: #34d399;">📊 Статистика Web4</h3>
                 <div class="metric"><span>Стартовый:</span> <span class="val">0.2517 SOL</span></div>
@@ -445,36 +455,10 @@ HTML_CONTENT = """<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- SIDEBAR DRAWER HTML -->
-    <div id="drawer-overlay" class="drawer-overlay" onclick="toggleDrawer(false)"></div>
-    <div id="sidebar-drawer" class="sidebar-drawer">
-        <div class="drawer-header">
-            <h3 style="margin:0; color:#34d399; font-size:16px;">⚡ Web4 Wallet Panel</h3>
-            <button class="close-drawer" onclick="toggleDrawer(false)">✕</button>
-        </div>
-        <div style="margin-bottom: 12px;">
-            <div style="font-size:10px; color:#94a3b8; font-weight:700; margin-bottom:4px;">ДЕПОЗИТНЫЙ АДРЕС:</div>
-            <div class="input-group-web4">
-                <input type="text" id="wallet-input" class="input-field-web4" readonly>
-            </div>
-        </div>
-        <div class="qr-container-web4">
-            <img id="qr-img" src="" alt="QR" style="width: 132px; height: 132px; border-radius: 10px;">
-        </div>
-        <button class="btn-neural" onclick="navigator.clipboard.writeText(document.getElementById('wallet-input').value); alert('📋 Адрес скопирован!')">Копировать адрес</button>
-        
-        <div style="margin-top: 24px; border-top: 1px solid rgba(52,211,153,0.2); padding-top: 16px;">
-            <div style="font-size:10px; color:#94a3b8; font-weight:700; margin-bottom:4px;">ПРОВЕРКА ТРАНЗАКЦИИ (SIGNATURE):</div>
-            <div class="input-group-web4">
-                <input type="text" id="tx-hash-input" class="input-field-web4" placeholder="Введите хэш...">
-            </div>
-            <button class="btn-neural" style="background: linear-gradient(135deg, #059669 0%, #064e3b 100%);" onclick="verifyDeposit()">Verify & Credit SOL 🔄</button>
-        </div>
-    </div>
-
+    <!-- НИЖНЯЯ НАВИГАЦИЯ -->
     <div id="bottom-nav-bar" class="bottom-nav" style="display: none;">
-        <button id="nav-wallet" class="nav-item active" onclick="switchTab('wallet')"><span class="nav-icon">👛</span><span>Wallet</span></button>
-        <button id="nav-trader" class="nav-item" onclick="switchTab('trader')"><span class="nav-icon">⚡</span><span>Core</span></button>
+        <button id="nav-wallet" class="nav-item" onclick="switchTab('wallet')"><span class="nav-icon">👛</span><span>Wallet</span></button>
+        <button id="nav-trader" class="nav-item active" onclick="switchTab('trader')"><span class="nav-icon">⚡</span><span>Ai Trader</span></button>
         <button id="nav-stats" class="nav-item" onclick="switchTab('stats')"><span class="nav-icon">📊</span><span>Stats</span></button>
     </div>
 
@@ -487,47 +471,34 @@ HTML_CONTENT = """<!DOCTYPE html>
                 const res = await fetch('/api/get-image-url');
                 const data = await res.json();
                 if(data.success && data.url) {
-                    document.getElementById('run-splash').style.backgroundImage = `url('${data.url}')`;
+                    document.getElementById('splash-screen').style.backgroundImage = `url('${data.url}')`;
                 }
             } catch(e) {}
         }
         loadDashboardImage();
 
         function enterApp() {
-            document.getElementById('run-splash').style.display = 'none';
-            document.getElementById('tab-wallet').style.display = 'none';
+            document.getElementById('splash-screen').style.display = 'none';
             document.getElementById('app-container').style.display = 'block';
             document.getElementById('bottom-nav-bar').style.display = 'flex';
             switchTab('trader');
         }
 
-        function toggleDrawer(open) {
-            const drawer = document.getElementById('sidebar-drawer');
-            const overlay = document.getElementById('drawer-overlay');
-            if(open) {
-                drawer.classList.add('open');
-                overlay.classList.add('open');
-            } else {
-                drawer.classList.remove('open');
-                overlay.classList.remove('open');
-            }
-        }
-
         let isTrading = false;
         function switchTab(tab) {
-            document.querySelectorAll('#app-container .tab-content').forEach(el => el.style.display = 'none');
+            document.querySelectorAll('#app-container .tab-content').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+            
             if(tab === 'wallet') { 
-                document.getElementById('run-splash').style.display = 'flex';
-                document.getElementById('tab-wallet').style.display = 'block';
-                document.getElementById('app-container').style.display = 'none';
+                document.getElementById('tab-wallet').classList.add('active'); 
                 document.getElementById('nav-wallet').classList.add('active'); 
+                checkBalance();
             } else if(tab === 'trader') { 
-                document.getElementById('tab-trader').style.display = 'block'; 
+                document.getElementById('tab-trader').classList.add('active'); 
                 document.getElementById('nav-trader').classList.add('active'); 
                 checkBalance(); loadStats(); loadLogs(); 
             } else if(tab === 'stats') { 
-                document.getElementById('tab-stats').style.display = 'block'; 
+                document.getElementById('tab-stats').classList.add('active'); 
                 document.getElementById('nav-stats').classList.add('active'); 
                 loadStats(); 
             }
@@ -566,7 +537,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             if(!txHash) { alert("Введите хэш!"); return; }
             const res = await fetch('/api/verify-tx', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({telegram_id: user.id, tx_signature: txHash})});
             const data = await res.json();
-            if(data.success) { alert("✅ Успешно верифицировано!"); document.getElementById('tx-hash-input').value = ""; checkBalance(); toggleDrawer(false); }
+            if(data.success) { alert("✅ Успешно верифицировано!"); document.getElementById('tx-hash-input').value = ""; checkBalance(); }
         }
         
         async function toggleTrading() {
@@ -728,7 +699,7 @@ async def main():
     
     asyncio.create_task(telegram_long_polling())
     asyncio.create_task(background_mov_trader_daemon())
-    add_log("Web4 Core запущен.")
+    add_log("Web4 Ai Trader запущен.")
     while True:
         await asyncio.sleep(3600)
 
