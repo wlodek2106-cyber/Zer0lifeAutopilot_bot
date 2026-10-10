@@ -24,7 +24,7 @@ SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
 MIN_SOL_RESERVE = 0.3
 MAX_TRADE_SOL_LIMIT = 0.1
 
-RECENT_LOGS = ["🌐 Web4 Core запущен с приветственной картинкой."]
+RECENT_LOGS = ["🌐 Web4 Core запущен с обновленным ассетом."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -633,7 +633,7 @@ async def telegram_long_polling():
                                 send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
                                 payload = {
                                     "chat_id": chat_id,
-                                    "photo": "AgACAgIAAxkBAAIs12rKA_zZCCJykwGm3hhMnWUin8__AAJaHmsbMplRSvd5mW8LPQ-WAQADAgADcwADPQQ",
+                                    "photo": "AgACAgIAAxkBAAIs3mrKFwzYWkbKh15vBaUwG-L4AYWCAALXHmsbMplRSrqZEGMJBBzxAQADAgADcwADPQQ",
                                     "caption": "🌐 *Zer0Life Web4 Core*\n\nИнтерфейс активирован:",
                                     "parse_mode": "Markdown",
                                     "reply_markup": {"inline_keyboard": [[{"text": "🚀 Открыть Web4 Терминал", "web_app": {"url": RENDER_URL}}]]}
@@ -663,7 +663,7 @@ async def main():
     
     asyncio.create_task(telegram_long_polling())
     asyncio.create_task(background_mov_trader_daemon())
-    add_log("Web4 Core запущен с приветственной картинкой.")
+    add_log("Web4 Core запущен.")
     while True:
         await asyncio.sleep(3600)
 
