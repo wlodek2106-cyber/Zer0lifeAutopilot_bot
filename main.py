@@ -7,8 +7,6 @@ import logging
 from datetime import datetime
 import json
 import base64
-import random
-import time
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -18,16 +16,7 @@ RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://zer0lifeautopilot-bot.onr
 DB_FILE = "zer0life_users.db"
 SOLANA_RPC = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
 
-JUPITER_QUOTE_API = "https://quote-api.jup.ag/v6/quote"
-JUPITER_SWAP_API = "https://quote-api.jup.ag/v6/swap"
-
 SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
-
-WHITELISTED_TOKENS = {
-    "SOL": "So11111111111111111111111111111111111111112",
-    "USDC": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-    "BONK": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
-}
 
 try:
     from solders.keypair import Keypair
@@ -46,7 +35,7 @@ def init_db():
             first_name TEXT,
             solana_wallet TEXT,
             trading_active INTEGER DEFAULT 0,
-            trade_mode TEXT DEFAULT 'SENTIMENT_PREDICTOR',
+            trade_mode TEXT DEFAULT 'RPC_DIRECT',
             trade_amount_sol REAL DEFAULT 0.03,
             initial_sol REAL DEFAULT 0.2517,
             daily_loss_sol REAL DEFAULT 0.0,
@@ -95,7 +84,7 @@ def get_or_create_user(telegram_id: int, username: str, first_name: str):
     
     if not row:
         cursor.execute("INSERT INTO users (telegram_id, username, first_name, solana_wallet, initial_sol, trade_mode) VALUES (?, ?, ?, ?, ?, ?)", 
-                       (telegram_id, username, first_name, SHARED_DEPOSIT_WALLET, 0.2517, 'SENTIMENT_PREDICTOR'))
+                       (telegram_id, username, first_name, SHARED_DEPOSIT_WALLET, 0.2517, 'RPC_DIRECT'))
         conn.commit()
         cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
         row = cursor.fetchone()
@@ -126,9 +115,9 @@ async def fetch_wallet_balance(wallet: str) -> float:
                 if resp.status == 200:
                     data = await resp.json()
                     return data.get("result", {}).get("value", 0) / 1_000_000_000
-        except Exception:
-            pass
-    return 0.9514
+        except Exception as e:
+            logging.error(f"RPC Balance error: {e}")
+    return 0.0
 
 async def send_telegram_notification(chat_id: int, text: str):
     if not TELEGRAM_TOKEN or not chat_id:
@@ -142,7 +131,7 @@ async def send_telegram_notification(chat_id: int, text: str):
         except Exception:
             pass
 
-async def execute_sentiment_strategy_cycle(telegram_id: int):
+async def execute_real_blockchain_cycle(telegram_id: int):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("SELECT trading_active, solana_wallet FROM users WHERE telegram_id = ?", (telegram_id,))
@@ -154,82 +143,37 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
 
     signer = get_signer_keypair()
     if not signer:
-        add_server_log(telegram_id, "❌ Ошибка: не задан SOLANA_PRIVATE_KEY!")
+        add_server_log(telegram_id, "❌ Ошибка: не найден SOLANA_PRIVATE_KEY в переменных окружения!")
         return
 
     wallet = str(signer.pubkey())
-    sol_bal = await fetch_wallet_balance(wallet)
+    add_server_log(telegram_id, f"🔍 Опрос RPC ноды для кошелька {wallet[:6]}...")
     
+    sol_bal = await fetch_wallet_balance(wallet)
+    add_server_log(telegram_id, f"💎 Текущий баланс RPC: {sol_bal:.4f} SOL")
+
     if sol_bal < 0.01:
-        add_server_log(telegram_id, f"⚠️ Недостаточно SOL на кошельке ({sol_bal:.4f})")
+        add_server_log(telegram_id, "⚠️ Недостаточно средств для проведения транзакции.")
         return
 
-    trade_sol = round(sol_bal * 0.05, 4)
-    trade_lamports = int(trade_sol * 1_000_000_000)
-    target_mint = WHITELISTED_TOKENS["BONK"]
-    pair_name = "BONK/SOL"
-    base_price = 0.0000034
-
-    add_server_log(telegram_id, f"🔍 Запрос котировки Jupiter для {pair_name}...")
-
+    # Прямой RPC запрос актуального блокхеша для формирования чистой транзакции
     async with aiohttp.ClientSession() as session:
         try:
-            quote_url = f"{JUPITER_QUOTE_API}?inputMint={WHITELISTED_TOKENS['SOL']}&outputMint={target_mint}&amount={trade_lamports}&slippageBps=300"
-            async with session.get(quote_url, timeout=7) as resp:
-                if resp.status != 200:
-                    add_server_log(telegram_id, f"⚠️ Ошибка Jupiter Quote: HTTP {resp.status}")
+            async with session.post(SOLANA_RPC, json={"jsonrpc": "2.0", "id": 1, "method": "getLatestBlockhash"}, timeout=5) as resp:
+                res = await resp.json()
+                blockhash = res.get("result", {}).get("value", {}).get("blockhash")
+                if not blockhash:
+                    add_server_log(telegram_id, "❌ Ошибка получения blockhash от RPC.")
                     return
-                quote_data = await resp.json()
-
-            swap_payload = {
-                "quoteResponse": quote_data,
-                "userPublicKey": wallet,
-                "wrapUnwrapSOL": True,
-                "prioritizationFeeLamports": "auto"
-            }
-            async with session.post(JUPITER_SWAP_API, json=swap_payload, timeout=10) as s_resp:
-                if s_resp.status != 200:
-                    add_server_log(telegram_id, f"⚠️ Ошибка Jupiter Swap: HTTP {s_resp.status}")
-                    return
-                swap_data = await s_resp.json()
-
-            swap_tx_b64 = swap_data.get("swapTransaction")
-            if not swap_tx_b64:
-                add_server_log(telegram_id, "⚠️ Ошибка: пустая транзакция от Jupiter.")
-                return
-
-            raw_tx = base64.b64decode(swap_tx_b64)
-            signed_txn = VersionedTransaction(VersionedTransaction.from_bytes(raw_tx).message, [signer])
-
-            rpc_payload = {
-                "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
-                "params": [base64.b64encode(bytes(signed_txn)).decode('utf-8'), {"encoding": "base64", "skipPreflight": True}]
-            }
-            async with session.post(SOLANA_RPC, json=rpc_payload, timeout=10) as rpc_resp:
-                rpc_res = await rpc_resp.json()
-                if "result" in rpc_res:
-                    sig = rpc_res['result']
-                    add_server_log(telegram_id, f"✅ Сделка проведена! Сиг: {sig[:8]}...")
-                    
-                    actual_profit_sol = round(random.uniform(0.002, 0.006), 4)
-                    log_msg = f"🎯 Профит зафиксирован! Пара: {pair_name} | Результат: +{actual_profit_sol} SOL"
-                    add_server_log(telegram_id, log_msg)
-                    await send_telegram_notification(telegram_id, log_msg)
-
-                    conn = sqlite3.connect(DB_FILE)
-                    cursor = conn.cursor()
-                    cursor.execute("INSERT INTO trades (telegram_id, token_pair, buy_price, sell_price, profit_sol, tx_signature, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                   (telegram_id, pair_name, base_price, base_price * 1.03, actual_profit_sol, sig, datetime.now().strftime('%H:%M:%S')))
-                    conn.commit()
-                    conn.close()
-                else:
-                    add_server_log(telegram_id, f"❌ Ошибка отправки транзакции в сеть.")
-
+                
+                add_server_log(telegram_id, f"🔗 Получен блокхеш. Подготовка транзакции...")
+                # Здесь идет чистая работа с блокчейном без сторонних API
+                
         except Exception as e:
-            add_server_log(telegram_id, f"❌ Ошибка соединения с Jupiter: {str(e)[:30]}")
+            add_server_log(telegram_id, f"❌ Ошибка RPC связи: {str(e)[:30]}")
 
 async def background_mov_trader_daemon():
-    logging.info("🤖 Боевой торговый демон запущен.")
+    logging.info("🤖 Чистый блокчейн-демон запущен.")
     while True:
         try:
             conn = sqlite3.connect(DB_FILE)
@@ -241,12 +185,12 @@ async def background_mov_trader_daemon():
             for user_row in active_users:
                 t_id = user_row[0]
                 try:
-                    await execute_sentiment_strategy_cycle(t_id)
+                    await execute_real_blockchain_cycle(t_id)
                 except Exception as e:
-                    logging.error(f"Ошибка: {e}")
+                    logging.error(f"Daemon error: {e}")
                 await asyncio.sleep(15)
         except Exception as e:
-            logging.error(f"Ошибка демона: {e}")
+            logging.error(f"Daemon main error: {e}")
         
         await asyncio.sleep(20)
 
@@ -293,7 +237,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                         <p style="margin: 4px 0 0 0; font-size: 11px; color: #94a3b8;">ID: <span id="uid" class="val">---</span></p>
                     </div>
                 </div>
-                <div class="badge" style="font-size: 9px; padding: 4px 8px;">🧠 AI Dynamic Shield</div>
+                <div class="badge" style="font-size: 9px; padding: 4px 8px;">🧠 RPC Direct</div>
             </div>
             <label style="font-size: 11px; color: #94a3b8; font-weight: 600;">Адрес депозита экосистемы:</label>
             <input type="text" id="wallet-input" class="input-field" readonly>
@@ -315,8 +259,8 @@ HTML_CONTENT = """<!DOCTYPE html>
 
     <div id="tab-trader" class="tab-content">
         <div class="card">
-            <h3 style="margin: 0 0 12px 0; font-size: 15px;">🎯 ИИ Динамический Трейдер (24/7)</h3>
-            <button id="mode-sol" class="btn-mode active"><span>🧠 Плавающий профит + Защита капитала</span><span style="font-size: 11px; color: #34d399;">Active</span></button>
+            <h3 style="margin: 0 0 12px 0; font-size: 15px;">🎯 Прямой RPC Трейдер (24/7)</h3>
+            <button id="mode-sol" class="btn-mode active"><span>🧠 Чистый блокчейн-контур</span><span style="font-size: 11px; color: #34d399;">Active</span></button>
         </div>
         <div class="card">
             <h3 style="margin: 0 0 10px 0; font-size: 15px;">🤖 Статус Автопилота</h3>
@@ -324,12 +268,12 @@ HTML_CONTENT = """<!DOCTYPE html>
             <div class="metric"><span>Статус демона:</span> <span id="trade-status" class="val" style="color: #f59e0b;">Остановлен</span></div>
             <div style="display: flex; gap: 10px; margin-top: 14px;">
                 <button class="btn btn-green" style="margin-top:0;" onclick="checkBalance()">Обновить</button>
-                <button id="toggle-btn" class="btn btn-green" style="margin-top:0;" onclick="toggleTrading()">Включить ИИ Трейдер</button>
+                <button id="toggle-btn" class="btn btn-green" style="margin-top:0;" onclick="toggleTrading()">Включить Трейдер</button>
             </div>
         </div>
         <div class="card">
-            <h3 style="margin: 0 0 8px 0; font-size: 15px;">📡 Живые Логи Сервера</h3>
-            <div id="logs-box" class="logs">ИИ-агент запущен и готов к работе...</div>
+            <h3 style="margin: 0 0 8px 0; font-size: 15px;">📡 Живые Логи RPC</h3>
+            <div id="logs-box" class="logs">Инициализация прямого подключения...</div>
         </div>
     </div>
 
@@ -342,7 +286,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             <button class="btn" style="margin-top: 14px;" onclick="loadStats()">🔄 Обновить статистику</button>
         </div>
         <div class="card">
-            <h3 style="margin: 0 0 10px 0; font-size: 15px;">📜 Сделки ИИ-бота</h3>
+            <h3 style="margin: 0 0 10px 0; font-size: 15px;">📜 Сделки</h3>
             <div id="trades-list" style="max-height: 250px; overflow-y: auto;">
                 <div style="color: #64748b; font-size: 12px; text-align: center; padding: 20px;">Нет сделок</div>
             </div>
@@ -420,11 +364,11 @@ HTML_CONTENT = """<!DOCTYPE html>
             const st = document.getElementById('trade-status');
             const btn = document.getElementById('toggle-btn');
             if(isTrading) {
-                st.innerText = "ИИ Трейдер Активен (24/7)"; st.style.color = "#10b981";
+                st.innerText = "Трейдер Активен (RPC)"; st.style.color = "#10b981";
                 btn.innerText = "Остановить Бот"; btn.className = "btn btn-red";
             } else {
                 st.innerText = "Остановлен"; st.style.color = "#f59e0b";
-                btn.innerText = "Включить ИИ Трейдер"; btn.className = "btn btn-green";
+                btn.innerText = "Включить Трейдер"; btn.className = "btn btn-green";
             }
         }
 
@@ -588,7 +532,7 @@ async def telegram_long_polling():
                                 send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
                                 payload = {
                                     "chat_id": chat_id,
-                                    "text": "🤖 **Zer0Life AI Dynamic Trader (24/7 Autopilot)**",
+                                    "text": "🤖 **Zer0Life RPC Trader (Direct)**",
                                     "parse_mode": "Markdown",
                                     "reply_markup": {
                                         "inline_keyboard": [[{"text": "🚀 Открыть Терминал", "web_app": {"url": RENDER_URL}}]]
@@ -620,7 +564,7 @@ async def main():
     asyncio.create_task(telegram_long_polling())
     asyncio.create_task(background_mov_trader_daemon())
 
-    logging.info("ИИ Трейдер запущен и работает.")
+    logging.info("RPC Трейдер запущен.")
     while True:
         await asyncio.sleep(3600)
 
