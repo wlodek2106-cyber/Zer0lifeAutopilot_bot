@@ -298,8 +298,10 @@ HTML_CONTENT = """<!DOCTYPE html>
         </div>
         <div class="card">
             <h3 style="margin: 0 0 10px 0; font-size: 15px;">🤖 Sentiment AI Агент 24/7</h3>
+            <div class="metric"><span>Баланс пула:</span> <span id="wallet-balance" class="val">Загрузка...</span></div>
             <div class="metric"><span>Статус:</span> <span id="trade-status" class="val" style="color: #f59e0b;">Остановлен</span></div>
             <div style="display: flex; gap: 10px; margin-top: 14px;">
+                <button class="btn btn-green" style="margin-top:0;" onclick="checkBalance()">Обновить</button>
                 <button id="toggle-btn" class="btn btn-green" style="margin-top:0;" onclick="toggleTrading()">Включить Предиктор</button>
             </div>
         </div>
@@ -369,6 +371,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             } else if(tab === 'trader') {
                 document.getElementById('tab-trader').classList.add('active');
                 document.getElementById('nav-trader').classList.add('active');
+                checkBalance();
             } else if(tab === 'stats') {
                 document.getElementById('tab-stats').classList.add('active');
                 document.getElementById('nav-stats').classList.add('active');
@@ -385,6 +388,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                 document.getElementById('qr-img').src = "https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=" + encodeURIComponent(w);
                 isTrading = data.profile.trading_active === 1;
                 updateUI();
+                checkBalance();
             }
         }
 
@@ -397,6 +401,16 @@ HTML_CONTENT = """<!DOCTYPE html>
             } else {
                 st.innerText = "Остановлен"; st.style.color = "#f59e0b";
                 btn.innerText = "Включить Предиктор"; btn.className = "btn btn-green";
+            }
+        }
+
+        async function checkBalance() {
+            const w = document.getElementById('wallet-input').value;
+            if(!w) return;
+            const res = await fetch('/api/blockchain/balance?wallet=' + encodeURIComponent(w));
+            const data = await res.json();
+            if(data.success) {
+                document.getElementById('wallet-balance').innerText = data.balance.toFixed(4) + " SOL";
             }
         }
 
@@ -415,6 +429,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             if(data.success) {
                 alert("✅ Депозит успешно верифицирован и зачислен в пул!");
                 document.getElementById('tx-hash-input').value = "";
+                checkBalance();
             } else {
                 alert("⚠️ Ошибка верификации: " + (data.error || "Транзакция не найдена"));
             }
@@ -479,6 +494,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                         timestamp: timeStr
                     })
                 });
+                checkBalance();
             } else {
                 const box = document.getElementById('logs-box');
                 box.innerHTML += `<div style="color: #f59e0b;">${data.log}</div>`;
@@ -591,7 +607,7 @@ async def telegram_long_polling():
                                 send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
                                 payload = {
                                     "chat_id": chat_id,
-                                    "text": "🧠 **Zer0Life Sentiment Predictor AI Trader**\n\nТерминал с верификацией транзакций активирован:",
+                                    "text": "🧠 **Zer0Life Sentiment Predictor AI Trader**\n\nТерминал активирован:",
                                     "parse_mode": "Markdown",
                                     "reply_markup": {
                                         "inline_keyboard": [[
