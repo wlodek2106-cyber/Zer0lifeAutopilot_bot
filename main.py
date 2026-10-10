@@ -21,10 +21,10 @@ JUPITER_SWAP_API = "https://public.jupiterapi.com/swap"
 RUGCHECK_API = "https://api.rugcheck.xyz/v1/token"
 
 SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
-MIN_SOL_RESERVE = 0.3  # Несгораемый остаток SOL
+MIN_SOL_RESERVE = 0.3
 MAX_TRADE_SOL_LIMIT = 0.1
 
-RECENT_LOGS = ["🛡️ Clean Smart Scanner запущен. Заглушки удалены."]
+RECENT_LOGS = ["🌐 Web4 Neural Sidebar запущен."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -57,7 +57,7 @@ def init_db():
             first_name TEXT,
             solana_wallet TEXT,
             trading_active INTEGER DEFAULT 0,
-            trade_mode TEXT DEFAULT 'STRICT_SCANNER',
+            trade_mode TEXT DEFAULT 'WEB4_SIDEBAR',
             trade_amount_sol REAL DEFAULT 0.04,
             initial_sol REAL DEFAULT 0.2517,
             daily_loss_sol REAL DEFAULT 0.0,
@@ -86,7 +86,7 @@ def get_or_create_user(telegram_id: int, username: str, first_name: str):
     row = cursor.fetchone()
     if not row:
         cursor.execute("INSERT INTO users (telegram_id, username, first_name, solana_wallet, initial_sol, trade_mode) VALUES (?, ?, ?, ?, ?, ?)", 
-                       (telegram_id, username, first_name, SHARED_DEPOSIT_WALLET, 0.2517, 'STRICT_SCANNER'))
+                       (telegram_id, username, first_name, SHARED_DEPOSIT_WALLET, 0.2517, 'WEB4_SIDEBAR'))
         conn.commit()
         cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
         row = cursor.fetchone()
@@ -146,30 +146,25 @@ async def scan_real_opportunities(session: aiohttp.ClientSession):
                 return None
             data = await resp.json()
             pairs = data.get("pairs", [])
-            
             for pair in pairs:
                 if pair.get("chainId") != "solana":
                     continue
                 liquidity = pair.get("liquidity", {}).get("usd", 0)
-                if liquidity < 15000: # Только высокая ликвидность
+                if liquidity < 15000:
                     continue
-                
                 base_token = pair.get("baseToken", {})
                 token_mint = base_token.get("address")
                 pair_name = f"{base_token.get('symbol', 'ASSET')}/SOL"
                 if not token_mint:
                     continue
-                
-                # Ищем реальный сильный импульс роста/спреда от 6% за 5 минут
                 price_change_5m = pair.get("priceChange", {}).get("m5", 0)
                 if price_change_5m >= 6.0:
                     is_safe = await audit_token_safety(token_mint)
                     if is_safe:
                         return (pair_name, token_mint, price_change_5m)
-                        
     except Exception:
         pass
-    return None # Никаких заглушек — если нет импульса, бот ждет
+    return None
 
 async def send_telegram_notification(chat_id: int, text: str):
     if not TELEGRAM_TOKEN or not chat_id:
@@ -186,14 +181,12 @@ async def send_telegram_notification(chat_id: int, text: str):
 async def execute_strict_trade(telegram_id: int, pair_name: str, target_mint: str, sol_bal: float, signer: Keypair, session: aiohttp.ClientSession):
     if sol_bal <= MIN_SOL_RESERVE:
         return
-
     available_for_trade = sol_bal - MIN_SOL_RESERVE
     base_trade_sol = round(min(available_for_trade * 0.3, MAX_TRADE_SOL_LIMIT * 0.5), 4)
     if base_trade_sol <= 0.001:
         return
-
     base_lamports = int(base_trade_sol * 1_000_000_000)
-    add_log(f"🚀 [Импульс] Вход по {pair_name} на {base_trade_sol} SOL")
+    add_log(f"⚡ [Web4 Sidebar] Вход по {pair_name} на {base_trade_sol} SOL")
 
     try:
         buy_q_url = f"{JUPITER_QUOTE_API}?inputMint={WHITELISTED_TOKENS['SOL']}&outputMint={target_mint}&amount={base_lamports}&slippageBps=50"
@@ -224,17 +217,15 @@ async def execute_strict_trade(telegram_id: int, pair_name: str, target_mint: st
 
         total_tokens = out_amt
         total_invested_lamports = base_lamports
-
         sol_back_amount = 0
-        for attempt in range(60): # Короткий цикл быстрой фиксации
+
+        for attempt in range(60):
             await asyncio.sleep(4)
             sell_q_url = f"{JUPITER_QUOTE_API}?inputMint={target_mint}&outputMint={WHITELISTED_TOKENS['SOL']}&amount={total_tokens}&slippageBps=50"
             async with session.get(sell_q_url, timeout=3) as sell_resp:
                 if sell_resp.status == 200:
                     sell_data = await sell_resp.json()
                     current_back = int(sell_data.get("outAmount", 0))
-                    
-                    # Цель: быстрый плюс 15%+ на импульсе
                     if current_back >= int(total_invested_lamports * 1.15):
                         sol_back_amount = current_back
                         break
@@ -256,11 +247,11 @@ async def execute_strict_trade(telegram_id: int, pair_name: str, target_mint: st
             }
             async with session.post(SOLANA_RPC, json=sell_rpc_payload, timeout=3) as sell_rpc_resp:
                 sell_rpc_data = await sell_rpc_resp.json()
-                tx_sig = sell_rpc_data.get("result", "tx_impulse")
+                tx_sig = sell_rpc_data.get("result", "tx_sidebar")
 
         actual_profit_sol = round((sol_back_amount - total_invested_lamports) / 1_000_000_000, 4)
-        add_log(f"💰 Профит в SOL: +{actual_profit_sol} SOL")
-        await send_telegram_notification(telegram_id, f"🚀 *Impulse Profit!*\n• Пара: `{pair_name}`\n• +`{actual_profit_sol} SOL`")
+        add_log(f"💎 Profit: +{actual_profit_sol} SOL")
+        await send_telegram_notification(telegram_id, f"🌐 *Web4 Profit!*\n• Asset: `{pair_name}`\n• +`{actual_profit_sol} SOL`")
 
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
@@ -297,7 +288,7 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
             await execute_strict_trade(telegram_id, pair_name, target_mint, sol_bal, signer, session)
 
 async def background_mov_trader_daemon():
-    add_log("🛡️ Бот ожидает реальные импульсы рынка (без заглушек).")
+    add_log("🌐 Web4 Sidebar Core активен.")
     while True:
         try:
             conn = sqlite3.connect(DB_FILE)
@@ -321,36 +312,61 @@ HTML_CONTENT = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zer0Life Ecosystem</title>
+    <title>Zer0Life Web4 Ecosystem</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         * { box-sizing: border-box; }
-        body { background-color: #03050a; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 16px; padding-bottom: 100px; }
+        body { 
+            background: #010308; 
+            background-image: radial-gradient(circle at 50% 0%, rgba(16, 185, 129, 0.12) 0%, transparent 60%);
+            color: #f1f5f9; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+            margin: 0; 
+            padding: 16px; 
+            padding-bottom: 110px; 
+            width: 100vw; 
+            min-height: 100vh; 
+            overflow-x: hidden; 
+        }
         .main-menu-view { display: block; }
         .trader-view { display: none; }
-        .tab-content { display: none; }
+        .tab-content { display: none; width: 100%; }
         .tab-content.active { display: block; }
-        .card { background: linear-gradient(145deg, rgba(13, 18, 36, 0.85) 0%, rgba(7, 10, 20, 0.95) 100%); backdrop-filter: blur(20px); border-radius: 24px; padding: 20px; margin-bottom: 18px; border: 1px solid rgba(16, 185, 129, 0.25); box-shadow: 0 12px 40px rgba(0,0,0,0.7); }
-        .profile-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
-        .badge { background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); color: #34d399; padding: 6px 14px; border-radius: 20px; font-size: 11px; font-weight: 700; text-align: center; }
-        .input-field { width: 100%; background: #020617; border: 1px solid rgba(16, 185, 129, 0.3); color: #34d399; padding: 14px; border-radius: 16px; margin-top: 8px; font-family: monospace; font-size: 11px; text-align: center; outline: none; }
-        .btn { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: none; width: 100%; padding: 14px; border-radius: 16px; font-weight: 700; cursor: pointer; margin-top: 12px; font-size: 14px; box-shadow: 0 4px 25px rgba(16, 185, 129, 0.4); }
+        
+        .card { background: rgba(4, 8, 20, 0.75); backdrop-filter: blur(30px); border-radius: 28px; padding: 20px; margin-bottom: 18px; border: 1px solid rgba(52, 211, 153, 0.2); box-shadow: 0 12px 40px rgba(0,0,0,0.8); }
+        .btn { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: none; width: 100%; padding: 14px; border-radius: 18px; font-weight: 700; cursor: pointer; margin-top: 12px; font-size: 14px; box-shadow: 0 4px 25px rgba(16, 185, 129, 0.4); }
         .btn-green { background: linear-gradient(135deg, #10b981 0%, #059669 100%); box-shadow: 0 4px 25px rgba(16, 185, 129, 0.4); }
         .btn-red { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); box-shadow: 0 4px 25px rgba(239, 68, 68, 0.4); }
-        .btn-mode { background: rgba(30, 41, 59, 0.5); color: #94a3b8; border: 1px solid rgba(51, 65, 85, 0.6); margin-top: 8px; width: 100%; padding: 14px; border-radius: 16px; font-weight: bold; cursor: pointer; text-align: left; display: flex; justify-content: space-between; align-items: center; }
-        .btn-mode.active { background: linear-gradient(135deg, rgba(16, 185, 129, 0.3) 0%, rgba(5, 150, 105, 0.3) 100%); color: #fff; border-color: #10b981; }
+        .btn-mode { background: rgba(30, 41, 59, 0.4); color: #94a3b8; border: 1px solid rgba(52, 211, 153, 0.2); margin-top: 8px; width: 100%; padding: 14px; border-radius: 18px; font-weight: bold; cursor: pointer; text-align: left; display: flex; justify-content: space-between; align-items: center; }
         .metric { display: flex; justify-content: space-between; margin-top: 12px; font-size: 14px; color: #94a3b8; }
         .val { color: #34d399; font-weight: 700; font-family: monospace; }
-        .logs { background: #020617; border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 16px; padding: 12px; font-family: monospace; font-size: 11px; color: #34d399; height: 160px; overflow-y: auto; margin-top: 10px; white-space: pre-line; }
-        .trade-item { background: rgba(2, 6, 23, 0.7); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 14px; padding: 12px; margin-top: 10px; font-family: monospace; font-size: 11px; display: flex; justify-content: space-between; align-items: center; }
-        .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(3, 5, 10, 0.95); backdrop-filter: blur(20px); border-top: 1px solid rgba(16, 185, 129, 0.2); padding: 12px 16px; display: flex; justify-content: space-around; z-index: 100; }
-        .nav-item { background: transparent; border: none; color: #64748b; font-size: 11px; font-weight: 600; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; }
-        .nav-item.active { color: #34d399; text-shadow: 0 0 15px rgba(52, 211, 153, 0.7); }
+        .logs { background: #010409; border: 1px solid rgba(52, 211, 153, 0.25); border-radius: 18px; padding: 14px; font-family: monospace; font-size: 11px; color: #34d399; height: 160px; overflow-y: auto; margin-top: 10px; white-space: pre-line; box-shadow: inset 0 2px 8px rgba(0,0,0,0.9); }
+        .trade-item { background: rgba(2, 6, 23, 0.8); border: 1px solid rgba(52, 211, 153, 0.2); border-radius: 16px; padding: 12px; margin-top: 10px; font-family: monospace; font-size: 11px; display: flex; justify-content: space-between; align-items: center; }
+        
+        /* SIDEBAR DRAWER STYLING */
+        .drawer-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(1, 3, 8, 0.8); backdrop-filter: blur(10px); z-index: 999; display: none; opacity: 0; transition: opacity 0.3s ease; }
+        .drawer-overlay.open { display: block; opacity: 1; }
+        
+        .sidebar-drawer { position: fixed; top: 0; right: -100%; width: 85%; max-width: 360px; height: 100%; background: rgba(4, 10, 26, 0.95); backdrop-filter: blur(40px); border-left: 1px solid rgba(52, 211, 153, 0.4); box-shadow: -20px 0 50px rgba(0,0,0,0.9); z-index: 1000; transition: right 0.35s cubic-bezier(0.4, 0, 0.2, 1); padding: 20px; display: flex; flex-direction: column; overflow-y: auto; }
+        .sidebar-drawer.open { right: 0; }
+        
+        .drawer-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid rgba(52, 211, 153, 0.2); padding-bottom: 12px; }
+        .close-drawer { background: transparent; border: none; color: #ef4444; font-size: 20px; font-weight: bold; cursor: pointer; }
+        
+        .input-group-web4 { width: 100%; background: rgba(2, 6, 23, 0.9); border: 1px solid rgba(52, 211, 153, 0.3); border-radius: 16px; padding: 12px; margin-top: 8px; display: flex; align-items: center; justify-content: space-between; }
+        .input-field-web4 { background: transparent; border: none; color: #34d399; font-family: monospace; font-size: 10px; width: 100%; outline: none; }
+        
+        .btn-neural { background: linear-gradient(135deg, #10b981 0%, #047857 100%); color: white; border: none; width: 100%; padding: 14px; border-radius: 16px; font-weight: 800; cursor: pointer; margin-top: 14px; font-size: 13px; text-transform: uppercase; box-shadow: 0 6px 25px rgba(16, 185, 129, 0.4); }
+        .qr-container-web4 { background: #ffffff; padding: 14px; border-radius: 20px; width: 160px; height: 160px; margin: 16px auto; display: flex; justify-content: center; align-items: center; box-shadow: 0 8px 30px rgba(16, 185, 129, 0.25); }
+
+        .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(1, 3, 8, 0.92); backdrop-filter: blur(30px); border-top: 1px solid rgba(52, 211, 153, 0.2); padding: 12px 16px; display: flex; justify-content: space-around; z-index: 100; box-shadow: 0 -10px 30px rgba(0,0,0,0.8); }
+        .nav-item { background: transparent; border: none; color: #64748b; font-size: 11px; font-weight: 600; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; transition: all 0.2s; }
+        .nav-item.active { color: #34d399; text-shadow: 0 0 20px rgba(52, 211, 153, 0.8); }
         .nav-icon { font-size: 20px; }
-        .qr-box { background: #ffffff; padding: 12px; border-radius: 16px; width: 140px; height: 140px; margin: 12px auto; display: flex; justify-content: center; align-items: center; }
+        
         .top-navbar { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 10px; margin-bottom: 16px; }
-        .top-nav-btn { background: rgba(30, 41, 59, 0.6); border: 1px solid rgba(51, 65, 85, 0.8); color: #94a3b8; padding: 8px 16px; border-radius: 14px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
-        .top-nav-btn.active { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: #fff; border-color: #10b981; box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3); }
+        .top-nav-btn { background: rgba(30, 41, 59, 0.4); border: 1px solid rgba(52, 211, 153, 0.2); color: #94a3b8; padding: 8px 16px; border-radius: 16px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+        .top-nav-btn.active { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: #fff; border-color: #10b981; box-shadow: 0 4px 20px rgba(16, 185, 129, 0.4); }
     </style>
 </head>
 <body>
@@ -362,93 +378,125 @@ HTML_CONTENT = """<!DOCTYPE html>
             <button class="top-nav-btn" onclick="switchMainTab('obzor')">Обзор</button>
         </div>
         <div id="main-tab-glavnaya" class="main-tab-content card">
-            <h2 style="margin-top:0; color: #34d399;">Zer0Life Ecosystem 🚀</h2>
-            <p style="color: #94a3b8; font-size: 13px;">Чистый сканер импульсов без мертвых активов.</p>
-            <button class="btn btn-green" onclick="openAiTrader()">🤖 Войти в AI Trader</button>
+            <h2 style="margin-top:0; color: #34d399;">Zer0Life Web4 🌐</h2>
+            <p style="color: #94a3b8; font-size: 13px;">Интеллектуальная экосистема автономного прироста SOL.</p>
+            <button class="btn btn-green" onclick="openAiTrader()">⚡ Запустить Neural Core</button>
         </div>
         <div id="main-tab-torgovlya" class="main-tab-content card" style="display:none;">
-            <h2 style="margin-top:0; color: #34d399;">📈 Торговый терминал</h2>
-            <p style="color: #94a3b8; font-size: 13px;">Работа только по реальным движениям рынка.</p>
+            <h2 style="margin-top:0; color: #34d399;">📈 Neural Terminal</h2>
+            <p style="color: #94a3b8; font-size: 13px;">Мониторинг импульсов и защита пула.</p>
             <button class="btn btn-green" onclick="openAiTrader()">🚀 Открыть Терминал</button>
         </div>
         <div id="main-tab-prognoz" class="main-tab-content card" style="display:none;">
-            <h2 style="margin-top:0; color: #34d399;">🔮 Прогнозы</h2>
-            <p style="color: #94a3b8; font-size: 13px;">Мониторинг притока ликвидности.</p>
+            <h2 style="margin-top:0; color: #34d399;">🔮 Нейропрогноз</h2>
+            <p style="color: #94a3b8; font-size: 13px;">Анализ ликвидности сети в реальном времени.</p>
         </div>
         <div id="main-tab-obzor" class="main-tab-content card" style="display:none;">
-            <h2 style="margin-top:0; color: #34d399;">🌐 Обзор</h2>
-            <p style="color: #94a3b8; font-size: 13px;">Экосистема Zer0Life и инструменты.</p>
+            <h2 style="margin-top:0; color: #34d399;">🌐 Обзор Web4</h2>
+            <p style="color: #94a3b8; font-size: 13px;">Децентрализованные микросервисы и ZRL.</p>
         </div>
     </div>
+
     <div id="trader-view" class="trader-view">
-        <div style="margin-bottom: 12px;">
-            <button class="btn" style="width: auto; padding: 8px 16px; margin-top:0; background: rgba(30,41,59,0.8);" onclick="backToMainMenu()">⬅️ Назад</button>
+        <div style="margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center;">
+            <button class="btn" style="width: auto; padding: 8px 16px; margin-top:0; background: rgba(30,41,59,0.6);" onclick="backToMainMenu()">⬅️ Назад</button>
+            <button class="btn" style="width: auto; padding: 8px 16px; margin-top:0; background: linear-gradient(135deg, #10b981 0%, #047857 100%);" onclick="toggleDrawer(true)">👛 Кошелек & Штрихкод</button>
         </div>
+
         <div id="tab-wallet" class="tab-content active">
             <div class="card">
-                <div class="profile-header">
-                    <div>
-                        <h2 style="margin: 0; font-size: 16px;" id="uname">Trader</h2>
-                        <p style="margin: 4px 0 0 0; font-size: 11px; color: #94a3b8;">ID: <span id="uid" class="val">---</span></p>
-                    </div>
-                    <div class="badge" style="font-size: 9px; padding: 4px 8px;">🛡️ Резерв 0.3 SOL</div>
-                </div>
-                <label style="font-size: 11px; color: #94a3b8; font-weight: 600;">Адрес депозита:</label>
-                <input type="text" id="wallet-input" class="input-field" readonly>
-                <div class="qr-box"><img id="qr-img" src="" alt="QR" style="width: 120px; height: 120px;"></div>
-                <button class="btn" onclick="navigator.clipboard.writeText(document.getElementById('wallet-input').value); alert('Адрес скопирован!')">📋 Копировать</button>
-            </div>
-            <div class="card">
-                <h3 style="margin: 0 0 8px 0; font-size: 14px;">📬 Верификация депозита</h3>
-                <input type="text" id="tx-hash-input" class="input-field" placeholder="Хэш транзакции (Signature)...">
-                <button class="btn btn-green" onclick="verifyDeposit()">Verify & Credit SOL 🔄</button>
+                <h2 style="margin-top: 0; color: #34d399;">👛 Управление кошельком</h2>
+                <p style="color: #94a3b8; font-size: 13px;">Нажмите кнопку выше или ниже, чтобы открыть боковую панель со штрихкодом и верификацией транзакции.</p>
+                <button class="btn-neural" onclick="toggleDrawer(true)">⚡ Открыть боковую панель кошелька</button>
             </div>
         </div>
+
         <div id="tab-trader" class="tab-content">
             <div class="card">
-                <h3 style="margin: 0 0 12px 0; font-size: 15px;">🛡️ Clean Momentum Bot (24/7)</h3>
-                <button class="btn-mode active"><span>⚡ Ожидание сильных импульсов рынка</span><span style="font-size: 11px; color: #34d399;">Active</span></button>
+                <h3 style="margin: 0 0 12px 0; font-size: 15px;">🛡️ Web4 Momentum Bot (24/7)</h3>
+                <button class="btn-mode active"><span>⚡ Нейросканирование импульсов</span><span style="font-size: 11px; color: #34d399;">Active</span></button>
             </div>
             <div class="card">
                 <h3 style="margin: 0 0 10px 0; font-size: 15px;">🤖 Автопилот</h3>
                 <div class="metric"><span>Баланс пула:</span> <span id="wallet-balance" class="val">Загрузка...</span></div>
-                <div class="metric"><span>Статус:</span> <span id="trade-status" class="val" style="color: #f59e0b;">Остановлен</span></div>
+                <div class="metric"><span>Статус ядра:</span> <span id="trade-status" class="val" style="color: #f59e0b;">Остановлен</span></div>
                 <div style="display: flex; gap: 10px; margin-top: 14px;">
                     <button class="btn btn-green" style="margin-top:0;" onclick="checkBalance()">Обновить</button>
                     <button id="toggle-btn" class="btn btn-green" style="margin-top:0;" onclick="toggleTrading()">Включить</button>
                 </div>
             </div>
             <div class="card">
-                <h3 style="margin: 0 0 8px 0; font-size: 15px;">📡 Логи</h3>
+                <h3 style="margin: 0 0 8px 0; font-size: 15px;">📡 Neural Logs</h3>
                 <div id="logs-box" class="logs">Загрузка...</div>
             </div>
         </div>
+
         <div id="tab-stats" class="tab-content">
             <div class="card">
-                <h3 style="margin: 0 0 12px 0; font-size: 16px; color: #34d399;">📊 Статистика</h3>
+                <h3 style="margin: 0 0 12px 0; font-size: 16px; color: #34d399;">📊 Статистика Web4</h3>
                 <div class="metric"><span>Стартовый:</span> <span class="val">0.2517 SOL</span></div>
                 <div class="metric"><span>Текущий:</span> <span id="stat-current" class="val">-- SOL</span></div>
                 <div class="metric"><span>Результат:</span> <span id="stat-profit-sol" class="val" style="color: #34d399;">0.0000 SOL</span></div>
                 <button class="btn" style="margin-top: 14px;" onclick="loadStats()">🔄 Обновить</button>
             </div>
             <div class="card">
-                <h3 style="margin: 0 0 10px 0; font-size: 15px;">📜 Сделки</h3>
+                <h3 style="margin: 0 0 10px 0; font-size: 15px;">📜 История операций</h3>
                 <div id="trades-list" style="max-height: 250px; overflow-y: auto;">
                     <div style="color: #64748b; font-size: 12px; text-align: center; padding: 20px;">Нет сделок</div>
                 </div>
             </div>
         </div>
+
+        <!-- SIDEBAR DRAWER HTML -->
+        <div id="drawer-overlay" class="drawer-overlay" onclick="toggleDrawer(false)"></div>
+        <div id="sidebar-drawer" class="sidebar-drawer">
+            <div class="drawer-header">
+                <h3 style="margin:0; color:#34d399; font-size:16px;">⚡ Web4 Wallet Panel</h3>
+                <button class="close-drawer" onclick="toggleDrawer(false)">✕</button>
+            </div>
+            <div style="margin-bottom: 12px;">
+                <div style="font-size:10px; color:#94a3b8; font-weight:700; margin-bottom:4px;">ДЕПОЗИТНЫЙ АДРЕС:</div>
+                <div class="input-group-web4">
+                    <input type="text" id="wallet-input" class="input-field-web4" readonly>
+                </div>
+            </div>
+            <div class="qr-container-web4">
+                <img id="qr-img" src="" alt="QR" style="width: 132px; height: 132px; border-radius: 10px;">
+            </div>
+            <button class="btn-neural" onclick="navigator.clipboard.writeText(document.getElementById('wallet-input').value); alert('📋 Адрес скопирован!')">Копировать адрес</button>
+            
+            <div style="margin-top: 24px; border-top: 1px solid rgba(52,211,153,0.2); padding-top: 16px;">
+                <div style="font-size:10px; color:#94a3b8; font-weight:700; margin-bottom:4px;">ПРОВЕРКА ТРАНЗАКЦИИ (SIGNATURE):</div>
+                <div class="input-group-web4">
+                    <input type="text" id="tx-hash-input" class="input-field-web4" placeholder="Введите хэш...">
+                </div>
+                <button class="btn-neural" style="background: linear-gradient(135deg, #059669 0%, #064e3b 100%);" onclick="verifyDeposit()">Verify & Credit SOL 🔄</button>
+            </div>
+        </div>
+
         <div class="bottom-nav">
             <button id="nav-wallet" class="nav-item active" onclick="switchTab('wallet')"><span class="nav-icon">👛</span><span>Wallet</span></button>
-            <button id="nav-trader" class="nav-item" onclick="switchTab('trader')"><span class="nav-icon">⚡</span><span>Bot</span></button>
+            <button id="nav-trader" class="nav-item" onclick="switchTab('trader')"><span class="nav-icon">⚡</span><span>Core</span></button>
             <button id="nav-stats" class="nav-item" onclick="switchTab('stats')"><span class="nav-icon">📊</span><span>Stats</span></button>
         </div>
     </div>
+
     <script>
         let tg = window.Telegram.WebApp; tg.expand();
         const user = tg.initDataUnsafe?.user || { id: 42882165, username: "CryptoWlodek", first_name: "CryptoWlodek" };
-        document.getElementById('uid').innerText = user.id;
-        document.getElementById('uname').innerText = user.first_name;
+        
+        function toggleDrawer(open) {
+            const drawer = document.getElementById('sidebar-drawer');
+            const overlay = document.getElementById('drawer-overlay');
+            if(open) {
+                drawer.classList.add('open');
+                overlay.classList.add('open');
+            } else {
+                drawer.classList.remove('open');
+                overlay.classList.remove('open');
+            }
+        }
+
         function switchMainTab(tab) {
             document.querySelectorAll('.top-nav-btn').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.main-tab-content').forEach(el => el.style.display = 'none');
@@ -463,9 +511,19 @@ HTML_CONTENT = """<!DOCTYPE html>
         function switchTab(tab) {
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-            if(tab === 'wallet') { document.getElementById('tab-wallet').classList.add('active'); document.getElementById('nav-wallet').classList.add('active'); }
-            else if(tab === 'trader') { document.getElementById('tab-trader').classList.add('active'); document.getElementById('nav-trader').classList.add('active'); checkBalance(); loadStats(); loadLogs(); }
-            else if(tab === 'stats') { document.getElementById('tab-stats').classList.add('active'); document.getElementById('nav-stats').classList.add('active'); loadStats(); }
+            if(tab === 'wallet') { 
+                document.getElementById('tab-wallet').classList.add('active'); 
+                document.getElementById('nav-wallet').classList.add('active');
+                toggleDrawer(true); // Автоматически открываем шторку кошелька при нажатии на таб
+            } else if(tab === 'trader') { 
+                document.getElementById('tab-trader').classList.add('active'); 
+                document.getElementById('nav-trader').classList.add('active'); 
+                checkBalance(); loadStats(); loadLogs(); 
+            } else if(tab === 'stats') { 
+                document.getElementById('tab-stats').classList.add('active'); 
+                document.getElementById('nav-stats').classList.add('active'); 
+                loadStats(); 
+            }
         }
         async function loadProfile() {
             const res = await fetch('/api/profile', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({telegram_id: user.id, username: user.username, first_name: user.first_name})});
@@ -473,7 +531,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             if(data.success) {
                 const w = data.profile.solana_wallet;
                 document.getElementById('wallet-input').value = w;
-                document.getElementById('qr-img').src = "https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=" + encodeURIComponent(w);
+                document.getElementById('qr-img').src = "https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=" + encodeURIComponent(w);
                 isTrading = data.profile.trading_active === 1;
                 updateUI();
                 checkBalance();
@@ -497,7 +555,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             if(!txHash) { alert("Введите хэш!"); return; }
             const res = await fetch('/api/verify-tx', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({telegram_id: user.id, tx_signature: txHash})});
             const data = await res.json();
-            if(data.success) { alert("✅ Успешно!"); document.getElementById('tx-hash-input').value = ""; checkBalance(); }
+            if(data.success) { alert("✅ Успешно верифицировано!"); document.getElementById('tx-hash-input').value = ""; checkBalance(); toggleDrawer(false); }
         }
         async function toggleTrading() {
             isTrading = !isTrading;
@@ -611,14 +669,14 @@ async def telegram_long_polling():
                                 send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
                                 payload = {
                                     "chat_id": chat_id,
-                                    "text": "🛡️ *Zer0Life Ecosystem*\n\nЧистый терминал готов:",
+                                    "text": "🌐 *Zer0Life Web4 Core*\n\nБоковая панель кошелька готова:",
                                     "parse_mode": "Markdown",
-                                    "reply_markup": {"inline_keyboard": [[{"text": "🚀 Открыть Терминал", "web_app": {"url": RENDER_URL}}]]}
+                                    "reply_markup": {"inline_keyboard": [[{"text": "🚀 Открыть Web4 Терминал", "web_app": {"url": RENDER_URL}}]]}
                                 }
                                 async with session.post(send_url, json=payload) as send_resp:
                                     pass
             except Exception:
-                await asyncio.sleep(3)
+                asyncio.sleep(3)
             await asyncio.sleep(1)
 
 async def main():
@@ -640,10 +698,9 @@ async def main():
     
     asyncio.create_task(telegram_long_polling())
     asyncio.create_task(background_mov_trader_daemon())
-    add_log("Чистый сканер запущен 24/7.")
+    add_log("Web4 Sidebar запущен 24/7.")
     while True:
         await asyncio.sleep(3600)
 
 if __name__ == "__main__":
     asyncio.run(main())
-
