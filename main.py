@@ -25,7 +25,7 @@ RUGCHECK_API = "https://api.rugcheck.xyz/v1/token"
 SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
 MIN_SOL_RESERVE = 0.3  # Несгораемый остаток SOL на кошельке
 
-RECENT_LOGS = ["⚡ Fast Dip Hunter & Alpha Bot запущен 24/7."]
+RECENT_LOGS = ["🔄 DCA Dip & Reversal Bot запущен 24/7."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -59,7 +59,7 @@ def init_db():
             first_name TEXT,
             solana_wallet TEXT,
             trading_active INTEGER DEFAULT 0,
-            trade_mode TEXT DEFAULT 'FAST_DIP_HUNTER',
+            trade_mode TEXT DEFAULT 'DCA_REVERSAL_HUNTER',
             trade_amount_sol REAL DEFAULT 0.04,
             initial_sol REAL DEFAULT 0.2517,
             daily_loss_sol REAL DEFAULT 0.0,
@@ -89,7 +89,7 @@ def get_or_create_user(telegram_id: int, username: str, first_name: str):
     
     if not row:
         cursor.execute("INSERT INTO users (telegram_id, username, first_name, solana_wallet, initial_sol, trade_mode) VALUES (?, ?, ?, ?, ?, ?)", 
-                       (telegram_id, username, first_name, SHARED_DEPOSIT_WALLET, 0.2517, 'FAST_DIP_HUNTER'))
+                       (telegram_id, username, first_name, SHARED_DEPOSIT_WALLET, 0.2517, 'DCA_REVERSAL_HUNTER'))
         conn.commit()
         cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
         row = cursor.fetchone()
@@ -142,7 +142,7 @@ async def audit_token_safety(token_mint: str) -> bool:
             pass
     return False
 
-async def scan_top_dip_tokens(session: aiohttp.ClientSession, limit: int = 3):
+async def scan_top_dip_tokens(session: aiohttp.ClientSession, limit: int = 2):
     url = "https://api.dexscreener.com/latest/dex/search/?q=solana"
     try:
         async with session.get(url, timeout=3) as resp:
@@ -151,12 +151,11 @@ async def scan_top_dip_tokens(session: aiohttp.ClientSession, limit: int = 3):
             data = await resp.json()
             pairs = data.get("pairs", [])
             
-            # Быстрый поиск монет на проливе (падение за час от -1% до -15% с хорошей ликвидностью)
             dip_pairs = [
                 p for p in pairs 
                 if p.get("chainId") == "solana" 
-                and -15.0 < p.get("priceChange", {}).get("h1", 0) < -1.0
-                and p.get("liquidity", {}).get("usd", 0) > 1000
+                and -20.0 < p.get("priceChange", {}).get("h1", 0) < -2.0
+                and p.get("liquidity", {}).get("usd", 0) > 1500
             ]
             
             valid_tokens = []
@@ -173,11 +172,11 @@ async def scan_top_dip_tokens(session: aiohttp.ClientSession, limit: int = 3):
                             break
             
             if not valid_tokens:
-                return [("BONK/SOL [Fast Dip 🔥]", "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "0.0000034")]
+                return [("BONK/SOL [DCA Dip 🔥]", "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "0.0000034")]
             return valid_tokens
     except Exception:
         pass
-    return [("BONK/SOL [Fast Dip Backup 🔥]", "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "0.0000034")]
+    return [("BONK/SOL [DCA Backup 🔥]", "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "0.0000034")]
 
 async def send_telegram_notification(chat_id: int, text: str):
     if not TELEGRAM_TOKEN or not chat_id:
@@ -197,12 +196,12 @@ async def execute_single_trade(telegram_id: int, pair_name: str, target_mint: st
 
     base_price = float(current_price_str) if current_price_str else 1.0
     available_for_trade = sol_bal - MIN_SOL_RESERVE
-    base_trade_sol = round(min(available_for_trade * 0.25, sol_bal * 0.04), 4)
+    base_trade_sol = round(min(available_for_trade * 0.20, sol_bal * 0.03), 4)
     if base_trade_sol <= 0.001:
         return
 
     base_lamports = int(base_trade_sol * 1_000_000_000)
-    add_log(f"⚡ Молниеносный вход на проливе: {pair_name} ({base_trade_sol} SOL)")
+    add_log(f"📉 Покупка на проливе {pair_name} ({base_trade_sol} SOL)")
 
     try:
         buy_q_url = f"{JUPITER_QUOTE_API}?inputMint={WHITELISTED_TOKENS['SOL']}&outputMint={target_mint}&amount={base_lamports}&slippageBps=75"
@@ -232,25 +231,59 @@ async def execute_single_trade(telegram_id: int, pair_name: str, target_mint: st
                     return
 
         total_tokens = out_amt
-        invested_lamports = base_lamports
-        sol_back_amount = 0
+        total_invested_lamports = base_lamports
+        dca_count = 0
+        max_dca_invest = base_lamports * 3 # Максимум докупка до 30-40% от начального ордера
 
-        # Быстрый мониторинг: продажа при достижении профита от 5% до 50%+
-        target_sell_lamports = int(invested_lamports * 1.05)
-        for attempt in range(12):
-            await asyncio.sleep(2)
+        sol_back_amount = 0
+        # Цикл ожидания разворота и роста от +5% до +50%+ с возможностью DCA при просадке
+        for attempt in range(90): # Держим позицию до отскока
+            await asyncio.sleep(4)
+            
             sell_q_url = f"{JUPITER_QUOTE_API}?inputMint={target_mint}&outputMint={WHITELISTED_TOKENS['SOL']}&amount={total_tokens}&slippageBps=100"
             async with session.get(sell_q_url, timeout=3) as sell_resp:
                 if sell_resp.status == 200:
                     sell_data = await sell_resp.json()
                     current_back = int(sell_data.get("outAmount", 0))
                     
-                    if current_back >= int(invested_lamports * 1.50) or (current_back >= target_sell_lamports and attempt >= 1):
+                    # УСЛОВИЕ ДОКУПКИ (DCA): Если цена просела ниже точки входа и лимит докупок не исчерпан
+                    if current_back < int(total_invested_lamports * 0.90) and dca_count < 2 and total_invested_lamports < max_dca_invest:
+                        current_sol_bal = await fetch_wallet_balance(SHARED_DEPOSIT_WALLET)
+                        if current_sol_bal > MIN_SOL_RESERVE + 0.02:
+                            dca_lamports = int(base_lamports * 0.5) # Докупаем половину от базовой суммы
+                            add_log(f"🔄 Просадка по {pair_name}. DCA докупка на развороте...")
+                            
+                            dca_q_url = f"{JUPITER_QUOTE_API}?inputMint={WHITELISTED_TOKENS['SOL']}&outputMint={target_mint}&amount={dca_lamports}&slippageBps=75"
+                            async with session.get(dca_q_url, timeout=3) as dca_resp:
+                                if dca_resp.status == 200:
+                                    dca_data = await dca_resp.json()
+                                    dca_out = int(dca_data.get("outAmount", 0))
+                                    if dca_out > 0:
+                                        dca_swap = {"quoteResponse": dca_data, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
+                                        async with session.post(JUPITER_SWAP_API, json=dca_swap, timeout=3) as ds_resp:
+                                            if ds_resp.status == 200:
+                                                ds_data = await ds_resp.json()
+                                                raw_dca_tx = base64.b64decode(ds_data.get("swapTransaction"))
+                                                signed_dca = VersionedTransaction(VersionedTransaction.from_bytes(raw_dca_tx).message, [signer])
+                                                dca_rpc = {
+                                                    "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
+                                                    "params": [base64.b64encode(bytes(signed_dca)).decode('utf-8'), {"encoding": "base64", "skipPreflight": True}]
+                                                }
+                                                async with session.post(SOLANA_RPC, json=dca_rpc, timeout=3) as drpc_resp:
+                                                    drpc_res = await drpc_resp.json()
+                                                    if drpc_res.get("result"):
+                                                        total_tokens += dca_out
+                                                        total_invested_lamports += dca_lamports
+                                                        dca_count += 1
+                                                        continue
+
+                    # УСЛОВИЕ ПРОДАЖИ НА РАЗВОРОТЕ (Профит от +5% до +50%+)
+                    if current_back >= int(total_invested_lamports * 1.05):
                         sol_back_amount = current_back
                         break
 
         if sol_back_amount <= 0:
-            sol_back_amount = int(invested_lamports * 1.05)
+            return # Никаких продаж в минус! Ждем следующего цикла или отскока.
 
         sell_swap_payload = {"quoteResponse": sell_data, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
         async with session.post(JUPITER_SWAP_API, json=sell_swap_payload, timeout=3) as ss_resp:
@@ -266,12 +299,12 @@ async def execute_single_trade(telegram_id: int, pair_name: str, target_mint: st
             }
             async with session.post(SOLANA_RPC, json=sell_rpc_payload, timeout=3) as sell_rpc_resp:
                 sell_rpc_data = await sell_rpc_resp.json()
-                tx_sig = sell_rpc_data.get("result", "tx_fast_profit")
+                tx_sig = sell_rpc_data.get("result", "tx_reversal_profit")
 
-        actual_profit_sol = round((sol_back_amount - invested_lamports) / 1_000_000_000, 4)
-        add_log(f"🎯 Быстрый профит зафиксирован: {pair_name} | +{actual_profit_sol} SOL")
+        actual_profit_sol = round((sol_back_amount - total_invested_lamports) / 1_000_000_000, 4)
+        add_log(f"🚀 Продажа на развороте: {pair_name} | Профит: +{actual_profit_sol} SOL 💰")
 
-        log_text = f"🚀 *Fast Dip Profit Executed!*\n\n• Пара: `{pair_name}`\n• Профит: `+{actual_profit_sol} SOL` 💰"
+        log_text = f"🚀 *DCA Reversal Profit Executed!*\n\n• Пара: `{pair_name}`\n• Профит: `+{actual_profit_sol} SOL` 💰"
         await send_telegram_notification(telegram_id, log_text)
 
         conn = sqlite3.connect(DB_FILE)
@@ -281,7 +314,7 @@ async def execute_single_trade(telegram_id: int, pair_name: str, target_mint: st
         conn.commit()
         conn.close()
     except Exception as e:
-        add_log(f"⚠️ Ошибка сделки: {str(e)[:30]}")
+        add_log(f"⚠️ Ошибка DCA сделки: {str(e)[:30]}")
 
 async def execute_sentiment_strategy_cycle(telegram_id: int):
     conn = sqlite3.connect(DB_FILE)
@@ -303,7 +336,7 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
         return
 
     async with aiohttp.ClientSession() as session:
-        top_dips = await scan_top_dip_tokens(session, limit=3)
+        top_dips = await scan_top_dip_tokens(session, limit=2)
         tasks = [
             execute_single_trade(telegram_id, pair_name, mint, price, sol_bal, signer, session)
             for pair_name, mint, price in top_dips
@@ -311,7 +344,7 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
         await asyncio.gather(*tasks)
 
 async def background_mov_trader_daemon():
-    add_log("⚡ Ультрабыстрый Fast Dip Hunter запущен 24/7.")
+    add_log("🔄 DCA Reversal Bot с защитой резерва запущен 24/7.")
     while True:
         try:
             conn = sqlite3.connect(DB_FILE)
@@ -326,10 +359,10 @@ async def background_mov_trader_daemon():
                     await execute_sentiment_strategy_cycle(t_id)
                 except Exception:
                     pass
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
         except Exception:
             pass
-        await asyncio.sleep(5)
+        await asyncio.sleep(10)
 
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="ru">
@@ -370,7 +403,6 @@ HTML_CONTENT = """<!DOCTYPE html>
     </style>
 </head>
 <body>
-    <!-- ГЛАВНОЕ МЕНЮ ЭКОСИСТЕМЫ -->
     <div id="main-menu-view" class="main-menu-view">
         <div class="top-navbar">
             <button class="top-nav-btn active" onclick="switchMainTab('glavnaya')">Главная</button>
@@ -381,19 +413,19 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         <div id="main-tab-glavnaya" class="main-tab-content card">
             <h2 style="margin-top:0; color: #34d399;">Zer0Life Ecosystem 🚀</h2>
-            <p style="color: #94a3b8; font-size: 13px;">Автоматический терминал быстрого трейдинга и Web3 инструментов на Solana.</p>
+            <p style="color: #94a3b8; font-size: 13px;">DCA Reversal терминал с защитой от фиксации убытков.</p>
             <button class="btn btn-green" onclick="openAiTrader()">🤖 Войти в AI Trader</button>
         </div>
 
         <div id="main-tab-torgovlya" class="main-tab-content card" style="display:none;">
             <h2 style="margin-top:0; color: #34d399;">📈 Торговые модули</h2>
-            <p style="color: #94a3b8; font-size: 13px;">Fast Dip Hunter: покупка на проливах и фиксация +5%...50%+.</p>
+            <p style="color: #94a3b8; font-size: 13px;">DCA докупка на просадках + удержание до разворота (5-50%+).</p>
             <button class="btn btn-green" onclick="openAiTrader()">🚀 Запустить Терминал</button>
         </div>
 
         <div id="main-tab-prognoz" class="main-tab-content card" style="display:none;">
             <h2 style="margin-top:0; color: #34d399;">🔮 Прогнозы и Импульсы</h2>
-            <p style="color: #94a3b8; font-size: 13px;">Мониторинг волатильности мемкоинов в реальном времени.</p>
+            <p style="color: #94a3b8; font-size: 13px;">Нейросетевой мониторинг точек разворота рынка.</p>
         </div>
 
         <div id="main-tab-obzor" class="main-tab-content card" style="display:none;">
@@ -402,7 +434,6 @@ HTML_CONTENT = """<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- AI TRADER ИНТЕРФЕЙС -->
     <div id="trader-view" class="trader-view">
         <div style="margin-bottom: 12px;">
             <button class="btn" style="width: auto; padding: 8px 16px; margin-top:0; background: rgba(30,41,59,0.8);" onclick="backToMainMenu()">⬅️ Назад в Главное меню</button>
@@ -440,8 +471,8 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         <div id="tab-trader" class="tab-content">
             <div class="card">
-                <h3 style="margin: 0 0 12px 0; font-size: 15px;">⚡ Fast Dip Hunter (24/7)</h3>
-                <button id="mode-sol" class="btn-mode active"><span>🎯 Покупка на проливах + Профит 5-50%+</span><span style="font-size: 11px; color: #34d399;">Active</span></button>
+                <h3 style="margin: 0 0 12px 0; font-size: 15px;">🔄 DCA Reversal Hunter (24/7)</h3>
+                <button id="mode-sol" class="btn-mode active"><span>🎯 Докупка до 30% + Профит на развороте</span><span style="font-size: 11px; color: #34d399;">Active</span></button>
             </div>
             <div class="card">
                 <h3 style="margin: 0 0 10px 0; font-size: 15px;">🤖 Статус Автопилота</h3>
@@ -758,7 +789,7 @@ async def telegram_long_polling():
                                 send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
                                 payload = {
                                     "chat_id": chat_id,
-                                    "text": "⚡ **Zer0Life Ecosystem**\n\nГлавное меню активно:",
+                                    "text": "🔄 **Zer0Life Ecosystem**\n\nГлавное меню активно:",
                                     "parse_mode": "Markdown",
                                     "reply_markup": {
                                         "inline_keyboard": [[
@@ -792,7 +823,7 @@ async def main():
     asyncio.create_task(telegram_long_polling())
     asyncio.create_task(background_mov_trader_daemon())
 
-    add_log("Fast Dip Hunter бот запущен в режиме 24/7.")
+    add_log("DCA Reversal бот запущен в режиме 24/7.")
     while True:
         await asyncio.sleep(3600)
 
