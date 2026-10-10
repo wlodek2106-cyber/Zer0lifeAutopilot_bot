@@ -3,12 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Zer0Life Autopilot Dashboard</title>
+    <title>Zer0Life Ai Trader - Wallet</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         :root {
             --neon-green: #14f195;
-            --neon-red: #ff3366;
             --neon-green-glow: rgba(20, 241, 149, 0.5);
             --bg-dark: #030407;
             --panel-bg: rgba(12, 14, 20, 0.65);
@@ -16,69 +15,69 @@
             --text-muted: #8a8d98;
         }
 
-        body {
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
             background-color: var(--bg-dark);
-            /* Кибер-сетка и радиальное свечение на фоне */
             background-image: 
-                radial-gradient(circle at 50% 0%, rgba(20, 241, 149, 0.08) 0%, transparent 60%),
+                radial-gradient(circle at 50% 0%, rgba(20, 241, 149, 0.08) 0%, transparent 50%),
                 linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
                 linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
             background-size: 100% 100%, 30px 30px, 30px 30px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
             color: var(--text-main);
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            margin: 0;
-            padding: 20px;
             overflow-x: hidden;
-        }
-        
-        .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 24px;
-        }
-        
-        .title-block {
             display: flex;
             flex-direction: column;
         }
 
-        h2 {
-            margin: 0;
-            font-size: 22px;
-            font-weight: 900;
+        .container {
+            flex-grow: 1;
+            padding: 20px 20px 110px 20px;
+            overflow-y: auto;
+        }
+
+        .panel {
+            background: var(--panel-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(20, 241, 149, 0.15);
+            border-radius: 20px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .panel::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 1px;
+            background: linear-gradient(90deg, transparent, var(--neon-green), transparent);
+            opacity: 0.3;
+        }
+
+        .panel-title {
             color: var(--text-main);
+            font-size: 20px;
+            font-weight: 800;
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 10px;
+            margin-bottom: 12px;
             letter-spacing: 0.5px;
-            text-shadow: 0 0 20px rgba(255, 255, 255, 0.2);
         }
 
-        .status-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            background: rgba(20, 241, 149, 0.1);
-            border: 1px solid rgba(20, 241, 149, 0.3);
-            padding: 4px 10px;
-            border-radius: 12px;
-            font-size: 10px;
-            font-weight: 800;
-            color: var(--neon-green);
-            margin-top: 8px;
-            width: fit-content;
-            letter-spacing: 1px;
-            box-shadow: 0 0 10px rgba(20, 241, 149, 0.1);
-        }
-
-        .pulse-dot {
+        .live-dot {
             width: 8px;
             height: 8px;
             background-color: var(--neon-green);
             border-radius: 50%;
             box-shadow: 0 0 10px var(--neon-green);
-            animation: pulse 1.5s infinite;
+            animation: pulse 2s infinite;
         }
 
         @keyframes pulse {
@@ -87,242 +86,240 @@
             100% { transform: scale(0.95); opacity: 1; }
         }
 
-        /* Glassmorphism Cards */
-        .card {
-            background: var(--panel-bg);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            border-radius: 20px;
-            padding: 20px;
-            margin-bottom: 16px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-            position: relative;
-            overflow: hidden;
+        .panel-desc {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-bottom: 24px;
+            line-height: 1.5;
         }
 
-        .card::before {
-            content: '';
-            position: absolute;
-            top: 0; left: 0; width: 100%; height: 2px;
-            background: linear-gradient(90deg, transparent, var(--neon-green), transparent);
-            opacity: 0.5;
-        }
-
-        .card h3 {
-            margin: 0 0 16px 0;
-            font-size: 12px;
-            font-weight: 800;
+        .input-label {
+            font-size: 10px;
             color: var(--neon-green);
             text-transform: uppercase;
-            letter-spacing: 1.5px;
-        }
-
-        .coin-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            background: rgba(0, 0, 0, 0.4);
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            border-radius: 14px;
-            padding: 14px;
-            margin-bottom: 10px;
-            transition: all 0.3s;
-        }
-
-        .coin-row:hover {
-            border-color: rgba(20, 241, 149, 0.4);
-            box-shadow: 0 0 15px rgba(20, 241, 149, 0.1);
-            transform: translateY(-1px);
-        }
-
-        .coin-info {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-        }
-
-        .coin-pair {
-            font-size: 15px;
             font-weight: 800;
-            color: #ffffff;
-        }
-
-        .coin-chain {
-            font-size: 9px;
-            color: var(--text-muted);
-            background: rgba(255, 255, 255, 0.1);
-            padding: 3px 6px;
-            border-radius: 6px;
-            width: fit-content;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .price-info {
-            text-align: right;
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-        }
-
-        .price {
-            font-size: 16px;
-            font-weight: 800;
-            color: #ffffff;
-            font-family: 'Courier New', Courier, monospace;
-            transition: color 0.3s, text-shadow 0.3s;
-        }
-
-        .action-hold { color: #f59e0b; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
-        .action-buy { color: var(--neon-green); font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; text-shadow: 0 0 10px rgba(20, 241, 149, 0.3); }
-        .action-sell { color: var(--neon-red); font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; text-shadow: 0 0 10px rgba(255, 51, 102, 0.3); }
-
-        .stats-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-            margin-bottom: 16px;
-        }
-
-        .stat-box {
-            background: rgba(20, 241, 149, 0.05);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(20, 241, 149, 0.2);
-            border-radius: 16px;
-            padding: 16px;
-            text-align: center;
-            box-shadow: inset 0 0 20px rgba(20, 241, 149, 0.02);
-        }
-
-        .stat-label {
-            font-size: 10px;
-            color: var(--text-muted);
             margin-bottom: 8px;
-            font-weight: 800;
-            text-transform: uppercase;
+            display: block;
             letter-spacing: 1px;
         }
 
-        .stat-value {
-            font-size: 20px;
-            font-weight: 900;
+        .address-box {
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(20, 241, 149, 0.3);
+            border-radius: 12px;
+            padding: 16px 12px;
             color: var(--neon-green);
-            font-family: 'Courier New', Courier, monospace;
-            text-shadow: 0 0 15px rgba(20, 241, 149, 0.4);
-        }
-
-        .desc-text {
             font-size: 13px;
-            color: var(--text-muted);
-            line-height: 1.6;
-            margin-bottom: 20px;
+            font-family: 'Courier New', Courier, monospace;
+            word-break: break-all;
+            margin-bottom: 28px;
+            text-align: center;
+            box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.8);
         }
 
-        /* Кнопки */
-        .btn {
+        .qr-container {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 28px;
+            position: relative;
+        }
+
+        .qr-glow {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 170px;
+            height: 170px;
+            background: var(--neon-green);
+            filter: blur(40px);
+            border-radius: 20px;
+            opacity: 0.15;
+            z-index: 0;
+        }
+
+        .qr-code {
+            background: #ffffff;
+            padding: 10px;
+            border-radius: 16px;
+            width: 160px;
+            height: 160px;
+            z-index: 1;
+            position: relative;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+        }
+
+        .btn-primary {
             background: linear-gradient(135deg, #10b981 0%, var(--neon-green) 100%);
             color: #000;
             border: none;
-            width: 100%;
-            padding: 16px;
             border-radius: 14px;
+            padding: 16px;
+            width: 100%;
             font-size: 14px;
             font-weight: 800;
             text-transform: uppercase;
             letter-spacing: 0.5px;
             cursor: pointer;
-            box-shadow: 0 4px 15px var(--neon-green-glow);
             transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 4px 15px var(--neon-green-glow);
             display: flex;
             justify-content: center;
             align-items: center;
             gap: 8px;
         }
 
-        .btn:active {
+        .btn-primary:active {
             transform: scale(0.97);
             box-shadow: 0 2px 8px rgba(20, 241, 149, 0.3);
         }
 
         .btn-secondary {
-            background: rgba(255, 255, 255, 0.05);
-            color: var(--text-muted);
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(20, 241, 149, 0.1);
+            color: var(--neon-green);
+            border: 1px solid rgba(20, 241, 149, 0.3);
             box-shadow: none;
-            margin-top: 12px;
         }
 
         .btn-secondary:active {
-            background: rgba(255, 255, 255, 0.1);
+            background: rgba(20, 241, 149, 0.2);
+        }
+
+        .input-field {
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 14px;
+            padding: 16px;
+            color: #ffffff;
+            font-size: 14px;
+            width: 100%;
+            box-sizing: border-box;
+            margin-bottom: 20px;
+            outline: none;
+            transition: all 0.3s;
+            font-family: monospace;
+        }
+
+        .input-field::placeholder {
+            color: #4b5563;
+            font-family: -apple-system, sans-serif;
+        }
+
+        .input-field:focus {
+            border-color: var(--neon-green);
+            box-shadow: 0 0 10px rgba(20, 241, 149, 0.2);
+            background: rgba(0, 0, 0, 0.6);
+        }
+
+        .floating-nav {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 90%;
+            max-width: 400px;
+            background: rgba(15, 18, 25, 0.85);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 16px;
+            z-index: 10;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+        }
+
+        .nav-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            color: var(--text-muted);
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            cursor: pointer;
+            flex: 1;
+            font-weight: 700;
+            padding: 8px 0;
+            border-radius: 20px;
+            transition: all 0.3s;
+        }
+
+        .nav-item.active {
+            color: #fff;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .nav-icon {
+            font-size: 18px;
+            margin-bottom: 2px;
+            opacity: 0.7;
+            transition: all 0.3s;
+        }
+
+        .nav-item.active .nav-icon {
+            opacity: 1;
+            transform: translateY(-2px);
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
         }
     </style>
 </head>
 <body>
-    <div class="header">
-        <div class="title-block">
-            <h2>🛡 Zer0Life Autopilot</h2>
-            <div class="status-badge">
-                <div class="pulse-dot"></div>
-                СИСТЕМА АКТИВНА (24/7)
-            </div>
-        </div>
-        <div style="font-size: 28px; filter: drop-shadow(0 0 10px rgba(20,241,149,0.5));">🤖</div>
-    </div>
 
-    <div class="stats-grid">
-        <div class="stat-box">
-            <div class="stat-label">PNL (24Ч)</div>
-            <div class="stat-value">+$124.50</div>
-        </div>
-        <div class="stat-box">
-            <div class="stat-label">СДЕЛОК</div>
-            <div class="stat-value" style="color: #fff; text-shadow: none;">14</div>
-        </div>
-    </div>
+    <div class="container">
+        <!-- Panel 1: Web4 Wallet Panel -->
+        <div class="panel">
+            <div class="panel-title">
+                <div class="live-dot"></div>
+                Web4 Wallet Panel
+            </div>
+            <div class="panel-desc">
+                Ваш зашифрованный депозитный адрес и штрихкод для пополнения ликвидности SOL.
+            </div>
+            
+            <label class="input-label">Депозитный адрес (Solana)</label>
+            <div class="address-box" id="wallet-address">
+                8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L
+            </div>
 
-    <div class="card">
-        <h3>📊 DEX Мониторинг</h3>
-        
-        <div class="coin-row">
-            <div class="coin-info">
-                <span class="coin-pair">SOL / USDC</span>
-                <span class="coin-chain">Solana</span>
+            <div class="qr-container">
+                <div class="qr-glow"></div>
+                <img class="qr-code" src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L" alt="QR Code">
             </div>
-            <div class="price-info">
-                <span class="price" id="sol-price">$145.50</span>
-                <span class="action-hold">⏳ HOLD</span>
-            </div>
+
+            <button class="btn-primary" onclick="copyAddress()">
+                <span style="font-size: 16px;">📋</span> Копировать адрес
+            </button>
         </div>
 
-        <div class="coin-row">
-            <div class="coin-info">
-                <span class="coin-pair">ZRL / SOL</span>
-                <span class="coin-chain">Raydium</span>
-            </div>
-            <div class="price-info">
-                <span class="price">$0.00000009</span>
-                <span class="action-buy">🟢 BUY_DIP</span>
-            </div>
-        </div>
-
-        <div class="coin-row">
-            <div class="coin-info">
-                <span class="coin-pair">AVAX / USDC</span>
-                <span class="coin-chain">Avalanche</span>
-            </div>
-            <div class="price-info">
-                <span class="price">$25.80</span>
-                <span class="action-sell">🔴 TAKE_PROFIT</span>
-            </div>
+        <!-- Panel 2: Transaction Verification -->
+        <div class="panel">
+            <label class="input-label">Проверка транзакции (Signature)</label>
+            <input type="text" class="input-field" placeholder="Вставьте tx_hash...">
+            
+            <button class="btn-primary btn-secondary" onclick="verifyTx()">
+                Verify & Credit SOL 🔄
+            </button>
         </div>
     </div>
 
-    <div class="card">
-        <h3>⚙️ Управление ИИ</h3>
-        <p class="desc-text">Автономный кросс-чейн ИИ-агент сканирует пулы ликвидности, выкупает просадки и защищает капитал с использованием смарт-контрактов.</p>
-        <button class="btn" onclick="tg.HapticFeedback.impactOccurred('medium'); alert('Настройки стратегии открыты');">⚙️ Настройки стратегии</button>
-        <button class="btn btn-secondary" onclick="tg.HapticFeedback.impactOccurred('light'); tg.close();">Закрыть панель</button>
+    <div class="floating-nav">
+        <div class="nav-item active">
+            <span class="nav-icon">👛</span>
+            <span>Wallet</span>
+        </div>
+        <div class="nav-item" onclick="tg.HapticFeedback.impactOccurred('light');">
+            <span class="nav-icon">🤖</span>
+            <span>Ai Trader</span>
+        </div>
+        <div class="nav-item" onclick="tg.HapticFeedback.impactOccurred('light');">
+            <span class="nav-icon">📊</span>
+            <span>Stats</span>
+        </div>
     </div>
 
     <script>
@@ -330,37 +327,22 @@
         tg.expand();
         tg.ready();
         
-        // Настройка цвета хедера для Telegram
         tg.setHeaderColor('#030407');
         tg.setBackgroundColor('#030407');
 
-        // Имитация живого обновления цен (Исправленный и дополненный код)
-        setInterval(() => {
-            const solPriceEl = document.getElementById('sol-price');
-            // Парсим текущую цену
-            const currentPrice = parseFloat(solPriceEl.innerText.replace('$', ''));
-            // Генерируем случайное изменение
-            const change = (Math.random() * 0.4) - 0.2;
-            const newPrice = (currentPrice + change).toFixed(2);
-            
-            // Обновляем значение на экране
-            solPriceEl.innerText = `$${newPrice}`;
-            
-            // Добавляем красивую неоновую подсветку при изменении цены
-            if (change > 0) {
-                solPriceEl.style.color = '#14f195';
-                solPriceEl.style.textShadow = '0 0 10px rgba(20, 241, 149, 0.5)';
-            } else {
-                solPriceEl.style.color = '#ff3366';
-                solPriceEl.style.textShadow = '0 0 10px rgba(255, 51, 102, 0.5)';
-            }
-            
-            // Возвращаем белый цвет через полсекунды
-            setTimeout(() => {
-                solPriceEl.style.color = '#ffffff';
-                solPriceEl.style.textShadow = 'none';
-            }, 500);
-        }, 3000);
+        function copyAddress() {
+            const address = document.getElementById('wallet-address').innerText.trim();
+            navigator.clipboard.writeText(address).then(() => {
+                tg.HapticFeedback.notificationOccurred('success');
+                tg.showAlert('Адрес скопирован в буфер обмена!');
+            }).catch(err => {
+                console.error('Ошибка копирования', err);
+            });
+        }
+
+        function verifyTx() {
+            tg.HapticFeedback.impactOccurred('medium');
+        }
     </script>
 </body>
 </html>
