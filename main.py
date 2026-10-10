@@ -26,7 +26,7 @@ SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
 MIN_SOL_RESERVE = 0.3  # Несгораемый остаток SOL на кошельке
 MAX_TRADE_SOL_LIMIT = 0.1
 
-RECENT_LOGS = ["⚡ DEX Arbitrage (5-10%+) & Compound Bot запущен 24/7."]
+RECENT_LOGS = ["⚡ DEX Arbitrage & Compound Bot запущен 24/7."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -166,18 +166,12 @@ async def scan_arbitrage_or_dip_tokens(session: aiohttp.ClientSession):
                 if not token_mint:
                     continue
                 
-                # Проверяем DEX маржу / спред между пулами
-                dex_id = pair.get("dexId", "raydium")
-                price_native = float(pair.get("priceNative", 0))
-                
-                # Поиск арбитражной возможности 5-10%+
                 price_change_5m = pair.get("priceChange", {}).get("m5", 0)
                 if abs(price_change_5m) >= 5.0 and liquidity > 5000:
                     is_safe = await audit_token_safety(token_mint)
                     if is_safe:
                         return ("ARBITRAGE", pair_name, token_mint, price_change_5m)
                 
-                # Запасной вариант: поиск сильного пролива для лесенки
                 price_change_1h = pair.get("priceChange", {}).get("h1", 0)
                 if -15.0 < price_change_1h < -2.0:
                     is_safe = await audit_token_safety(token_mint)
@@ -210,7 +204,7 @@ async def execute_arbitrage_or_trade(telegram_id: int, mode: str, pair_name: str
         return
 
     base_lamports = int(base_trade_sol * 1_000_000_000)
-    add_log(f"⚡ [{mode}] Вход по {pair_name} на сумму {base_trade_sol} SOL для прироста баланса")
+    add_log(f"⚡ [{mode}] Вход по {pair_name} на сумму {base_trade_sol} SOL")
 
     try:
         buy_q_url = f"{JUPITER_QUOTE_API}?inputMint={WHITELISTED_TOKENS['SOL']}&outputMint={target_mint}&amount={base_lamports}&slippageBps=75"
@@ -253,12 +247,11 @@ async def execute_arbitrage_or_trade(telegram_id: int, mode: str, pair_name: str
                     sell_data = await sell_resp.json()
                     current_back = int(sell_data.get("outAmount", 0))
                     
-                    # DCA докупка (лесенка) при сильной просадке
                     if current_back < int(total_invested_lamports * 0.88) and ladder_step == 1:
                         current_sol_bal = await fetch_wallet_balance(SHARED_DEPOSIT_WALLET)
                         if current_sol_bal > MIN_SOL_RESERVE + 0.02:
                             ladder_lamports = base_lamports
-                            add_log(f"📉 [Лесенка] Докупка {pair_name} для усреднения спреда...")
+                            add_log(f"📉 [Лесенка] Докупка {pair_name}...")
                             
                             lad_q_url = f"{JUPITER_QUOTE_API}?inputMint={WHITELISTED_TOKENS['SOL']}&outputMint={target_mint}&amount={ladder_lamports}&slippageBps=75"
                             async with session.get(lad_q_url, timeout=3) as lad_resp:
@@ -284,14 +277,13 @@ async def execute_arbitrage_or_trade(telegram_id: int, mode: str, pair_name: str
                                                         ladder_step = 2
                                                         continue
 
-                    # Фиксация прибыли (при арбитражной марже или росте на 50%+)
                     target_multiplier = 1.05 if mode == "ARBITRAGE" else 1.50
                     if current_back >= int(total_invested_lamports * target_multiplier):
                         sol_back_amount = current_back
                         break
 
         if sol_back_amount <= 0:
-            return # Никаких продаж в минус — держим позицию до разворота
+            return
 
         sell_swap_payload = {"quoteResponse": sell_data, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
         async with session.post(JUPITER_SWAP_API, json=sell_swap_payload, timeout=3) as ss_resp:
@@ -310,9 +302,9 @@ async def execute_arbitrage_or_trade(telegram_id: int, mode: str, pair_name: str
                 tx_sig = sell_rpc_data.get("result", "tx_arb_profit")
 
         actual_profit_sol = round((sol_back_amount - total_invested_lamports) / 1_000_000_000, 4)
-        add_log(f"🚀 Профит зафиксирован в SOL: +{actual_profit_sol} SOL 💰. Ищу новые маржинальные связки...")
+        add_log(f"🚀 Профит зафиксирован в SOL: +{actual_profit_sol} SOL 💰")
 
-        log_text = f"⚡ *DEX Arbitrage / Compound Success!*\n• Пара: `{pair_name}`\n• Прирост SOL: `+{actual_profit_sol} SOL` 🚀"
+        log_text = f"⚡ *DEX Arbitrage Success!*\n• Пара: `{pair_name}`\n• Прирост SOL: `+{actual_profit_sol} SOL` 🚀"
         await send_telegram_notification(telegram_id, log_text)
 
         conn = sqlite3.connect(DB_FILE)
@@ -834,4 +826,4 @@ async def main():
         await asyncio.sleep(3600)
 
 if __name__ == "__main__":
-    asyncio.main(main())
+    asyncio.run(main())
