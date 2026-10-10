@@ -3,12 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Zer0lifeAutopilot Dashboard</title>
+    <title>Zer0Life Autopilot Dashboard</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
+        :root {
+            --neon-green: #14f195;
+            --neon-red: #ff3366;
+            --neon-green-glow: rgba(20, 241, 149, 0.5);
+            --bg-dark: #030407;
+            --panel-bg: rgba(12, 14, 20, 0.65);
+            --text-main: #ffffff;
+            --text-muted: #8a8d98;
+        }
+
         body {
-            background-color: #0b0c10;
-            color: #ffffff;
+            background-color: var(--bg-dark);
+            /* Кибер-сетка и радиальное свечение на фоне */
+            background-image: 
+                radial-gradient(circle at 50% 0%, rgba(20, 241, 149, 0.08) 0%, transparent 60%),
+                linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+            background-size: 100% 100%, 30px 30px, 30px 30px;
+            color: var(--text-main);
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             margin: 0;
             padding: 20px;
@@ -29,12 +45,14 @@
 
         h2 {
             margin: 0;
-            font-size: 20px;
-            font-weight: 800;
-            color: #14f195;
+            font-size: 22px;
+            font-weight: 900;
+            color: var(--text-main);
             display: flex;
             align-items: center;
             gap: 8px;
+            letter-spacing: 0.5px;
+            text-shadow: 0 0 20px rgba(255, 255, 255, 0.2);
         }
 
         .status-badge {
@@ -45,35 +63,40 @@
             border: 1px solid rgba(20, 241, 149, 0.3);
             padding: 4px 10px;
             border-radius: 12px;
-            font-size: 11px;
-            font-weight: 700;
-            color: #14f195;
-            margin-top: 6px;
+            font-size: 10px;
+            font-weight: 800;
+            color: var(--neon-green);
+            margin-top: 8px;
             width: fit-content;
+            letter-spacing: 1px;
+            box-shadow: 0 0 10px rgba(20, 241, 149, 0.1);
         }
 
         .pulse-dot {
             width: 8px;
             height: 8px;
-            background-color: #14f195;
+            background-color: var(--neon-green);
             border-radius: 50%;
-            box-shadow: 0 0 10px #14f195;
+            box-shadow: 0 0 10px var(--neon-green);
             animation: pulse 1.5s infinite;
         }
 
         @keyframes pulse {
             0% { transform: scale(0.95); opacity: 1; }
-            50% { transform: scale(1.3); opacity: 0.5; }
+            50% { transform: scale(1.5); opacity: 0.5; }
             100% { transform: scale(0.95); opacity: 1; }
         }
 
+        /* Glassmorphism Cards */
         .card {
-            background: #12141c;
+            background: var(--panel-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
             border: 1px solid rgba(255, 255, 255, 0.05);
-            border-radius: 16px;
-            padding: 18px;
+            border-radius: 20px;
+            padding: 20px;
             margin-bottom: 16px;
-            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
             position: relative;
             overflow: hidden;
         }
@@ -82,151 +105,169 @@
             content: '';
             position: absolute;
             top: 0; left: 0; width: 100%; height: 2px;
-            background: linear-gradient(90deg, transparent, #14f195, transparent);
+            background: linear-gradient(90deg, transparent, var(--neon-green), transparent);
             opacity: 0.5;
         }
 
         .card h3 {
             margin: 0 0 16px 0;
-            font-size: 14px;
+            font-size: 12px;
             font-weight: 800;
-            color: #8a8d98;
+            color: var(--neon-green);
             text-transform: uppercase;
-            letter-spacing: 1px;
+            letter-spacing: 1.5px;
         }
 
         .coin-row {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            background: #181b24;
-            border: 1px solid #282d3d;
-            border-radius: 12px;
-            padding: 12px 14px;
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 14px;
+            padding: 14px;
             margin-bottom: 10px;
-            transition: border-color 0.2s;
+            transition: all 0.3s;
         }
 
         .coin-row:hover {
             border-color: rgba(20, 241, 149, 0.4);
+            box-shadow: 0 0 15px rgba(20, 241, 149, 0.1);
+            transform: translateY(-1px);
         }
 
         .coin-info {
             display: flex;
             flex-direction: column;
-            gap: 4px;
+            gap: 6px;
         }
 
         .coin-pair {
-            font-size: 14px;
-            font-weight: 700;
+            font-size: 15px;
+            font-weight: 800;
             color: #ffffff;
         }
 
         .coin-chain {
-            font-size: 10px;
-            color: #8a8d98;
-            background: #282d3d;
-            padding: 2px 6px;
-            border-radius: 4px;
+            font-size: 9px;
+            color: var(--text-muted);
+            background: rgba(255, 255, 255, 0.1);
+            padding: 3px 6px;
+            border-radius: 6px;
             width: fit-content;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
 
         .price-info {
             text-align: right;
             display: flex;
             flex-direction: column;
-            gap: 4px;
+            gap: 6px;
         }
 
         .price {
-            font-size: 15px;
+            font-size: 16px;
             font-weight: 800;
             color: #ffffff;
+            font-family: 'Courier New', Courier, monospace;
+            transition: color 0.3s, text-shadow 0.3s;
         }
 
-        .action-hold { color: #f59e0b; font-size: 11px; font-weight: 700; }
-        .action-buy { color: #14f195; font-size: 11px; font-weight: 700; }
-        .action-sell { color: #ef4444; font-size: 11px; font-weight: 700; }
+        .action-hold { color: #f59e0b; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
+        .action-buy { color: var(--neon-green); font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; text-shadow: 0 0 10px rgba(20, 241, 149, 0.3); }
+        .action-sell { color: var(--neon-red); font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; text-shadow: 0 0 10px rgba(255, 51, 102, 0.3); }
 
         .stats-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 10px;
+            gap: 12px;
             margin-bottom: 16px;
         }
 
         .stat-box {
             background: rgba(20, 241, 149, 0.05);
+            backdrop-filter: blur(10px);
             border: 1px solid rgba(20, 241, 149, 0.2);
-            border-radius: 12px;
-            padding: 12px;
+            border-radius: 16px;
+            padding: 16px;
             text-align: center;
+            box-shadow: inset 0 0 20px rgba(20, 241, 149, 0.02);
         }
 
         .stat-label {
             font-size: 10px;
-            color: #8a8d98;
-            margin-bottom: 4px;
-            font-weight: 700;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
 
         .stat-value {
-            font-size: 16px;
+            font-size: 20px;
             font-weight: 900;
-            color: #14f195;
+            color: var(--neon-green);
+            font-family: 'Courier New', Courier, monospace;
+            text-shadow: 0 0 15px rgba(20, 241, 149, 0.4);
         }
 
         .desc-text {
-            font-size: 12px;
-            color: #8a8d98;
-            line-height: 1.5;
-            margin-bottom: 16px;
+            font-size: 13px;
+            color: var(--text-muted);
+            line-height: 1.6;
+            margin-bottom: 20px;
         }
 
+        /* Кнопки */
         .btn {
-            background: linear-gradient(135deg, #10b981 0%, #14f195 100%);
+            background: linear-gradient(135deg, #10b981 0%, var(--neon-green) 100%);
             color: #000;
             border: none;
             width: 100%;
-            padding: 14px;
-            border-radius: 12px;
+            padding: 16px;
+            border-radius: 14px;
             font-size: 14px;
             font-weight: 800;
             text-transform: uppercase;
+            letter-spacing: 0.5px;
             cursor: pointer;
-            box-shadow: 0 4px 15px rgba(20, 241, 149, 0.3);
-            transition: all 0.2s;
+            box-shadow: 0 4px 15px var(--neon-green-glow);
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 8px;
         }
 
         .btn:active {
-            transform: scale(0.96);
-            box-shadow: 0 2px 8px rgba(20, 241, 149, 0.2);
+            transform: scale(0.97);
+            box-shadow: 0 2px 8px rgba(20, 241, 149, 0.3);
         }
 
         .btn-secondary {
-            background: #181b24;
-            color: #8a8d98;
-            border: 1px solid #282d3d;
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-muted);
+            border: 1px solid rgba(255, 255, 255, 0.1);
             box-shadow: none;
-            margin-top: 10px;
+            margin-top: 12px;
         }
 
         .btn-secondary:active {
-            background: #282d3d;
+            background: rgba(255, 255, 255, 0.1);
         }
     </style>
 </head>
 <body>
     <div class="header">
         <div class="title-block">
-            <h2>🛡 Zer0life Autopilot</h2>
+            <h2>🛡 Zer0Life Autopilot</h2>
             <div class="status-badge">
                 <div class="pulse-dot"></div>
                 СИСТЕМА АКТИВНА (24/7)
             </div>
         </div>
-        <div style="font-size: 24px;">🤖</div>
+        <div style="font-size: 28px; filter: drop-shadow(0 0 10px rgba(20,241,149,0.5));">🤖</div>
     </div>
 
     <div class="stats-grid">
@@ -236,7 +277,7 @@
         </div>
         <div class="stat-box">
             <div class="stat-label">СДЕЛОК</div>
-            <div class="stat-value" style="color: #fff;">14</div>
+            <div class="stat-value" style="color: #fff; text-shadow: none;">14</div>
         </div>
     </div>
 
@@ -288,8 +329,38 @@
         const tg = window.Telegram.WebApp;
         tg.expand();
         tg.ready();
+        
+        // Настройка цвета хедера для Telegram
+        tg.setHeaderColor('#030407');
+        tg.setBackgroundColor('#030407');
 
-        // Имитация живого обновления цен
+        // Имитация живого обновления цен (Исправленный и дополненный код)
         setInterval(() => {
             const solPriceEl = document.getElementById('sol-price');
-            const currentPrice = parseFloat(solPriceEl.innerText
+            // Парсим текущую цену
+            const currentPrice = parseFloat(solPriceEl.innerText.replace('$', ''));
+            // Генерируем случайное изменение
+            const change = (Math.random() * 0.4) - 0.2;
+            const newPrice = (currentPrice + change).toFixed(2);
+            
+            // Обновляем значение на экране
+            solPriceEl.innerText = `$${newPrice}`;
+            
+            // Добавляем красивую неоновую подсветку при изменении цены
+            if (change > 0) {
+                solPriceEl.style.color = '#14f195';
+                solPriceEl.style.textShadow = '0 0 10px rgba(20, 241, 149, 0.5)';
+            } else {
+                solPriceEl.style.color = '#ff3366';
+                solPriceEl.style.textShadow = '0 0 10px rgba(255, 51, 102, 0.5)';
+            }
+            
+            // Возвращаем белый цвет через полсекунды
+            setTimeout(() => {
+                solPriceEl.style.color = '#ffffff';
+                solPriceEl.style.textShadow = 'none';
+            }, 500);
+        }, 3000);
+    </script>
+</body>
+</html>
