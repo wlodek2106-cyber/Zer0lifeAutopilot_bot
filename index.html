@@ -2,81 +2,294 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Zer0lifeAutopilot Dashboard</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         body {
-            background-color: #0f172a;
-            color: #f8fafc;
+            background-color: #0b0c10;
+            color: #ffffff;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             margin: 0;
-            padding: 16px;
+            padding: 20px;
+            overflow-x: hidden;
         }
+        
         .header {
-            text-align: center;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
             margin-bottom: 24px;
         }
-        .card {
-            background: #1e293b;
+        
+        .title-block {
+            display: flex;
+            flex-direction: column;
+        }
+
+        h2 {
+            margin: 0;
+            font-size: 20px;
+            font-weight: 800;
+            color: #14f195;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(20, 241, 149, 0.1);
+            border: 1px solid rgba(20, 241, 149, 0.3);
+            padding: 4px 10px;
             border-radius: 12px;
-            padding: 16px;
+            font-size: 11px;
+            font-weight: 700;
+            color: #14f195;
+            margin-top: 6px;
+            width: fit-content;
+        }
+
+        .pulse-dot {
+            width: 8px;
+            height: 8px;
+            background-color: #14f195;
+            border-radius: 50%;
+            box-shadow: 0 0 10px #14f195;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(0.95); opacity: 1; }
+            50% { transform: scale(1.3); opacity: 0.5; }
+            100% { transform: scale(0.95); opacity: 1; }
+        }
+
+        .card {
+            background: #12141c;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 16px;
+            padding: 18px;
             margin-bottom: 16px;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
+            position: relative;
+            overflow: hidden;
         }
-        .status-active {
-            color: #22c55e;
-            font-weight: bold;
+
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 2px;
+            background: linear-gradient(90deg, transparent, #14f195, transparent);
+            opacity: 0.5;
         }
+
+        .card h3 {
+            margin: 0 0 16px 0;
+            font-size: 14px;
+            font-weight: 800;
+            color: #8a8d98;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
         .coin-row {
             display: flex;
             justify-content: space-between;
-            margin-bottom: 8px;
-            border-bottom: 1px solid #334155;
-            padding-bottom: 8px;
+            align-items: center;
+            background: #181b24;
+            border: 1px solid #282d3d;
+            border-radius: 12px;
+            padding: 12px 14px;
+            margin-bottom: 10px;
+            transition: border-color 0.2s;
         }
+
+        .coin-row:hover {
+            border-color: rgba(20, 241, 149, 0.4);
+        }
+
+        .coin-info {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .coin-pair {
+            font-size: 14px;
+            font-weight: 700;
+            color: #ffffff;
+        }
+
+        .coin-chain {
+            font-size: 10px;
+            color: #8a8d98;
+            background: #282d3d;
+            padding: 2px 6px;
+            border-radius: 4px;
+            width: fit-content;
+        }
+
+        .price-info {
+            text-align: right;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .price {
+            font-size: 15px;
+            font-weight: 800;
+            color: #ffffff;
+        }
+
+        .action-hold { color: #f59e0b; font-size: 11px; font-weight: 700; }
+        .action-buy { color: #14f195; font-size: 11px; font-weight: 700; }
+        .action-sell { color: #ef4444; font-size: 11px; font-weight: 700; }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+
+        .stat-box {
+            background: rgba(20, 241, 149, 0.05);
+            border: 1px solid rgba(20, 241, 149, 0.2);
+            border-radius: 12px;
+            padding: 12px;
+            text-align: center;
+        }
+
+        .stat-label {
+            font-size: 10px;
+            color: #8a8d98;
+            margin-bottom: 4px;
+            font-weight: 700;
+        }
+
+        .stat-value {
+            font-size: 16px;
+            font-weight: 900;
+            color: #14f195;
+        }
+
+        .desc-text {
+            font-size: 12px;
+            color: #8a8d98;
+            line-height: 1.5;
+            margin-bottom: 16px;
+        }
+
         .btn {
-            background: #6366f1;
-            color: white;
+            background: linear-gradient(135deg, #10b981 0%, #14f195 100%);
+            color: #000;
             border: none;
             width: 100%;
-            padding: 12px;
-            border-radius: 8px;
-            font-size: 16px;
-            font-weight: bold;
+            padding: 14px;
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: 800;
+            text-transform: uppercase;
             cursor: pointer;
+            box-shadow: 0 4px 15px rgba(20, 241, 149, 0.3);
+            transition: all 0.2s;
+        }
+
+        .btn:active {
+            transform: scale(0.96);
+            box-shadow: 0 2px 8px rgba(20, 241, 149, 0.2);
+        }
+
+        .btn-secondary {
+            background: #181b24;
+            color: #8a8d98;
+            border: 1px solid #282d3d;
+            box-shadow: none;
             margin-top: 10px;
         }
-        .btn:active { background: #4f46e5; }
+
+        .btn-secondary:active {
+            background: #282d3d;
+        }
     </style>
 </head>
 <body>
     <div class="header">
-        <h2>🛡 Zer0life Autopilot</h2>
-        <p>Статус: <span class="status-active">🟢 Активен (24/7)</span></p>
+        <div class="title-block">
+            <h2>🛡 Zer0life Autopilot</h2>
+            <div class="status-badge">
+                <div class="pulse-dot"></div>
+                СИСТЕМА АКТИВНА (24/7)
+            </div>
+        </div>
+        <div style="font-size: 24px;">🤖</div>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-box">
+            <div class="stat-label">PNL (24Ч)</div>
+            <div class="stat-value">+$124.50</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-label">СДЕЛОК</div>
+            <div class="stat-value" style="color: #fff;">14</div>
+        </div>
     </div>
 
     <div class="card">
-        <h3>📊 Мониторинг DEX</h3>
+        <h3>📊 DEX Мониторинг</h3>
+        
         <div class="coin-row">
-            <span>SOL / USDC</span>
-            <span><b>$145.50</b> (HOLD)</span>
+            <div class="coin-info">
+                <span class="coin-pair">SOL / USDC</span>
+                <span class="coin-chain">Solana</span>
+            </div>
+            <div class="price-info">
+                <span class="price" id="sol-price">$145.50</span>
+                <span class="action-hold">⏳ HOLD</span>
+            </div>
         </div>
+
         <div class="coin-row">
-            <span>AVAX / USDC</span>
-            <span><b>$25.80</b> (BUY_DIP)</span>
+            <div class="coin-info">
+                <span class="coin-pair">ZRL / SOL</span>
+                <span class="coin-chain">Raydium</span>
+            </div>
+            <div class="price-info">
+                <span class="price">$0.00000009</span>
+                <span class="action-buy">🟢 BUY_DIP</span>
+            </div>
+        </div>
+
+        <div class="coin-row">
+            <div class="coin-info">
+                <span class="coin-pair">AVAX / USDC</span>
+                <span class="coin-chain">Avalanche</span>
+            </div>
+            <div class="price-info">
+                <span class="price">$25.80</span>
+                <span class="action-sell">🔴 TAKE_PROFIT</span>
+            </div>
         </div>
     </div>
 
     <div class="card">
-        <h3>⚙️ Управление</h3>
-        <p>Автономный ИИ-агент сканирует ликвидность на просадках и защищает капитал.</p>
-        <button class="btn" onclick="Telegram.WebApp.close()">Закрыть панель</button>
+        <h3>⚙️ Управление ИИ</h3>
+        <p class="desc-text">Автономный кросс-чейн ИИ-агент сканирует пулы ликвидности, выкупает просадки и защищает капитал с использованием смарт-контрактов.</p>
+        <button class="btn" onclick="tg.HapticFeedback.impactOccurred('medium'); alert('Настройки стратегии открыты');">⚙️ Настройки стратегии</button>
+        <button class="btn btn-secondary" onclick="tg.HapticFeedback.impactOccurred('light'); tg.close();">Закрыть панель</button>
     </div>
 
     <script>
-        let tg = window.Telegram.WebApp;
+        const tg = window.Telegram.WebApp;
         tg.expand();
-    </script>
-</body>
-</html>
+        tg.ready();
+
+        // Имитация живого обновления цен
+        setInterval(() => {
+            const solPriceEl = document.getElementById('sol-price');
+            const currentPrice = parseFloat(solPriceEl.innerText
