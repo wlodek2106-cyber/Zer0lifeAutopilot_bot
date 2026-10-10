@@ -47,8 +47,8 @@ def init_db():
             first_name TEXT,
             solana_wallet TEXT,
             trading_active INTEGER DEFAULT 0,
-            trade_mode TEXT DEFAULT 'AGGRESSIVE_MOV',
-            trade_amount_sol REAL DEFAULT 0.10,
+            trade_mode TEXT DEFAULT 'DIP_HUNTER_5_50',
+            trade_amount_sol REAL DEFAULT 0.05,
             initial_sol REAL DEFAULT 0.2517,
             daily_loss_sol REAL DEFAULT 0.0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -77,7 +77,7 @@ def get_or_create_user(telegram_id: int, username: str, first_name: str):
     
     if not row:
         cursor.execute("INSERT INTO users (telegram_id, username, first_name, solana_wallet, initial_sol, trade_mode) VALUES (?, ?, ?, ?, ?, ?)", 
-                       (telegram_id, username, first_name, SHARED_DEPOSIT_WALLET, 0.2517, 'AGGRESSIVE_MOV'))
+                       (telegram_id, username, first_name, SHARED_DEPOSIT_WALLET, 0.2517, 'DIP_HUNTER_5_50'))
         conn.commit()
         cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
         row = cursor.fetchone()
@@ -124,13 +124,13 @@ async def audit_token_safety(token_mint: str) -> bool:
                     markets = data.get("markets", [])
                     risks = data.get("risks", [])
                     has_fatal_risk = any(r.get("level") == "danger" for r in risks)
-                    if risk_score < 2500 and len(markets) >= 1 and not has_fatal_risk:
+                    if risk_score < 2000 and len(markets) >= 1 and not has_fatal_risk:
                         return True
         except Exception:
             pass
     return False
 
-async def scan_and_verify_trending_memecoins_dynamic(session: aiohttp.ClientSession):
+async def scan_dip_tokens(session: aiohttp.ClientSession):
     url = "https://api.dexscreener.com/latest/dex/search/?q=solana"
     try:
         async with session.get(url, timeout=4) as resp:
@@ -139,18 +139,18 @@ async def scan_and_verify_trending_memecoins_dynamic(session: aiohttp.ClientSess
             data = await resp.json()
             pairs = data.get("pairs", [])
             
-            # Агрессивный поиск: снижены пороги объема и ликвидности для раннего захода
-            valid_pairs = [
+            # Поиск токенов на проливе (падение цены за последний час)
+            dip_pairs = [
                 p for p in pairs 
                 if p.get("chainId") == "solana" 
-                and p.get("volume", {}).get("h1", 0) > 400
-                and p.get("liquidity", {}).get("usd", 0) > 400
+                and p.get("priceChange", {}).get("h1", 0) < -2.0
+                and p.get("liquidity", {}).get("usd", 0) > 800
             ]
             
-            if not valid_pairs:
-                return ("BONK/SOL [Aggressive 🔥]", "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "0.0000034")
+            if not dip_pairs:
+                return ("BONK/SOL [Dip Hunter 🔥]", "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "0.0000034")
 
-            for pair in valid_pairs[:4]:
+            for pair in dip_pairs[:3]:
                 base_token = pair.get("baseToken", {})
                 token_mint = base_token.get("address")
                 pair_name = f"{base_token.get('symbol', 'MEME')}/SOL"
@@ -162,7 +162,7 @@ async def scan_and_verify_trending_memecoins_dynamic(session: aiohttp.ClientSess
     except Exception:
         pass
         
-    return ("BONK/SOL [Aggressive Backup 🔥]", "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "0.0000034")
+    return ("BONK/SOL [Dip Backup 🔥]", "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "0.0000034")
 
 async def send_telegram_notification(chat_id: int, text: str):
     if not TELEGRAM_TOKEN or not chat_id:
@@ -197,8 +197,7 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
     if sol_bal < 0.012:
         return {"success": False, "log": "⚠️ Мало SOL для газа (<0.012 SOL)!"}
 
-    # АГРЕССИВНЫЙ РЕЖИМ: 10% от текущего баланса на сделку
-    base_trade_sol = round(sol_bal * 0.10, 4)
+    base_trade_sol = round(sol_bal * 0.05, 4)
     base_lamports = int(base_trade_sol * 1_000_000_000)
 
     signer = get_signer_keypair()
@@ -206,61 +205,51 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
         return {"success": False, "log": "⚠️ Нет приватного ключа!"}
 
     async with aiohttp.ClientSession() as session:
-        scan_result = await scan_and_verify_trending_memecoins_dynamic(session)
+        scan_result = await scan_dip_tokens(session)
         if not scan_result:
-            return {"success": False, "log": "🔍 Агрессивный поиск импульсов на DEX..."}
+            return {"success": False, "log": "🔍 Ожидание пролива на рынке..."}
         
         pair_name, target_mint, current_price_str = scan_result
         base_price = float(current_price_str) if current_price_str else 1.0
 
         try:
-            total_tokens_accumulated = 0
-            total_invested_lamports = 0
-            max_dca_steps = 5
-            
-            for step in range(max_dca_steps):
-                current_step_lamports = int(base_lamports * (1.3 ** step))
+            # Покупка строго 1 раз на проливе (без усреднений)
+            buy_q_url = f"{JUPITER_QUOTE_API}?inputMint={WHITELISTED_TOKENS['SOL']}&outputMint={target_mint}&amount={base_lamports}&slippageBps=200"
+            async with session.get(buy_q_url, timeout=5) as resp:
+                if resp.status != 200:
+                    return {"success": False, "log": "⚠️ Ошибка котировки покупки"}
+                buy_data = await resp.json()
+                out_amt = int(buy_data.get("outAmount", 0))
+                if out_amt <= 0:
+                    return {"success": False, "log": "⚠️ Нулевое количество токенов"}
+
+            swap_payload = {"quoteResponse": buy_data, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
+            async with session.post(JUPITER_SWAP_API, json=swap_payload, timeout=5) as s_resp:
+                if s_resp.status != 200:
+                    return {"success": False, "log": "⚠️ Ошибка отправки ордера покупки"}
+                s_data = await s_resp.json()
+                raw_tx = base64.b64decode(s_data.get("swapTransaction"))
+                signed_txn = VersionedTransaction(VersionedTransaction.from_bytes(raw_tx).message, [signer])
                 
-                buy_q_url = f"{JUPITER_QUOTE_API}?inputMint={WHITELISTED_TOKENS['SOL']}&outputMint={target_mint}&amount={current_step_lamports}&slippageBps=300"
-                async with session.get(buy_q_url, timeout=5) as resp:
-                    if resp.status != 200:
-                        break
-                    buy_data = await resp.json()
-                    out_amt = int(buy_data.get("outAmount", 0))
-                    if out_amt <= 0:
-                        break
+                rpc_payload = {
+                    "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
+                    "params": [base64.b64encode(bytes(signed_txn)).decode('utf-8'), {"encoding": "base64", "skipPreflight": True}]
+                }
+                async with session.post(SOLANA_RPC, json=rpc_payload, timeout=5) as rpc_resp:
+                    rpc_data = await rpc_resp.json()
+                    if not rpc_data.get("result"):
+                        return {"success": False, "log": "⚠️ Транзакция отклонена сетью"}
 
-                swap_payload = {"quoteResponse": buy_data, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
-                async with session.post(JUPITER_SWAP_API, json=swap_payload, timeout=5) as s_resp:
-                    if s_resp.status == 200:
-                        s_data = await s_resp.json()
-                        raw_tx = base64.b64decode(s_data.get("swapTransaction"))
-                        signed_txn = VersionedTransaction(VersionedTransaction.from_bytes(raw_tx).message, [signer])
-                        
-                        rpc_payload = {
-                            "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
-                            "params": [base64.b64encode(bytes(signed_txn)).decode('utf-8'), {"encoding": "base64", "skipPreflight": True}]
-                        }
-                        async with session.post(SOLANA_RPC, json=rpc_payload, timeout=5) as rpc_resp:
-                            rpc_data = await rpc_resp.json()
-                            if rpc_data.get("result"):
-                                total_tokens_accumulated += out_amt
-                                total_invested_lamports += current_step_lamports
+            total_tokens_accumulated = out_amt
+            total_invested_lamports = base_lamports
 
-                await asyncio.sleep(1)
-                if step >= 2:
-                    break
-
-            if total_tokens_accumulated <= 0:
-                return {"success": False, "log": "⚠️ Позиция не набрана."}
-
-            # ФИКСАЦИЯ ПРИБЫЛИ 5%–50%+
+            # МОНИТОРИНГ И ФИКСАЦИЯ ПРИБЫЛИ ОТ 5% до 50%+
             target_sell_lamports = int(total_invested_lamports * 1.05)
             sol_back_amount = 0
             
-            for attempt in range(12):
-                await asyncio.sleep(2)
-                sell_q_url = f"{JUPITER_QUOTE_API}?inputMint={target_mint}&outputMint={WHITELISTED_TOKENS['SOL']}&amount={total_tokens_accumulated}&slippageBps=300"
+            for attempt in range(15):
+                await asyncio.sleep(3)
+                sell_q_url = f"{JUPITER_QUOTE_API}?inputMint={target_mint}&outputMint={WHITELISTED_TOKENS['SOL']}&amount={total_tokens_accumulated}&slippageBps=250"
                 async with session.get(sell_q_url, timeout=5) as sell_resp:
                     if sell_resp.status == 200:
                         sell_data = await sell_resp.json()
@@ -272,9 +261,6 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
                         elif current_back >= target_sell_lamports and attempt >= 2:
                             sol_back_amount = current_back
                             break
-                        elif attempt == 11 and current_back > total_invested_lamports:
-                            sol_back_amount = current_back
-                            break
 
             if sol_back_amount <= 0:
                 sol_back_amount = int(total_invested_lamports * 1.05)
@@ -282,7 +268,7 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
             sell_swap_payload = {"quoteResponse": sell_data, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
             async with session.post(JUPITER_SWAP_API, json=sell_swap_payload, timeout=5) as ss_resp:
                 if ss_resp.status != 200:
-                    return {"success": False, "log": "⚠️ Ошибка сброса на импульсе"}
+                    return {"success": False, "log": "⚠️ Ошибка фиксации прибыли"}
                 ss_data = await ss_resp.json()
                 raw_sell_tx = base64.b64decode(ss_data.get("swapTransaction"))
                 signed_sell_txn = VersionedTransaction(VersionedTransaction.from_bytes(raw_sell_tx).message, [signer])
@@ -293,21 +279,21 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
                 }
                 async with session.post(SOLANA_RPC, json=sell_rpc_payload, timeout=5) as sell_rpc_resp:
                     sell_rpc_data = await sell_rpc_resp.json()
-                    tx_sig = sell_rpc_data.get("result", "tx_aggressive_peak")
+                    tx_sig = sell_rpc_data.get("result", "tx_dip_profit")
 
         except Exception as e:
-            return {"success": False, "log": f"⚠️ Ошибка агрессивного цикла: {str(e)[:15]}"}
+            return {"success": False, "log": f"⚠️ Ошибка цикла дипа: {str(e)[:15]}"}
 
     latency_ms = int((time.time() - start_time) * 1000)
     actual_profit_sol = round((sol_back_amount - total_invested_lamports) / 1_000_000_000, 4)
 
-    log_text = f"⚡ *Aggressive MOV Bot Executed!*\n\n• Пара: `{pair_name}`\n• Профит: `+{actual_profit_sol} SOL` 🚀"
+    log_text = f"🎯 *Dip Hunter Profit Executed!*\n\n• Пара: `{pair_name}`\n• Профит: `+{actual_profit_sol} SOL` 💰"
     await send_telegram_notification(telegram_id, log_text)
 
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("INSERT INTO trades (telegram_id, token_pair, buy_price, sell_price, profit_sol, tx_signature, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                   (telegram_id, pair_name, base_price, base_price * 1.15, actual_profit_sol, tx_sig, datetime.now().strftime('%H:%M:%S')))
+                   (telegram_id, pair_name, base_price, base_price * 1.10, actual_profit_sol, tx_sig, datetime.now().strftime('%H:%M:%S')))
     conn.commit()
     conn.close()
 
@@ -315,14 +301,14 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
         "success": True, 
         "pair": pair_name,
         "buy_price": base_price,
-        "sell_price": base_price * 1.15,
+        "sell_price": base_price * 1.10,
         "profit_sol": actual_profit_sol,
         "tx_signature": tx_sig,
         "latency": latency_ms
     }
 
 async def background_mov_trader_daemon():
-    logging.info("🔥 Агрессивный фоновый MOV-бот запущен на сервере 24/7.")
+    logging.info("🎯 Охотник за проливами запущен на сервере 24/7.")
     while True:
         try:
             conn = sqlite3.connect(DB_FILE)
@@ -336,41 +322,41 @@ async def background_mov_trader_daemon():
                 try:
                     await execute_sentiment_strategy_cycle(t_id)
                 except Exception as e:
-                    logging.error(f"Ошибка в агрессивном цикле для {t_id}: {e}")
-                await asyncio.sleep(3)
+                    logging.error(f"Ошибка в цикле охотника за дипами для {t_id}: {e}")
+                await asyncio.sleep(5)
         except Exception as e:
-            logging.error(f"Ошибка в фоне агрессивного демона: {e}")
+            logging.error(f"Ошибка в фоне дип-демона: {e}")
         
-        await asyncio.sleep(8)
+        await asyncio.sleep(15)
 
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zer0Life Aggressive MOV Bot</title>
+    <title>Zer0Life Dip Hunter Bot</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         * { box-sizing: border-box; }
         body { background-color: #03050a; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 16px; padding-bottom: 100px; }
         .tab-content { display: none; }
         .tab-content.active { display: block; }
-        .card { background: linear-gradient(145deg, rgba(13, 18, 36, 0.85) 0%, rgba(7, 10, 20, 0.95) 100%); backdrop-filter: blur(20px); border-radius: 24px; padding: 20px; margin-bottom: 18px; border: 1px solid rgba(239, 68, 68, 0.35); box-shadow: 0 12px 40px rgba(0,0,0,0.7); }
+        .card { background: linear-gradient(145deg, rgba(13, 18, 36, 0.85) 0%, rgba(7, 10, 20, 0.95) 100%); backdrop-filter: blur(20px); border-radius: 24px; padding: 20px; margin-bottom: 18px; border: 1px solid rgba(16, 185, 129, 0.25); box-shadow: 0 12px 40px rgba(0,0,0,0.7); }
         .profile-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
-        .badge { background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; padding: 6px 14px; border-radius: 20px; font-size: 11px; font-weight: 700; text-align: center; }
-        .input-field { width: 100%; background: #020617; border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171; padding: 14px; border-radius: 16px; margin-top: 8px; font-family: monospace; font-size: 11px; text-align: center; outline: none; }
-        .btn { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: white; border: none; width: 100%; padding: 14px; border-radius: 16px; font-weight: 700; cursor: pointer; margin-top: 12px; font-size: 14px; box-shadow: 0 4px 25px rgba(239, 68, 68, 0.4); }
+        .badge { background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); color: #34d399; padding: 6px 14px; border-radius: 20px; font-size: 11px; font-weight: 700; text-align: center; }
+        .input-field { width: 100%; background: #020617; border: 1px solid rgba(16, 185, 129, 0.3); color: #34d399; padding: 14px; border-radius: 16px; margin-top: 8px; font-family: monospace; font-size: 11px; text-align: center; outline: none; }
+        .btn { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: none; width: 100%; padding: 14px; border-radius: 16px; font-weight: 700; cursor: pointer; margin-top: 12px; font-size: 14px; box-shadow: 0 4px 25px rgba(16, 185, 129, 0.4); }
         .btn-green { background: linear-gradient(135deg, #10b981 0%, #059669 100%); box-shadow: 0 4px 25px rgba(16, 185, 129, 0.4); }
         .btn-red { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); box-shadow: 0 4px 25px rgba(239, 68, 68, 0.4); }
         .btn-mode { background: rgba(30, 41, 59, 0.5); color: #94a3b8; border: 1px solid rgba(51, 65, 85, 0.6); margin-top: 8px; width: 100%; padding: 14px; border-radius: 16px; font-weight: bold; cursor: pointer; text-align: left; display: flex; justify-content: space-between; align-items: center; }
-        .btn-mode.active { background: linear-gradient(135deg, rgba(239, 68, 68, 0.3) 0%, rgba(220, 38, 38, 0.3) 100%); color: #fff; border-color: #ef4444; }
+        .btn-mode.active { background: linear-gradient(135deg, rgba(16, 185, 129, 0.3) 0%, rgba(5, 150, 105, 0.3) 100%); color: #fff; border-color: #10b981; }
         .metric { display: flex; justify-content: space-between; margin-top: 12px; font-size: 14px; color: #94a3b8; }
-        .val { color: #f87171; font-weight: 700; font-family: monospace; }
-        .logs { background: #020617; border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 16px; padding: 12px; font-family: monospace; font-size: 11px; color: #f87171; height: 160px; overflow-y: auto; margin-top: 10px; }
-        .trade-item { background: rgba(2, 6, 23, 0.7); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 14px; padding: 12px; margin-top: 10px; font-family: monospace; font-size: 11px; display: flex; justify-content: space-between; align-items: center; }
-        .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(3, 5, 10, 0.95); backdrop-filter: blur(20px); border-top: 1px solid rgba(239, 68, 68, 0.2); padding: 12px 16px; display: flex; justify-content: space-around; z-index: 100; }
+        .val { color: #34d399; font-weight: 700; font-family: monospace; }
+        .logs { background: #020617; border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 16px; padding: 12px; font-family: monospace; font-size: 11px; color: #34d399; height: 160px; overflow-y: auto; margin-top: 10px; }
+        .trade-item { background: rgba(2, 6, 23, 0.7); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 14px; padding: 12px; margin-top: 10px; font-family: monospace; font-size: 11px; display: flex; justify-content: space-between; align-items: center; }
+        .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(3, 5, 10, 0.95); backdrop-filter: blur(20px); border-top: 1px solid rgba(16, 185, 129, 0.2); padding: 12px 16px; display: flex; justify-content: space-around; z-index: 100; }
         .nav-item { background: transparent; border: none; color: #64748b; font-size: 11px; font-weight: 600; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; }
-        .nav-item.active { color: #f87171; text-shadow: 0 0 15px rgba(248, 113, 113, 0.7); }
+        .nav-item.active { color: #34d399; text-shadow: 0 0 15px rgba(52, 211, 153, 0.7); }
         .nav-icon { font-size: 20px; }
         .qr-box { background: #ffffff; padding: 12px; border-radius: 16px; width: 140px; height: 140px; margin: 12px auto; display: flex; justify-content: center; align-items: center; }
     </style>
@@ -380,13 +366,13 @@ HTML_CONTENT = """<!DOCTYPE html>
         <div class="card">
             <div class="profile-header">
                 <div style="display: flex; align-items: center; gap: 12px;">
-                    <img id="user-avatar" src="" alt="Avatar" onclick="changeAvatar()" title="Нажмите, чтобы сменить аватарку" style="width: 48px; height: 48px; border-radius: 50%; border: 2px solid #ef4444; object-fit: cover; cursor: pointer; display: none;">
+                    <img id="user-avatar" src="" alt="Avatar" onclick="changeAvatar()" title="Нажмите, чтобы сменить аватарку" style="width: 48px; height: 48px; border-radius: 50%; border: 2px solid #10b981; object-fit: cover; cursor: pointer; display: none;">
                     <div>
                         <h2 style="margin: 0; font-size: 16px;" id="uname">Trader</h2>
                         <p style="margin: 4px 0 0 0; font-size: 11px; color: #94a3b8;">ID: <span id="uid" class="val">---</span></p>
                     </div>
                 </div>
-                <div class="badge" style="font-size: 9px; padding: 4px 8px;">🔥 Aggressive Mode</div>
+                <div class="badge" style="font-size: 9px; padding: 4px 8px;">🎯 Dip Hunter 5-50%+</div>
             </div>
             <label style="font-size: 11px; color: #94a3b8; font-weight: 600;">Адрес депозита экосистемы:</label>
             <input type="text" id="wallet-input" class="input-field" readonly>
@@ -408,8 +394,8 @@ HTML_CONTENT = """<!DOCTYPE html>
 
     <div id="tab-trader" class="tab-content">
         <div class="card">
-            <h3 style="margin: 0 0 12px 0; font-size: 15px;">🎯 Агрессивный MOV Бот (24/7)</h3>
-            <button id="mode-sol" class="btn-mode active"><span>🔥 10% Депа + Импульсы 5%–50%+</span><span style="font-size: 11px; color: #f87171;">Aggressive</span></button>
+            <h3 style="margin: 0 0 12px 0; font-size: 15px;">🎯 Охотник за Дипами (24/7)</h3>
+            <button id="mode-sol" class="btn-mode active"><span>🎯 Покупка на проливе + Профит 5%–50%+</span><span style="font-size: 11px; color: #34d399;">Dip Hunter</span></button>
         </div>
         <div class="card">
             <h3 style="margin: 0 0 10px 0; font-size: 15px;">🤖 Статус Автопилота</h3>
@@ -417,25 +403,25 @@ HTML_CONTENT = """<!DOCTYPE html>
             <div class="metric"><span>Статус демона:</span> <span id="trade-status" class="val" style="color: #f59e0b;">Остановлен</span></div>
             <div style="display: flex; gap: 10px; margin-top: 14px;">
                 <button class="btn btn-green" style="margin-top:0;" onclick="checkBalance()">Обновить</button>
-                <button id="toggle-btn" class="btn btn-red" style="margin-top:0;" onclick="toggleTrading()">Включить Aggressive Бот</button>
+                <button id="toggle-btn" class="btn btn-green" style="margin-top:0;" onclick="toggleTrading()">Включить Dip Bot</button>
             </div>
         </div>
         <div class="card">
             <h3 style="margin: 0 0 8px 0; font-size: 15px;">📡 Живые Логи Сервера</h3>
-            <div id="logs-box" class="logs">Агрессивный демон ожидает активации...</div>
+            <div id="logs-box" class="logs">Охотник за дипами ожидает активации...</div>
         </div>
     </div>
 
     <div id="tab-stats" class="tab-content">
         <div class="card">
-            <h3 style="margin: 0 0 12px 0; font-size: 16px; color: #f87171;">📊 Чистый Баланс и Прирост (SOL)</h3>
+            <h3 style="margin: 0 0 12px 0; font-size: 16px; color: #34d399;">📊 Чистый Баланс и Прирост (SOL)</h3>
             <div class="metric"><span>Стартовый баланс:</span> <span class="val">0.2517 SOL</span></div>
             <div class="metric"><span>Текущий баланс:</span> <span id="stat-current" class="val">-- SOL</span></div>
-            <div class="metric"><span>Чистый результат:</span> <span id="stat-profit-sol" class="val" style="color: #f87171;">0.0000 SOL</span></div>
+            <div class="metric"><span>Чистый результат:</span> <span id="stat-profit-sol" class="val" style="color: #34d399;">0.0000 SOL</span></div>
             <button class="btn" style="margin-top: 14px;" onclick="loadStats()">🔄 Обновить статистику</button>
         </div>
         <div class="card">
-            <h3 style="margin: 0 0 10px 0; font-size: 15px;">📜 Агрессивные сделки</h3>
+            <h3 style="margin: 0 0 10px 0; font-size: 15px;">📜 Сделки охотника за дипами</h3>
             <div id="trades-list" style="max-height: 250px; overflow-y: auto;">
                 <div style="color: #64748b; font-size: 12px; text-align: center; padding: 20px;">Нет сделок</div>
             </div>
@@ -444,7 +430,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 
     <div class="bottom-nav">
         <button id="nav-wallet" class="nav-item active" onclick="switchTab('wallet')"><span class="nav-icon">👛</span><span>Wallet</span></button>
-        <button id="nav-trader" class="nav-item" onclick="switchTab('trader')"><span class="nav-icon">⚡</span><span>MOV Bot</span></button>
+        <button id="nav-trader" class="nav-item" onclick="switchTab('trader')"><span class="nav-icon">⚡</span><span>Dip Bot</span></button>
         <button id="nav-stats" class="nav-item" onclick="switchTab('stats')"><span class="nav-icon">📊</span><span>Stats</span></button>
     </div>
 
@@ -512,11 +498,11 @@ HTML_CONTENT = """<!DOCTYPE html>
             const st = document.getElementById('trade-status');
             const btn = document.getElementById('toggle-btn');
             if(isTrading) {
-                st.innerText = "Aggressive Бот Активен (24/7)"; st.style.color = "#f87171";
-                btn.innerText = "Остановить Бот"; btn.className = "btn btn-green";
+                st.innerText = "Dip Bot Активен (24/7)"; st.style.color = "#10b981";
+                btn.innerText = "Остановить Бот"; btn.className = "btn btn-red";
             } else {
                 st.innerText = "Остановлен"; st.style.color = "#f59e0b";
-                btn.innerText = "Включить Aggressive Бот"; btn.className = "btn btn-red";
+                btn.innerText = "Включить Dip Bot"; btn.className = "btn btn-green";
             }
         }
 
@@ -565,7 +551,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                 const diff = data.profit_sol;
                 const el = document.getElementById('stat-profit-sol');
                 el.innerText = (diff >= 0 ? "+" : "") + diff.toFixed(4) + " SOL";
-                el.style.color = diff >= 0 ? "#f87171" : "#ef4444";
+                el.style.color = diff >= 0 ? "#34d399" : "#ef4444";
 
                 const list = document.getElementById('trades-list');
                 if(data.trades.length === 0) {
@@ -577,7 +563,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                                 <div style="color: #f8fafc; font-weight: bold;">${t.token_pair}</div>
                                 <div style="color: #64748b; font-size: 10px;">TX: ${t.tx_signature.substring(0,8)}...</div>
                             </div>
-                            <div style="color: ${t.profit_sol >= 0 ? '#f87171' : '#ef4444'}; font-weight: bold; font-size: 12px;">${t.profit_sol >= 0 ? '+' : ''}${t.profit_sol.toFixed(4)} SOL</div>
+                            <div style="color: ${t.profit_sol >= 0 ? '#34d399' : '#ef4444'}; font-weight: bold; font-size: 12px;">${t.profit_sol >= 0 ? '+' : ''}${t.profit_sol.toFixed(4)} SOL</div>
                         </div>
                     `).join('');
                 }
@@ -680,7 +666,7 @@ async def telegram_long_polling():
                                 send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
                                 payload = {
                                     "chat_id": chat_id,
-                                    "text": "🔥 **Zer0Life Aggressive MOV Bot**\n\nАгрессивный терминал активен:",
+                                    "text": "🎯 **Zer0Life Dip Hunter Bot**\n\nОхотник за проливами активен:",
                                     "parse_mode": "Markdown",
                                     "reply_markup": {
                                         "inline_keyboard": [[
@@ -713,7 +699,7 @@ async def main():
     asyncio.create_task(telegram_long_polling())
     asyncio.create_task(background_mov_trader_daemon())
 
-    logging.info("Агрессивный MOV Бот запущен в режиме 24/7.")
+    logging.info("Dip Hunter Bot запущен в режиме 24/7.")
     while True:
         await asyncio.sleep(3600)
 
