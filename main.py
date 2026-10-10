@@ -676,8 +676,21 @@ async def telegram_long_polling():
                                     "reply_markup": {"inline_keyboard": [[{"text": "🚀 Открыть Web4 Терминал", "web_app": {"url": RENDER_URL}}]]}
                                 }
                                 async with session.post(send_url, json=payload) as send_resp:
-                                    pass
-            except Exception:
+                                    res_json = await send_resp.json()
+                                    if not res_json.get("ok"):
+                                        # Если file_id не подошел, шлем fallback-сообщение с текстом и кнопкой, чтобы бот не молчал
+                                        err_desc = res_json.get("description", "Unknown error")
+                                        fallback_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+                                        fallback_payload = {
+                                            "chat_id": chat_id,
+                                            "text": "🌐 *Добро пожаловать в Zer0Life Web4 Ai Trader*\n\nИнтеллектуальная экосистема автономного прироста SOL и нейросканирования рынка активирована.\n\n👇 Нажмите кнопку ниже для запуска терминала:",
+                                            "parse_mode": "Markdown",
+                                            "reply_markup": {"inline_keyboard": [[{"text": "🚀 Открыть Web4 Терминал", "web_app": {"url": RENDER_URL}}]]}
+                                        }
+                                        async with session.post(fallback_url, json=fallback_payload) as f_resp:
+                                            pass
+            except Exception as e:
+                logging.error(f"Polling error: {e}")
                 await asyncio.sleep(3)
             await asyncio.sleep(1)
 
@@ -702,7 +715,7 @@ async def main():
     asyncio.create_task(telegram_long_polling())
     asyncio.create_task(background_mov_trader_daemon())
     add_log("Web4 Ai Trader запущен.")
-    while True:
+    while` True:
         await asyncio.sleep(3600)
 
 if __name__ == "__main__":
