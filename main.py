@@ -620,7 +620,7 @@ async def main():
     asyncio.create_task(telegram_long_polling())
     asyncio.create_task(background_mov_trader_daemon())
 
-    logging.info("Боевой ИИ Трейдер запущен на платном сервере.")
+    logging.info("ИИ Трейдер запущен и работает.")
     while True:
         await asyncio.sleep(3600)
 
