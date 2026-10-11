@@ -307,6 +307,48 @@ async def background_mov_trader_daemon():
             pass
         await asyncio.sleep(15)
 
+# ==========================================
+# ДОБАВЛЕННЫЙ БЛОК: DEX Arbitrage Scanner
+# ==========================================
+async def fetch_arb_quote(session, input_mint, output_mint, amount):
+    slippage_bps = 50
+    url = f"{JUPITER_QUOTE_API}?inputMint={input_mint}&outputMint={output_mint}&amount={amount}&slippageBps={slippage_bps}"
+    async with session.get(url) as response:
+        if response.status == 200:
+            return await response.json()
+        return None
+
+async def arbitrage_worker():
+    add_log("🤖 DEX Scanner (Arbitrage) инициализирован.")
+    amount_in_lamports = 1000000000 # Тестируем на объеме 1 SOL
+    
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                sol_mint = WHITELISTED_TOKENS["SOL"]
+                usdc_mint = WHITELISTED_TOKENS["USDC"]
+                
+                # Ищем путь SOL -> USDC
+                quote_forward = await fetch_arb_quote(session, sol_mint, usdc_mint, amount_in_lamports)
+                if quote_forward:
+                    usdc_amount = quote_forward['outAmount']
+                    
+                    # Ищем путь обратно USDC -> SOL
+                    quote_backward = await fetch_arb_quote(session, usdc_mint, sol_mint, usdc_amount)
+                    if quote_backward:
+                        final_sol = int(quote_backward['outAmount'])
+                        profit = final_sol - amount_in_lamports
+                        
+                        if profit > 0:
+                            profit_sol = profit / 10**9
+                            add_log(f"✅ АРБИТРАЖ! Профит: +{profit_sol:.5f} SOL")
+            except Exception:
+                pass
+            
+            await asyncio.sleep(2.5) # Пауза, чтобы не получить бан от Jupiter API
+# ==========================================
+
+
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -710,8 +752,11 @@ async def main():
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
     
+    # ЗАПУСКАЕМ ФОНОВЫЕ ЗАДАЧИ
     asyncio.create_task(telegram_long_polling())
     asyncio.create_task(background_mov_trader_daemon())
+    asyncio.create_task(arbitrage_worker()) # <--- ДОБАВЛЕН ЗАПУСК DEX-СКАНЕРА
+    
     add_log("Web4 Ai Trader запущен.")
     while True:
         await asyncio.sleep(3600)
