@@ -199,6 +199,7 @@ async def aggressive_arbitrage_worker():
                             profit_sol = net_profit / 10**9
                             profit_pct = (profit_sol / 0.5) * 100
 
+                            # Снижен порог до 0.1% для частого совершения сделок
                             if 0.1 <= profit_pct <= 15.0:
                                 add_log(f"🔥 СПРЕД 0.1%+ ({pair_sym}/SOL): +{profit_sol:.4f} SOL ({profit_pct:.2f}%)")
                                 
@@ -561,7 +562,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                 const res = await fetch('/api/verify-tx', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({telegram_id: user.id, tx_signature: txHash})});
                 const data = await res.json();
                 if(data.success) { 
-                    alert("✅ Успешно верифицировано!\nНайдено пополнение на: +" + data.amount + " SOL"); 
+                    alert("✅ Успешно верифицировано!\\nНайдено пополнение на: +" + data.amount + " SOL"); 
                     document.getElementById('tx-hash-input').value = ""; 
                     checkBalance(); 
                 } else {
@@ -582,7 +583,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             try {
                 const res = await fetch('/api/logs');
                 const data = await res.json();
-                if(data.success) { document.getElementById('logs-box').innerText = data.logs.join('\n'); }
+                if(data.success) { document.getElementById('logs-box').innerText = data.logs.join('\\n'); }
             } catch(e) {}
         };
         
@@ -802,9 +803,9 @@ async def main():
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
     
-    # Исправлен запуск фоновых задач на asyncio.create_task
-    asyncio.create_task(telegram_long_polling())
-    asyncio.create_task(aggressive_arbitrage_worker())
+    asyncio.create_tag = asyncio.create_task
+    asyncio.create_tag(telegram_long_polling())
+    asyncio.create_tag(aggressive_arbitrage_worker())
     
     add_log("⚜️ Aggressive Terminal запущен.")
     while True:
