@@ -22,7 +22,7 @@ RUGCHECK_API = "https://api.rugcheck.xyz/v1/token"
 
 SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
 MIN_SOL_RESERVE = 0.3
-MAX_TRADE_SOL_LIMIT = 0.1
+MAX_TRADE_SOL_LIMIT = 0.5 # Лимит повышен
 
 RECENT_LOGS = ["⚜️ Zer0Life Premium Terminal запущен."]
 
@@ -327,14 +327,14 @@ async def fetch_arb_quote(session, input_mint, output_mint, amount):
         return None
 
 async def arbitrage_worker():
-    add_log("🤖 Multi-DEX AI Agent переведен в БОЕВОЙ РЕЖИМ.")
-    amount_in_lamports = 100000000 # 0.1 SOL
+    add_log("🤖 Multi-DEX AI Agent: Объем повышен до 0.5 SOL. БОЕВОЙ РЕЖИМ.")
+    amount_in_lamports = 500000000 # Повышенный объем: 0.5 SOL
     
     signer = get_signer_keypair()
     if not signer:
         add_log("⚠️ Ошибка: Нет приватного ключа. Режим симуляции.")
     else:
-        add_log("🔑 Ключи подписи подключены. Сканирование DEX...")
+        add_log("🔑 Ключи подписи подключены. Сканирование агрессивных связок...")
 
     target_stables = [WHITELISTED_TOKENS["USDC"], WHITELISTED_TOKENS["USDT"]]
     scan_counter = 0
@@ -353,7 +353,7 @@ async def arbitrage_worker():
                         if quote_backward:
                             final_sol = int(quote_backward['outAmount'])
                             net_profit_lamports = final_sol - amount_in_lamports
-                            ESTIMATED_FEE_LAMPORTS = 100000 
+                            ESTIMATED_FEE_LAMPORTS = 80000 # Сниженный порог комиссии (0.00008 SOL) для более частого входа
                             real_profit_lamports = net_profit_lamports - ESTIMATED_FEE_LAMPORTS
                             
                             if real_profit_lamports > 0:
@@ -441,7 +441,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             overflow: hidden; 
         }
         
-        /* ПРИВЕТСТВЕННЫЙ ЭКРАН */
         #splash-screen {
             position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
             background: linear-gradient(180deg, #0a0a0c 0%, #050507 100%);
@@ -458,7 +457,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             text-transform: uppercase; letter-spacing: 1px;
         }
 
-        /* LUXURY CARDS & GLASSMORPHISM */
         .card { 
             background: linear-gradient(145deg, rgba(22, 22, 26, 0.95), rgba(12, 12, 14, 0.95)); 
             backdrop-filter: blur(20px); 
@@ -469,7 +467,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             box-shadow: 0 12px 40px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.05); 
         }
         
-        /* ТЕКСТ И ЗАГОЛОВКИ */
         .title-gold {
             margin-top: 0; 
             font-size: 20px;
@@ -483,7 +480,6 @@ HTML_CONTENT = """<!DOCTYPE html>
         .subtitle { color: #8a8d93; font-size: 13px; line-height: 1.4; font-weight: 400; }
         .label-gold { font-size: 10px; color: #d4af37; font-weight: 700; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; }
 
-        /* ЭЛЕМЕНТЫ ВВОДА */
         .input-group-web4 { 
             width: 100%; background: rgba(0, 0, 0, 0.4); 
             border: 1px solid rgba(212, 175, 55, 0.3); 
@@ -497,7 +493,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             font-size: 11px; width: 100%; outline: none; 
         }
 
-        /* КНОПКИ */
         .btn-gold { 
             background: linear-gradient(135deg, #d4af37 0%, #aa771c 100%); 
             color: #050505; border: none; width: 100%; padding: 16px; 
@@ -511,7 +506,6 @@ HTML_CONTENT = """<!DOCTYPE html>
         .btn-red { background: linear-gradient(135deg, #3f0d12 0%, #a71d31 100%); color: white; border: 1px solid rgba(255, 50, 50, 0.3); box-shadow: 0 4px 20px rgba(167, 29, 49, 0.4); border-radius: 18px; padding: 14px; font-weight: 700; border: none; width: 100%; cursor: pointer;}
         .btn-mode { background: rgba(20, 20, 24, 0.6); color: #d4af37; border: 1px solid rgba(212, 175, 55, 0.2); margin-top: 8px; width: 100%; padding: 14px; border-radius: 18px; font-weight: bold; cursor: pointer; text-align: left; display: flex; justify-content: space-between; align-items: center; }
         
-        /* QR КОД */
         .qr-wrapper {
             background: linear-gradient(145deg, #ffdf73, #aa771c);
             padding: 2px; border-radius: 22px; width: 164px; height: 164px; 
@@ -523,7 +517,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             border-radius: 20px; display: flex; justify-content: center; align-items: center; 
         }
 
-        /* МЕТРИКИ И ЛОГИ */
         .metric { display: flex; justify-content: space-between; margin-top: 14px; font-size: 14px; color: #8a8d93; }
         .val { color: #ffdf73; font-weight: 700; font-family: "SF Mono", monospace; }
         
@@ -540,7 +533,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             display: flex; justify-content: space-between; align-items: center; 
         }
 
-        /* НАВИГАЦИЯ */
         .bottom-nav { 
             position: fixed; bottom: 0; left: 0; right: 0; 
             background: rgba(10, 10, 12, 0.95); backdrop-filter: blur(30px); 
@@ -570,7 +562,6 @@ HTML_CONTENT = """<!DOCTYPE html>
 
     <div id="app-container" style="display: none; width: 100vw; height: 100vh;">
         
-        <!-- Вкладка Кошелька (Luxury Design) -->
         <div id="tab-wallet" class="tab-content">
             <div class="card">
                 <h2 class="title-gold">⚜️ Premium Wallet</h2>
@@ -603,7 +594,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- Вкладка Трейдера -->
         <div id="tab-trader" class="tab-content active">
             <div class="card">
                 <h3 class="title-gold" style="font-size: 16px; margin-bottom: 12px;">🛡️ AI Trader (24/7)</h3>
@@ -627,7 +617,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- Вкладка Статистики -->
         <div id="tab-stats" class="tab-content">
             <div class="card">
                 <h3 class="title-gold" style="font-size: 16px; margin-bottom: 12px;">📊 Статистика Terminal</h3>
@@ -672,7 +661,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             document.getElementById('splash-screen').style.display = 'none';
             document.getElementById('app-container').style.display = 'block';
             document.getElementById('bottom-nav-bar').style.display = 'flex';
-            switchTab('wallet'); // Запускаем сразу на кошелек, чтобы заценить дизайн
+            switchTab('trader');
         }
 
         let isTrading = false;
@@ -734,7 +723,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             const res = await fetch('/api/verify-tx', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({telegram_id: user.id, tx_signature: txHash})});
             const data = await res.json();
             if(data.success) { 
-                alert("✅ Успешно верифицировано!"); 
+                alert("✅ Успешно верифицировано!\nНайдено пополнение на: +" + data.amount + " SOL"); 
                 document.getElementById('tx-hash-input').value = ""; 
                 checkBalance(); 
             } else {
@@ -815,9 +804,6 @@ async def api_get_profile(request):
     user = get_or_create_user(int(data.get("telegram_id")), data.get("username", ""), data.get("first_name", ""))
     return web.json_response({"success": True, "profile": user})
 
-# ==========================================
-# ОБНОВЛЕННАЯ ФУНКЦИЯ ПРОВЕРКИ ТРАНЗАКЦИЙ (РЕАЛЬНАЯ СЕТЬ)
-# ==========================================
 async def api_verify_tx(request):
     data = await request.json()
     tx_sig = data.get("tx_signature", "").strip()
@@ -841,15 +827,29 @@ async def api_verify_tx(request):
                     if not tx_info:
                         return web.json_response({"success": False, "error": "Транзакция не найдена в сети Solana"})
                         
-                    if tx_info.get("meta", {}).get("err"):
+                    meta = tx_info.get("meta", {})
+                    if meta.get("err"):
                         return web.json_response({"success": False, "error": "Транзакция завершилась ошибкой (Failed)"})
 
-                    # Проверяем, участвует ли кошелек бота в этой транзакции
                     account_keys = [acc["pubkey"] for acc in tx_info.get("transaction", {}).get("message", {}).get("accountKeys", [])]
+                    
                     if SHARED_DEPOSIT_WALLET not in account_keys:
                         return web.json_response({"success": False, "error": "Эта транзакция отправлена на чужой кошелек"})
-
-                    return web.json_response({"success": True})
+                    
+                    wallet_index = account_keys.index(SHARED_DEPOSIT_WALLET)
+                    pre_balances = meta.get("preBalances", [])
+                    post_balances = meta.get("postBalances", [])
+                    
+                    if wallet_index < len(pre_balances) and wallet_index < len(post_balances):
+                        received_lamports = post_balances[wallet_index] - pre_balances[wallet_index]
+                        
+                        if received_lamports > 0:
+                            amount_sol = received_lamports / 1_000_000_000
+                            return web.json_response({"success": True, "amount": round(amount_sol, 4)})
+                        else:
+                            return web.json_response({"success": False, "error": "По этому хэшу нет зачислений SOL на кошелек бота"})
+                            
+                    return web.json_response({"success": False, "error": "Не удалось вычислить сумму перевода"})
                 else:
                     return web.json_response({"success": False, "error": "Ошибка связи с RPC сервером"})
         except Exception:
