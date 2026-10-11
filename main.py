@@ -121,9 +121,6 @@ async def fetch_wallet_balance(wallet: str) -> float:
             pass
     return 0.2517
 
-# ==========================================
-# AI AGENT: АУДИТ РИСКОВ, РЕГПУЛА И СКАМА
-# ==========================================
 async def audit_token_safety(session: aiohttp.ClientSession, token_mint: str) -> bool:
     if token_mint in WHITELISTED_TOKENS.values():
         return True
@@ -136,13 +133,12 @@ async def audit_token_safety(session: aiohttp.ClientSession, token_mint: str) ->
                 risks = data.get("risks", [])
                 
                 has_fatal_risk = any(r.get("level") == "danger" for r in risks)
-                mint_abandoned = data.get("token", {}).get("mintAuthority") is None
                 freeze_disabled = data.get("token", {}).get("freezeAuthority") is None
                 
                 if risk_score < 500 and len(markets) >= 2 and not has_fatal_risk and freeze_disabled:
                     return True
                 else:
-                    add_log(f"🛡️ AI Agent: Токен {token_mint[:8]}... заблокирован (Score: {risk_score}, Danger: {has_fatal_risk})")
+                    add_log(f"🛡️ AI Agent: Токен {token_mint[:8]}... заблокирован (Score: {risk_score})")
     except Exception:
         pass
     return False
@@ -182,8 +178,7 @@ async def send_telegram_notification(chat_id: int, text: str):
     payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.post(url, json=payload, timeout=3) as resp:
-                pass
+            await session.post(url, json=payload, timeout=3)
         except Exception:
             pass
 
@@ -315,9 +310,6 @@ async def background_mov_trader_daemon():
             pass
         await asyncio.sleep(15)
 
-# ==========================================
-# MULTI-DEX ARBITRAGE & RISK AUDIT WORKER
-# ==========================================
 async def fetch_arb_quote(session, input_mint, output_mint, amount):
     slippage_bps = 50
     url = f"{JUPITER_QUOTE_API}?inputMint={input_mint}&outputMint={output_mint}&amount={amount}&slippageBps={slippage_bps}"
@@ -418,9 +410,6 @@ async def arbitrage_worker():
             
             await asyncio.sleep(2)
 
-# ==========================================
-# LUXURY HTML & CSS (С ЗАЩИТОЙ ОТ КЭША)
-# ==========================================
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -447,11 +436,9 @@ HTML_CONTENT = """<!DOCTYPE html>
         #splash-screen {
             position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
             background-color: #050507;
-            background-image: url('https://images.unsplash.com/photo-1639762681485-074b7f938ba0?q=80&w=800&auto=format&fit=crop');
-            background-size: cover;
-            background-position: center;
             display: flex; flex-direction: column; justify-content: flex-end;
             padding: 24px; padding-bottom: 50px; z-index: 9999;
+            background-size: cover; background-position: center;
         }
 
         .run-btn {
@@ -556,7 +543,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 </head>
 <body>
     <div id="splash-screen">
-        <button class="run-btn" type="button" onclick="enterApp()">LAUNCH TERMINAL</button>
+        <button class="run-btn" onclick="enterApp()">LAUNCH TERMINAL</button>
     </div>
 
     <div id="app-container" style="display: none; width: 100vw; height: 100vh;">
@@ -637,20 +624,25 @@ HTML_CONTENT = """<!DOCTYPE html>
 
     <script>
         let tg;
-        try {
-            tg = window.Telegram.WebApp;
-            if (tg) tg.expand();
-        } catch(e) { console.log(e); }
-
+        try { tg = window.Telegram.WebApp; if (tg) tg.expand(); } catch(e) {}
         const user = (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) ? tg.initDataUnsafe.user : { id: 42882165, username: "CryptoWlodek", first_name: "CryptoWlodek" };
 
-        function enterApp() {
+        async function loadDashboardImage() {
             try {
-                document.getElementById('splash-screen').style.display = 'none';
-                document.getElementById('app-container').style.display = 'block';
-                document.getElementById('bottom-nav-bar').style.display = 'flex';
-                switchTab('trader');
-            } catch(e) { alert("Ошибка запуска: " + e.message); }
+                const res = await fetch('/api/get-image-url');
+                const data = await res.json();
+                if(data.success && data.url) {
+                    document.getElementById('splash-screen').style.backgroundImage = `url('${data.url}')`;
+                }
+            } catch(e) {}
+        }
+        loadDashboardImage();
+
+        function enterApp() {
+            document.getElementById('splash-screen').style.display = 'none';
+            document.getElementById('app-container').style.display = 'block';
+            document.getElementById('bottom-nav-bar').style.display = 'flex';
+            switchTab('trader');
         }
 
         let isTrading = false;
@@ -790,6 +782,21 @@ async def health_handler(request):
     return web.Response(text="OK", status=200)
 
 async def api_get_image_url(request):
+    if not TELEGRAM_TOKEN:
+        return web.json_response({"success": False})
+    
+    file_id = "BQACAgIAAxkBAAIs5WrKHdZEC_o9AAFA8I4DJ9bwtxNgUAACYqoAAjKZUUqVAAGch_gphqE9BA"
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}", timeout=5) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    file_path = data.get("result", {}).get("file_path")
+                    if file_path:
+                        download_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
+                        return web.json_response({"success": True, "url": download_url})
+        except Exception:
+            pass
     return web.json_response({"success": False})
 
 async def api_get_profile(request):
