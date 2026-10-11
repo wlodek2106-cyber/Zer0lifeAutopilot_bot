@@ -24,7 +24,7 @@ SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
 MIN_SOL_RESERVE = 0.3
 MAX_TRADE_SOL_LIMIT = 0.1
 
-RECENT_LOGS = ["🌐 Web4 Ai Trader запущен."]
+RECENT_LOGS = ["⚜️ Zer0Life Premium Terminal запущен."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -135,7 +135,6 @@ async def audit_token_safety(session: aiohttp.ClientSession, token_mint: str) ->
                 markets = data.get("markets", [])
                 risks = data.get("risks", [])
                 
-                # КРИТЕРИИ БЕЗОПАСНОСТИ AI АГЕНТА:
                 has_fatal_risk = any(r.get("level") == "danger" for r in risks)
                 mint_abandoned = data.get("token", {}).get("mintAuthority") is None
                 freeze_disabled = data.get("token", {}).get("freezeAuthority") is None
@@ -196,7 +195,7 @@ async def execute_strict_trade(telegram_id: int, pair_name: str, target_mint: st
     if base_trade_sol <= 0.001:
         return
     base_lamports = int(base_trade_sol * 1_000_000_000)
-    add_log(f"⚡ [Ai Trader] Вход по {pair_name} на {base_trade_sol} SOL")
+    add_log(f"⚡ Вход по {pair_name} на {base_trade_sol} SOL")
 
     try:
         buy_q_url = f"{JUPITER_QUOTE_API}?inputMint={WHITELISTED_TOKENS['SOL']}&outputMint={target_mint}&amount={base_lamports}&slippageBps=50"
@@ -261,7 +260,7 @@ async def execute_strict_trade(telegram_id: int, pair_name: str, target_mint: st
 
         actual_profit_sol = round((sol_back_amount - total_invested_lamports) / 1_000_000_000, 4)
         add_log(f"💎 Profit: +{actual_profit_sol} SOL")
-        await send_telegram_notification(telegram_id, f"🌐 *Web4 Profit!*\n• Asset: `{pair_name}`\n• +`{actual_profit_sol} SOL`")
+        await send_telegram_notification(telegram_id, f"⚜️ *Premium Profit!*\n• Asset: `{pair_name}`\n• +`{actual_profit_sol} SOL`")
 
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
@@ -298,7 +297,6 @@ async def execute_sentiment_strategy_cycle(telegram_id: int):
             await execute_strict_trade(telegram_id, pair_name, target_mint, sol_bal, signer, session)
 
 async def background_mov_trader_daemon():
-    add_log("🌐 Web4 Ai Trader активен.")
     while True:
         try:
             conn = sqlite3.connect(DB_FILE)
@@ -334,13 +332,12 @@ async def arbitrage_worker():
     
     signer = get_signer_keypair()
     if not signer:
-        add_log("⚠️ Ошибка: Нет приватного ключа. Арбитраж работает в режиме симуляции.")
+        add_log("⚠️ Ошибка: Нет приватного ключа. Режим симуляции.")
     else:
-        add_log("🔑 Ключи подписи подключены. Сканирование всех DEX бирж...")
+        add_log("🔑 Ключи подписи подключены. Сканирование DEX...")
 
     target_stables = [WHITELISTED_TOKENS["USDC"], WHITELISTED_TOKENS["USDT"]]
-    
-    scan_counter = 0 # СЧЕТЧИК ПУЛЬСА
+    scan_counter = 0
 
     async with aiohttp.ClientSession() as session:
         while True:
@@ -348,29 +345,23 @@ async def arbitrage_worker():
                 sol_mint = WHITELISTED_TOKENS["SOL"]
                 
                 for stable_mint in target_stables:
-                    # 1. Сканируем лучший курс по всем DEX (SOL -> Stable)
                     quote_forward = await fetch_arb_quote(session, sol_mint, stable_mint, amount_in_lamports)
                     if quote_forward:
                         stable_amount = quote_forward['outAmount']
-                        
-                        # 2. Сканируем лучший обратный курс (Stable -> SOL)
                         quote_backward = await fetch_arb_quote(session, stable_mint, sol_mint, stable_amount)
+                        
                         if quote_backward:
                             final_sol = int(quote_backward['outAmount'])
                             net_profit_lamports = final_sol - amount_in_lamports
-                            
-                            # Учитываем комиссии сети (примерно 0.0001 SOL на 2 транзакции)
                             ESTIMATED_FEE_LAMPORTS = 100000 
                             real_profit_lamports = net_profit_lamports - ESTIMATED_FEE_LAMPORTS
                             
                             if real_profit_lamports > 0:
                                 profit_sol = real_profit_lamports / 10**9
-                                add_log(f"✅ АРБИТРАЖ НАЙДЕН! Профит с учетом комиссий: +{profit_sol:.5f} SOL")
+                                add_log(f"✅ АРБИТРАЖ! Профит: +{profit_sol:.5f} SOL")
                                 
                                 if signer:
-                                    add_log("⚡ Запуск исполнения транзакций через DEX...")
-                                    
-                                    # Исполнение первого плеча (SOL -> Stable)
+                                    add_log("⚡ Исполнение транзакций...")
                                     swap_payload_1 = {"quoteResponse": quote_forward, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
                                     async with session.post(JUPITER_SWAP_API, json=swap_payload_1, timeout=5) as s_resp1:
                                         if s_resp1.status == 200:
@@ -383,11 +374,10 @@ async def arbitrage_worker():
                                                 "params": [base64.b64encode(bytes(signed_txn1)).decode('utf-8'), {"encoding": "base64", "skipPreflight": True}]
                                             }
                                             await session.post(SOLANA_RPC, json=rpc_payload1)
-                                            add_log("🔄 Этап 1 завершен. Фиксация в стейблкоин.")
+                                            add_log("🔄 Этап 1: Фиксация в стейблкоин.")
                                             
                                             await asyncio.sleep(2)
                                             
-                                            # Исполнение второго плеча (Stable -> SOL)
                                             swap_payload_2 = {"quoteResponse": quote_backward, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
                                             async with session.post(JUPITER_SWAP_API, json=swap_payload_2, timeout=5) as s_resp2:
                                                 if s_resp2.status == 200:
@@ -402,9 +392,8 @@ async def arbitrage_worker():
                                                     async with session.post(SOLANA_RPC, json=rpc_payload2) as rpc_resp2:
                                                         rpc_data = await rpc_resp2.json()
                                                         tx_sig = rpc_data.get("result", "unknown")
-                                                        add_log(f"💎 Прибыль зафиксирована в SOL! TX: {str(tx_sig)[:8]}...")
+                                                        add_log(f"💎 Прибыль в SOL! TX: {str(tx_sig)[:8]}...")
                                                         
-                                                        # === ОТПРАВКА PUSH-УВЕДОМЛЕНИЙ В TELEGRAM ===
                                                         conn = sqlite3.connect(DB_FILE)
                                                         cursor = conn.cursor()
                                                         cursor.execute("SELECT telegram_id FROM users WHERE trading_active = 1")
@@ -412,41 +401,39 @@ async def arbitrage_worker():
                                                         conn.close()
                                                         
                                                         pair_name = "USDC/SOL" if stable_mint == WHITELISTED_TOKENS["USDC"] else "USDT/SOL"
-                                                        
                                                         msg_text = (
                                                             f"🚀 *MOV Bot Peak Dump Executed!*\n\n"
                                                             f"• Пара: `{pair_name}` [Verified 🔥]\n"
                                                             f"• Профит: `+{profit_sol:.5f} SOL` 🎯\n"
                                                         )
-                                                        
                                                         for u in active_users:
                                                             await send_telegram_notification(u[0], msg_text)
-                                                        # ==========================================
-            except Exception as e:
+            except Exception:
                 pass
             
-            # === БЛОК ПУЛЬСА (HEARTBEAT) ===
             scan_counter += 1
             if scan_counter >= 150:
                 add_log("🛰️ AI Agent: Просканировано 150 пулов, риски под контролем...")
                 scan_counter = 0
-            # ===============================
             
             await asyncio.sleep(2)
 
+# ==========================================
+# LUXURY HTML & CSS 
+# ==========================================
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zer0Life Web4 Ecosystem</title>
+    <title>Zer0Life Premium</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         * { box-sizing: border-box; }
         body { 
-            background: #010308; 
+            background: #050507; 
             color: #f1f5f9; 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif; 
             margin: 0; 
             padding: 0; 
             width: 100vw; 
@@ -454,54 +441,122 @@ HTML_CONTENT = """<!DOCTYPE html>
             overflow: hidden; 
         }
         
+        /* ПРИВЕТСТВЕННЫЙ ЭКРАН */
         #splash-screen {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            background-size: cover;
-            background-position: center;
-            display: flex;
-            flex-direction: column;
-            justify-content: flex-end;
-            padding: 24px;
-            padding-bottom: 40px;
-            z-index: 9999;
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: linear-gradient(180deg, #0a0a0c 0%, #050507 100%);
+            display: flex; flex-direction: column; justify-content: flex-end;
+            padding: 24px; padding-bottom: 50px; z-index: 9999;
         }
 
         .run-btn {
-            background: #a3e635;
-            color: #000000;
-            border: none;
-            width: 100%;
-            padding: 16px;
-            border-radius: 20px;
-            font-weight: 800;
-            font-size: 16px;
-            cursor: pointer;
-            text-align: center;
-            box-shadow: 0 8px 30px rgba(163, 230, 53, 0.4);
-            text-transform: uppercase;
+            background: linear-gradient(135deg, #d4af37 0%, #aa771c 100%);
+            color: #000000; border: none; width: 100%; padding: 18px;
+            border-radius: 20px; font-weight: 800; font-size: 16px;
+            cursor: pointer; text-align: center;
+            box-shadow: 0 8px 30px rgba(212, 175, 55, 0.3);
+            text-transform: uppercase; letter-spacing: 1px;
         }
 
-        .card { background: rgba(4, 8, 20, 0.85); backdrop-filter: blur(30px); border-radius: 28px; padding: 20px; margin-bottom: 18px; border: 1px solid rgba(52, 211, 153, 0.2); box-shadow: 0 12px 40px rgba(0,0,0,0.8); }
-        .btn { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: none; width: 100%; padding: 14px; border-radius: 18px; font-weight: 700; cursor: pointer; margin-top: 12px; font-size: 14px; box-shadow: 0 4px 25px rgba(16, 185, 129, 0.4); }
-        .btn-green { background: linear-gradient(135deg, #10b981 0%, #059669 100%); box-shadow: 0 4px 25px rgba(16, 185, 129, 0.4); }
-        .btn-red { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); box-shadow: 0 4px 25px rgba(239, 68, 68, 0.4); }
-        .btn-mode { background: rgba(30, 41, 59, 0.4); color: #94a3b8; border: 1px solid rgba(52, 211, 153, 0.2); margin-top: 8px; width: 100%; padding: 14px; border-radius: 18px; font-weight: bold; cursor: pointer; text-align: left; display: flex; justify-content: space-between; align-items: center; }
-        .metric { display: flex; justify-content: space-between; margin-top: 12px; font-size: 14px; color: #94a3b8; }
-        .val { color: #34d399; font-weight: 700; font-family: monospace; }
-        .logs { background: #010409; border: 1px solid rgba(52, 211, 153, 0.25); border-radius: 18px; padding: 14px; font-family: monospace; font-size: 11px; color: #34d399; height: 160px; overflow-y: auto; margin-top: 10px; white-space: pre-line; box-shadow: inset 0 2px 8px rgba(0,0,0,0.9); }
-        .trade-item { background: rgba(2, 6, 23, 0.8); border: 1px solid rgba(52, 211, 153, 0.2); border-radius: 16px; padding: 12px; margin-top: 10px; font-family: monospace; font-size: 11px; display: flex; justify-content: space-between; align-items: center; }
+        /* LUXURY CARDS & GLASSMORPHISM */
+        .card { 
+            background: linear-gradient(145deg, rgba(22, 22, 26, 0.95), rgba(12, 12, 14, 0.95)); 
+            backdrop-filter: blur(20px); 
+            border-radius: 24px; 
+            padding: 22px; 
+            margin-bottom: 18px; 
+            border: 1px solid rgba(212, 175, 55, 0.2); 
+            box-shadow: 0 12px 40px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.05); 
+        }
         
-        .input-group-web4 { width: 100%; background: rgba(2, 6, 23, 0.9); border: 1px solid rgba(52, 211, 153, 0.3); border-radius: 16px; padding: 12px; margin-top: 8px; display: flex; align-items: center; justify-content: space-between; }
-        .input-field-web4 { background: transparent; border: none; color: #34d399; font-family: monospace; font-size: 10px; width: 100%; outline: none; }
-        .qr-container-web4 { background: #ffffff; padding: 14px; border-radius: 20px; width: 160px; height: 160px; margin: 16px auto; display: flex; justify-content: center; align-items: center; box-shadow: 0 8px 30px rgba(16, 185, 129, 0.25); }
+        /* ТЕКСТ И ЗАГОЛОВКИ */
+        .title-gold {
+            margin-top: 0; 
+            font-size: 20px;
+            font-weight: 800;
+            background: linear-gradient(to right, #d4af37, #ffdf73, #d4af37);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: 0.5px;
+        }
+        
+        .subtitle { color: #8a8d93; font-size: 13px; line-height: 1.4; font-weight: 400; }
+        .label-gold { font-size: 10px; color: #d4af37; font-weight: 700; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; }
 
-        .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(1, 3, 8, 0.92); backdrop-filter: blur(30px); border-top: 1px solid rgba(52, 211, 153, 0.2); padding: 12px 16px; display: flex; justify-content: space-around; z-index: 900; box-shadow: 0 -10px 30px rgba(0,0,0,0.8); }
-        .nav-item { background: transparent; border: none; color: #64748b; font-size: 11px; font-weight: 600; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; transition: all 0.2s; }
-        .nav-item.active { color: #34d399; text-shadow: 0 0 20px rgba(52, 211, 153, 0.8); }
+        /* ЭЛЕМЕНТЫ ВВОДА */
+        .input-group-web4 { 
+            width: 100%; background: rgba(0, 0, 0, 0.4); 
+            border: 1px solid rgba(212, 175, 55, 0.3); 
+            border-radius: 16px; padding: 14px; margin-top: 6px; 
+            display: flex; align-items: center; justify-content: space-between;
+            box-shadow: inset 0 2px 10px rgba(0,0,0,0.5);
+        }
+        .input-field-web4 { 
+            background: transparent; border: none; 
+            color: #ffdf73; font-family: "SF Mono", monospace; 
+            font-size: 11px; width: 100%; outline: none; 
+        }
+
+        /* КНОПКИ */
+        .btn-gold { 
+            background: linear-gradient(135deg, #d4af37 0%, #aa771c 100%); 
+            color: #050505; border: none; width: 100%; padding: 16px; 
+            border-radius: 18px; font-weight: 800; cursor: pointer; 
+            margin-top: 16px; font-size: 14px; text-transform: uppercase;
+            box-shadow: 0 6px 20px rgba(212, 175, 55, 0.25);
+            letter-spacing: 0.5px; transition: transform 0.1s;
+        }
+        .btn-gold:active { transform: scale(0.98); }
+        
+        .btn-red { background: linear-gradient(135deg, #3f0d12 0%, #a71d31 100%); color: white; border: 1px solid rgba(255, 50, 50, 0.3); box-shadow: 0 4px 20px rgba(167, 29, 49, 0.4); border-radius: 18px; padding: 14px; font-weight: 700; border: none; width: 100%; cursor: pointer;}
+        .btn-mode { background: rgba(20, 20, 24, 0.6); color: #d4af37; border: 1px solid rgba(212, 175, 55, 0.2); margin-top: 8px; width: 100%; padding: 14px; border-radius: 18px; font-weight: bold; cursor: pointer; text-align: left; display: flex; justify-content: space-between; align-items: center; }
+        
+        /* QR КОД */
+        .qr-wrapper {
+            background: linear-gradient(145deg, #ffdf73, #aa771c);
+            padding: 2px; border-radius: 22px; width: 164px; height: 164px; 
+            margin: 24px auto;
+            box-shadow: 0 10px 30px rgba(212, 175, 55, 0.2);
+        }
+        .qr-container-web4 { 
+            background: #ffffff; width: 100%; height: 100%; 
+            border-radius: 20px; display: flex; justify-content: center; align-items: center; 
+        }
+
+        /* МЕТРИКИ И ЛОГИ */
+        .metric { display: flex; justify-content: space-between; margin-top: 14px; font-size: 14px; color: #8a8d93; }
+        .val { color: #ffdf73; font-weight: 700; font-family: "SF Mono", monospace; }
+        
+        .logs { 
+            background: rgba(0, 0, 0, 0.6); border: 1px solid rgba(212, 175, 55, 0.15); 
+            border-radius: 18px; padding: 14px; font-family: "SF Mono", monospace; 
+            font-size: 11px; color: #d4af37; height: 160px; overflow-y: auto; 
+            margin-top: 12px; white-space: pre-line; box-shadow: inset 0 2px 15px rgba(0,0,0,0.8); 
+        }
+        .trade-item { 
+            background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(212, 175, 55, 0.15); 
+            border-radius: 16px; padding: 14px; margin-top: 10px; 
+            font-family: "SF Mono", monospace; font-size: 11px; 
+            display: flex; justify-content: space-between; align-items: center; 
+        }
+
+        /* НАВИГАЦИЯ */
+        .bottom-nav { 
+            position: fixed; bottom: 0; left: 0; right: 0; 
+            background: rgba(10, 10, 12, 0.95); backdrop-filter: blur(30px); 
+            border-top: 1px solid rgba(212, 175, 55, 0.15); 
+            padding: 12px 16px; display: flex; justify-content: space-around; 
+            z-index: 900; box-shadow: 0 -10px 40px rgba(0,0,0,0.9); 
+        }
+        .nav-item { 
+            background: transparent; border: none; color: #5a5d63; 
+            font-size: 11px; font-weight: 600; display: flex; 
+            flex-direction: column; align-items: center; gap: 4px; 
+            cursor: pointer; transition: all 0.3s; 
+        }
+        .nav-item.active { 
+            color: #d4af37; text-shadow: 0 0 15px rgba(212, 175, 55, 0.6); 
+        }
         .nav-icon { font-size: 20px; }
         
         .tab-content { display: none; width: 100%; height: 100vh; overflow-y: auto; padding: 16px; padding-bottom: 110px; }
@@ -510,66 +565,81 @@ HTML_CONTENT = """<!DOCTYPE html>
 </head>
 <body>
     <div id="splash-screen">
-        <button class="run-btn" onclick="enterApp()">Get Started</button>
+        <button class="run-btn" onclick="enterApp()">Launch Terminal</button>
     </div>
 
     <div id="app-container" style="display: none; width: 100vw; height: 100vh;">
+        
+        <!-- Вкладка Кошелька (Luxury Design) -->
         <div id="tab-wallet" class="tab-content">
             <div class="card">
-                <h2 style="margin-top: 0; color: #34d399;">⚡ Web4 Wallet Panel</h2>
-                <p style="color: #94a3b8; font-size: 13px;">Ваш персональный депозитный адрес и штрихкод для пополнения SOL.</p>
-                <div style="margin: 16px 0;">
-                    <div style="font-size:10px; color:#94a3b8; font-weight:700; margin-bottom:4px;">ДЕПОЗИТНЫЙ АДРЕС:</div>
+                <h2 class="title-gold">⚜️ Premium Wallet</h2>
+                <p class="subtitle">Ваш персональный защищенный адрес для депозита SOL.</p>
+                
+                <div style="margin: 20px 0;">
+                    <div class="label-gold">Deposit Address:</div>
                     <div class="input-group-web4">
                         <input type="text" id="wallet-input" class="input-field-web4" readonly>
                     </div>
                 </div>
-                <div class="qr-container-web4">
-                    <img id="qr-img" src="" alt="QR" style="width: 132px; height: 132px; border-radius: 10px;">
+                
+                <div class="qr-wrapper">
+                    <div class="qr-container-web4">
+                        <img id="qr-img" src="" alt="QR" style="width: 140px; height: 140px; border-radius: 12px;">
+                    </div>
                 </div>
-                <button class="btn-neural" onclick="navigator.clipboard.writeText(document.getElementById('wallet-input').value); alert('📋 Адрес скопирован!')" style="background: linear-gradient(135deg, #10b981 0%, #047857 100%); color: white; border: none; width: 100%; padding: 14px; border-radius: 16px; font-weight: 800; cursor: pointer; text-transform: uppercase;">Копировать адрес</button>
+                
+                <button class="btn-gold" onclick="navigator.clipboard.writeText(document.getElementById('wallet-input').value); alert('📋 Адрес скопирован!')">
+                    Скопировать адрес
+                </button>
             </div>
+            
             <div class="card">
-                <div style="font-size:10px; color:#94a3b8; font-weight:700; margin-bottom:4px;">ПРОВЕРКА ТРАНЗАКЦИИ (SIGNATURE):</div>
+                <div class="label-gold">Верификация (TX Signature):</div>
                 <div class="input-group-web4">
                     <input type="text" id="tx-hash-input" class="input-field-web4" placeholder="Введите хэш...">
                 </div>
-                <button class="btn" style="background: linear-gradient(135deg, #059669 0%, #064e3b 100%); margin-top: 12px;" onclick="verifyDeposit()">Verify & Credit SOL 🔄</button>
+                <button class="btn-gold" style="margin-top: 12px; font-size: 13px;" onclick="verifyDeposit()">Verify & Credit 🔄</button>
             </div>
         </div>
 
+        <!-- Вкладка Трейдера -->
         <div id="tab-trader" class="tab-content active">
             <div class="card">
-                <h3 style="margin: 0 0 12px 0; font-size: 15px;">🛡️ Web4 Ai Trader (24/7)</h3>
-                <button class="btn-mode active"><span>⚡ Нейросканирование + RugAudit</span><span style="font-size: 11px; color: #34d399;">Active</span></button>
+                <h3 class="title-gold" style="font-size: 16px; margin-bottom: 12px;">🛡️ AI Trader (24/7)</h3>
+                <button class="btn-mode active">
+                    <span style="color: #f1f5f9;">⚜️ AI Agent + RugAudit</span>
+                    <span style="font-size: 11px; color: #d4af37;">Active</span>
+                </button>
             </div>
             <div class="card">
-                <h3 style="margin: 0 0 10px 0; font-size: 15px;">🤖 Автопилот</h3>
+                <h3 class="title-gold" style="font-size: 16px; margin-bottom: 10px;">🤖 Автопилот</h3>
                 <div class="metric"><span>Баланс пула:</span> <span id="wallet-balance" class="val">Загрузка...</span></div>
-                <div class="metric"><span>Статус ядра:</span> <span id="trade-status" class="val" style="color: #f59e0b;">Остановлен</span></div>
-                <div style="display: flex; gap: 10px; margin-top: 14px;">
-                    <button class="btn btn-green" style="margin-top:0;" onclick="checkBalance()">Обновить</button>
-                    <button id="toggle-btn" class="btn btn-green" style="margin-top:0;" onclick="toggleTrading()">Включить</button>
+                <div class="metric"><span>Статус ядра:</span> <span id="trade-status" class="val" style="color: #8a8d93;">Остановлен</span></div>
+                <div style="display: flex; gap: 10px; margin-top: 16px;">
+                    <button class="btn-gold" style="margin-top:0; padding: 12px;" onclick="checkBalance()">Обновить</button>
+                    <button id="toggle-btn" class="btn-gold" style="margin-top:0; padding: 12px;" onclick="toggleTrading()">Включить</button>
                 </div>
             </div>
             <div class="card">
-                <h3 style="margin: 0 0 8px 0; font-size: 15px;">📡 Neural Logs</h3>
+                <h3 class="title-gold" style="font-size: 15px; margin-bottom: 8px;">📡 Neural Logs</h3>
                 <div id="logs-box" class="logs">Загрузка...</div>
             </div>
         </div>
 
+        <!-- Вкладка Статистики -->
         <div id="tab-stats" class="tab-content">
             <div class="card">
-                <h3 style="margin: 0 0 12px 0; font-size: 16px; color: #34d399;">📊 Статистика Web4</h3>
+                <h3 class="title-gold" style="font-size: 16px; margin-bottom: 12px;">📊 Статистика Terminal</h3>
                 <div class="metric"><span>Стартовый:</span> <span class="val">0.2517 SOL</span></div>
                 <div class="metric"><span>Текущий:</span> <span id="stat-current" class="val">-- SOL</span></div>
-                <div class="metric"><span>Результат:</span> <span id="stat-profit-sol" class="val" style="color: #34d399;">0.0000 SOL</span></div>
-                <button class="btn" style="margin-top: 14px;" onclick="loadStats()">🔄 Обновить</button>
+                <div class="metric"><span>Результат:</span> <span id="stat-profit-sol" class="val" style="color: #d4af37;">0.0000 SOL</span></div>
+                <button class="btn-gold" style="margin-top: 16px;" onclick="loadStats()">🔄 Обновить</button>
             </div>
             <div class="card">
-                <h3 style="margin: 0 0 10px 0; font-size: 15px;">📜 История операций</h3>
+                <h3 class="title-gold" style="font-size: 15px; margin-bottom: 10px;">📜 История операций</h3>
                 <div id="trades-list" style="max-height: 250px; overflow-y: auto;">
-                    <div style="color: #64748b; font-size: 12px; text-align: center; padding: 20px;">Нет сделок</div>
+                    <div style="color: #5a5d63; font-size: 12px; text-align: center; padding: 20px;">Нет сделок</div>
                 </div>
             </div>
         </div>
@@ -577,7 +647,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 
     <div id="bottom-nav-bar" class="bottom-nav" style="display: none;">
         <button id="nav-wallet" class="nav-item" onclick="switchTab('wallet')"><span class="nav-icon">👛</span><span>Wallet</span></button>
-        <button id="nav-trader" class="nav-item active" onclick="switchTab('trader')"><span class="nav-icon">⚡</span><span>Ai Trader</span></button>
+        <button id="nav-trader" class="nav-item active" onclick="switchTab('trader')"><span class="nav-icon">⚡</span><span>Trader</span></button>
         <button id="nav-stats" class="nav-item" onclick="switchTab('stats')"><span class="nav-icon">📊</span><span>Stats</span></button>
     </div>
 
@@ -590,7 +660,9 @@ HTML_CONTENT = """<!DOCTYPE html>
                 const res = await fetch('/api/get-image-url');
                 const data = await res.json();
                 if(data.success && data.url) {
-                    document.getElementById('splash-screen').style.backgroundImage = `url('${data.url}')`;
+                    document.getElementById('splash-screen').style.backgroundImage = `linear-gradient(180deg, rgba(10,10,12,0.6) 0%, #050507 100%), url('${data.url}')`;
+                    document.getElementById('splash-screen').style.backgroundSize = 'cover';
+                    document.getElementById('splash-screen').style.backgroundPosition = 'center';
                 }
             } catch(e) {}
         }
@@ -600,7 +672,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             document.getElementById('splash-screen').style.display = 'none';
             document.getElementById('app-container').style.display = 'block';
             document.getElementById('bottom-nav-bar').style.display = 'flex';
-            switchTab('trader');
+            switchTab('wallet'); // Запускаем сразу на кошелек, чтобы заценить дизайн
         }
 
         let isTrading = false;
@@ -629,7 +701,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             if(data.success) {
                 const w = data.profile.solana_wallet;
                 document.getElementById('wallet-input').value = w;
-                document.getElementById('qr-img').src = "https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=" + encodeURIComponent(w);
+                document.getElementById('qr-img').src = "https://api.qrserver.com/v1/create-qr-code/?size=160x160&color=050507&bgcolor=ffffff&data=" + encodeURIComponent(w);
                 isTrading = data.profile.trading_active === 1;
                 updateUI();
                 checkBalance();
@@ -639,8 +711,13 @@ HTML_CONTENT = """<!DOCTYPE html>
         function updateUI() {
             const st = document.getElementById('trade-status');
             const btn = document.getElementById('toggle-btn');
-            if(isTrading) { st.innerText = "Активен (24/7)"; st.style.color = "#10b981"; btn.innerText = "Остановить"; btn.className = "btn btn-red"; }
-            else { st.innerText = "Остановлен"; st.style.color = "#f59e0b"; btn.innerText = "Включить"; btn.className = "btn btn-green"; }
+            if(isTrading) { 
+                st.innerText = "Активен (24/7)"; st.style.color = "#d4af37"; 
+                btn.innerText = "Остановить"; btn.className = "btn-red"; 
+            } else { 
+                st.innerText = "Остановлен"; st.style.color = "#8a8d93"; 
+                btn.innerText = "Включить"; btn.className = "btn-gold"; 
+            }
         }
         
         async function checkBalance() {
@@ -681,18 +758,19 @@ HTML_CONTENT = """<!DOCTYPE html>
                 const diff = data.profit_sol;
                 const el = document.getElementById('stat-profit-sol');
                 el.innerText = (diff >= 0 ? "+" : "") + diff.toFixed(4) + " SOL";
-                el.style.color = diff >= 0 ? "#34d399" : "#ef4444";
+                el.style.color = diff >= 0 ? "#d4af37" : "#a71d31";
+                
                 const list = document.getElementById('trades-list');
                 if(data.trades.length === 0) {
-                    list.innerHTML = '<div style="color: #64748b; font-size: 12px; text-align: center; padding: 20px;">Нет сделок</div>';
+                    list.innerHTML = '<div style="color: #5a5d63; font-size: 12px; text-align: center; padding: 20px;">Нет сделок</div>';
                 } else {
                     list.innerHTML = data.trades.map(t => `
                         <div class="trade-item">
                             <div>
-                                <div style="color: #f8fafc; font-weight: bold;">${t.token_pair}</div>
-                                <div style="color: #64748b; font-size: 10px;">TX: <a href="https://solscan.io/tx/${t.tx_signature}" target="_blank" style="color: #34d399;">${t.tx_signature.substring(0,8)}...</a></div>
+                                <div style="color: #f1f5f9; font-weight: bold;">${t.token_pair}</div>
+                                <div style="color: #8a8d93; font-size: 10px;">TX: <a href="https://solscan.io/tx/${t.tx_signature}" target="_blank" style="color: #d4af37;">${t.tx_signature.substring(0,8)}...</a></div>
                             </div>
-                            <div style="color: ${t.profit_sol >= 0 ? '#34d399' : '#ef4444'}; font-weight: bold; font-size: 12px;">${t.profit_sol >= 0 ? '+' : ''}${t.profit_sol.toFixed(4)} SOL</div>
+                            <div style="color: ${t.profit_sol >= 0 ? '#d4af37' : '#a71d31'}; font-weight: bold; font-size: 12px;">${t.profit_sol >= 0 ? '+' : ''}${t.profit_sol.toFixed(4)} SOL</div>
                         </div>
                     `).join('');
                 }
@@ -790,9 +868,9 @@ async def telegram_long_polling():
                                 payload = {
                                     "chat_id": chat_id,
                                     "photo": "BQACAgIAAxkBAAIs5WrKHdZEC_o9AAFA8I4DJ9bwtxNgUAACYqoAAjKZUUqVAAGch_gphqE9BA",
-                                    "caption": "🌐 *Добро пожаловать в Zer0Life Web4 Ai Trader*\n\nИнтеллектуальная экосистема автономного прироста SOL и нейросканирования рынка активирована.\n\n👇 Нажмите кнопку ниже для запуска терминала:",
+                                    "caption": "⚜️ *Добро пожаловать в Zer0Life Premium Terminal*\n\nИнтеллектуальная экосистема автономного прироста SOL активирована.\n\n👇 Нажмите кнопку ниже для запуска:",
                                     "parse_mode": "Markdown",
-                                    "reply_markup": {"inline_keyboard": [[{"text": "🚀 Открыть Web4 Терминал", "web_app": {"url": RENDER_URL}}]]}
+                                    "reply_markup": {"inline_keyboard": [[{"text": "🚀 Открыть Premium Terminal", "web_app": {"url": RENDER_URL}}]]}
                                 }
                                 async with session.post(send_url, json=payload) as send_resp:
                                     res_json = await send_resp.json()
@@ -800,9 +878,9 @@ async def telegram_long_polling():
                                         fallback_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
                                         fallback_payload = {
                                             "chat_id": chat_id,
-                                            "text": "🌐 *Добро пожаловать в Zer0Life Web4 Ai Trader*\n\nИнтеллектуальная экосистема автономного прироста SOL и нейросканирования рынка активирована.\n\n👇 Нажмите кнопку ниже для запуска терминала:",
+                                            "text": "⚜️ *Добро пожаловать в Zer0Life Premium Terminal*\n\nИнтеллектуальная экосистема автономного прироста SOL активирована.\n\n👇 Нажмите кнопку ниже для запуска:",
                                             "parse_mode": "Markdown",
-                                            "reply_markup": {"inline_keyboard": [[{"text": "🚀 Открыть Web4 Терминал", "web_app": {"url": RENDER_URL}}]]}
+                                            "reply_markup": {"inline_keyboard": [[{"text": "🚀 Открыть Premium Terminal", "web_app": {"url": RENDER_URL}}]]}
                                         }
                                         async with session.post(fallback_url, json=fallback_payload) as f_resp:
                                             pass
@@ -833,7 +911,7 @@ async def main():
     asyncio.create_task(background_mov_trader_daemon())
     asyncio.create_task(arbitrage_worker())
     
-    add_log("Web4 Ai Trader запущен.")
+    add_log("⚜️ Premium Terminal запущен.")
     while True:
         await asyncio.sleep(3600)
 
