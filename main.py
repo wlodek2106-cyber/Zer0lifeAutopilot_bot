@@ -802,6 +802,7 @@ async def main():
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
     
+    # Исправлен запуск фоновых задач на asyncio.create_task
     asyncio.create_task(telegram_long_polling())
     asyncio.create_task(aggressive_arbitrage_worker())
     
