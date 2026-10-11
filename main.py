@@ -500,6 +500,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             document.getElementById('app-container').style.display = 'block';
             document.getElementById('bottom-nav-bar').style.display = 'flex';
             switchTab('trader');
+            loadProfile();
         };
 
         let isTrading = false;
