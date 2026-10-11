@@ -23,6 +23,10 @@ RUGCHECK_API = "https://api.rugcheck.xyz/v1/token"
 SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
 MIN_SOL_RESERVE = 0.3
 
+# Новый ID файла изображения
+SPLASH_FILE_ID = "BQACAgIAAxkBAAIs6WrKMzeuDrcSrw64PHJtnoHvV5d0AALOqAACDnhQSjGP-cB9UjthPQQ"
+CACHED_SPLASH_IMAGE: bytes | None = None
+
 RECENT_LOGS = ["⚜️ Zer0Life Aggressive Terminal запущен."]
 
 def add_log(msg: str):
@@ -150,7 +154,7 @@ async def send_telegram_notification(chat_id: int, text: str):
 
 async def aggressive_arbitrage_worker():
     add_log("⚡ Aggressive Arbitrage Engine: Сканирование от 0.1% профита.")
-    amount_in_lamports = 500000000 # 0.5 SOL
+    amount_in_lamports = 500000000
     
     signer = get_signer_keypair()
     if not signer:
@@ -255,7 +259,7 @@ async def aggressive_arbitrage_worker():
                         checked += 1
                         if checked >= 15:
                             break
-            except Exception as e:
+            except Exception:
                 pass
             
             await asyncio.sleep(1)
@@ -264,14 +268,11 @@ HTML_CONTENT = """<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-    <meta http-equiv="Pragma" content="no-cache">
-    <meta http-equiv="Expires" content="0">
-    <title>Zer0Life Premium</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Zer0LifeRun</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        * { box-sizing: border-box; }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
         body { 
             background: #050507; 
             color: #f1f5f9; 
@@ -284,23 +285,84 @@ HTML_CONTENT = """<!DOCTYPE html>
         }
         
         #splash-screen {
-            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            position: fixed; 
+            top: 0; 
+            left: 0; 
+            width: 100vw; 
+            height: 100vh;
             background-color: #050507;
+            background-image: linear-gradient(180deg, rgba(0,0,0,0.05) 0%, rgba(0,0,0,0.2) 50%, rgba(0,0,0,0.85) 100%), url('/splash.jpg');
             background-size: cover;
-            background-position: center;
+            background-position: center top;
             background-repeat: no-repeat;
-            display: flex; flex-direction: column; justify-content: flex-end;
-            padding: 24px; padding-bottom: 50px; z-index: 9999;
+            display: flex; 
+            flex-direction: column; 
+            justify-content: flex-end;
+            align-items: center;
+            padding: 24px; 
+            padding-bottom: calc(34px + env(safe-area-inset-bottom, 16px)); 
+            z-index: 9999;
+        }
+
+        .splash-branding {
+            text-align: center;
+            margin-bottom: 24px;
+            user-select: none;
+        }
+
+        .brand-title {
+            font-size: 42px;
+            font-weight: 900;
+            font-style: italic;
+            color: #ffffff;
+            text-transform: uppercase;
+            line-height: 1.0;
+            letter-spacing: 1px;
+            text-shadow: 0 4px 16px rgba(0, 0, 0, 0.9);
+        }
+
+        .brand-run {
+            font-size: 54px;
+            font-weight: 900;
+            font-style: italic;
+            color: #5ff53b;
+            text-transform: uppercase;
+            line-height: 1.0;
+            margin-top: 4px;
+            text-shadow: 0 0 25px rgba(95, 245, 59, 0.5), 0 4px 16px rgba(0, 0, 0, 0.9);
+        }
+
+        .brand-tagline {
+            font-size: 13px;
+            font-weight: 800;
+            color: #ffffff;
+            text-transform: uppercase;
+            letter-spacing: 4px;
+            margin-top: 10px;
+            opacity: 0.95;
+            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.8);
         }
 
         .run-btn {
-            background: linear-gradient(135deg, #d4af37 0%, #aa771c 100%);
-            color: #000000; border: none; width: 100%; padding: 18px;
-            border-radius: 20px; font-weight: 800; font-size: 16px;
-            cursor: pointer; text-align: center;
-            box-shadow: 0 8px 30px rgba(212, 175, 55, 0.3);
-            text-transform: uppercase; letter-spacing: 1px;
-            position: relative; z-index: 10000;
+            background: linear-gradient(180deg, #8af64a 0%, #68e831 100%);
+            color: #000000;
+            border: none;
+            width: 100%;
+            max-width: 440px;
+            padding: 17px;
+            border-radius: 22px;
+            font-weight: 800;
+            font-size: 18px;
+            cursor: pointer;
+            text-align: center;
+            box-shadow: 0 10px 28px rgba(104, 232, 49, 0.45);
+            letter-spacing: 0.5px;
+            transition: transform 0.15s ease, filter 0.15s ease;
+        }
+
+        .run-btn:active {
+            transform: scale(0.98);
+            filter: brightness(0.95);
         }
 
         .card { 
@@ -396,7 +458,12 @@ HTML_CONTENT = """<!DOCTYPE html>
 </head>
 <body>
     <div id="splash-screen">
-        <button class="run-btn" onclick="enterApp()">LAUNCH TERMINAL</button>
+        <div class="splash-branding">
+            <div class="brand-title">ZERØLIFE</div>
+            <div class="brand-run">RUN</div>
+            <div class="brand-tagline">MOVE TO EARN</div>
+        </div>
+        <button class="run-btn" onclick="enterApp()">Get Started</button>
     </div>
 
     <div id="app-container" style="display: none; width: 100vw; height: 100vh;">
@@ -485,16 +552,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             }
         } catch(e) { console.error("Telegram init error:", e); }
 
-        async function loadDashboardImage() {
-            try {
-                const res = await fetch('/api/get-image-url');
-                const data = await res.json();
-                if(data.success && data.url) {
-                    document.getElementById('splash-screen').style.backgroundImage = `linear-gradient(180deg, rgba(5,5,7,0.1) 0%, rgba(5,5,7,0.9) 100%), url('${data.url}')`;
-                }
-            } catch(e) { console.error("Image fetch error:", e); }
-        }
-        
         window.enterApp = function() {
             document.getElementById('splash-screen').style.display = 'none';
             document.getElementById('app-container').style.display = 'block';
@@ -621,7 +678,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             } catch(e) {}
         };
         
-        loadDashboardImage();
         loadProfile();
         setInterval(async () => { if(!isTrading) return; checkBalance(); loadStats(); loadLogs(); }, 5000);
     </script>
@@ -640,23 +696,57 @@ async def index_handler(request):
 async def health_handler(request):
     return web.Response(text="OK", status=200)
 
-async def api_get_image_url(request):
-    if not TELEGRAM_TOKEN:
-        return web.json_response({"success": False})
+async def fetch_and_cache_splash_image() -> bytes | None:
+    global CACHED_SPLASH_IMAGE
+    if CACHED_SPLASH_IMAGE:
+        return CACHED_SPLASH_IMAGE
     
-    file_id = "BQACAgIAAxkBAAIs5WrKHdZEC_o9AAFA8I4DJ9bwtxNgUAACYqoAAjKZUUqVAAGch_gphqE9BA"
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}", timeout=5) as resp:
+    # 1. Проверяем локальный файл
+    for fn in ["splash.jpg", "splash.png", "image.png"]:
+        if os.path.exists(fn):
+            try:
+                with open(fn, "rb") as f:
+                    CACHED_SPLASH_IMAGE = f.read()
+                    logging.info(f"Загружено локальное изображение {fn}")
+                    return CACHED_SPLASH_IMAGE
+            except Exception:
+                pass
+
+    # 2. Скачиваем из Telegram по file_id
+    if not TELEGRAM_TOKEN:
+        return None
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            url_info = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={SPLASH_FILE_ID}"
+            async with session.get(url_info, timeout=aiohttp.ClientTimeout(total=8)) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     file_path = data.get("result", {}).get("file_path")
                     if file_path:
-                        download_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
-                        return web.json_response({"success": True, "url": download_url})
-        except Exception:
-            pass
-    return web.json_response({"success": False})
+                        dl_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
+                        async with session.get(dl_url, timeout=aiohttp.ClientTimeout(total=15)) as img_resp:
+                            if img_resp.status == 200:
+                                CACHED_SPLASH_IMAGE = await img_resp.read()
+                                try:
+                                    with open("splash.jpg", "wb") as f:
+                                        f.write(CACHED_SPLASH_IMAGE)
+                                except Exception:
+                                    pass
+                                logging.info("✅ Заставка успешно получена из Telegram и сохранена в splash.jpg")
+                                return CACHED_SPLASH_IMAGE
+    except Exception as e:
+        logging.error(f"Не удалось скачать заставку из Telegram: {e}")
+    return None
+
+async def splash_image_handler(request):
+    img = await fetch_and_cache_splash_image()
+    if img:
+        return web.Response(body=img, content_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+    return web.Response(status=404)
+
+async def api_get_image_url(request):
+    return web.json_response({"success": True, "url": "/splash.jpg"})
 
 async def api_get_profile(request):
     data = await request.json()
@@ -768,10 +858,10 @@ async def telegram_long_polling():
                                 send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
                                 payload = {
                                     "chat_id": chat_id,
-                                    "photo": "BQACAgIAAxkBAAIs5WrKHdZEC_o9AAFA8I4DJ9bwtxNgUAACYqoAAjKZUUqVAAGch_gphqE9BA",
-                                    "caption": "⚜️ *Добро пожаловать в Zer0Life Premium Terminal*\n\nИнтеллектуальная экосистема автономного прироста SOL активирована.\n\n👇 Нажмите кнопку ниже для запуска:",
+                                    "photo": SPLASH_FILE_ID,
+                                    "caption": "⚜️ *Добро пожаловать в Zer0Life Run*\n\nИнтеллектуальная экосистема автономного прироста SOL активирована.\n\n👇 Нажмите кнопку ниже для запуска:",
                                     "parse_mode": "Markdown",
-                                    "reply_markup": {"inline_keyboard": [[{"text": "🚀 Открыть Premium Terminal", "web_app": {"url": RENDER_URL}}]]}
+                                    "reply_markup": {"inline_keyboard": [[{"text": "🚀 Открыть Zer0Life Run", "web_app": {"url": RENDER_URL}}]]}
                                 }
                                 async with session.post(send_url, json=payload) as send_resp:
                                     res_json = await send_resp.json()
@@ -779,9 +869,9 @@ async def telegram_long_polling():
                                         fallback_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
                                         fallback_payload = {
                                             "chat_id": chat_id,
-                                            "text": "⚜️ *Добро пожаловать в Zer0Life Premium Terminal*\n\nИнтеллектуальная экосистема автономного прироста SOL активирована.\n\n👇 Нажмите кнопку ниже для запуска:",
+                                            "text": "⚜️ *Добро пожаловать в Zer0Life Run*\n\nИнтеллектуальная экосистема автономного прироста SOL активирована.\n\n👇 Нажмите кнопку ниже для запуска:",
                                             "parse_mode": "Markdown",
-                                            "reply_markup": {"inline_keyboard": [[{"text": "🚀 Открыть Premium Terminal", "web_app": {"url": RENDER_URL}}]]}
+                                            "reply_markup": {"inline_keyboard": [[{"text": "🚀 Открыть Zer0Life Run", "web_app": {"url": RENDER_URL}}]]}
                                         }
                                         async with session.post(fallback_url, json=fallback_payload) as f_resp:
                                             pass
@@ -795,6 +885,7 @@ async def main():
     app = web.Application()
     app.router.add_get('/', index_handler)
     app.router.add_get('/health', health_handler)
+    app.router.add_get('/splash.jpg', splash_image_handler)
     app.router.add_get('/api/get-image-url', api_get_image_url)
     app.router.add_post('/api/profile', api_get_profile)
     app.router.add_post('/api/verify-tx', api_verify_tx)
@@ -808,10 +899,13 @@ async def main():
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
     
+    # Предзагрузка заставки в память при старте
+    asyncio.create_task(fetch_and_cache_splash_image())
+    
     asyncio.create_task(telegram_long_polling())
     asyncio.create_task(aggressive_arbitrage_worker())
     
-    add_log("⚜️ Aggressive Terminal запущен.")
+    add_log("⚜️ Zer0Life Run Terminal запущен.")
     while True:
         await asyncio.sleep(3600)
 
