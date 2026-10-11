@@ -18,11 +18,12 @@ SOLANA_RPC = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-ke
 
 JUPITER_QUOTE_API = "https://public.jupiterapi.com/quote"
 JUPITER_SWAP_API = "https://public.jupiterapi.com/swap"
+RUGCHECK_API = "https://api.rugcheck.xyz/v1/token"
 
 SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
 MIN_SOL_RESERVE = 0.3
 
-RECENT_LOGS = ["⚜️ Zer0Life Fast Terminal запущен."]
+RECENT_LOGS = ["⚜️ Zer0Life Secure Fast Terminal запущен."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -115,6 +116,23 @@ async def fetch_wallet_balance(wallet: str) -> float:
             pass
     return 0.2517
 
+async def audit_token_safety(session: aiohttp.ClientSession, token_mint: str) -> bool:
+    try:
+        async with session.get(f"{RUGCHECK_API}/{token_mint}/report", timeout=2.5) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                risk_score = data.get("score", 1000)
+                risks = data.get("risks", [])
+                has_fatal_risk = any(r.get("level") == "danger" for r in risks)
+                freeze_disabled = data.get("token", {}).get("freezeAuthority") is None
+                
+                # Защита от рагпула и скама
+                if risk_score < 700 and not has_fatal_risk and freeze_disabled:
+                    return True
+    except Exception:
+        pass
+    return False
+
 async def send_telegram_notification(chat_id: int, text: str):
     if not TELEGRAM_TOKEN or not chat_id:
         return
@@ -126,18 +144,17 @@ async def send_telegram_notification(chat_id: int, text: str):
         except Exception:
             pass
 
-async def fast_arbitrage_worker():
-    add_log("🚀 Fast Arbitrage Engine: Запуск непрерывного сканирования всех пар.")
+async def secure_arbitrage_worker():
+    add_log("🛡️ Secure Arbitrage Engine: Сканирование рынка с защитой от рагпулов.")
     amount_in_lamports = 500000000 # 0.5 SOL
     
     signer = get_signer_keypair()
     if not signer:
-        add_log("⚠️ Внимание: Приватный ключ не найден. Режим симуляции сделок.")
+        add_log("⚠️ Внимание: Приватный ключ не найден. Режим симуляции.")
 
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                # Получаем активные пары с высокой ликвидностью
                 async with session.get("https://api.dexscreener.com/latest/dex/search/?q=solana", timeout=3) as resp:
                     if resp.status != 200:
                         await asyncio.sleep(2)
@@ -150,13 +167,18 @@ async def fast_arbitrage_worker():
                         if p.get("chainId") != "solana":
                             continue
                         liq = p.get("liquidity", {}).get("usd", 0)
-                        if liq < 10000:
+                        if liq < 15000:
                             continue
                         
                         base = p.get("baseToken", {})
                         token_mint = base.get("address")
                         pair_sym = base.get("symbol", "ASSET")
                         if not token_mint or token_mint == SOL_MINT:
+                            continue
+
+                        # Быстрая проверка безопасности (RugCheck / Рагпул фильтр)
+                        is_safe = await audit_token_safety(session, token_mint)
+                        if not is_safe:
                             continue
 
                         # Запрос котировки на покупку
@@ -177,16 +199,14 @@ async def fast_arbitrage_worker():
                             q2_data = await q2_resp.json()
                             final_sol = int(q2_data.get('outAmount', 0))
                             
-                            net_profit = final_sol - amount_in_lamports - 80000 # Вычет комиссии
+                            net_profit = final_sol - amount_in_lamports - 80000
                             profit_sol = net_profit / 10**9
                             profit_pct = (profit_sol / 0.5) * 100
 
-                            # Сделка совершается, если профит попадает в диапазон от 0.3% до 10%
                             if 0.3 <= profit_pct <= 10.0:
-                                add_log(f"🔥 НАЙДЕН СПРЕД ({pair_sym}/SOL): +{profit_sol:.4f} SOL ({profit_pct:.2f}%)")
+                                add_log(f"🔥 НАЙДЕН СПРЕД ({pair_sym}/SOL) [RugSafe]: +{profit_sol:.4f} SOL ({profit_pct:.2f}%)")
                                 
                                 if signer:
-                                    # Исполнение Шага 1 (Покупка)
                                     swap1_payload = {"quoteResponse": q1_data, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
                                     async with session.post(JUPITER_SWAP_API, json=swap1_payload, timeout=3) as s1:
                                         if s1.status == 200:
@@ -201,7 +221,6 @@ async def fast_arbitrage_worker():
                                             await session.post(SOLANA_RPC, json=rpc1)
                                             await asyncio.sleep(1.5)
 
-                                            # Исполнение Шага 2 (Продажа)
                                             swap2_payload = {"quoteResponse": q2_data, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
                                             async with session.post(JUPITER_SWAP_API, json=swap2_payload, timeout=3) as s2:
                                                 if s2.status == 200:
@@ -229,11 +248,11 @@ async def fast_arbitrage_worker():
                                                         conn.close()
 
                                                         for u in active_users:
-                                                            await send_telegram_notification(u[0], f"🚀 *Zer0Life Trade Executed!*\n• Пара: `{pair_sym}/SOL`\n• Профит: `+{profit_sol:.4f} SOL` ({profit_pct:.2f}%) 🎯")
+                                                            await send_telegram_notification(u[0], f"🚀 *Zer0Life Secure Trade!*\n• Пара: `{pair_sym}/SOL`\n• Профит: `+{profit_sol:.4f} SOL` ({profit_pct:.2f}%) 🎯")
                                 break
                         
                         checked += 1
-                        if checked >= 10: # Проверяем пачку из 10 пар за итерацию для максимальной скорости
+                        if checked >= 10:
                             break
             except Exception as e:
                 pass
@@ -412,7 +431,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             <div class="card">
                 <h3 class="title-gold" style="font-size: 16px; margin-bottom: 12px;">🛡️ AI Trader (24/7)</h3>
                 <button class="btn-mode active">
-                    <span style="color: #f1f5f9;">⚜️ Fast Arbitrage Core</span>
+                    <span style="color: #f1f5f9;">⚜️ RugSafe Arbitrage Core</span>
                     <span style="font-size: 11px; color: #d4af37;">Active</span>
                 </button>
             </div>
@@ -789,9 +808,9 @@ async def main():
     
     asyncio.create_tag = asyncio.create_task
     asyncio.create_tag(telegram_long_polling())
-    asyncio.create_tag(fast_arbitrage_worker())
+    asyncio.create_tag(secure_arbitrage_worker())
     
-    add_log("⚜️ Fast Terminal запущен.")
+    add_log("⚜️ Secure Fast Terminal запущен.")
     while True:
         await asyncio.sleep(3600)
 
