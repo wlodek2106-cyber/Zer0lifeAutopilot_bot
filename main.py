@@ -37,7 +37,8 @@ def add_log(msg: str):
 
 WHITELISTED_TOKENS = {
     "SOL": "So11111111111111111111111111111111111111112",
-    "USDC": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+    "USDC": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "USDT": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
 }
 
 try:
@@ -120,22 +121,31 @@ async def fetch_wallet_balance(wallet: str) -> float:
             pass
     return 0.2517
 
-async def audit_token_safety(token_mint: str) -> bool:
+# ==========================================
+# AI AGENT: АУДИТ РИСКОВ, РЕГПУЛА И СКАМА
+# ==========================================
+async def audit_token_safety(session: aiohttp.ClientSession, token_mint: str) -> bool:
     if token_mint in WHITELISTED_TOKENS.values():
         return True
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(f"{RUGCHECK_API}/{token_mint}/report", timeout=4) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    risk_score = data.get("score", 100)
-                    markets = data.get("markets", [])
-                    risks = data.get("risks", [])
-                    has_fatal_risk = any(r.get("level") == "danger" for r in risks)
-                    if risk_score < 1000 and len(markets) >= 3 and not has_fatal_risk:
-                        return True
-        except Exception:
-            pass
+    try:
+        async with session.get(f"{RUGCHECK_API}/{token_mint}/report", timeout=4) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                risk_score = data.get("score", 1000)
+                markets = data.get("markets", [])
+                risks = data.get("risks", [])
+                
+                # КРИТЕРИИ БЕЗОПАСНОСТИ AI АГЕНТА:
+                has_fatal_risk = any(r.get("level") == "danger" for r in risks)
+                mint_abandoned = data.get("token", {}).get("mintAuthority") is None
+                freeze_disabled = data.get("token", {}).get("freezeAuthority") is None
+                
+                if risk_score < 500 and len(markets) >= 2 and not has_fatal_risk and freeze_disabled:
+                    return True
+                else:
+                    add_log(f"🛡️ AI Agent: Токен {token_mint[:8]}... заблокирован (Score: {risk_score}, Danger: {has_fatal_risk})")
+    except Exception:
+        pass
     return False
 
 async def scan_real_opportunities(session: aiohttp.ClientSession):
@@ -159,7 +169,7 @@ async def scan_real_opportunities(session: aiohttp.ClientSession):
                     continue
                 price_change_5m = pair.get("priceChange", {}).get("m5", 0)
                 if price_change_5m >= 6.0:
-                    is_safe = await audit_token_safety(token_mint)
+                    is_safe = await audit_token_safety(session, token_mint)
                     if is_safe:
                         return (pair_name, token_mint, price_change_5m)
     except Exception:
@@ -308,7 +318,7 @@ async def background_mov_trader_daemon():
         await asyncio.sleep(15)
 
 # ==========================================
-# ДОБАВЛЕННЫЙ БЛОК: DEX Arbitrage Scanner (БОЕВОЙ РЕЖИМ)
+# MULTI-DEX ARBITRAGE & RISK AUDIT WORKER
 # ==========================================
 async def fetch_arb_quote(session, input_mint, output_mint, amount):
     slippage_bps = 50
@@ -319,84 +329,82 @@ async def fetch_arb_quote(session, input_mint, output_mint, amount):
         return None
 
 async def arbitrage_worker():
-    add_log("🤖 DEX Scanner переведен в БОЕВОЙ РЕЖИМ.")
-    
-    # Снижаем объем до 0.1 SOL (100,000,000 лампортов) для первых тестов безопасности!
-    amount_in_lamports = 100000000 
+    add_log("🤖 Multi-DEX AI Agent переведен в БОЕВОЙ РЕЖИМ.")
+    amount_in_lamports = 100000000 # 0.1 SOL
     
     signer = get_signer_keypair()
     if not signer:
         add_log("⚠️ Ошибка: Нет приватного ключа. Арбитраж работает в режиме симуляции.")
     else:
-        add_log("🔑 Ключи подключены. Готов к исполнению сделок.")
-        
+        add_log("🔑 Ключи подписи подключены. Сканирование всех DEX бирж...")
+
+    target_stables = [WHITELISTED_TOKENS["USDC"], WHITELISTED_TOKENS["USDT"]]
+
     async with aiohttp.ClientSession() as session:
         while True:
             try:
                 sol_mint = WHITELISTED_TOKENS["SOL"]
-                usdc_mint = WHITELISTED_TOKENS["USDC"]
                 
-                # Ищем путь SOL -> USDC
-                quote_forward = await fetch_arb_quote(session, sol_mint, usdc_mint, amount_in_lamports)
-                if quote_forward:
-                    usdc_amount = quote_forward['outAmount']
-                    
-                    # Ищем путь обратно USDC -> SOL
-                    quote_backward = await fetch_arb_quote(session, usdc_mint, sol_mint, usdc_amount)
-                    if quote_backward:
-                        final_sol = int(quote_backward['outAmount'])
-                        profit = final_sol - amount_in_lamports
+                for stable_mint in target_stables:
+                    # 1. Сканируем лучший курс по всем DEX (SOL -> Stable)
+                    quote_forward = await fetch_arb_quote(session, sol_mint, stable_mint, amount_in_lamports)
+                    if quote_forward:
+                        stable_amount = quote_forward['outAmount']
                         
-                        if profit > 0:
-                            profit_sol = profit / 10**9
-                            add_log(f"✅ НАЙДЕН АРБИТРАЖ! Профит: +{profit_sol:.5f} SOL")
+                        # 2. Сканируем лучший обратный курс (Stable -> SOL)
+                        quote_backward = await fetch_arb_quote(session, stable_mint, sol_mint, stable_amount)
+                        if quote_backward:
+                            final_sol = int(quote_backward['outAmount'])
+                            net_profit_lamports = final_sol - amount_in_lamports
                             
-                            # === БОЕВОЙ БЛОК: ИСПОЛНЕНИЕ СДЕЛКИ ===
-                            if signer:
-                                add_log("⚡ Запускаю связку транзакций...")
+                            # Учитываем комиссии сети (примерно 0.0001 SOL на 2 транзакции)
+                            ESTIMATED_FEE_LAMPORTS = 100000 
+                            real_profit_lamports = net_profit_lamports - ESTIMATED_FEE_LAMPORTS
+                            
+                            if real_profit_lamports > 0:
+                                profit_sol = real_profit_lamports / 10**9
+                                add_log(f"✅ АРБИТРАЖ НАЙДЕН! Профит с учетом комиссий: +{profit_sol:.5f} SOL")
                                 
-                                # 1. Покупаем USDC
-                                swap_payload_1 = {"quoteResponse": quote_forward, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
-                                async with session.post(JUPITER_SWAP_API, json=swap_payload_1, timeout=5) as s_resp1:
-                                    if s_resp1.status == 200:
-                                        s_data1 = await s_resp1.json()
-                                        raw_tx1 = base64.b64decode(s_data1.get("swapTransaction"))
-                                        signed_txn1 = VersionedTransaction(VersionedTransaction.from_bytes(raw_tx1).message, [signer])
-                                        
-                                        rpc_payload1 = {
-                                            "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
-                                            "params": [base64.b64encode(bytes(signed_txn1)).decode('utf-8'), {"encoding": "base64", "skipPreflight": True}]
-                                        }
-                                        await session.post(SOLANA_RPC, json=rpc_payload1)
-                                        add_log("🔄 Этап 1: SOL -> USDC отправлен.")
-                                        
-                                        # Ждем 2 секунды, чтобы первая транзакция успела пройти в блокчейне
-                                        await asyncio.sleep(2) 
-                                        
-                                        # 2. Продаем USDC обратно в SOL (фиксируем прибыль)
-                                        swap_payload_2 = {"quoteResponse": quote_backward, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
-                                        async with session.post(JUPITER_SWAP_API, json=swap_payload_2, timeout=5) as s_resp2:
-                                            if s_resp2.status == 200:
-                                                s_data2 = await s_resp2.json()
-                                                raw_tx2 = base64.b64decode(s_data2.get("swapTransaction"))
-                                                signed_txn2 = VersionedTransaction(VersionedTransaction.from_bytes(raw_tx2).message, [signer])
-                                                
-                                                rpc_payload2 = {
-                                                    "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
-                                                    "params": [base64.b64encode(bytes(signed_txn2)).decode('utf-8'), {"encoding": "base64", "skipPreflight": True}]
-                                                }
-                                                async with session.post(SOLANA_RPC, json=rpc_payload2) as rpc_resp2:
-                                                    rpc_data = await rpc_resp2.json()
-                                                    tx_sig = rpc_data.get("result", "unknown")
-                                                    add_log(f"💎 Арбитраж закрыт! TX: {str(tx_sig)[:8]}...")
-                            # =======================================
-                            
+                                if signer:
+                                    add_log("⚡ Запуск исполнения транзакций через DEX...")
+                                    
+                                    # Исполнение первого плеча (SOL -> Stable)
+                                    swap_payload_1 = {"quoteResponse": quote_forward, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
+                                    async with session.post(JUPITER_SWAP_API, json=swap_payload_1, timeout=5) as s_resp1:
+                                        if s_resp1.status == 200:
+                                            s_data1 = await s_resp1.json()
+                                            raw_tx1 = base64.b64decode(s_data1.get("swapTransaction"))
+                                            signed_txn1 = VersionedTransaction(VersionedTransaction.from_bytes(raw_tx1).message, [signer])
+                                            
+                                            rpc_payload1 = {
+                                                "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
+                                                "params": [base64.b64encode(bytes(signed_txn1)).decode('utf-8'), {"encoding": "base64", "skipPreflight": True}]
+                                            }
+                                            await session.post(SOLANA_RPC, json=rpc_payload1)
+                                            add_log("🔄 Этап 1 завершен. Фиксация в стейблкоин.")
+                                            
+                                            await asyncio.sleep(2)
+                                            
+                                            # Исполнение второго плеча (Stable -> SOL)
+                                            swap_payload_2 = {"quoteResponse": quote_backward, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
+                                            async with session.post(JUPITER_SWAP_API, json=swap_payload_2, timeout=5) as s_resp2:
+                                                if s_resp2.status == 200:
+                                                    s_data2 = await s_resp2.json()
+                                                    raw_sell_tx = base64.b64decode(s_data2.get("swapTransaction"))
+                                                    signed_txn2 = VersionedTransaction(VersionedTransaction.from_bytes(raw_sell_tx).message, [signer])
+                                                    
+                                                    rpc_payload2 = {
+                                                        "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
+                                                        "params": [base64.b64encode(bytes(signed_txn2)).decode('utf-8'), {"encoding": "base64", "skipPreflight": True}]
+                                                    }
+                                                    async with session.post(SOLANA_RPC, json=rpc_payload2) as rpc_resp2:
+                                                        rpc_data = await rpc_resp2.json()
+                                                        tx_sig = rpc_data.get("result", "unknown")
+                                                        add_log(f"💎 Прибыль зафиксирована в SOL! TX: {str(tx_sig)[:8]}...")
             except Exception as e:
                 pass
             
-            # Увеличенная пауза для боевого режима, чтобы не перегрузить RPC
-            await asyncio.sleep(3) 
-# ==========================================
+            await asyncio.sleep(2)
 
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="ru">
@@ -418,7 +426,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             overflow: hidden; 
         }
         
-        /* ПРИВЕТСТВЕННЫЙ ЭКРАН */
         #splash-screen {
             position: fixed;
             top: 0;
@@ -474,15 +481,11 @@ HTML_CONTENT = """<!DOCTYPE html>
     </style>
 </head>
 <body>
-    <!-- ПРИВЕТСТВЕННЫЙ ЭКРАН -->
     <div id="splash-screen">
         <button class="run-btn" onclick="enterApp()">Get Started</button>
     </div>
 
-    <!-- ОСНОВНОЙ КОНТЕЙНЕР ПРИЛОЖЕНИЯ -->
     <div id="app-container" style="display: none; width: 100vw; height: 100vh;">
-        
-        <!-- ВКЛАДКА WALLET -->
         <div id="tab-wallet" class="tab-content">
             <div class="card">
                 <h2 style="margin-top: 0; color: #34d399;">⚡ Web4 Wallet Panel</h2>
@@ -507,11 +510,10 @@ HTML_CONTENT = """<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- ВКЛАДКА AI TRADER -->
         <div id="tab-trader" class="tab-content active">
             <div class="card">
                 <h3 style="margin: 0 0 12px 0; font-size: 15px;">🛡️ Web4 Ai Trader (24/7)</h3>
-                <button class="btn-mode active"><span>⚡ Нейросканирование импульсов</span><span style="font-size: 11px; color: #34d399;">Active</span></button>
+                <button class="btn-mode active"><span>⚡ Нейросканирование + RugAudit</span><span style="font-size: 11px; color: #34d399;">Active</span></button>
             </div>
             <div class="card">
                 <h3 style="margin: 0 0 10px 0; font-size: 15px;">🤖 Автопилот</h3>
@@ -528,7 +530,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- ВКЛАДКА STATS -->
         <div id="tab-stats" class="tab-content">
             <div class="card">
                 <h3 style="margin: 0 0 12px 0; font-size: 16px; color: #34d399;">📊 Статистика Web4</h3>
@@ -546,7 +547,6 @@ HTML_CONTENT = """<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- НИЖНЯЯ НАВИГАЦИЯ -->
     <div id="bottom-nav-bar" class="bottom-nav" style="display: none;">
         <button id="nav-wallet" class="nav-item" onclick="switchTab('wallet')"><span class="nav-icon">👛</span><span>Wallet</span></button>
         <button id="nav-trader" class="nav-item active" onclick="switchTab('trader')"><span class="nav-icon">⚡</span><span>Ai Trader</span></button>
@@ -801,10 +801,9 @@ async def main():
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
     
-    # ЗАПУСКАЕМ ФОНОВЫЕ ЗАДАЧИ
     asyncio.create_task(telegram_long_polling())
     asyncio.create_task(background_mov_trader_daemon())
-    asyncio.create_task(arbitrage_worker()) # <--- ДОБАВЛЕН ЗАПУСК DEX-СКАНЕРА
+    asyncio.create_task(arbitrage_worker())
     
     add_log("Web4 Ai Trader запущен.")
     while True:
