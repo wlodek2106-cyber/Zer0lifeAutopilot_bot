@@ -22,7 +22,7 @@ RUGCHECK_API = "https://api.rugcheck.xyz/v1/token"
 
 SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
 MIN_SOL_RESERVE = 0.3
-MAX_TRADE_SOL_LIMIT = 0.5 # Лимит повышен
+MAX_TRADE_SOL_LIMIT = 0.5
 
 RECENT_LOGS = ["⚜️ Zer0Life Premium Terminal запущен."]
 
@@ -328,7 +328,7 @@ async def fetch_arb_quote(session, input_mint, output_mint, amount):
 
 async def arbitrage_worker():
     add_log("🤖 Multi-DEX AI Agent: Объем повышен до 0.5 SOL. БОЕВОЙ РЕЖИМ.")
-    amount_in_lamports = 500000000 # Повышенный объем: 0.5 SOL
+    amount_in_lamports = 500000000 
     
     signer = get_signer_keypair()
     if not signer:
@@ -353,7 +353,7 @@ async def arbitrage_worker():
                         if quote_backward:
                             final_sol = int(quote_backward['outAmount'])
                             net_profit_lamports = final_sol - amount_in_lamports
-                            ESTIMATED_FEE_LAMPORTS = 80000 # Сниженный порог комиссии (0.00008 SOL) для более частого входа
+                            ESTIMATED_FEE_LAMPORTS = 80000
                             real_profit_lamports = net_profit_lamports - ESTIMATED_FEE_LAMPORTS
                             
                             if real_profit_lamports > 0:
@@ -443,7 +443,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         
         #splash-screen {
             position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-            background: linear-gradient(180deg, #0a0a0c 0%, #050507 100%);
+            background: #050507;
             display: flex; flex-direction: column; justify-content: flex-end;
             padding: 24px; padding-bottom: 50px; z-index: 9999;
         }
@@ -649,11 +649,13 @@ HTML_CONTENT = """<!DOCTYPE html>
                 const res = await fetch('/api/get-image-url');
                 const data = await res.json();
                 if(data.success && data.url) {
-                    document.getElementById('splash-screen').style.backgroundImage = `linear-gradient(180deg, rgba(10,10,12,0.6) 0%, #050507 100%), url('${data.url}')`;
+                    document.getElementById('splash-screen').style.backgroundImage = `url('${data.url}')`;
                     document.getElementById('splash-screen').style.backgroundSize = 'cover';
                     document.getElementById('splash-screen').style.backgroundPosition = 'center';
                 }
-            } catch(e) {}
+            } catch(e) {
+                console.error("Ошибка загрузки изображения", e);
+            }
         }
         loadDashboardImage();
 
@@ -661,7 +663,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             document.getElementById('splash-screen').style.display = 'none';
             document.getElementById('app-container').style.display = 'block';
             document.getElementById('bottom-nav-bar').style.display = 'flex';
-            switchTab('trader');
+            switchTab('trader'); 
         }
 
         let isTrading = false;
@@ -786,8 +788,9 @@ async def health_handler(request):
     return web.Response(text="OK", status=200)
 
 async def api_get_image_url(request):
+    fallback_url = "https://images.unsplash.com/photo-1639762681485-074b7f938ba0?q=80&w=800&auto=format&fit=crop"
     if not TELEGRAM_TOKEN:
-        return web.json_response({"success": False})
+        return web.json_response({"success": True, "url": fallback_url})
     file_id = "BQACAgIAAxkBAAIs5WrKHdZEC_o9AAFA8I4DJ9bwtxNgUAACYqoAAjKZUUqVAAGch_gphqE9BA"
     async with aiohttp.ClientSession() as session:
         async with session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}") as resp:
@@ -797,7 +800,7 @@ async def api_get_image_url(request):
                 if file_path:
                     download_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
                     return web.json_response({"success": True, "url": download_url})
-    return web.json_response({"success": False})
+    return web.json_response({"success": True, "url": fallback_url})
 
 async def api_get_profile(request):
     data = await request.json()
