@@ -327,7 +327,7 @@ async def fetch_arb_quote(session, input_mint, output_mint, amount):
         return None
 
 async def arbitrage_worker():
-    add_log("🤖 Multi-DEX AI Agent: Объем повышен до 0.5 SOL. БОЕВОЙ РЕЖИМ.")
+    add_log("🤖 Multi-DEX AI Agent: Объем 0.5 SOL. БОЕВОЙ РЕЖИМ.")
     amount_in_lamports = 500000000 
     
     signer = get_signer_keypair()
@@ -419,13 +419,16 @@ async def arbitrage_worker():
             await asyncio.sleep(2)
 
 # ==========================================
-# LUXURY HTML & CSS 
+# LUXURY HTML & CSS (С ЗАЩИТОЙ ОТ КЭША)
 # ==========================================
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>Zer0Life Premium</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
@@ -443,7 +446,10 @@ HTML_CONTENT = """<!DOCTYPE html>
         
         #splash-screen {
             position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-            background: #050507;
+            background-color: #050507;
+            background-image: url('https://images.unsplash.com/photo-1639762681485-074b7f938ba0?q=80&w=800&auto=format&fit=crop');
+            background-size: cover;
+            background-position: center;
             display: flex; flex-direction: column; justify-content: flex-end;
             padding: 24px; padding-bottom: 50px; z-index: 9999;
         }
@@ -468,12 +474,9 @@ HTML_CONTENT = """<!DOCTYPE html>
         }
         
         .title-gold {
-            margin-top: 0; 
-            font-size: 20px;
-            font-weight: 800;
+            margin-top: 0; font-size: 20px; font-weight: 800;
             background: linear-gradient(to right, #d4af37, #ffdf73, #d4af37);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
             letter-spacing: 0.5px;
         }
         
@@ -499,9 +502,8 @@ HTML_CONTENT = """<!DOCTYPE html>
             border-radius: 18px; font-weight: 800; cursor: pointer; 
             margin-top: 16px; font-size: 14px; text-transform: uppercase;
             box-shadow: 0 6px 20px rgba(212, 175, 55, 0.25);
-            letter-spacing: 0.5px; transition: transform 0.1s;
+            letter-spacing: 0.5px;
         }
-        .btn-gold:active { transform: scale(0.98); }
         
         .btn-red { background: linear-gradient(135deg, #3f0d12 0%, #a71d31 100%); color: white; border: 1px solid rgba(255, 50, 50, 0.3); box-shadow: 0 4px 20px rgba(167, 29, 49, 0.4); border-radius: 18px; padding: 14px; font-weight: 700; border: none; width: 100%; cursor: pointer;}
         .btn-mode { background: rgba(20, 20, 24, 0.6); color: #d4af37; border: 1px solid rgba(212, 175, 55, 0.2); margin-top: 8px; width: 100%; padding: 14px; border-radius: 18px; font-weight: bold; cursor: pointer; text-align: left; display: flex; justify-content: space-between; align-items: center; }
@@ -509,8 +511,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         .qr-wrapper {
             background: linear-gradient(145deg, #ffdf73, #aa771c);
             padding: 2px; border-radius: 22px; width: 164px; height: 164px; 
-            margin: 24px auto;
-            box-shadow: 0 10px 30px rgba(212, 175, 55, 0.2);
+            margin: 24px auto; box-shadow: 0 10px 30px rgba(212, 175, 55, 0.2);
         }
         .qr-container-web4 { 
             background: #ffffff; width: 100%; height: 100%; 
@@ -546,9 +547,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             flex-direction: column; align-items: center; gap: 4px; 
             cursor: pointer; transition: all 0.3s; 
         }
-        .nav-item.active { 
-            color: #d4af37; text-shadow: 0 0 15px rgba(212, 175, 55, 0.6); 
-        }
+        .nav-item.active { color: #d4af37; text-shadow: 0 0 15px rgba(212, 175, 55, 0.6); }
         .nav-icon { font-size: 20px; }
         
         .tab-content { display: none; width: 100%; height: 100vh; overflow-y: auto; padding: 16px; padding-bottom: 110px; }
@@ -557,7 +556,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 </head>
 <body>
     <div id="splash-screen">
-        <button class="run-btn" onclick="enterApp()">Launch Terminal</button>
+        <button class="run-btn" type="button" onclick="enterApp()">LAUNCH TERMINAL</button>
     </div>
 
     <div id="app-container" style="display: none; width: 100vw; height: 100vh;">
@@ -566,25 +565,21 @@ HTML_CONTENT = """<!DOCTYPE html>
             <div class="card">
                 <h2 class="title-gold">⚜️ Premium Wallet</h2>
                 <p class="subtitle">Ваш персональный защищенный адрес для депозита SOL.</p>
-                
                 <div style="margin: 20px 0;">
                     <div class="label-gold">Deposit Address:</div>
                     <div class="input-group-web4">
                         <input type="text" id="wallet-input" class="input-field-web4" readonly>
                     </div>
                 </div>
-                
                 <div class="qr-wrapper">
                     <div class="qr-container-web4">
                         <img id="qr-img" src="" alt="QR" style="width: 140px; height: 140px; border-radius: 12px;">
                     </div>
                 </div>
-                
                 <button class="btn-gold" onclick="navigator.clipboard.writeText(document.getElementById('wallet-input').value); alert('📋 Адрес скопирован!')">
                     Скопировать адрес
                 </button>
             </div>
-            
             <div class="card">
                 <div class="label-gold">Верификация (TX Signature):</div>
                 <div class="input-group-web4">
@@ -641,29 +636,21 @@ HTML_CONTENT = """<!DOCTYPE html>
     </div>
 
     <script>
-        let tg = window.Telegram.WebApp; tg.expand();
-        const user = tg.initDataUnsafe?.user || { id: 42882165, username: "CryptoWlodek", first_name: "CryptoWlodek" };
-        
-        async function loadDashboardImage() {
-            try {
-                const res = await fetch('/api/get-image-url');
-                const data = await res.json();
-                if(data.success && data.url) {
-                    document.getElementById('splash-screen').style.backgroundImage = `url('${data.url}')`;
-                    document.getElementById('splash-screen').style.backgroundSize = 'cover';
-                    document.getElementById('splash-screen').style.backgroundPosition = 'center';
-                }
-            } catch(e) {
-                console.error("Ошибка загрузки изображения", e);
-            }
-        }
-        loadDashboardImage();
+        let tg;
+        try {
+            tg = window.Telegram.WebApp;
+            if (tg) tg.expand();
+        } catch(e) { console.log(e); }
+
+        const user = (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) ? tg.initDataUnsafe.user : { id: 42882165, username: "CryptoWlodek", first_name: "CryptoWlodek" };
 
         function enterApp() {
-            document.getElementById('splash-screen').style.display = 'none';
-            document.getElementById('app-container').style.display = 'block';
-            document.getElementById('bottom-nav-bar').style.display = 'flex';
-            switchTab('trader'); 
+            try {
+                document.getElementById('splash-screen').style.display = 'none';
+                document.getElementById('app-container').style.display = 'block';
+                document.getElementById('bottom-nav-bar').style.display = 'flex';
+                switchTab('trader');
+            } catch(e) { alert("Ошибка запуска: " + e.message); }
         }
 
         let isTrading = false;
@@ -687,16 +674,18 @@ HTML_CONTENT = """<!DOCTYPE html>
         }
         
         async function loadProfile() {
-            const res = await fetch('/api/profile', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({telegram_id: user.id, username: user.username, first_name: user.first_name})});
-            const data = await res.json();
-            if(data.success) {
-                const w = data.profile.solana_wallet;
-                document.getElementById('wallet-input').value = w;
-                document.getElementById('qr-img').src = "https://api.qrserver.com/v1/create-qr-code/?size=160x160&color=050507&bgcolor=ffffff&data=" + encodeURIComponent(w);
-                isTrading = data.profile.trading_active === 1;
-                updateUI();
-                checkBalance();
-            }
+            try {
+                const res = await fetch('/api/profile', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({telegram_id: user.id, username: user.username, first_name: user.first_name})});
+                const data = await res.json();
+                if(data.success) {
+                    const w = data.profile.solana_wallet;
+                    document.getElementById('wallet-input').value = w;
+                    document.getElementById('qr-img').src = "https://api.qrserver.com/v1/create-qr-code/?size=160x160&color=050507&bgcolor=ffffff&data=" + encodeURIComponent(w);
+                    isTrading = data.profile.trading_active === 1;
+                    updateUI();
+                    checkBalance();
+                }
+            } catch(e) {}
         }
         
         function updateUI() {
@@ -714,29 +703,35 @@ HTML_CONTENT = """<!DOCTYPE html>
         async function checkBalance() {
             const w = document.getElementById('wallet-input').value;
             if(!w) return;
-            const res = await fetch('/api/blockchain/balance?wallet=' + encodeURIComponent(w));
-            const data = await res.json();
-            if(data.success) { document.getElementById('wallet-balance').innerText = data.balance.toFixed(4) + " SOL"; }
+            try {
+                const res = await fetch('/api/blockchain/balance?wallet=' + encodeURIComponent(w));
+                const data = await res.json();
+                if(data.success) { document.getElementById('wallet-balance').innerText = data.balance.toFixed(4) + " SOL"; }
+            } catch(e) {}
         }
         
         async function verifyDeposit() {
             const txHash = document.getElementById('tx-hash-input').value.trim();
             if(!txHash) { alert("Введите хэш!"); return; }
-            const res = await fetch('/api/verify-tx', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({telegram_id: user.id, tx_signature: txHash})});
-            const data = await res.json();
-            if(data.success) { 
-                alert("✅ Успешно верифицировано!\nНайдено пополнение на: +" + data.amount + " SOL"); 
-                document.getElementById('tx-hash-input').value = ""; 
-                checkBalance(); 
-            } else {
-                alert("❌ Ошибка: " + (data.error || "Неизвестная ошибка"));
-            }
+            try {
+                const res = await fetch('/api/verify-tx', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({telegram_id: user.id, tx_signature: txHash})});
+                const data = await res.json();
+                if(data.success) { 
+                    alert("✅ Успешно верифицировано!\nНайдено пополнение на: +" + data.amount + " SOL"); 
+                    document.getElementById('tx-hash-input').value = ""; 
+                    checkBalance(); 
+                } else {
+                    alert("❌ Ошибка: " + (data.error || "Неизвестная ошибка"));
+                }
+            } catch(e) { alert("Ошибка соединения с сервером"); }
         }
         
         async function toggleTrading() {
             isTrading = !isTrading;
-            await fetch('/api/trading/toggle', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({telegram_id: user.id, active: isTrading ? 1 : 0})});
-            updateUI();
+            try {
+                await fetch('/api/trading/toggle', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({telegram_id: user.id, active: isTrading ? 1 : 0})});
+                updateUI();
+            } catch(e) {}
         }
         
         async function loadLogs() {
@@ -748,30 +743,32 @@ HTML_CONTENT = """<!DOCTYPE html>
         }
         
         async function loadStats() {
-            const res = await fetch('/api/stats?telegram_id=' + user.id);
-            const data = await res.json();
-            if(data.success) {
-                document.getElementById('stat-current').innerText = data.current_sol.toFixed(4) + " SOL";
-                const diff = data.profit_sol;
-                const el = document.getElementById('stat-profit-sol');
-                el.innerText = (diff >= 0 ? "+" : "") + diff.toFixed(4) + " SOL";
-                el.style.color = diff >= 0 ? "#d4af37" : "#a71d31";
-                
-                const list = document.getElementById('trades-list');
-                if(data.trades.length === 0) {
-                    list.innerHTML = '<div style="color: #5a5d63; font-size: 12px; text-align: center; padding: 20px;">Нет сделок</div>';
-                } else {
-                    list.innerHTML = data.trades.map(t => `
-                        <div class="trade-item">
-                            <div>
-                                <div style="color: #f1f5f9; font-weight: bold;">${t.token_pair}</div>
-                                <div style="color: #8a8d93; font-size: 10px;">TX: <a href="https://solscan.io/tx/${t.tx_signature}" target="_blank" style="color: #d4af37;">${t.tx_signature.substring(0,8)}...</a></div>
+            try {
+                const res = await fetch('/api/stats?telegram_id=' + user.id);
+                const data = await res.json();
+                if(data.success) {
+                    document.getElementById('stat-current').innerText = data.current_sol.toFixed(4) + " SOL";
+                    const diff = data.profit_sol;
+                    const el = document.getElementById('stat-profit-sol');
+                    el.innerText = (diff >= 0 ? "+" : "") + diff.toFixed(4) + " SOL";
+                    el.style.color = diff >= 0 ? "#d4af37" : "#a71d31";
+                    
+                    const list = document.getElementById('trades-list');
+                    if(data.trades.length === 0) {
+                        list.innerHTML = '<div style="color: #5a5d63; font-size: 12px; text-align: center; padding: 20px;">Нет сделок</div>';
+                    } else {
+                        list.innerHTML = data.trades.map(t => `
+                            <div class="trade-item">
+                                <div>
+                                    <div style="color: #f1f5f9; font-weight: bold;">${t.token_pair}</div>
+                                    <div style="color: #8a8d93; font-size: 10px;">TX: <a href="https://solscan.io/tx/${t.tx_signature}" target="_blank" style="color: #d4af37;">${t.tx_signature.substring(0,8)}...</a></div>
+                                </div>
+                                <div style="color: ${t.profit_sol >= 0 ? '#d4af37' : '#a71d31'}; font-weight: bold; font-size: 12px;">${t.profit_sol >= 0 ? '+' : ''}${t.profit_sol.toFixed(4)} SOL</div>
                             </div>
-                            <div style="color: ${t.profit_sol >= 0 ? '#d4af37' : '#a71d31'}; font-weight: bold; font-size: 12px;">${t.profit_sol >= 0 ? '+' : ''}${t.profit_sol.toFixed(4)} SOL</div>
-                        </div>
-                    `).join('');
+                        `).join('');
+                    }
                 }
-            }
+            } catch(e) {}
         }
         
         loadProfile();
@@ -782,25 +779,18 @@ HTML_CONTENT = """<!DOCTYPE html>
 """
 
 async def index_handler(request):
-    return web.Response(text=HTML_CONTENT, content_type='text/html')
+    headers = {
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0"
+    }
+    return web.Response(text=HTML_CONTENT, content_type='text/html', headers=headers)
 
 async def health_handler(request):
     return web.Response(text="OK", status=200)
 
 async def api_get_image_url(request):
-    fallback_url = "https://images.unsplash.com/photo-1639762681485-074b7f938ba0?q=80&w=800&auto=format&fit=crop"
-    if not TELEGRAM_TOKEN:
-        return web.json_response({"success": True, "url": fallback_url})
-    file_id = "BQACAgIAAxkBAAIs5WrKHdZEC_o9AAFA8I4DJ9bwtxNgUAACYqoAAjKZUUqVAAGch_gphqE9BA"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}") as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                file_path = data.get("result", {}).get("file_path")
-                if file_path:
-                    download_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
-                    return web.json_response({"success": True, "url": download_url})
-    return web.json_response({"success": True, "url": fallback_url})
+    return web.json_response({"success": False})
 
 async def api_get_profile(request):
     data = await request.json()
