@@ -733,7 +733,13 @@ HTML_CONTENT = """<!DOCTYPE html>
             if(!txHash) { alert("Введите хэш!"); return; }
             const res = await fetch('/api/verify-tx', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({telegram_id: user.id, tx_signature: txHash})});
             const data = await res.json();
-            if(data.success) { alert("✅ Успешно верифицировано!"); document.getElementById('tx-hash-input').value = ""; checkBalance(); }
+            if(data.success) { 
+                alert("✅ Успешно верифицировано!"); 
+                document.getElementById('tx-hash-input').value = ""; 
+                checkBalance(); 
+            } else {
+                alert("❌ Ошибка: " + (data.error || "Неизвестная ошибка"));
+            }
         }
         
         async function toggleTrading() {
@@ -809,9 +815,45 @@ async def api_get_profile(request):
     user = get_or_create_user(int(data.get("telegram_id")), data.get("username", ""), data.get("first_name", ""))
     return web.json_response({"success": True, "profile": user})
 
+# ==========================================
+# ОБНОВЛЕННАЯ ФУНКЦИЯ ПРОВЕРКИ ТРАНЗАКЦИЙ (РЕАЛЬНАЯ СЕТЬ)
+# ==========================================
 async def api_verify_tx(request):
     data = await request.json()
-    return web.json_response({"success": True})
+    tx_sig = data.get("tx_signature", "").strip()
+
+    if not tx_sig or len(tx_sig) < 50:
+        return web.json_response({"success": False, "error": "Неверный формат хэша (слишком короткий)"})
+
+    payload = {
+        "jsonrpc": "2.0", "id": 1, 
+        "method": "getTransaction", 
+        "params": [tx_sig, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}]
+    }
+    
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(SOLANA_RPC, json=payload, timeout=5) as resp:
+                if resp.status == 200:
+                    rpc_data = await resp.json()
+                    tx_info = rpc_data.get("result")
+                    
+                    if not tx_info:
+                        return web.json_response({"success": False, "error": "Транзакция не найдена в сети Solana"})
+                        
+                    if tx_info.get("meta", {}).get("err"):
+                        return web.json_response({"success": False, "error": "Транзакция завершилась ошибкой (Failed)"})
+
+                    # Проверяем, участвует ли кошелек бота в этой транзакции
+                    account_keys = [acc["pubkey"] for acc in tx_info.get("transaction", {}).get("message", {}).get("accountKeys", [])]
+                    if SHARED_DEPOSIT_WALLET not in account_keys:
+                        return web.json_response({"success": False, "error": "Эта транзакция отправлена на чужой кошелек"})
+
+                    return web.json_response({"success": True})
+                else:
+                    return web.json_response({"success": False, "error": "Ошибка связи с RPC сервером"})
+        except Exception:
+            return web.json_response({"success": False, "error": "Ошибка сети при проверке"})
 
 async def api_toggle_trading(request):
     data = await request.json()
