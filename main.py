@@ -23,7 +23,7 @@ RUGCHECK_API = "https://api.rugcheck.xyz/v1/token"
 SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
 MIN_SOL_RESERVE = 0.3
 
-RECENT_LOGS = ["⚜️ Zer0Life Secure Fast Terminal запущен."]
+RECENT_LOGS = ["⚜️ Zer0Life Aggressive Terminal запущен."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -126,8 +126,7 @@ async def audit_token_safety(session: aiohttp.ClientSession, token_mint: str) ->
                 has_fatal_risk = any(r.get("level") == "danger" for r in risks)
                 freeze_disabled = data.get("token", {}).get("freezeAuthority") is None
                 
-                # Защита от рагпула и скама
-                if risk_score < 700 and not has_fatal_risk and freeze_disabled:
+                if risk_score < 750 and not has_fatal_risk and freeze_disabled:
                     return True
     except Exception:
         pass
@@ -144,8 +143,8 @@ async def send_telegram_notification(chat_id: int, text: str):
         except Exception:
             pass
 
-async def secure_arbitrage_worker():
-    add_log("🛡️ Secure Arbitrage Engine: Сканирование рынка с защитой от рагпулов.")
+async def aggressive_arbitrage_worker():
+    add_log("⚡ Aggressive Arbitrage Engine: Сканирование от 0.1% профита.")
     amount_in_lamports = 500000000 # 0.5 SOL
     
     signer = get_signer_keypair()
@@ -167,7 +166,7 @@ async def secure_arbitrage_worker():
                         if p.get("chainId") != "solana":
                             continue
                         liq = p.get("liquidity", {}).get("usd", 0)
-                        if liq < 15000:
+                        if liq < 10000:
                             continue
                         
                         base = p.get("baseToken", {})
@@ -176,13 +175,11 @@ async def secure_arbitrage_worker():
                         if not token_mint or token_mint == SOL_MINT:
                             continue
 
-                        # Быстрая проверка безопасности (RugCheck / Рагпул фильтр)
                         is_safe = await audit_token_safety(session, token_mint)
                         if not is_safe:
                             continue
 
-                        # Запрос котировки на покупку
-                        q1_url = f"{JUPITER_QUOTE_API}?inputMint={SOL_MINT}&outputMint={token_mint}&amount={amount_in_lamports}&slippageBps=100"
+                        q1_url = f"{JUPITER_QUOTE_API}?inputMint={SOL_MINT}&outputMint={token_mint}&amount={amount_in_lamports}&slippageBps=150"
                         async with session.get(q1_url, timeout=2) as q1_resp:
                             if q1_resp.status != 200:
                                 continue
@@ -191,8 +188,7 @@ async def secure_arbitrage_worker():
                             if out_amount <= 0:
                                 continue
 
-                        # Запрос котировки на продажу обратно в SOL
-                        q2_url = f"{JUPITER_QUOTE_API}?inputMint={token_mint}&outputMint={SOL_MINT}&amount={out_amount}&slippageBps=100"
+                        q2_url = f"{JUPITER_QUOTE_API}?inputMint={token_mint}&outputMint={SOL_MINT}&amount={out_amount}&slippageBps=150"
                         async with session.get(q2_url, timeout=2) as q2_resp:
                             if q2_resp.status != 200:
                                 continue
@@ -203,8 +199,9 @@ async def secure_arbitrage_worker():
                             profit_sol = net_profit / 10**9
                             profit_pct = (profit_sol / 0.5) * 100
 
-                            if 0.3 <= profit_pct <= 10.0:
-                                add_log(f"🔥 НАЙДЕН СПРЕД ({pair_sym}/SOL) [RugSafe]: +{profit_sol:.4f} SOL ({profit_pct:.2f}%)")
+                            # Снижен порог до 0.1% для частого совершения сделок
+                            if 0.1 <= profit_pct <= 15.0:
+                                add_log(f"🔥 СПРЕД 0.1%+ ({pair_sym}/SOL): +{profit_sol:.4f} SOL ({profit_pct:.2f}%)")
                                 
                                 if signer:
                                     swap1_payload = {"quoteResponse": q1_data, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
@@ -248,11 +245,11 @@ async def secure_arbitrage_worker():
                                                         conn.close()
 
                                                         for u in active_users:
-                                                            await send_telegram_notification(u[0], f"🚀 *Zer0Life Secure Trade!*\n• Пара: `{pair_sym}/SOL`\n• Профит: `+{profit_sol:.4f} SOL` ({profit_pct:.2f}%) 🎯")
+                                                            await send_telegram_notification(u[0], f"🚀 *Zer0Life Aggressive Trade!*\n• Пара: `{pair_sym}/SOL`\n• Профит: `+{profit_sol:.4f} SOL` ({profit_pct:.2f}%) 🎯")
                                 break
                         
                         checked += 1
-                        if checked >= 10:
+                        if checked >= 15:
                             break
             except Exception as e:
                 pass
@@ -431,7 +428,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             <div class="card">
                 <h3 class="title-gold" style="font-size: 16px; margin-bottom: 12px;">🛡️ AI Trader (24/7)</h3>
                 <button class="btn-mode active">
-                    <span style="color: #f1f5f9;">⚜️ RugSafe Arbitrage Core</span>
+                    <span style="color: #f1f5f9;">⚜️ Aggressive Arbitrage Core</span>
                     <span style="font-size: 11px; color: #d4af37;">Active</span>
                 </button>
             </div>
@@ -808,9 +805,9 @@ async def main():
     
     asyncio.create_tag = asyncio.create_task
     asyncio.create_tag(telegram_long_polling())
-    asyncio.create_tag(secure_arbitrage_worker())
+    asyncio.create_tag(aggressive_arbitrage_worker())
     
-    add_log("⚜️ Secure Fast Terminal запущен.")
+    add_log("⚜️ Aggressive Terminal запущен.")
     while True:
         await asyncio.sleep(3600)
 
