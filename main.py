@@ -7,7 +7,6 @@ import logging
 from datetime import datetime
 import json
 import base64
-import random
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -24,7 +23,7 @@ RUGCHECK_API = "https://api.rugcheck.xyz/v1/token"
 JITO_BUNDLE_API = "https://mainnet.block-engine.jito.wtf/api/v1/bundles"
 
 SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
-SPLASH_IMAGE_URL = "https://i.postimg.cc/c4PrqkQN/IMG-0004.png"
+SPLASH_IMAGE_URL = "https://i.postimg.cc/52n94Pzg/57D47DDD-9BED-4D4B-AA69-2B59CAB400AD.png"
 
 # Токены
 SOL_MINT = "So11111111111111111111111111111111111111112"
@@ -32,8 +31,8 @@ USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
 # Риск-параметры
 GAS_RESERVE_SOL = 0.015
-MAX_DAILY_LOSS_PCT = 2.5       # Защитный стоп на день: максимум 2.5% просадки
-MIN_PROFIT_PCT = 0.35          # Минимальный порог входа чистыми (+0.35%)
+MAX_DAILY_LOSS_PCT = 2.5       # Защитный стоп на день (2.5%)
+MIN_PROFIT_PCT = 0.35          # Минимальный чистый порог (+0.35%)
 JITO_TIP_LAMPORTS = 100000     # 0.0001 SOL чаевые валидаторам Jito за приоритет
 
 RECENT_LOGS = ["⚜️ Zer0Life Institutional AI Terminal инициализирован."]
@@ -164,7 +163,6 @@ async def audit_token_safety(session: aiohttp.ClientSession, token_mint: str, pa
     liq = pair_data.get("liquidity", {}).get("usd", 0)
     vol24 = pair_data.get("volume", {}).get("h24", 0)
     
-    # Институциональный фильтр: только пулы с проверенной глубиной
     if liq < 25000 or vol24 < 40000:
         AUDITED_TOKENS_CACHE[token_mint] = False
         return False
@@ -213,21 +211,18 @@ async def professional_trading_worker():
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                # 1. Проверка защитного стоп-лосса (Circuit Breaker)
                 sol_balance = await fetch_wallet_balance(SHARED_DEPOSIT_WALLET)
                 usdc_balance = await fetch_usdc_balance(SHARED_DEPOSIT_WALLET)
                 usable_sol = max(0.0, sol_balance - GAS_RESERVE_SOL)
 
-                # Динамический размер лота (Критерий Келли / Безопасные 25% свободной ликвидности)
                 trade_sol = min(0.05, max(0.02, usable_sol * 0.25))
                 amount_in_lamports = int(trade_sol * 1_000_000_000)
 
                 if usable_sol < 0.015:
-                    add_log(f"⏳ Резерв: {sol_balance:.4f} SOL | {usdc_balance:.2f} USDC. Ожидание достаточного пула...")
+                    add_log(f"⏳ Резерв: {sol_balance:.4f} SOL | {usdc_balance:.2f} USDC. Ожидание пула...")
                     await asyncio.sleep(12)
                     continue
 
-                # 2. Сканирование пулов Raydium, Orca, Meteora через DexScreener
                 async with session.get("https://api.dexscreener.com/latest/dex/search/?q=SOL", timeout=5) as resp:
                     if resp.status != 200:
                         await asyncio.sleep(3)
@@ -250,11 +245,9 @@ async def professional_trading_worker():
 
                     checked_pools += 1
                     
-                    # 3. Фильтрация от СКАМА / Honeypot
                     if not await audit_token_safety(session, token_mint, p):
                         continue
 
-                    # 4. Проверка спреда туда и обратно через прямые маршруты Jupiter
                     q1_url = f"{JUPITER_QUOTE_API}?inputMint={SOL_MINT}&outputMint={token_mint}&amount={amount_in_lamports}&slippageBps=50&onlyDirectRoutes=true"
                     async with session.get(q1_url, timeout=2.5) as q1_resp:
                         if q1_resp.status != 200:
@@ -271,18 +264,15 @@ async def professional_trading_worker():
                         q2 = await q2_resp.json()
                         final_lamports = int(q2.get('outAmount', 0))
 
-                    # 5. Расчет чистой прибыли с учетом газа и Jito Tip
                     net_lamports = final_lamports - amount_in_lamports - JITO_TIP_LAMPORTS - 10000
                     profit_sol = net_lamports / 1_000_000_000
                     profit_pct = (profit_sol / trade_sol) * 100
 
-                    # 6. Вход ТОЛЬКО если профит строго выше порога
                     if MIN_PROFIT_PCT <= profit_pct <= 15.0:
                         add_log(f"⚡ АРБИТРАЖ [{dex_id}]: {pair_sym}/SOL. Расчетный профит: +{profit_sol:.4f} SOL (+{profit_pct:.2f}%)")
 
                         tx_sig = f"jito_bundle_{os.urandom(6).hex()}"
                         
-                        # 7. Отправка через Jito Bundle (при наличии ключа)
                         if signer:
                             swap1_payload = {"quoteResponse": q1, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
                             async with session.post(JUPITER_SWAP_API, json=swap1_payload, timeout=3) as s1:
@@ -291,7 +281,6 @@ async def professional_trading_worker():
                                     tx_b1 = base64.b64decode(s1_data["swapTransaction"])
                                     tx1 = VersionedTransaction(VersionedTransaction.from_bytes(tx_b1).message, [signer])
                                     
-                                    # Отправка бандлом через Jito RPC
                                     bundle_body = {
                                         "jsonrpc": "2.0", "id": 1,
                                         "method": "sendBundle",
@@ -302,7 +291,6 @@ async def professional_trading_worker():
                                             j_data = await j_resp.json()
                                             tx_sig = j_data.get("result", tx_sig)
 
-                        # 8. Модуль авто-хеджирования: переводим 50% прибыли в USDC
                         hedged_usdc = 0.0
                         try:
                             sol_price_est = 180.0
@@ -310,7 +298,6 @@ async def professional_trading_worker():
                         except Exception:
                             pass
 
-                        # 9. Фиксация в локальной базе сделок
                         conn = sqlite3.connect(DB_FILE)
                         cursor = conn.cursor()
                         cursor.execute("SELECT telegram_id FROM users WHERE trading_active = 1")
@@ -333,7 +320,7 @@ async def professional_trading_worker():
                         break
 
                 if checked_pools > 0:
-                    add_log(f"🔍 Сканирование DEX: {checked_pools} пулов проанализировано. Небезопасные отсеяны.")
+                    add_log(f"🔍 Сканирование DEX: {checked_pools} пулов проверено. Опасные отсеяны.")
 
             except Exception as e:
                 logging.error(f"Trading worker loop error: {e}")
