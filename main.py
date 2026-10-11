@@ -24,7 +24,7 @@ SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
 MIN_SOL_RESERVE = 0.3
 MAX_TRADE_SOL_LIMIT = 0.5
 
-RECENT_LOGS = ["⚜️ Zer0Life Premium Terminal запущен."]
+RECENT_LOGS = ["⚜️ Zer0Life Dynamic Terminal запущен."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -35,11 +35,7 @@ def add_log(msg: str):
         RECENT_LOGS.pop()
     logging.info(msg)
 
-WHITELISTED_TOKENS = {
-    "SOL": "So11111111111111111111111111111111111111112",
-    "USDC": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-    "USDT": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
-}
+SOL_MINT = "So11111111111111111111111111111111111111112"
 
 try:
     from solders.keypair import Keypair
@@ -122,54 +118,20 @@ async def fetch_wallet_balance(wallet: str) -> float:
     return 0.2517
 
 async def audit_token_safety(session: aiohttp.ClientSession, token_mint: str) -> bool:
-    if token_mint in WHITELISTED_TOKENS.values():
-        return True
     try:
-        async with session.get(f"{RUGCHECK_API}/{token_mint}/report", timeout=4) as resp:
+        async with session.get(f"{RUGCHECK_API}/{token_mint}/report", timeout=3) as resp:
             if resp.status == 200:
                 data = await resp.json()
                 risk_score = data.get("score", 1000)
-                markets = data.get("markets", [])
                 risks = data.get("risks", [])
-                
                 has_fatal_risk = any(r.get("level") == "danger" for r in risks)
                 freeze_disabled = data.get("token", {}).get("freezeAuthority") is None
                 
-                if risk_score < 500 and len(markets) >= 2 and not has_fatal_risk and freeze_disabled:
+                if risk_score < 600 and not has_fatal_risk and freeze_disabled:
                     return True
-                else:
-                    add_log(f"🛡️ AI Agent: Токен {token_mint[:8]}... заблокирован (Score: {risk_score})")
     except Exception:
         pass
     return False
-
-async def scan_real_opportunities(session: aiohttp.ClientSession):
-    url = "https://api.dexscreener.com/latest/dex/search/?q=solana"
-    try:
-        async with session.get(url, timeout=4) as resp:
-            if resp.status != 200:
-                return None
-            data = await resp.json()
-            pairs = data.get("pairs", [])
-            for pair in pairs:
-                if pair.get("chainId") != "solana":
-                    continue
-                liquidity = pair.get("liquidity", {}).get("usd", 0)
-                if liquidity < 15000:
-                    continue
-                base_token = pair.get("baseToken", {})
-                token_mint = base_token.get("address")
-                pair_name = f"{base_token.get('symbol', 'ASSET')}/SOL"
-                if not token_mint:
-                    continue
-                price_change_5m = pair.get("priceChange", {}).get("m5", 0)
-                if price_change_5m >= 6.0:
-                    is_safe = await audit_token_safety(session, token_mint)
-                    if is_safe:
-                        return (pair_name, token_mint, price_change_5m)
-    except Exception:
-        pass
-    return None
 
 async def send_telegram_notification(chat_id: int, text: str):
     if not TELEGRAM_TOKEN or not chat_id:
@@ -182,178 +144,86 @@ async def send_telegram_notification(chat_id: int, text: str):
         except Exception:
             pass
 
-async def execute_strict_trade(telegram_id: int, pair_name: str, target_mint: str, sol_bal: float, signer: Keypair, session: aiohttp.ClientSession):
-    if sol_bal <= MIN_SOL_RESERVE:
-        return
-    available_for_trade = sol_bal - MIN_SOL_RESERVE
-    base_trade_sol = round(min(available_for_trade * 0.3, MAX_TRADE_SOL_LIMIT * 0.5), 4)
-    if base_trade_sol <= 0.001:
-        return
-    base_lamports = int(base_trade_sol * 1_000_000_000)
-    add_log(f"⚡ Вход по {pair_name} на {base_trade_sol} SOL")
-
-    try:
-        buy_q_url = f"{JUPITER_QUOTE_API}?inputMint={WHITELISTED_TOKENS['SOL']}&outputMint={target_mint}&amount={base_lamports}&slippageBps=50"
-        async with session.get(buy_q_url, timeout=3) as resp:
-            if resp.status != 200:
-                return
-            buy_data = await resp.json()
-            out_amt = int(buy_data.get("outAmount", 0))
-            if out_amt <= 0:
-                return
-
-        swap_payload = {"quoteResponse": buy_data, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
-        async with session.post(JUPITER_SWAP_API, json=swap_payload, timeout=3) as s_resp:
-            if s_resp.status != 200:
-                return
-            s_data = await s_resp.json()
-            raw_tx = base64.b64decode(s_data.get("swapTransaction"))
-            signed_txn = VersionedTransaction(VersionedTransaction.from_bytes(raw_tx).message, [signer])
-            
-            rpc_payload = {
-                "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
-                "params": [base64.b64encode(bytes(signed_txn)).decode('utf-8'), {"encoding": "base64", "skipPreflight": True}]
-            }
-            async with session.post(SOLANA_RPC, json=rpc_payload, timeout=3) as rpc_resp:
-                rpc_data = await rpc_resp.json()
-                if not rpc_data.get("result"):
-                    return
-
-        total_tokens = out_amt
-        total_invested_lamports = base_lamports
-        sol_back_amount = 0
-
-        for attempt in range(60):
-            await asyncio.sleep(4)
-            sell_q_url = f"{JUPITER_QUOTE_API}?inputMint={target_mint}&outputMint={WHITELISTED_TOKENS['SOL']}&amount={total_tokens}&slippageBps=50"
-            async with session.get(sell_q_url, timeout=3) as sell_resp:
-                if sell_resp.status == 200:
-                    sell_data = await sell_resp.json()
-                    current_back = int(sell_data.get("outAmount", 0))
-                    if current_back >= int(total_invested_lamports * 1.15):
-                        sol_back_amount = current_back
-                        break
-
-        if sol_back_amount <= 0:
-            return
-
-        sell_swap_payload = {"quoteResponse": sell_data, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
-        async with session.post(JUPITER_SWAP_API, json=sell_swap_payload, timeout=3) as ss_resp:
-            if ss_resp.status != 200:
-                return
-            ss_data = await ss_resp.json()
-            raw_sell_tx = base64.b64decode(ss_data.get("swapTransaction"))
-            signed_sell_txn = VersionedTransaction(VersionedTransaction.from_bytes(raw_sell_tx).message, [signer])
-            
-            sell_rpc_payload = {
-                "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
-                "params": [base64.b64encode(bytes(signed_sell_txn)).decode('utf-8'), {"encoding": "base64", "skipPreflight": True}]
-            }
-            async with session.post(SOLANA_RPC, json=sell_rpc_payload, timeout=3) as sell_rpc_resp:
-                sell_rpc_data = await sell_rpc_resp.json()
-                tx_sig = sell_rpc_data.get("result", "tx_clean")
-
-        actual_profit_sol = round((sol_back_amount - total_invested_lamports) / 1_000_000_000, 4)
-        add_log(f"💎 Profit: +{actual_profit_sol} SOL")
-        await send_telegram_notification(telegram_id, f"⚜️ *Premium Profit!*\n• Asset: `{pair_name}`\n• +`{actual_profit_sol} SOL`")
-
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO trades (telegram_id, token_pair, buy_price, sell_price, profit_sol, tx_signature, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                       (telegram_id, pair_name, 1.0, 1.15, actual_profit_sol, tx_sig, datetime.now().strftime('%H:%M:%S')))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        add_log(f"⚠️ Ошибка: {str(e)[:30]}")
-
-async def execute_sentiment_strategy_cycle(telegram_id: int):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT trading_active, solana_wallet FROM users WHERE telegram_id = ?", (telegram_id,))
-    row = cursor.fetchone()
-    if not row or row[0] == 0:
-        conn.close()
-        return
-    wallet = row[1]
-    conn.close()
-
-    sol_bal = await fetch_wallet_balance(wallet)
-    if sol_bal <= MIN_SOL_RESERVE:
-        return
-
-    signer = get_signer_keypair()
-    if not signer:
-        return
-
-    async with aiohttp.ClientSession() as session:
-        res = await scan_real_opportunities(session)
-        if res:
-            pair_name, target_mint, _ = res
-            await execute_strict_trade(telegram_id, pair_name, target_mint, sol_bal, signer, session)
-
-async def background_mov_trader_daemon():
-    while True:
-        try:
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
-            cursor.execute("SELECT telegram_id FROM users WHERE trading_active = 1")
-            active_users = cursor.fetchall()
-            conn.close()
-
-            for user_row in active_users:
-                try:
-                    await execute_sentiment_strategy_cycle(user_row[0])
-                except Exception:
-                    pass
-                await asyncio.sleep(3)
-        except Exception:
-            pass
-        await asyncio.sleep(15)
-
 async def fetch_arb_quote(session, input_mint, output_mint, amount):
-    slippage_bps = 50
-    url = f"{JUPITER_QUOTE_API}?inputMint={input_mint}&outputMint={output_mint}&amount={amount}&slippageBps={slippage_bps}"
-    async with session.get(url) as response:
-        if response.status == 200:
-            return await response.json()
-        return None
+    url = f"{JUPITER_QUOTE_API}?inputMint={input_mint}&outputMint={output_mint}&amount={amount}&slippageBps=50"
+    try:
+        async with session.get(url, timeout=3) as response:
+            if response.status == 200:
+                return await response.json()
+    except Exception:
+        pass
+    return None
 
-async def arbitrage_worker():
-    add_log("🤖 Multi-DEX AI Agent: Объем 0.5 SOL. БОЕВОЙ РЕЖИМ.")
-    amount_in_lamports = 500000000 
+async def dynamic_arbitrage_worker():
+    add_log("🤖 Dynamic Multi-Asset AI Agent: Сканирование всех пар Solana (0.3% - 10%).")
+    amount_in_lamports = 500000000 # 0.5 SOL
     
     signer = get_signer_keypair()
     if not signer:
         add_log("⚠️ Ошибка: Нет приватного ключа. Режим симуляции.")
-    else:
-        add_log("🔑 Ключи подписи подключены. Сканирование агрессивных связок...")
 
-    target_stables = [WHITELISTED_TOKENS["USDC"], WHITELISTED_TOKENS["USDT"]]
     scan_counter = 0
 
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                sol_mint = WHITELISTED_TOKENS["SOL"]
-                
-                for stable_mint in target_stables:
-                    quote_forward = await fetch_arb_quote(session, sol_mint, stable_mint, amount_in_lamports)
-                    if quote_forward:
-                        stable_amount = quote_forward['outAmount']
-                        quote_backward = await fetch_arb_quote(session, stable_mint, sol_mint, stable_amount)
+                # Динамически запрашиваем самые ликвидные и волатильные пары Solana прямо с Dexscreener
+                async with session.get("https://api.dexscreener.com/latest/dex/search/?q=solana", timeout=4) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        pairs = data.get("pairs", [])
                         
-                        if quote_backward:
-                            final_sol = int(quote_backward['outAmount'])
+                        target_mints = []
+                        mint_to_symbol = {}
+                        
+                        for p in pairs:
+                            if p.get("chainId") != "solana":
+                                continue
+                            liq = p.get("liquidity", {}).get("usd", 0)
+                            if liq < 20000: # Фильтр минимальной ликвидности для безопасности
+                                continue
+                            base = p.get("baseToken", {})
+                            m = base.get("address")
+                            sym = base.get("symbol", "ASSET")
+                            if m and m != SOL_MINT and m not in target_mints:
+                                target_mints.append(m)
+                                mint_to_symbol[m] = sym
+                                if len(target_mints) >= 15: # Проверяем топ-15 актуальных пар за цикл
+                                    break
+
+                        for token_mint in target_mints:
+                            pair_sym = mint_to_symbol.get(token_mint, "TOKEN")
+                            
+                            # Проверка безопасности токена перед сделкой
+                            is_safe = await audit_token_safety(session, token_mint)
+                            if not is_safe:
+                                continue
+
+                            quote_forward = await fetch_arb_quote(session, SOL_MINT, token_mint, amount_in_lamports)
+                            if not quote_forward:
+                                continue
+                                
+                            token_amount = int(quote_forward.get('outAmount', 0))
+                            if token_amount <= 0:
+                                continue
+                                
+                            quote_backward = await fetch_arb_quote(session, token_mint, SOL_MINT, token_amount)
+                            if not quote_backward:
+                                continue
+                                
+                            final_sol = int(quote_backward.get('outAmount', 0))
                             net_profit_lamports = final_sol - amount_in_lamports
                             ESTIMATED_FEE_LAMPORTS = 80000
                             real_profit_lamports = net_profit_lamports - ESTIMATED_FEE_LAMPORTS
                             
-                            if real_profit_lamports > 0:
-                                profit_sol = real_profit_lamports / 10**9
-                                add_log(f"✅ АРБИТРАЖ! Профит: +{profit_sol:.5f} SOL")
+                            profit_sol = real_profit_lamports / 10**9
+                            profit_pct = (profit_sol / 0.5) * 100
+                            
+                            # Проверяем целевой диапазон профита: от 0.3% до 10%
+                            if 0.3 <= profit_pct <= 10.0:
+                                add_log(f"✅ АРБИТРАЖ ({pair_sym}/SOL)! Профит: +{profit_sol:.4f} SOL ({profit_pct:.2f}%)")
                                 
                                 if signer:
-                                    add_log("⚡ Исполнение транзакций...")
                                     swap_payload_1 = {"quoteResponse": quote_forward, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
                                     async with session.post(JUPITER_SWAP_API, json=swap_payload_1, timeout=5) as s_resp1:
                                         if s_resp1.status == 200:
@@ -366,7 +236,6 @@ async def arbitrage_worker():
                                                 "params": [base64.b64encode(bytes(signed_txn1)).decode('utf-8'), {"encoding": "base64", "skipPreflight": True}]
                                             }
                                             await session.post(SOLANA_RPC, json=rpc_payload1)
-                                            add_log("🔄 Этап 1: Фиксация в стейблкоин.")
                                             
                                             await asyncio.sleep(2)
                                             
@@ -384,19 +253,21 @@ async def arbitrage_worker():
                                                     async with session.post(SOLANA_RPC, json=rpc_payload2) as rpc_resp2:
                                                         rpc_data = await rpc_resp2.json()
                                                         tx_sig = rpc_data.get("result", "unknown")
-                                                        add_log(f"💎 Прибыль в SOL! TX: {str(tx_sig)[:8]}...")
+                                                        add_log(f"💎 Сделка закрыта! TX: {str(tx_sig)[:8]}...")
                                                         
                                                         conn = sqlite3.connect(DB_FILE)
                                                         cursor = conn.cursor()
                                                         cursor.execute("SELECT telegram_id FROM users WHERE trading_active = 1")
                                                         active_users = cursor.fetchall()
+                                                        cursor.execute("INSERT INTO trades (telegram_id, token_pair, buy_price, sell_price, profit_sol, tx_signature, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                                                       (active_users[0][0] if active_users else 42882165, f"{pair_sym}/SOL", 1.0, 1.0 + (profit_pct/100), profit_sol, tx_sig, datetime.now().strftime('%H:%M:%S')))
+                                                        conn.commit()
                                                         conn.close()
                                                         
-                                                        pair_name = "USDC/SOL" if stable_mint == WHITELISTED_TOKENS["USDC"] else "USDT/SOL"
                                                         msg_text = (
-                                                            f"🚀 *MOV Bot Peak Dump Executed!*\n\n"
-                                                            f"• Пара: `{pair_name}` [Verified 🔥]\n"
-                                                            f"• Профит: `+{profit_sol:.5f} SOL` 🎯\n"
+                                                            f"🚀 *Zer0Life Dynamic Trade Executed!*\n\n"
+                                                            f"• Пара: `{pair_sym}/SOL` [Verified 🔥]\n"
+                                                            f"• Профит: `+{profit_sol:.4f} SOL` ({profit_pct:.2f}%) 🎯\n"
                                                         )
                                                         for u in active_users:
                                                             await send_telegram_notification(u[0], msg_text)
@@ -404,8 +275,8 @@ async def arbitrage_worker():
                 pass
             
             scan_counter += 1
-            if scan_counter >= 150:
-                add_log("🛰️ AI Agent: Просканировано 150 пулов, риски под контролем...")
+            if scan_counter >= 50:
+                add_log("🛰️ AI Agent: Сканирование динамического пула активных пар...")
                 scan_counter = 0
             
             await asyncio.sleep(2)
@@ -625,7 +496,6 @@ HTML_CONTENT = """<!DOCTYPE html>
     </div>
 
     <script>
-        // Инициализация данных пользователя - защита от любых ошибок Telegram Web App API
         let user = { id: 42882165, username: "CryptoWlodek", first_name: "CryptoWlodek" };
         try {
             if (window.Telegram && window.Telegram.WebApp) {
@@ -636,7 +506,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             }
         } catch(e) { console.error("Telegram init error:", e); }
 
-        // Загрузка вашего кота на фон с легким затемнением внизу для читаемости кнопки
         async function loadDashboardImage() {
             try {
                 const res = await fetch('/api/get-image-url');
@@ -647,7 +516,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             } catch(e) { console.error("Image fetch error:", e); }
         }
         
-        // Глобальная функция для надежного запуска интерфейса
         window.enterApp = function() {
             document.getElementById('splash-screen').style.display = 'none';
             document.getElementById('app-container').style.display = 'block';
@@ -773,7 +641,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             } catch(e) {}
         };
         
-        // Старт системы
         loadDashboardImage();
         loadProfile();
         setInterval(async () => { if(!isTrading) return; checkBalance(); loadStats(); loadLogs(); }, 5000);
@@ -961,11 +828,11 @@ async def main():
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
     
-    asyncio.create_task(telegram_long_polling())
-    asyncio.create_task(background_mov_trader_daemon())
-    asyncio.create_task(arbitrage_worker())
+    asyncio.create_tag = asyncio.create_task
+    asyncio.create_tag(telegram_long_polling())
+    asyncio.create_tag(dynamic_arbitrage_worker())
     
-    add_log("⚜️ Premium Terminal запущен.")
+    add_log("⚜️ Dynamic Terminal запущен.")
     while True:
         await asyncio.sleep(3600)
 
