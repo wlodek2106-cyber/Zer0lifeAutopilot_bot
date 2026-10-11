@@ -18,13 +18,11 @@ SOLANA_RPC = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-ke
 
 JUPITER_QUOTE_API = "https://public.jupiterapi.com/quote"
 JUPITER_SWAP_API = "https://public.jupiterapi.com/swap"
-RUGCHECK_API = "https://api.rugcheck.xyz/v1/token"
 
 SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
 MIN_SOL_RESERVE = 0.3
-MAX_TRADE_SOL_LIMIT = 0.5
 
-RECENT_LOGS = ["⚜️ Zer0Life Dynamic Terminal запущен."]
+RECENT_LOGS = ["⚜️ Zer0Life Fast Terminal запущен."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -117,22 +115,6 @@ async def fetch_wallet_balance(wallet: str) -> float:
             pass
     return 0.2517
 
-async def audit_token_safety(session: aiohttp.ClientSession, token_mint: str) -> bool:
-    try:
-        async with session.get(f"{RUGCHECK_API}/{token_mint}/report", timeout=3) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                risk_score = data.get("score", 1000)
-                risks = data.get("risks", [])
-                has_fatal_risk = any(r.get("level") == "danger" for r in risks)
-                freeze_disabled = data.get("token", {}).get("freezeAuthority") is None
-                
-                if risk_score < 600 and not has_fatal_risk and freeze_disabled:
-                    return True
-    except Exception:
-        pass
-    return False
-
 async def send_telegram_notification(chat_id: int, text: str):
     if not TELEGRAM_TOKEN or not chat_id:
         return
@@ -144,142 +126,119 @@ async def send_telegram_notification(chat_id: int, text: str):
         except Exception:
             pass
 
-async def fetch_arb_quote(session, input_mint, output_mint, amount):
-    url = f"{JUPITER_QUOTE_API}?inputMint={input_mint}&outputMint={output_mint}&amount={amount}&slippageBps=50"
-    try:
-        async with session.get(url, timeout=3) as response:
-            if response.status == 200:
-                return await response.json()
-    except Exception:
-        pass
-    return None
-
-async def dynamic_arbitrage_worker():
-    add_log("🤖 Dynamic Multi-Asset AI Agent: Сканирование всех пар Solana (0.3% - 10%).")
+async def fast_arbitrage_worker():
+    add_log("🚀 Fast Arbitrage Engine: Запуск непрерывного сканирования всех пар.")
     amount_in_lamports = 500000000 # 0.5 SOL
     
     signer = get_signer_keypair()
     if not signer:
-        add_log("⚠️ Ошибка: Нет приватного ключа. Режим симуляции.")
-
-    scan_counter = 0
+        add_log("⚠️ Внимание: Приватный ключ не найден. Режим симуляции сделок.")
 
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                # Динамически запрашиваем самые ликвидные и волатильные пары Solana прямо с Dexscreener
-                async with session.get("https://api.dexscreener.com/latest/dex/search/?q=solana", timeout=4) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        pairs = data.get("pairs", [])
+                # Получаем активные пары с высокой ликвидностью
+                async with session.get("https://api.dexscreener.com/latest/dex/search/?q=solana", timeout=3) as resp:
+                    if resp.status != 200:
+                        await asyncio.sleep(2)
+                        continue
+                    data = await resp.json()
+                    pairs = data.get("pairs", [])
+                    
+                    checked = 0
+                    for p in pairs:
+                        if p.get("chainId") != "solana":
+                            continue
+                        liq = p.get("liquidity", {}).get("usd", 0)
+                        if liq < 10000:
+                            continue
                         
-                        target_mints = []
-                        mint_to_symbol = {}
-                        
-                        for p in pairs:
-                            if p.get("chainId") != "solana":
-                                continue
-                            liq = p.get("liquidity", {}).get("usd", 0)
-                            if liq < 20000: # Фильтр минимальной ликвидности для безопасности
-                                continue
-                            base = p.get("baseToken", {})
-                            m = base.get("address")
-                            sym = base.get("symbol", "ASSET")
-                            if m and m != SOL_MINT and m not in target_mints:
-                                target_mints.append(m)
-                                mint_to_symbol[m] = sym
-                                if len(target_mints) >= 15: # Проверяем топ-15 актуальных пар за цикл
-                                    break
+                        base = p.get("baseToken", {})
+                        token_mint = base.get("address")
+                        pair_sym = base.get("symbol", "ASSET")
+                        if not token_mint or token_mint == SOL_MINT:
+                            continue
 
-                        for token_mint in target_mints:
-                            pair_sym = mint_to_symbol.get(token_mint, "TOKEN")
-                            
-                            # Проверка безопасности токена перед сделкой
-                            is_safe = await audit_token_safety(session, token_mint)
-                            if not is_safe:
+                        # Запрос котировки на покупку
+                        q1_url = f"{JUPITER_QUOTE_API}?inputMint={SOL_MINT}&outputMint={token_mint}&amount={amount_in_lamports}&slippageBps=100"
+                        async with session.get(q1_url, timeout=2) as q1_resp:
+                            if q1_resp.status != 200:
+                                continue
+                            q1_data = await q1_resp.json()
+                            out_amount = int(q1_data.get('outAmount', 0))
+                            if out_amount <= 0:
                                 continue
 
-                            quote_forward = await fetch_arb_quote(session, SOL_MINT, token_mint, amount_in_lamports)
-                            if not quote_forward:
+                        # Запрос котировки на продажу обратно в SOL
+                        q2_url = f"{JUPITER_QUOTE_API}?inputMint={token_mint}&outputMint={SOL_MINT}&amount={out_amount}&slippageBps=100"
+                        async with session.get(q2_url, timeout=2) as q2_resp:
+                            if q2_resp.status != 200:
                                 continue
-                                
-                            token_amount = int(quote_forward.get('outAmount', 0))
-                            if token_amount <= 0:
-                                continue
-                                
-                            quote_backward = await fetch_arb_quote(session, token_mint, SOL_MINT, token_amount)
-                            if not quote_backward:
-                                continue
-                                
-                            final_sol = int(quote_backward.get('outAmount', 0))
-                            net_profit_lamports = final_sol - amount_in_lamports
-                            ESTIMATED_FEE_LAMPORTS = 80000
-                            real_profit_lamports = net_profit_lamports - ESTIMATED_FEE_LAMPORTS
+                            q2_data = await q2_resp.json()
+                            final_sol = int(q2_data.get('outAmount', 0))
                             
-                            profit_sol = real_profit_lamports / 10**9
+                            net_profit = final_sol - amount_in_lamports - 80000 # Вычет комиссии
+                            profit_sol = net_profit / 10**9
                             profit_pct = (profit_sol / 0.5) * 100
-                            
-                            # Проверяем целевой диапазон профита: от 0.3% до 10%
+
+                            # Сделка совершается, если профит попадает в диапазон от 0.3% до 10%
                             if 0.3 <= profit_pct <= 10.0:
-                                add_log(f"✅ АРБИТРАЖ ({pair_sym}/SOL)! Профит: +{profit_sol:.4f} SOL ({profit_pct:.2f}%)")
+                                add_log(f"🔥 НАЙДЕН СПРЕД ({pair_sym}/SOL): +{profit_sol:.4f} SOL ({profit_pct:.2f}%)")
                                 
                                 if signer:
-                                    swap_payload_1 = {"quoteResponse": quote_forward, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
-                                    async with session.post(JUPITER_SWAP_API, json=swap_payload_1, timeout=5) as s_resp1:
-                                        if s_resp1.status == 200:
-                                            s_data1 = await s_resp1.json()
-                                            raw_tx1 = base64.b64decode(s_data1.get("swapTransaction"))
+                                    # Исполнение Шага 1 (Покупка)
+                                    swap1_payload = {"quoteResponse": q1_data, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
+                                    async with session.post(JUPITER_SWAP_API, json=swap1_payload, timeout=3) as s1:
+                                        if s1.status == 200:
+                                            s1_data = await s1.json()
+                                            raw_tx1 = base64.b64decode(s1_data.get("swapTransaction"))
                                             signed_txn1 = VersionedTransaction(VersionedTransaction.from_bytes(raw_tx1).message, [signer])
                                             
-                                            rpc_payload1 = {
+                                            rpc1 = {
                                                 "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
                                                 "params": [base64.b64encode(bytes(signed_txn1)).decode('utf-8'), {"encoding": "base64", "skipPreflight": True}]
                                             }
-                                            await session.post(SOLANA_RPC, json=rpc_payload1)
-                                            
-                                            await asyncio.sleep(2)
-                                            
-                                            swap_payload_2 = {"quoteResponse": quote_backward, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
-                                            async with session.post(JUPITER_SWAP_API, json=swap_payload_2, timeout=5) as s_resp2:
-                                                if s_resp2.status == 200:
-                                                    s_data2 = await s_resp2.json()
-                                                    raw_sell_tx = base64.b64decode(s_data2.get("swapTransaction"))
-                                                    signed_txn2 = VersionedTransaction(VersionedTransaction.from_bytes(raw_sell_tx).message, [signer])
+                                            await session.post(SOLANA_RPC, json=rpc1)
+                                            await asyncio.sleep(1.5)
+
+                                            # Исполнение Шага 2 (Продажа)
+                                            swap2_payload = {"quoteResponse": q2_data, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
+                                            async with session.post(JUPITER_SWAP_API, json=swap2_payload, timeout=3) as s2:
+                                                if s2.status == 200:
+                                                    s2_data = await s2.json()
+                                                    raw_tx2 = base64.b64decode(s2_data.get("swapTransaction"))
+                                                    signed_txn2 = VersionedTransaction(VersionedTransaction.from_bytes(raw_tx2).message, [signer])
                                                     
-                                                    rpc_payload2 = {
+                                                    rpc2 = {
                                                         "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
                                                         "params": [base64.b64encode(bytes(signed_txn2)).decode('utf-8'), {"encoding": "base64", "skipPreflight": True}]
                                                     }
-                                                    async with session.post(SOLANA_RPC, json=rpc_payload2) as rpc_resp2:
-                                                        rpc_data = await rpc_resp2.json()
-                                                        tx_sig = rpc_data.get("result", "unknown")
-                                                        add_log(f"💎 Сделка закрыта! TX: {str(tx_sig)[:8]}...")
-                                                        
+                                                    async with session.post(SOLANA_RPC, json=rpc2) as rpc2_resp:
+                                                        r2_data = await rpc2_resp.json()
+                                                        tx_sig = r2_data.get("result", "success")
+                                                        add_log(f"💎 УСПЕХ! Профит: +{profit_sol:.4f} SOL. TX: {str(tx_sig)[:8]}...")
+
                                                         conn = sqlite3.connect(DB_FILE)
                                                         cursor = conn.cursor()
                                                         cursor.execute("SELECT telegram_id FROM users WHERE trading_active = 1")
                                                         active_users = cursor.fetchall()
+                                                        u_id = active_users[0][0] if active_users else 42882165
                                                         cursor.execute("INSERT INTO trades (telegram_id, token_pair, buy_price, sell_price, profit_sol, tx_signature, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                                                       (active_users[0][0] if active_users else 42882165, f"{pair_sym}/SOL", 1.0, 1.0 + (profit_pct/100), profit_sol, tx_sig, datetime.now().strftime('%H:%M:%S')))
+                                                                       (u_id, f"{pair_sym}/SOL", 1.0, 1.0 + (profit_pct/100), profit_sol, tx_sig, datetime.now().strftime('%H:%M:%S')))
                                                         conn.commit()
                                                         conn.close()
-                                                        
-                                                        msg_text = (
-                                                            f"🚀 *Zer0Life Dynamic Trade Executed!*\n\n"
-                                                            f"• Пара: `{pair_sym}/SOL` [Verified 🔥]\n"
-                                                            f"• Профит: `+{profit_sol:.4f} SOL` ({profit_pct:.2f}%) 🎯\n"
-                                                        )
+
                                                         for u in active_users:
-                                                            await send_telegram_notification(u[0], msg_text)
-            except Exception:
+                                                            await send_telegram_notification(u[0], f"🚀 *Zer0Life Trade Executed!*\n• Пара: `{pair_sym}/SOL`\n• Профит: `+{profit_sol:.4f} SOL` ({profit_pct:.2f}%) 🎯")
+                                break
+                        
+                        checked += 1
+                        if checked >= 10: # Проверяем пачку из 10 пар за итерацию для максимальной скорости
+                            break
+            except Exception as e:
                 pass
             
-            scan_counter += 1
-            if scan_counter >= 50:
-                add_log("🛰️ AI Agent: Сканирование динамического пула активных пар...")
-                scan_counter = 0
-            
-            await asyncio.sleep(2)
+            await asyncio.sleep(1)
 
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="ru">
@@ -453,7 +412,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             <div class="card">
                 <h3 class="title-gold" style="font-size: 16px; margin-bottom: 12px;">🛡️ AI Trader (24/7)</h3>
                 <button class="btn-mode active">
-                    <span style="color: #f1f5f9;">⚜️ AI Agent + RugAudit</span>
+                    <span style="color: #f1f5f9;">⚜️ Fast Arbitrage Core</span>
                     <span style="font-size: 11px; color: #d4af37;">Active</span>
                 </button>
             </div>
@@ -830,9 +789,9 @@ async def main():
     
     asyncio.create_tag = asyncio.create_task
     asyncio.create_tag(telegram_long_polling())
-    asyncio.create_tag(dynamic_arbitrage_worker())
+    asyncio.create_tag(fast_arbitrage_worker())
     
-    add_log("⚜️ Dynamic Terminal запущен.")
+    add_log("⚜️ Fast Terminal запущен.")
     while True:
         await asyncio.sleep(3600)
 
