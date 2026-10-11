@@ -263,7 +263,7 @@ HTML_CONTENT = """<!DOCTYPE html>
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <title>Zer0Life Run Web3</title>
+    <title>Zer0Life Premium</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         * { box-sizing: border-box; }
@@ -289,11 +289,11 @@ HTML_CONTENT = """<!DOCTYPE html>
         }
 
         .run-btn {
-            background: linear-gradient(135deg, #a3ff33 0%, #32cd32 100%);
+            background: linear-gradient(135deg, #d4af37 0%, #aa771c 100%);
             color: #000000; border: none; width: 100%; padding: 18px;
             border-radius: 20px; font-weight: 800; font-size: 16px;
             cursor: pointer; text-align: center;
-            box-shadow: 0 8px 30px rgba(163, 255, 51, 0.3);
+            box-shadow: 0 8px 30px rgba(212, 175, 55, 0.3);
             text-transform: uppercase; letter-spacing: 1px;
             position: relative; z-index: 10000;
         }
@@ -304,49 +304,49 @@ HTML_CONTENT = """<!DOCTYPE html>
             border-radius: 24px; 
             padding: 22px; 
             margin-bottom: 18px; 
-            border: 1px solid rgba(163, 255, 51, 0.2); 
+            border: 1px solid rgba(212, 175, 55, 0.2); 
             box-shadow: 0 12px 40px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.05); 
         }
         
         .title-gold {
             margin-top: 0; font-size: 20px; font-weight: 800;
-            background: linear-gradient(to right, #a3ff33, #ffffff, #a3ff33);
+            background: linear-gradient(to right, #d4af37, #ffdf73, #d4af37);
             -webkit-background-clip: text; -webkit-text-fill-color: transparent;
             letter-spacing: 0.5px;
         }
         
         .subtitle { color: #8a8d93; font-size: 13px; line-height: 1.4; font-weight: 400; }
-        .label-gold { font-size: 10px; color: #a3ff33; font-weight: 700; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; }
+        .label-gold { font-size: 10px; color: #d4af37; font-weight: 700; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; }
 
         .input-group-web4 { 
             width: 100%; background: rgba(0, 0, 0, 0.4); 
-            border: 1px solid rgba(163, 255, 51, 0.3); 
+            border: 1px solid rgba(212, 175, 55, 0.3); 
             border-radius: 16px; padding: 14px; margin-top: 6px; 
             display: flex; align-items: center; justify-content: space-between;
             box-shadow: inset 0 2px 10px rgba(0,0,0,0.5);
         }
         .input-field-web4 { 
             background: transparent; border: none; 
-            color: #a3ff33; font-family: "SF Mono", monospace; 
+            color: #ffdf73; font-family: "SF Mono", monospace; 
             font-size: 11px; width: 100%; outline: none; 
         }
 
         .btn-gold { 
-            background: linear-gradient(135deg, #a3ff33 0%, #32cd32 100%); 
+            background: linear-gradient(135deg, #d4af37 0%, #aa771c 100%); 
             color: #050505; border: none; width: 100%; padding: 16px; 
             border-radius: 18px; font-weight: 800; cursor: pointer; 
             margin-top: 16px; font-size: 14px; text-transform: uppercase;
-            box-shadow: 0 6px 20px rgba(163, 255, 51, 0.25);
+            box-shadow: 0 6px 20px rgba(212, 175, 55, 0.25);
             letter-spacing: 0.5px;
         }
         
         .btn-red { background: linear-gradient(135deg, #3f0d12 0%, #a71d31 100%); color: white; border: 1px solid rgba(255, 50, 50, 0.3); box-shadow: 0 4px 20px rgba(167, 29, 49, 0.4); border-radius: 18px; padding: 14px; font-weight: 700; border: none; width: 100%; cursor: pointer;}
-        .btn-mode { background: rgba(20, 20, 24, 0.6); color: #a3ff33; border: 1px solid rgba(163, 255, 51, 0.2); margin-top: 8px; width: 100%; padding: 14px; border-radius: 18px; font-weight: bold; cursor: pointer; text-align: left; display: flex; justify-content: space-between; align-items: center; }
+        .btn-mode { background: rgba(20, 20, 24, 0.6); color: #d4af37; border: 1px solid rgba(212, 175, 55, 0.2); margin-top: 8px; width: 100%; padding: 14px; border-radius: 18px; font-weight: bold; cursor: pointer; text-align: left; display: flex; justify-content: space-between; align-items: center; }
         
         .qr-wrapper {
-            background: linear-gradient(145deg, #a3ff33, #32cd32);
+            background: linear-gradient(145deg, #ffdf73, #aa771c);
             padding: 2px; border-radius: 22px; width: 164px; height: 164px; 
-            margin: 24px auto; box-shadow: 0 10px 30px rgba(163, 255, 51, 0.2);
+            margin: 24px auto; box-shadow: 0 10px 30px rgba(212, 175, 55, 0.2);
         }
         .qr-container-web4 { 
             background: #ffffff; width: 100%; height: 100%; 
@@ -354,16 +354,16 @@ HTML_CONTENT = """<!DOCTYPE html>
         }
 
         .metric { display: flex; justify-content: space-between; margin-top: 14px; font-size: 14px; color: #8a8d93; }
-        .val { color: #a3ff33; font-weight: 700; font-family: "SF Mono", monospace; }
+        .val { color: #ffdf73; font-weight: 700; font-family: "SF Mono", monospace; }
         
         .logs { 
-            background: rgba(0, 0, 0, 0.6); border: 1px solid rgba(163, 255, 51, 0.15); 
+            background: rgba(0, 0, 0, 0.6); border: 1px solid rgba(212, 175, 55, 0.15); 
             border-radius: 18px; padding: 14px; font-family: "SF Mono", monospace; 
-            font-size: 11px; color: #a3ff33; height: 160px; overflow-y: auto; 
+            font-size: 11px; color: #d4af37; height: 160px; overflow-y: auto; 
             margin-top: 12px; white-space: pre-line; box-shadow: inset 0 2px 15px rgba(0,0,0,0.8); 
         }
         .trade-item { 
-            background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(163, 255, 51, 0.15); 
+            background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(212, 175, 55, 0.15); 
             border-radius: 16px; padding: 14px; margin-top: 10px; 
             font-family: "SF Mono", monospace; font-size: 11px; 
             display: flex; justify-content: space-between; align-items: center; 
@@ -372,7 +372,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         .bottom-nav { 
             position: fixed; bottom: 0; left: 0; right: 0; 
             background: rgba(10, 10, 12, 0.95); backdrop-filter: blur(30px); 
-            border-top: 1px solid rgba(163, 255, 51, 0.15); 
+            border-top: 1px solid rgba(212, 175, 55, 0.15); 
             padding: 12px 16px; display: flex; justify-content: space-around; 
             z-index: 900; box-shadow: 0 -10px 40px rgba(0,0,0,0.9); 
         }
@@ -382,7 +382,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             flex-direction: column; align-items: center; gap: 4px; 
             cursor: pointer; transition: all 0.3s; 
         }
-        .nav-item.active { color: #a3ff33; text-shadow: 0 0 15px rgba(163, 255, 51, 0.6); }
+        .nav-item.active { color: #d4af37; text-shadow: 0 0 15px rgba(212, 175, 55, 0.6); }
         .nav-icon { font-size: 20px; }
         
         .tab-content { display: none; width: 100%; height: 100vh; overflow-y: auto; padding: 16px; padding-bottom: 110px; }
@@ -391,13 +391,13 @@ HTML_CONTENT = """<!DOCTYPE html>
 </head>
 <body>
     <div id="splash-screen">
-        <button class="run-btn" onclick="enterApp()">Get Started</button>
+        <button class="run-btn" onclick="enterApp()">LAUNCH TERMINAL</button>
     </div>
 
     <div id="app-container" style="display: none; width: 100vw; height: 100vh;">
         <div id="tab-wallet" class="tab-content">
             <div class="card">
-                <h2 class="title-gold">⚡ Zer0Life Run Wallet</h2>
+                <h2 class="title-gold">⚜️ Premium Wallet</h2>
                 <p class="subtitle">Ваш персональный защищенный адрес для депозита SOL.</p>
                 <div style="margin: 20px 0;">
                     <div class="label-gold">Deposit Address:</div>
@@ -425,10 +425,10 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         <div id="tab-trader" class="tab-content active">
             <div class="card">
-                <h3 class="title-gold" style="font-size: 16px; margin-bottom: 12px;">🏃‍♂️ Zer0Life Run Bot (24/7)</h3>
+                <h3 class="title-gold" style="font-size: 16px; margin-bottom: 12px;">🛡️ AI Trader (24/7)</h3>
                 <button class="btn-mode active">
-                    <span style="color: #f1f5f9;">⚡ Move-to-Earn Arbitrage Core</span>
-                    <span style="font-size: 11px; color: #a3ff33;">Active</span>
+                    <span style="color: #f1f5f9;">⚜️ Aggressive Arbitrage Core</span>
+                    <span style="font-size: 11px; color: #d4af37;">Active</span>
                 </button>
             </div>
             <div class="card">
@@ -448,10 +448,10 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         <div id="tab-stats" class="tab-content">
             <div class="card">
-                <h3 class="title-gold" style="font-size: 16px; margin-bottom: 12px;">📊 Статистика Run</h3>
+                <h3 class="title-gold" style="font-size: 16px; margin-bottom: 12px;">📊 Статистика Terminal</h3>
                 <div class="metric"><span>Стартовый:</span> <span class="val">0.2517 SOL</span></div>
                 <div class="metric"><span>Текущий:</span> <span id="stat-current" class="val">-- SOL</span></div>
-                <div class="metric"><span>Результат:</span> <span id="stat-profit-sol" class="val" style="color: #a3ff33;">0.0000 SOL</span></div>
+                <div class="metric"><span>Результат:</span> <span id="stat-profit-sol" class="val" style="color: #d4af37;">0.0000 SOL</span></div>
                 <button class="btn-gold" style="margin-top: 16px;" onclick="loadStats()">🔄 Обновить</button>
             </div>
             <div class="card">
@@ -536,7 +536,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             const st = document.getElementById('trade-status');
             const btn = document.getElementById('toggle-btn');
             if(isTrading) { 
-                st.innerText = "Активен (24/7)"; st.style.color = "#a3ff33"; 
+                st.innerText = "Активен (24/7)"; st.style.color = "#d4af37"; 
                 btn.innerText = "Остановить"; btn.className = "btn-red"; 
             } else { 
                 st.innerText = "Остановлен"; st.style.color = "#8a8d93"; 
@@ -595,7 +595,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                     const diff = data.profit_sol;
                     const el = document.getElementById('stat-profit-sol');
                     el.innerText = (diff >= 0 ? "+" : "") + diff.toFixed(4) + " SOL";
-                    el.style.color = diff >= 0 ? "#a3ff33" : "#a71d31";
+                    el.style.color = diff >= 0 ? "#d4af37" : "#a71d31";
                     
                     const list = document.getElementById('trades-list');
                     if(data.trades.length === 0) {
@@ -605,9 +605,9 @@ HTML_CONTENT = """<!DOCTYPE html>
                             <div class="trade-item">
                                 <div>
                                     <div style="color: #f1f5f9; font-weight: bold;">${t.token_pair}</div>
-                                    <div style="color: #8a8d93; font-size: 10px;">TX: <a href="https://solscan.io/tx/${t.tx_signature}" target="_blank" style="color: #a3ff33;">${t.tx_signature.substring(0,8)}...</a></div>
+                                    <div style="color: #8a8d93; font-size: 10px;">TX: <a href="https://solscan.io/tx/${t.tx_signature}" target="_blank" style="color: #d4af37;">${t.tx_signature.substring(0,8)}...</a></div>
                                 </div>
-                                <div style="color: ${t.profit_sol >= 0 ? '#a3ff33' : '#a71d31'}; font-weight: bold; font-size: 12px;">${t.profit_sol >= 0 ? '+' : ''}${t.profit_sol.toFixed(4)} SOL</div>
+                                <div style="color: ${t.profit_sol >= 0 ? '#d4af37' : '#a71d31'}; font-weight: bold; font-size: 12px;">${t.profit_sol >= 0 ? '+' : ''}${t.profit_sol.toFixed(4)} SOL</div>
                             </div>
                         `).join('');
                     }
