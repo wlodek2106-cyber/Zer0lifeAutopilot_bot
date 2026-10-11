@@ -414,7 +414,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
@@ -436,9 +436,11 @@ HTML_CONTENT = """<!DOCTYPE html>
         #splash-screen {
             position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
             background-color: #050507;
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
             display: flex; flex-direction: column; justify-content: flex-end;
             padding: 24px; padding-bottom: 50px; z-index: 9999;
-            background-size: cover; background-position: center;
         }
 
         .run-btn {
@@ -448,6 +450,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             cursor: pointer; text-align: center;
             box-shadow: 0 8px 30px rgba(212, 175, 55, 0.3);
             text-transform: uppercase; letter-spacing: 1px;
+            position: relative; z-index: 10000;
         }
 
         .card { 
@@ -547,7 +550,6 @@ HTML_CONTENT = """<!DOCTYPE html>
     </div>
 
     <div id="app-container" style="display: none; width: 100vw; height: 100vh;">
-        
         <div id="tab-wallet" class="tab-content">
             <div class="card">
                 <h2 class="title-gold">⚜️ Premium Wallet</h2>
@@ -623,30 +625,38 @@ HTML_CONTENT = """<!DOCTYPE html>
     </div>
 
     <script>
-        let tg;
-        try { tg = window.Telegram.WebApp; if (tg) tg.expand(); } catch(e) {}
-        const user = (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) ? tg.initDataUnsafe.user : { id: 42882165, username: "CryptoWlodek", first_name: "CryptoWlodek" };
+        // Инициализация данных пользователя - защита от любых ошибок Telegram Web App API
+        let user = { id: 42882165, username: "CryptoWlodek", first_name: "CryptoWlodek" };
+        try {
+            if (window.Telegram && window.Telegram.WebApp) {
+                window.Telegram.WebApp.expand();
+                if (window.Telegram.WebApp.initDataUnsafe && window.Telegram.WebApp.initDataUnsafe.user) {
+                    user = window.Telegram.WebApp.initDataUnsafe.user;
+                }
+            }
+        } catch(e) { console.error("Telegram init error:", e); }
 
+        // Загрузка вашего кота на фон с легким затемнением внизу для читаемости кнопки
         async function loadDashboardImage() {
             try {
                 const res = await fetch('/api/get-image-url');
                 const data = await res.json();
                 if(data.success && data.url) {
-                    document.getElementById('splash-screen').style.backgroundImage = `url('${data.url}')`;
+                    document.getElementById('splash-screen').style.backgroundImage = `linear-gradient(180deg, rgba(5,5,7,0.1) 0%, rgba(5,5,7,0.9) 100%), url('${data.url}')`;
                 }
-            } catch(e) {}
+            } catch(e) { console.error("Image fetch error:", e); }
         }
-        loadDashboardImage();
-
-        function enterApp() {
+        
+        // Глобальная функция для надежного запуска интерфейса
+        window.enterApp = function() {
             document.getElementById('splash-screen').style.display = 'none';
             document.getElementById('app-container').style.display = 'block';
             document.getElementById('bottom-nav-bar').style.display = 'flex';
             switchTab('trader');
-        }
+        };
 
         let isTrading = false;
-        function switchTab(tab) {
+        window.switchTab = function(tab) {
             document.querySelectorAll('#app-container .tab-content').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
             
@@ -663,7 +673,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                 document.getElementById('nav-stats').classList.add('active'); 
                 loadStats(); 
             }
-        }
+        };
         
         async function loadProfile() {
             try {
@@ -692,7 +702,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             }
         }
         
-        async function checkBalance() {
+        window.checkBalance = async function() {
             const w = document.getElementById('wallet-input').value;
             if(!w) return;
             try {
@@ -700,41 +710,41 @@ HTML_CONTENT = """<!DOCTYPE html>
                 const data = await res.json();
                 if(data.success) { document.getElementById('wallet-balance').innerText = data.balance.toFixed(4) + " SOL"; }
             } catch(e) {}
-        }
+        };
         
-        async function verifyDeposit() {
+        window.verifyDeposit = async function() {
             const txHash = document.getElementById('tx-hash-input').value.trim();
             if(!txHash) { alert("Введите хэш!"); return; }
             try {
                 const res = await fetch('/api/verify-tx', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({telegram_id: user.id, tx_signature: txHash})});
                 const data = await res.json();
                 if(data.success) { 
-                    alert("✅ Успешно верифицировано!\nНайдено пополнение на: +" + data.amount + " SOL"); 
+                    alert("✅ Успешно верифицировано!\\nНайдено пополнение на: +" + data.amount + " SOL"); 
                     document.getElementById('tx-hash-input').value = ""; 
                     checkBalance(); 
                 } else {
                     alert("❌ Ошибка: " + (data.error || "Неизвестная ошибка"));
                 }
             } catch(e) { alert("Ошибка соединения с сервером"); }
-        }
+        };
         
-        async function toggleTrading() {
+        window.toggleTrading = async function() {
             isTrading = !isTrading;
             try {
                 await fetch('/api/trading/toggle', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({telegram_id: user.id, active: isTrading ? 1 : 0})});
                 updateUI();
             } catch(e) {}
-        }
+        };
         
-        async function loadLogs() {
+        window.loadLogs = async function() {
             try {
                 const res = await fetch('/api/logs');
                 const data = await res.json();
                 if(data.success) { document.getElementById('logs-box').innerText = data.logs.join('\\n'); }
             } catch(e) {}
-        }
+        };
         
-        async function loadStats() {
+        window.loadStats = async function() {
             try {
                 const res = await fetch('/api/stats?telegram_id=' + user.id);
                 const data = await res.json();
@@ -761,8 +771,10 @@ HTML_CONTENT = """<!DOCTYPE html>
                     }
                 }
             } catch(e) {}
-        }
+        };
         
+        // Старт системы
+        loadDashboardImage();
         loadProfile();
         setInterval(async () => { if(!isTrading) return; checkBalance(); loadStats(); loadLogs(); }, 5000);
     </script>
