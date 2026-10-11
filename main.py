@@ -308,7 +308,7 @@ async def background_mov_trader_daemon():
         await asyncio.sleep(15)
 
 # ==========================================
-# ДОБАВЛЕННЫЙ БЛОК: DEX Arbitrage Scanner
+# ДОБАВЛЕННЫЙ БЛОК: DEX Arbitrage Scanner (БОЕВОЙ РЕЖИМ)
 # ==========================================
 async def fetch_arb_quote(session, input_mint, output_mint, amount):
     slippage_bps = 50
@@ -319,9 +319,17 @@ async def fetch_arb_quote(session, input_mint, output_mint, amount):
         return None
 
 async def arbitrage_worker():
-    add_log("🤖 DEX Scanner (Arbitrage) инициализирован.")
-    amount_in_lamports = 1000000000 # Тестируем на объеме 1 SOL
+    add_log("🤖 DEX Scanner переведен в БОЕВОЙ РЕЖИМ.")
     
+    # Снижаем объем до 0.1 SOL (100,000,000 лампортов) для первых тестов безопасности!
+    amount_in_lamports = 100000000 
+    
+    signer = get_signer_keypair()
+    if not signer:
+        add_log("⚠️ Ошибка: Нет приватного ключа. Арбитраж работает в режиме симуляции.")
+    else:
+        add_log("🔑 Ключи подключены. Готов к исполнению сделок.")
+        
     async with aiohttp.ClientSession() as session:
         while True:
             try:
@@ -341,13 +349,54 @@ async def arbitrage_worker():
                         
                         if profit > 0:
                             profit_sol = profit / 10**9
-                            add_log(f"✅ АРБИТРАЖ! Профит: +{profit_sol:.5f} SOL")
-            except Exception:
+                            add_log(f"✅ НАЙДЕН АРБИТРАЖ! Профит: +{profit_sol:.5f} SOL")
+                            
+                            # === БОЕВОЙ БЛОК: ИСПОЛНЕНИЕ СДЕЛКИ ===
+                            if signer:
+                                add_log("⚡ Запускаю связку транзакций...")
+                                
+                                # 1. Покупаем USDC
+                                swap_payload_1 = {"quoteResponse": quote_forward, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
+                                async with session.post(JUPITER_SWAP_API, json=swap_payload_1, timeout=5) as s_resp1:
+                                    if s_resp1.status == 200:
+                                        s_data1 = await s_resp1.json()
+                                        raw_tx1 = base64.b64decode(s_data1.get("swapTransaction"))
+                                        signed_txn1 = VersionedTransaction(VersionedTransaction.from_bytes(raw_tx1).message, [signer])
+                                        
+                                        rpc_payload1 = {
+                                            "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
+                                            "params": [base64.b64encode(bytes(signed_txn1)).decode('utf-8'), {"encoding": "base64", "skipPreflight": True}]
+                                        }
+                                        await session.post(SOLANA_RPC, json=rpc_payload1)
+                                        add_log("🔄 Этап 1: SOL -> USDC отправлен.")
+                                        
+                                        # Ждем 2 секунды, чтобы первая транзакция успела пройти в блокчейне
+                                        await asyncio.sleep(2) 
+                                        
+                                        # 2. Продаем USDC обратно в SOL (фиксируем прибыль)
+                                        swap_payload_2 = {"quoteResponse": quote_backward, "userPublicKey": str(signer.pubkey()), "wrapUnwrapSOL": True}
+                                        async with session.post(JUPITER_SWAP_API, json=swap_payload_2, timeout=5) as s_resp2:
+                                            if s_resp2.status == 200:
+                                                s_data2 = await s_resp2.json()
+                                                raw_tx2 = base64.b64decode(s_data2.get("swapTransaction"))
+                                                signed_txn2 = VersionedTransaction(VersionedTransaction.from_bytes(raw_tx2).message, [signer])
+                                                
+                                                rpc_payload2 = {
+                                                    "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
+                                                    "params": [base64.b64encode(bytes(signed_txn2)).decode('utf-8'), {"encoding": "base64", "skipPreflight": True}]
+                                                }
+                                                async with session.post(SOLANA_RPC, json=rpc_payload2) as rpc_resp2:
+                                                    rpc_data = await rpc_resp2.json()
+                                                    tx_sig = rpc_data.get("result", "unknown")
+                                                    add_log(f"💎 Арбитраж закрыт! TX: {str(tx_sig)[:8]}...")
+                            # =======================================
+                            
+            except Exception as e:
                 pass
             
-            await asyncio.sleep(2.5) # Пауза, чтобы не получить бан от Jupiter API
+            # Увеличенная пауза для боевого режима, чтобы не перегрузить RPC
+            await asyncio.sleep(3) 
 # ==========================================
-
 
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="ru">
