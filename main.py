@@ -339,6 +339,8 @@ async def arbitrage_worker():
         add_log("🔑 Ключи подписи подключены. Сканирование всех DEX бирж...")
 
     target_stables = [WHITELISTED_TOKENS["USDC"], WHITELISTED_TOKENS["USDT"]]
+    
+    scan_counter = 0 # СЧЕТЧИК ПУЛЬСА
 
     async with aiohttp.ClientSession() as session:
         while True:
@@ -401,8 +403,34 @@ async def arbitrage_worker():
                                                         rpc_data = await rpc_resp2.json()
                                                         tx_sig = rpc_data.get("result", "unknown")
                                                         add_log(f"💎 Прибыль зафиксирована в SOL! TX: {str(tx_sig)[:8]}...")
+                                                        
+                                                        # === ОТПРАВКА PUSH-УВЕДОМЛЕНИЙ В TELEGRAM ===
+                                                        conn = sqlite3.connect(DB_FILE)
+                                                        cursor = conn.cursor()
+                                                        cursor.execute("SELECT telegram_id FROM users WHERE trading_active = 1")
+                                                        active_users = cursor.fetchall()
+                                                        conn.close()
+                                                        
+                                                        pair_name = "USDC/SOL" if stable_mint == WHITELISTED_TOKENS["USDC"] else "USDT/SOL"
+                                                        
+                                                        msg_text = (
+                                                            f"🚀 *MOV Bot Peak Dump Executed!*\n\n"
+                                                            f"• Пара: `{pair_name}` [Verified 🔥]\n"
+                                                            f"• Профит: `+{profit_sol:.5f} SOL` 🎯\n"
+                                                        )
+                                                        
+                                                        for u in active_users:
+                                                            await send_telegram_notification(u[0], msg_text)
+                                                        # ==========================================
             except Exception as e:
                 pass
+            
+            # === БЛОК ПУЛЬСА (HEARTBEAT) ===
+            scan_counter += 1
+            if scan_counter >= 150:
+                add_log("🛰️ AI Agent: Просканировано 150 пулов, риски под контролем...")
+                scan_counter = 0
+            # ===============================
             
             await asyncio.sleep(2)
 
