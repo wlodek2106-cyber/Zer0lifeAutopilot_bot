@@ -471,7 +471,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             </div>
 
             <div class="card">
-                <div style="font-size: 12px; font-weight: 700; color: #94a3b8; margin-bottom: 6px;">ЖУРНАЛ СКАНЕРИРОВАНИЯ</div>
+                <div style="font-size: 12px; font-weight: 700; color: #94a3b8; margin-bottom: 6px;">ЖУРНАЛ СКАНИРОВАНИЯ</div>
                 <div id="log-box" class="log-console">Запуск ядра...</div>
             </div>
         </div>
@@ -510,7 +510,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <div style="color: #64748b; font-size: 11px; margin-top: 4px;">Send SPL-USDC on Solana. Enter transaction signature</div>
                 </div>
 
-<button class="btn-green-main" id="btn-show-addr" onclick="toggleDepositDetails()">Show Deposit Address 🚀</button>
+                <button class="btn-green-main" id="btn-show-addr" onclick="toggleDepositDetails()">Show Deposit Address 🚀</button>
 
                 <div id="deposit-details" style="display: none; margin-top: 14px;">
                     <div style="text-align: center; color: #94a3b8; font-size: 11px; margin-bottom: 8px;">Transfer USDC (Solana SPL) to:</div>
@@ -643,7 +643,7 @@ RAW_HTML = r"""<!DOCTYPE html>
 
         async function refresh() {
             try {
-                const l = await fetch('/api/logs').text();
+                const l = await fetch('/api/logs').then(r => r.json());
                 if(l.success) {
                     document.getElementById('log-box').innerText = l.logs.join('\n');
                     if(l.trading_active !== undefined) {
