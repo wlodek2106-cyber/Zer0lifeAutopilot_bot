@@ -161,19 +161,23 @@ async def verify_solana_usdc_tx(session: aiohttp.ClientSession, tx_sig: str, tar
 
 async def get_token_prices(session: aiohttp.ClientSession) -> dict:
     prices = {}
-    url = "https://api.coingecko.com/api/v3/simple/price?ids=solana,jupiter-exchange-solana,raydium,wif,pyth-network&vs_currencies=usd"
+    mints_str = ",".join([v["mint"] for v in WATCHLIST.values()])
+    url = f"https://api.dexscreener.com/latest/dex/tokens/{mints_str}"
     try:
         headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
         async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as resp:
             if resp.status == 200:
                 data = await resp.json()
-                if "solana" in data: prices["SOL"] = float(data["solana"]["usd"])
-                if "jupiter-exchange-solana" in data: prices["JUP"] = float(data["jupiter-exchange-solana"]["usd"])
-                if "raydium" in data: prices["RAY"] = float(data["raydium"]["usd"])
-                if "wif" in data: prices["WIF"] = float(data["wif"]["usd"])
-                if "pyth-network" in data: prices["PYTH"] = float(data["pyth-network"]["usd"])
+                pairs = data.get("pairs", [])
+                for pair in pairs:
+                    base_token = pair.get("baseToken", {}).get("address")
+                    price_usd = pair.get("priceUsd")
+                    if base_token and price_usd:
+                        for sym, info in WATCHLIST.items():
+                            if info["mint"] == base_token and sym not in prices:
+                                prices[sym] = float(price_usd)
             else:
-                add_log(f"⚠️ Ошибка цен CoinGecko, статус: {resp.status}")
+                add_log(f"⚠️ Ошибка получения цен Dexscreener, статус: {resp.status}")
     except Exception as e:
         add_log(f"⚠️ Ошибка запроса цен: {str(e)[:40]}")
     return prices
@@ -252,7 +256,7 @@ async def real_trading_worker():
                     add_log(f"📊 Цены: " + ", ".join([f"{s}: ${p:.2f}" for s, p in prices.items()]))
                 else:
                     add_log("⚠️ Не удалось получить цены активов...")
-                    await asyncio.sleep(10)
+                    await asyncio.sleep(15)
                     continue
 
                 for sym, p in prices.items():
@@ -287,17 +291,17 @@ async def real_trading_worker():
                         else:
                             add_log(f"⚠️ Ошибка продажи {sym}, повторим позже...")
                     conn.close()
-                    await asyncio.sleep(15)
+                    await asyncio.sleep(20)
                     continue
 
                 conn.close()
 
                 if not IS_TRADING_ACTIVE:
-                    await asyncio.sleep(15)
+                    await asyncio.sleep(20)
                     continue
 
                 if now_ts < cooldown_until:
-                    await asyncio.sleep(15)
+                    await asyncio.sleep(20)
                     continue
 
                 # ГАРАНТИРОВАННЫЙ ТЕСТОВЫЙ ВХОД СРАЗУ ПРИ СТАРТЕ
@@ -320,7 +324,7 @@ async def real_trading_worker():
                         add_log(f"💎 Успешно куплен {sym}! Tx: {buy_sig[:12]}...")
                     else:
                         add_log(f"❌ Ошибка тестового свопа SOL. Проверьте баланс SOL на газе и приватный ключ.")
-                    await asyncio.sleep(15)
+                    await asyncio.sleep(20)
                     continue
 
                 # Обычное сканирование просадок
@@ -358,7 +362,7 @@ async def real_trading_worker():
             except Exception as e:
                 add_log(f"⚠️ Ошибка сканера: {e}")
 
-            await asyncio.sleep(15)
+            await asyncio.sleep(20)
 
 # --- ИНТЕРФЕЙС ---
 RAW_HTML = r"""<!DOCTYPE html>
@@ -796,9 +800,6 @@ async def api_verify_deposit(request):
         conn.commit()
         conn.close()
 
-        add_log(f"📥 Зачислен ончейн-депозит: +${amount_usdc} USDC ({tx[:10]}...)")
-        return web.json_response({"success": True, "message": f"✅ Успешно! Зачислено ${amount_usdc} USDC на ваш баланс."})
-
     except Exception as e:
         return web.json_response({"success": False, "message": f"Ошибка сервера: {str(e)}"})
 
@@ -855,7 +856,7 @@ async def main():
     app.router.add_get('/health', health_handler)
     app.router.add_get('/api/logs', api_get_logs)
     app.router.add_get('/api/stats', api_get_stats)
-    app.router.add_post('/api/toggle_trading', api_toggle_trading)
+    app.router.add_post('/api/toggle_trading', api_toggle_trade := api_toggle_trading)
     app.router.add_post('/api/verify_deposit', api_verify_deposit)
     app.router.add_post('/webhook', telegram_webhook_handler)
 
