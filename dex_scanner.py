@@ -1,54 +1,60 @@
 import asyncio
 import aiohttp
-import time
 
-# Адреса смарт-контрактов токенов в сети Solana
-INPUT_MINT = "So11111111111111111111111111111111111111112" # SOL
-OUTPUT_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" # USDC
-AMOUNT_IN = 1000000000 # Тестовый объем: 1 SOL (в лампортах, 1 SOL = 10^9 lamports)
-SLIPPAGE_BPS = 50 # Допустимое проскальзывание 0.5%
+# Конфигурация активов из вашего пула
+WATCHLIST = {
+    "SOL":  {"mint": "So11111111111111111111111111111111111111112", "decimals": 9},
+    "JUP":  {"mint": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", "decimals": 6},
+    "RAY":  {"mint": "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R", "decimals": 6},
+    "WIF":  {"mint": "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm", "decimals": 6},
+    "PYTH": {"mint": "HZ1JovNiDcZvKhgWNgQX5Z59C3b22DoPtRUC544HLD37", "decimals": 6}
+}
+
+USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+SLIPPAGE_BPS = 40  # 0.40% проскальзывание
 
 async def fetch_quote(session, input_mint, output_mint, amount):
-    """Отправляет запрос к Jupiter API для получения котировки обмена"""
     url = f"https://quote-api.jup.ag/v6/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount}&slippageBps={SLIPPAGE_BPS}"
-    
-    async with session.get(url) as response:
+    async with session.get(url, headers={"User-Agent": "Mozilla/5.0"}) as response:
         if response.status == 200:
             return await response.json()
         return None
 
-async def arbitrage_worker():
-    """Бесконечный цикл сканирования DEX на наличие арбитражных окон"""
-    print("🤖 Zer0Life Arbitrage Worker запущен и сканирует пулы ликвидности...")
+async def multi_asset_arbitrage_worker():
+    print("🤖 Multi-Asset Arbitrage Worker запущен для SOL, JUP, RAY, WIF, PYTH...")
     
-    # Создаем постоянную сессию для быстрых запросов без переподключения
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                # Шаг 1: Узнаем, сколько USDC мы получим за 1 SOL
-                quote_forward = await fetch_quote(session, INPUT_MINT, OUTPUT_MINT, AMOUNT_IN)
-                
-                if quote_forward:
-                    usdc_amount = quote_forward['outAmount']
+                for sym, info in WATCHLIST.items():
+                    token_mint = info["mint"]
+                    decimals = info["decimals"]
                     
-                    # Шаг 2: Узнаем, сколько SOL мы получим обратно за эти USDC
-                    quote_backward = await fetch_quote(session, OUTPUT_MINT, INPUT_MINT, usdc_amount)
+                    # Тестовый объем входа (например, эквивалент ~$20 в базовых единицах токена)
+                    test_amount_in = int(10 ** decimals) # 1 целая монета для теста
                     
-                    if quote_backward:
-                        final_sol = int(quote_backward['outAmount'])
+                    # Шаг 1: Покупка/Обмен токена на USDC
+                    quote_to_usdc = await fetch_quote(session, token_mint, USDC_MINT, test_amount_in)
+                    if not quote_to_usdc:
+                        continue
                         
-                        # Высчитываем чистую разницу (Спред)
-                        profit = final_sol - AMOUNT_IN
+                    usdc_out = int(quote_to_usdc['outAmount'])
+                    
+                    # Шаг 2: Обратный обмен USDC обратно в исходный токен
+                    quote_back = await fetch_quote(session, USDC_MINT, token_mint, usdc_out)
+                    if not quote_back:
+                        continue
                         
-                        if profit > 0:
-                            print(f"✅ НАЙДЕН АРБИТРАЖ! Вход: 1 SOL | Выход: {final_sol / 10**9:.5f} SOL | Профит: +{profit / 10**9:.5f} SOL")
-                            # В будущем здесь мы будем вызывать функцию отправки транзакции
-                        else:
-                            # Закомментируйте строку ниже, если не хотите, чтобы консоль засорялась при отсутствии профита
-                            pass 
-                            
+                    final_amount = int(quote_back['outAmount'])
+                    profit = final_amount - test_amount_in
+                    
+                    if profit > 0:
+                        print(f"✅ НАЙДЕН СПРЕД [{sym}]: Профит +{profit / 10**decimals:.5f} {sym}")
+                    
+                    # Паужа между запросами по токенам во избежание лимитов API
+                    await asyncio.sleep(1)
+                    
             except Exception as e:
-                print(f"⚠️ Ошибка сканера DEX: {e}")
+                print(f"⚠️ Ошибка в мульти-ассетном воркере: {e}")
             
-            # Обязательная пауза (2 секунды), чтобы API Jupiter не заблокировал нашего бота за спам
-            await asyncio.sleep(2)
+            await asyncio.sleep(5)
