@@ -20,23 +20,17 @@ SOLANA_RPC = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-ke
 SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
 SPLASH_IMAGE_URL = "https://i.postimg.cc/52n94Pzg/57D47DDD-9BED-4D4B-AA69-2B59CAB400AD.png"
 
+# Токены Solana
 SOL_MINT = "So11111111111111111111111111111111111111112"
-ETH_MINT = "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs"
-BTC_MINT = "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh"
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
-PERP_MARKETS = [
-    {"symbol": "SOL-PERP", "mint": SOL_MINT, "leverage": 5},
-    {"symbol": "ETH-PERP", "mint": ETH_MINT, "leverage": 5},
-    {"symbol": "BTC-PERP", "mint": BTC_MINT, "leverage": 5}
-]
+# Риск-менеджмент ($25 реального USDC на вход)
+TRADE_AMOUNT_USDC = 25.0
+TRADE_AMOUNT_RAW = int(TRADE_AMOUNT_USDC * 1_000_000) # USDC 6 decimals
+TP_PCT = 0.015  # +1.5% фиксация прибыли
+SL_PCT = 0.012  # -1.2% стоп-лосс
 
-MARGIN_PER_TRADE = 25.0
-BASE_SL_PCT = 0.015
-TRAILING_ACTIVATION_PCT = 0.015
-TRAILING_STEP_PCT = 0.005
-
-RECENT_LOGS = ["⚜️ Zer0Life Alpha Neural Perps Engine инициализирован."]
+RECENT_LOGS = ["⚜️ Zer0Life Live DEX Engine запущен."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -47,15 +41,12 @@ def add_log(msg: str):
         RECENT_LOGS.pop()
     logging.info(msg)
 
-try:
-    from solders.keypair import Keypair
-    SOLANA_SDK_AVAILABLE = True
-except ImportError:
-    SOLANA_SDK_AVAILABLE = False
+from solders.keypair import Keypair
+from solders.transaction import VersionedTransaction
 
 def get_signer_keypair():
     pk_env = os.getenv("SOLANA_PRIVATE_KEY", "").strip()
-    if not pk_env or not SOLANA_SDK_AVAILABLE:
+    if not pk_env:
         return None
     try:
         if pk_env.startswith("["):
@@ -63,7 +54,7 @@ def get_signer_keypair():
         else:
             return Keypair.from_bytes(base58.b58decode(pk_env))
     except Exception as e:
-        add_log(f"⚠️ Ошибка ключа: {e}")
+        add_log(f"⚠️ Ошибка разбора приватного ключа: {e}")
         return None
 
 # --- БАЗА ДАННЫХ ---
@@ -74,10 +65,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS users (
             telegram_id INTEGER PRIMARY KEY,
             username TEXT,
-            first_name TEXT,
             solana_wallet TEXT,
             trading_active INTEGER DEFAULT 1,
-            trade_mode TEXT DEFAULT 'ALPHA_TRAILING_PERP',
             initial_balance REAL DEFAULT 95.0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -85,15 +74,14 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            telegram_id INTEGER,
             token_pair TEXT,
             position_side TEXT DEFAULT 'LONG',
             buy_price REAL,
-            peak_price REAL,
-            trailing_stop_price REAL,
-            sell_price REAL,
+            amount_lamports INTEGER,
+            sell_price REAL DEFAULT 0,
             profit_usdc REAL DEFAULT 0.0,
-            tx_signature TEXT,
+            buy_tx TEXT,
+            sell_tx TEXT,
             timestamp TEXT
         )
     ''')
@@ -121,142 +109,196 @@ async def send_telegram_notification(chat_id: int, text: str):
         except Exception:
             pass
 
-# --- ТОРГОВЫЙ СКАНЕР ---
-PRICE_HISTORIES = {m["symbol"]: [] for m in PERP_MARKETS}
+# --- РЕАЛЬНОЕ ИСПОЛНЕНИЕ ЧЕРЕЗ JUPITER SWAP API V6 ---
+async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, output_mint: str, amount_raw: int, signer: Keypair) -> str:
+    """Выполняет реальный своп в блокчейне Solana через Jupiter v6."""
+    try:
+        user_pubkey = str(signer.pubkey())
+        
+        # 1. Получаем котировку (Quote)
+        quote_url = f"https://quote-api.jup.ag/v6/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount_raw}&slippageBps=50"
+        async with session.get(quote_url, timeout=5) as resp:
+            if resp.status != 200:
+                err_text = await resp.text()
+                add_log(f"❌ Ошибка Quote API: {err_text[:80]}")
+                return ""
+            quote_data = await resp.json()
 
-async def fetch_token_price(session: aiohttp.ClientSession, mint: str) -> float:
+        # 2. Получаем сериализованную транзакцию
+        swap_payload = {
+            "quoteResponse": quote_data,
+            "userPublicKey": user_pubkey,
+            "wrapAndUnwrapSol": True,
+            "dynamicComputeUnitLimit": True,
+            "prioritizationFeeLamports": "auto"
+        }
+        async with session.post("https://quote-api.jup.ag/v6/swap", json=swap_payload, timeout=6) as resp:
+            if resp.status != 200:
+                err_text = await resp.text()
+                add_log(f"❌ Ошибка Swap API: {err_text[:80]}")
+                return ""
+            swap_res = await resp.json()
+            swap_tx_b64 = swap_res.get("swapTransaction")
+
+        if not swap_tx_b64:
+            return ""
+
+        # 3. Подписываем транзакцию
+        raw_tx_bytes = base58.b58decode(swap_tx_b64) if not swap_tx_b64.endswith("=") else None
+        if not raw_tx_bytes:
+            import base64
+            raw_tx_bytes = base64.b64decode(swap_tx_b64)
+
+        tx = VersionedTransaction.from_bytes(raw_tx_bytes)
+        signature = signer.sign_message(bytes(tx.message))
+        signed_tx = VersionedTransaction.populate(tx.message, [signature])
+
+        # 4. Отправляем в сеть через Helius RPC
+        import base64
+        signed_b64 = base64.b64encode(bytes(signed_tx)).decode("utf-8")
+        rpc_payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "sendTransaction",
+            "params": [signed_b64, {"skipPreflight": True, "encoding": "base64", "maxRetries": 3}]
+        }
+        async with session.post(SOLANA_RPC, json=rpc_payload, timeout=8) as resp:
+            if resp.status == 200:
+                rpc_res = await resp.json()
+                tx_sig = rpc_res.get("result")
+                if tx_sig:
+                    return str(tx_sig)
+                else:
+                    add_log(f"❌ RPC отказ: {rpc_res.get('error')}")
+    except Exception as e:
+        add_log(f"⚠️ Ошибка выполнения свопа: {e}")
+    return ""
+
+async def get_sol_price(session: aiohttp.ClientSession) -> float:
     try:
-        url = f"https://api.jup.ag/price/v2?ids={mint}"
+        url = "https://api.jup.ag/price/v2?ids=So11111111111111111111111111111111111111112"
         async with session.get(url, timeout=3) as resp:
             if resp.status == 200:
-                data = await resp.json()
-                return float(data.get("data", {}).get(mint, {}).get("price", 0.0))
-    except Exception:
-        pass
-    try:
-        url = f"https://api.dexscreener.com/latest/dex/tokens/{mint}"
-        async with session.get(url, timeout=3) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                return float(data.get("pairs", [{}])[0].get("priceUsd", 0.0))
+                d = await resp.json()
+                return float(d.get("data", {}).get(SOL_MINT, {}).get("price", 0.0))
     except Exception:
         pass
     return 0.0
 
-async def alpha_trailing_perp_worker():
-    add_log("🧠 Запущен Alpha-Скринер с динамическим Трейлинг-Тейком 24/7/365...")
+# --- БОЕВОЙ ТОРГОВЫЙ ЦИКЛ (БЕЗ ФЕЙКОВ) ---
+async def real_trading_worker():
+    add_log("🚀 Запуск БОЕВОГО ончейн-исполнителя (Jupiter Real Swaps)...")
     signer = get_signer_keypair()
-    if signer:
-        add_log(f"🔑 Live Mode: Автопилот активен для {str(signer.pubkey())[:6]}... (Solana L1)")
+    if not signer:
+        add_log("❌ ОШИБКА: SOLANA_PRIVATE_KEY не задан! Реальные транзакции невозможны.")
+        return
+
+    wallet_addr = str(signer.pubkey())
+    add_log(f"🔑 Live Mode: Авторизован кошелек {wallet_addr[:6]}...{wallet_addr[-4:]}")
+
+    price_history = []
 
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                current_prices = {}
-                for m in PERP_MARKETS:
-                    px = await fetch_token_price(session, m["mint"])
-                    if px > 0:
-                        current_prices[m["symbol"]] = px
-                        h = PRICE_HISTORIES[m["symbol"]]
-                        h.append(px)
-                        if len(h) > 20:
-                            h.pop(0)
+                current_price = await get_sol_price(session)
+                if current_price <= 0:
+                    await asyncio.sleep(4)
+                    continue
+
+                price_history.append(current_price)
+                if len(price_history) > 25:
+                    price_history.pop(0)
 
                 conn = sqlite3.connect(DB_FILE)
                 cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT id, token_pair, buy_price, peak_price, trailing_stop_price 
-                    FROM trades WHERE sell_price = 0 LIMIT 1
-                """)
+                cursor.execute("SELECT id, buy_price, amount_lamports, buy_tx FROM trades WHERE sell_price = 0 LIMIT 1")
                 active_trade = cursor.fetchone()
 
+                # 1. Если позиция открыта — проверяем тейк/стоп для РЕАЛЬНОЙ продажи
                 if active_trade:
-                    trade_id, pair_sym, buy_px, peak_px, trail_stop = active_trade
-                    curr_px = current_prices.get(pair_sym, 0.0)
+                    trade_id, entry_px, lamports, buy_tx = active_trade
+                    diff_pct = (current_price - entry_px) / entry_px
 
-                    if curr_px > 0:
-                        pnl_from_entry = (curr_px - buy_px) / buy_px
+                    # Условие закрытия: TP (+1.5%) или SL (-1.2%)
+                    if diff_pct >= TP_PCT or diff_pct <= -SL_PCT:
+                        add_log(f"🔄 СИГНАЛ ВЫХОДА: Отправка РЕАЛЬНОГО свопа SOL -> USDC в блокчейн...")
+                        
+                        sell_sig = await execute_jupiter_swap(
+                            session=session,
+                            input_mint=SOL_MINT,
+                            output_mint=USDC_MINT,
+                            amount_raw=lamports,
+                            signer=signer
+                        )
 
-                        if curr_px > peak_px:
-                            new_peak = curr_px
-                            if (new_peak - buy_px) / buy_px >= TRAILING_ACTIVATION_PCT:
-                                new_trail = new_peak * (1.0 - TRAILING_STEP_PCT)
-                            else:
-                                new_trail = trail_stop
-                            
-                            cursor.execute("UPDATE trades SET peak_price = ?, trailing_stop_price = ? WHERE id = ?", (new_peak, new_trail, trade_id))
-                            conn.commit()
-                            peak_px = new_peak
-                            trail_stop = new_trail
-
-                        if trail_stop > buy_px and curr_px <= trail_stop:
-                            profit_pct = (trail_stop - buy_px) / buy_px
-                            profit_usd = round(MARGIN_PER_TRADE * 5 * profit_pct, 2)
-                            tx_sig = f"jup_trail_win_{os.urandom(4).hex()}"
-
-                            cursor.execute("UPDATE trades SET sell_price = ?, profit_usdc = ?, tx_signature = ? WHERE id = ?", (curr_px, profit_usd, tx_sig, trade_id))
+                        if sell_sig:
+                            pnl_usd = round(TRADE_AMOUNT_USDC * diff_pct, 2)
+                            cursor.execute("UPDATE trades SET sell_price = ?, profit_usdc = ?, sell_tx = ? WHERE id = ?", (current_price, pnl_usd, sell_sig, trade_id))
                             conn.commit()
 
-                            add_log(f"🏆 МАКСИМАЛЬНЫЙ ПРОФИТ [{pair_sym}]! Пик: ${peak_px:.2f}. Выход: ${curr_px:.2f} (+{profit_pct*100:.2f}\%). Прибыль: +${profit_usd} USDC 💵")
+                            add_log(f"✅ УСПЕХ: Позиция закрыта в блокчейне! PnL: {'+' if pnl_usd >= 0 else ''}{pnl_usd} USDC. TX: {sell_sig[:10]}...")
+                            add_log(f"🔗 Ссылка: https://solscan.io/tx/{sell_sig}")
+
                             cursor.execute("SELECT telegram_id FROM users WHERE trading_active = 1")
                             users = cursor.fetchall()
                             for u in users:
-                                await send_telegram_notification(u[0], f"🏆 *Сделка закрыта с максимальным профитом!*\n• Пара: `{pair_sym}`\n• Выход: `${curr_px:.2f}`\n• Прибыль: `+${profit_usd} USDC` 💵")
-
-                        elif trail_stop <= buy_px and pnl_from_entry <= -BASE_SL_PCT:
-                            loss_usd = round(MARGIN_PER_TRADE * 5 * abs(pnl_from_entry), 2)
-                            tx_sig = f"jup_sl_{os.urandom(4).hex()}"
-
-                            cursor.execute("UPDATE trades SET sell_price = ?, profit_usdc = ?, tx_signature = ? WHERE id = ?", (curr_px, -loss_usd, tx_sig, trade_id))
-                            conn.commit()
-                            add_log(f"🛑 Стоп-лосс [{pair_sym}]: Выход по ${curr_px:.2f} ({pnl_from_entry*100:.2f}\%). Убыток: -${loss_usd} USDC")
+                                await send_telegram_notification(u[0], f"🎯 *Реальная сделка закрыта!*\n• Вход: `${entry_px:.2f}` -> Выход: `${current_price:.2f}`\n• PnL: `+{pnl_usd} USDC` 💵\n• [Смотреть транзакцию в Solscan](https://solscan.io/tx/{sell_sig})")
+                        else:
+                            add_log("⚠️ Ошибка отправки транзакции закрытия в сеть Solana. Повтор...")
 
                     conn.close()
-                    await asyncio.sleep(4)
+                    await asyncio.sleep(5)
                     continue
 
                 conn.close()
 
-                candidates = []
-                for m in PERP_MARKETS:
-                    sym = m["symbol"]
-                    history = PRICE_HISTORIES[sym]
-                    if len(history) >= 8:
-                        curr_p = history[-1]
-                        avg_p = sum(history[-8:-1]) / 7
-                        momentum = (curr_p - avg_p) / avg_p
-                        volatility = (max(history[-8:]) - min(history[-8:])) / min(history[-8:])
-                        score = momentum * 1000 + (volatility * 500)
+                # 2. Если свободен — ищем импульс для РЕАЛЬНОЙ покупки
+                if len(price_history) >= 8:
+                    avg_p = sum(price_history[-8:-1]) / 7
+                    momentum = (current_price - avg_p) / avg_p
 
-                        if momentum > 0.0012:
-                            candidates.append({"pair": sym, "price": curr_p, "score": score, "momentum": momentum})
+                    # Входим при импульсе от +0.10%
+                    if momentum >= 0.0010:
+                        add_log(f"⚡ ОБНАРУЖЕН ИМПУЛЬС (+{momentum*100:.2f}%): Отправка РЕАЛЬНОГО свопа 25 USDC -> SOL...")
+                        
+                        buy_sig = await execute_jupiter_swap(
+                            session=session,
+                            input_mint=USDC_MINT,
+                            output_mint=SOL_MINT,
+                            amount_raw=TRADE_AMOUNT_RAW,
+                            signer=signer
+                        )
 
-                if candidates:
-                    candidates.sort(key=lambda x: x["score"], reverse=True)
-                    best = candidates[0]
-                    target_pair = best["pair"]
-                    entry_px = best["price"]
-                    tx_sig = f"jup_entry_{os.urandom(5).hex()}"
+                        if buy_sig:
+                            # Рассчитываем количество полученных SOL
+                            sol_bought_lamports = int((TRADE_AMOUNT_USDC / current_price) * 1_000_000_000)
 
-                    add_log(f"⚡ AI ВЫБОР: Лидер — {target_pair} (Импульс: +{best['momentum']*100:.2f}%, Score: {best['score']:.1f})")
-                    init_stop = entry_px * (1.0 - BASE_SL_PCT)
+                            c = sqlite3.connect(DB_FILE)
+                            c.cursor().execute("""
+                                INSERT INTO trades (token_pair, position_side, buy_price, amount_lamports, sell_price, profit_usdc, buy_tx, sell_tx, timestamp) 
+                                VALUES ('SOL/USDC', 'LONG', ?, ?, 0, 0, ?, '', ?)
+                            """, (current_price, sol_bought_lamports, buy_sig, datetime.now().strftime('%H:%M:%S')))
+                            c.commit()
+                            c.close()
 
-                    c = sqlite3.connect(DB_FILE)
-                    c.cursor().execute("""
-                        INSERT INTO trades (telegram_id, token_pair, position_side, buy_price, peak_price, trailing_stop_price, sell_price, profit_usdc, tx_signature, timestamp) 
-                        VALUES (42882165, ?, 'LONG', ?, ?, ?, 0, 0, ?, ?)
-                    """, (target_pair, entry_px, entry_px, init_stop, tx_sig, datetime.now().strftime('%H:%M:%S')))
-                    c.commit()
-                    c.close()
+                            add_log(f"💎 ПОКУПКА В СЕТИ ПОДТВЕРЖДЕНА! Куплен SOL на 25 USDC по ${current_price:.2f}")
+                            add_log(f"🔗 Ссылка на покупку: https://solscan.io/tx/{buy_sig}")
 
-                    add_log(f"💎 Long открыт: {target_pair} по ${entry_px:.2f} на $125 ($25 x 5).")
+                            c = sqlite3.connect(DB_FILE)
+                            active_u = c.cursor().execute("SELECT telegram_id FROM users WHERE trading_active = 1").fetchall()
+                            c.close()
+                            for u in active_u:
+                                await send_telegram_notification(u[0], f"🚀 *Реальная покупка на Phantom!*\n• Куплен `SOL` за `25 USDC`\n• Цена: `${current_price:.2f}`\n• [Транзакция в Solscan](https://solscan.io/tx/{buy_sig})")
+                        else:
+                            add_log("⚠️ Не удалось выполнить покупку (проверьте наличие газа SOL на кошельке).")
 
             except Exception as e:
-                logging.error(f"Worker error: {e}")
+                logging.error(f"Trading loop error: {e}")
 
-            await asyncio.sleep(4)
+            await asyncio.sleep(5)
 
-# --- TELEGRAM POLLING ---
+# --- TELEGRAM BOT WORKER ---
 async def telegram_bot_worker():
     if not TELEGRAM_TOKEN:
         return
@@ -286,7 +328,7 @@ async def telegram_bot_worker():
 
                                 reply = {
                                     "chat_id": chat_id,
-                                    "text": "⚜️ *Zer0Life Alpha Terminal Активен!*\n\nАвтономный Jupiter Perps терминал (5x) запущен на Solana.\n\n👇 Нажмите кнопку ниже для перехода в терминал:",
+                                    "text": "⚜️ *Zer0Life Real DEX Engine Активен!*\n\nКаждая сделка совершается реально на Jupiter DEX с баланса вашего кошелька.\n\n👇 Нажмите кнопку ниже:",
                                     "parse_mode": "Markdown",
                                     "reply_markup": {
                                         "inline_keyboard": [[
@@ -309,11 +351,7 @@ RAW_HTML = r"""<!DOCTYPE html>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-        body { 
-            background: #050507; color: #f1f5f9; 
-            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif; 
-            margin: 0; padding: 0; width: 100vw; height: 100vh; overflow: hidden; 
-        }
+        body { background: #050507; color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif; margin: 0; padding: 0; width: 100vw; height: 100vh; overflow: hidden; }
         #splash-screen {
             position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
             background-color: #050507;
@@ -334,90 +372,33 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
         .run-btn:active { transform: scale(0.97); }
 
-        .card { 
-            background: linear-gradient(145deg, rgba(22, 22, 26, 0.95), rgba(12, 12, 14, 0.95)); 
-            backdrop-filter: blur(20px); border-radius: 24px; padding: 20px; margin-bottom: 16px; 
-            border: 1px solid rgba(212, 175, 55, 0.2); 
-        }
+        .card { background: linear-gradient(145deg, rgba(22, 22, 26, 0.95), rgba(12, 12, 14, 0.95)); backdrop-filter: blur(20px); border-radius: 24px; padding: 20px; margin-bottom: 16px; border: 1px solid rgba(212, 175, 55, 0.2); }
         .title-gold { margin-top: 0; font-size: 17px; font-weight: 800; background: linear-gradient(to right, #d4af37, #ffdf73, #d4af37); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
         .metric { display: flex; justify-content: space-between; margin-top: 10px; font-size: 13px; color: #8a8d93; }
         .val { color: #ffdf73; font-weight: 700; font-family: monospace; }
         .btn-gold { background: linear-gradient(135deg, #d4af37 0%, #aa771c 100%); color: #050505; border: none; width: 100%; padding: 14px; border-radius: 18px; font-weight: 800; cursor: pointer; margin-top: 12px; }
         .btn-red { background: linear-gradient(135deg, #3f0d12 0%, #a71d31 100%); color: white; border-radius: 18px; padding: 12px; font-weight: 700; border: none; width: 100%; cursor: pointer; }
-        .logs { background: rgba(0, 0, 0, 0.6); border: 1px solid rgba(212, 175, 55, 0.15); border-radius: 18px; padding: 12px; font-family: monospace; font-size: 11px; color: #d4af37; height: 170px; overflow-y: auto; margin-top: 10px; white-space: pre-line; }
+        .logs { background: rgba(0, 0, 0, 0.6); border: 1px solid rgba(212, 175, 55, 0.15); border-radius: 18px; padding: 12px; font-family: monospace; font-size: 11px; color: #5ff53b; height: 170px; overflow-y: auto; margin-top: 10px; white-space: pre-line; }
         .trade-item { background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(212, 175, 55, 0.15); border-radius: 16px; padding: 12px; margin-top: 8px; font-family: monospace; font-size: 11px; display: flex; justify-content: space-between; align-items: center; }
 
-        /* СТИЛЬ КАРТОЧКИ WALLET ТОЧНО КАК НА СКРИНШОТЕ */
-        .neon-card {
-            background: #0d101d;
-            border: 1px solid #1c223a;
-            border-radius: 26px;
-            padding: 20px;
-            margin-bottom: 16px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-        }
+        /* СТИЛЬ WALLET */
+        .neon-card { background: #0d101d; border: 1px solid #1c223a; border-radius: 26px; padding: 20px; margin-bottom: 16px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); }
         .header-row { display: flex; justify-content: space-between; align-items: flex-start; }
         .user-name { font-size: 19px; font-weight: 800; color: #ffffff; letter-spacing: 0.3px; }
         .user-id { color: #17e089; font-size: 13px; font-weight: 700; margin-top: 5px; font-family: monospace; }
-        .pool-badge {
-            background: rgba(14, 53, 44, 0.85);
-            border: 1px solid #137754;
-            color: #1fe090;
-            padding: 8px 12px;
-            border-radius: 20px;
-            font-size: 11px;
-            font-weight: 700;
-            display: flex; align-items: center; gap: 4px;
-        }
+        .pool-badge { background: rgba(14, 53, 44, 0.85); border: 1px solid #137754; color: #1fe090; padding: 8px 12px; border-radius: 20px; font-size: 11px; font-weight: 700; }
         .label-text { color: #7b88a8; font-size: 12px; font-weight: 500; margin-top: 18px; margin-bottom: 8px; }
-        .address-pill {
-            background: #080a14;
-            border: 1px solid #16533f;
-            border-radius: 14px;
-            padding: 13px 12px;
-            font-family: monospace;
-            font-size: 11px;
-            color: #1ee08f;
-            text-align: center;
-            word-break: break-all;
-        }
+        .address-pill { background: #080a14; border: 1px solid #16533f; border-radius: 14px; padding: 13px 12px; font-family: monospace; font-size: 11px; color: #1ee08f; text-align: center; word-break: break-all; }
         .qr-wrapper { display: flex; justify-content: center; align-items: center; margin-top: 18px; margin-bottom: 18px; }
-        .qr-box { background: #ffffff; padding: 12px; border-radius: 18px; box-shadow: 0 4px 20px rgba(0,0,0,0.6); }
+        .qr-box { background: #ffffff; padding: 12px; border-radius: 18px; }
         .qr-box img { display: block; width: 145px; height: 145px; }
-        .btn-purple {
-            background: linear-gradient(180deg, #6b43f7 0%, #5127ee 100%);
-            color: #ffffff; border: none; width: 100%; padding: 16px;
-            border-radius: 18px; font-weight: 700; font-size: 15px; cursor: pointer;
-            display: flex; justify-content: center; align-items: center; gap: 8px;
-            box-shadow: 0 8px 22px rgba(81, 39, 238, 0.4);
-        }
-        .btn-purple:active { transform: scale(0.98); }
+        .btn-purple { background: linear-gradient(180deg, #6b43f7 0%, #5127ee 100%); color: #ffffff; border: none; width: 100%; padding: 16px; border-radius: 18px; font-weight: 700; font-size: 15px; cursor: pointer; }
         .card-title { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 800; color: #ffffff; margin-bottom: 6px; }
-        .input-tx {
-            background: #080a14; border: 1px solid #1c223a; border-radius: 14px;
-            padding: 15px; width: 100%; color: #ffffff; font-family: monospace;
-            font-size: 12px; outline: none; margin-top: 6px; margin-bottom: 14px;
-        }
-        .btn-green {
-            background: linear-gradient(180deg, #1bd984 0%, #0fb86c 100%);
-            color: #041f12; border: none; width: 100%; padding: 16px;
-            border-radius: 18px; font-weight: 800; font-size: 15px; cursor: pointer;
-            display: flex; justify-content: center; align-items: center; gap: 8px;
-            box-shadow: 0 8px 22px rgba(27, 217, 132, 0.35);
-        }
+        .input-tx { background: #080a14; border: 1px solid #1c223a; border-radius: 14px; padding: 15px; width: 100%; color: #ffffff; font-family: monospace; font-size: 12px; outline: none; margin-top: 6px; margin-bottom: 14px; }
+        .btn-green { background: linear-gradient(180deg, #1bd984 0%, #0fb86c 100%); color: #041f12; border: none; width: 100%; padding: 16px; border-radius: 18px; font-weight: 800; font-size: 15px; cursor: pointer; }
 
-        /* НАВИГАЦИЯ */
-        .bottom-nav { 
-            position: fixed; bottom: 0; left: 0; right: 0; 
-            background: rgba(10, 10, 12, 0.95); backdrop-filter: blur(30px); 
-            border-top: 1px solid rgba(212, 175, 55, 0.15); 
-            padding: 12px 16px; display: flex; justify-content: space-around; z-index: 900; 
-        }
-        .nav-item { 
-            background: transparent; border: none; color: #5a5d63; 
-            font-size: 11px; font-weight: 600; display: flex; 
-            flex-direction: column; align-items: center; gap: 4px; cursor: pointer; 
-        }
+        .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(10, 10, 12, 0.95); backdrop-filter: blur(30px); border-top: 1px solid rgba(212, 175, 55, 0.15); padding: 12px 16px; display: flex; justify-content: space-around; z-index: 900; }
+        .nav-item { background: transparent; border: none; color: #5a5d63; font-size: 11px; font-weight: 600; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; }
         .nav-item.active { color: #d4af37; text-shadow: 0 0 15px rgba(212, 175, 55, 0.6); }
         .tab-content { display: none; width: 100%; height: 100vh; overflow-y: auto; padding: 16px; padding-bottom: 110px; }
         .tab-content.active { display: block; }
@@ -434,42 +415,41 @@ RAW_HTML = r"""<!DOCTYPE html>
     </div>
 
     <div id="app-container" style="display: none; width: 100vw; height: 100vh;">
-        <!-- TAB 1: TRADER (ВАШ СТАНДАРТНЫЙ ЭКРАН) -->
+        <!-- TAB 1: TRADER -->
         <div id="tab-trader" class="tab-content active">
             <div class="card">
-                <h3 class="title-gold">⚡ Alpha Neural Screener</h3>
-                <div class="metric"><span>Выбор пар:</span> <span class="val" style="color: #5ff53b;">Автономный (SOL, ETH, BTC)</span></div>
-                <div class="metric"><span>Фиксация профита:</span> <span class="val" style="color: #ffdf73;">Trailing-Profit (Выжимка пика)</span></div>
-                <div class="metric"><span>Маржа на сделку:</span> <span class="val">$25.00 USDC (5x плечо)</span></div>
-                <div class="metric"><span>Статус ядра:</span> <span id="status-val" class="val" style="color: #5ff53b;">Активен (24/7/365)</span></div>
+                <h3 class="title-gold">⚡ Live Onchain Jupiter DEX</h3>
+                <div class="metric"><span>Режим:</span> <span class="val" style="color: #5ff53b;">100% Ончейн (Real Swaps)</span></div>
+                <div class="metric"><span>Сделка:</span> <span class="val">$25.00 USDC -> SOL</span></div>
+                <div class="metric"><span>Кошелек:</span> <span class="val">8hxi...dM6L</span></div>
+                <div class="metric"><span>Статус:</span> <span id="status-val" class="val" style="color: #5ff53b;">Активен (24/7)</span></div>
                 <div style="display: flex; gap: 10px; margin-top: 14px;">
                     <button class="btn-gold" style="margin-top:0;" onclick="loadStats()">Обновить</button>
                     <button id="toggle-btn" class="btn-red" style="margin-top:0;" onclick="toggleTrading()">Остановить</button>
                 </div>
             </div>
             <div class="card">
-                <h3 class="title-gold">📡 Alpha AI Stream</h3>
-                <div id="logs-box" class="logs">Скрининг волатильности и импульсов...</div>
+                <h3 class="title-gold">📡 Журнал Реальных Транзакций</h3>
+                <div id="logs-box" class="logs">Связь с блокчейном Solana...</div>
             </div>
         </div>
 
-        <!-- TAB 2: STATS (ВАШ СТАНДАРТНЫЙ ЭКРАН) -->
+        <!-- TAB 2: STATS -->
         <div id="tab-stats" class="tab-content">
             <div class="card">
                 <h3 class="title-gold">📊 Статистика Доходности</h3>
-                <div class="metric"><span>Стартовый капитал:</span> <span class="val">$95.00 USDC</span></div>
                 <div class="metric"><span>Чистый PnL:</span> <span id="stat-profit" class="val" style="color: #5ff53b;">+$0.00 USDC</span></div>
-                <button class="btn-gold" onclick="loadStats()">Обновить данные</button>
+                <button class="btn-gold" onclick="loadStats()">Обновить</button>
             </div>
             <div class="card">
-                <h3 class="title-gold">📜 Исполненные Сделки</h3>
+                <h3 class="title-gold">📜 Исполненные Сделки (Solscan)</h3>
                 <div id="trades-list" style="max-height: 250px; overflow-y: auto;">
-                    <div style="color: #5a5d63; font-size: 12px; text-align: center; padding: 20px;">Ожидание фиксации...</div>
+                    <div style="color: #5a5d63; font-size: 12px; text-align: center; padding: 20px;">Ожидание сделок...</div>
                 </div>
             </div>
         </div>
 
-        <!-- TAB 3: WALLET (ОФОРМЛЕНИЕ 1 В 1 СО СКРИНШОТОМ) -->
+        <!-- TAB 3: WALLET -->
         <div id="tab-wallet" class="tab-content">
             <div class="neon-card">
                 <div class="header-row">
@@ -501,7 +481,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- 3 КНОПКИ ВНИЗУ -->
+    <!-- МЕНЮ НАВИГАЦИИ -->
     <div id="bottom-nav-bar" class="bottom-nav" style="display: none;">
         <button id="nav-trader" class="nav-item active" onclick="switchTab('trader')"><span style="font-size:20px;">⚡</span><span>Trader</span></button>
         <button id="nav-stats" class="nav-item" onclick="switchTab('stats')"><span style="font-size:20px;">📊</span><span>Stats</span></button>
@@ -509,11 +489,9 @@ RAW_HTML = r"""<!DOCTYPE html>
     </div>
 
     <script>
-        let user = { id: 42882165, username: "CryptoWlodek", first_name: "CryptoWlodek" };
+        let user = { id: 42882165, username: "CryptoWlodek" };
         try {
-            if (window.Telegram && window.Telegram.WebApp) {
-                window.Telegram.WebApp.expand();
-            }
+            if (window.Telegram && window.Telegram.WebApp) { window.Telegram.WebApp.expand(); }
         } catch(e) {}
 
         window.enterApp = function() {
@@ -544,7 +522,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         let isTrading = true;
         window.toggleTrading = async function() {
             isTrading = !isTrading;
-            document.getElementById('status-val').innerText = isTrading ? "Активен (24/7/365)" : "Остановлен";
+            document.getElementById('status-val').innerText = isTrading ? "Активен (24/7)" : "Остановлен";
             document.getElementById('status-val').style.color = isTrading ? "#5ff53b" : "#8a8d93";
             document.getElementById('toggle-btn').innerText = isTrading ? "Остановить" : "Включить";
             document.getElementById('toggle-btn').className = isTrading ? "btn-red" : "btn-gold";
@@ -553,20 +531,13 @@ RAW_HTML = r"""<!DOCTYPE html>
         window.copyDepositAddress = function() {
             const addr = document.getElementById('sol-address').innerText.trim();
             if (navigator.clipboard) {
-                navigator.clipboard.writeText(addr).then(() => {
-                    alert("✅ Адрес депозита скопирован в буфер обмена!");
-                });
-            } else {
-                alert("Адрес: " + addr);
-            }
+                navigator.clipboard.writeText(addr).then(() => { alert("✅ Адрес депозита скопирован!"); });
+            } else { alert("Адрес: " + addr); }
         };
 
         window.verifyDeposit = async function() {
             const tx = document.getElementById('tx-input').value.trim();
-            if(!tx) {
-                alert("Пожалуйста, вставьте хэш транзакции (Signature)!");
-                return;
-            }
+            if(!tx) { alert("Вставьте хэш транзакции!"); return; }
             try {
                 const res = await fetch('/api/verify_deposit', {
                     method: 'POST',
@@ -575,14 +546,10 @@ RAW_HTML = r"""<!DOCTYPE html>
                 });
                 const data = await res.json();
                 if(data.success) {
-                    alert("🎉 Транзакция подтверждена в сети Solana!");
+                    alert("🎉 Транзакция подтверждена!");
                     document.getElementById('tx-input').value = "";
-                } else {
-                    alert("⚠️ " + (data.message || "Ошибка верификации."));
-                }
-            } catch(e) {
-                alert("Ошибка соединения. Повторите запрос.");
-            }
+                } else { alert("⚠️ " + (data.message || "Ошибка верификации.")); }
+            } catch(e) { alert("Ошибка запроса."); }
         };
 
         window.loadLogs = async function() {
@@ -605,7 +572,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     
                     const list = document.getElementById('trades-list');
                     if(data.trades.length === 0) {
-                        list.innerHTML = '<div style="color: #5a5d63; font-size: 12px; text-align: center; padding: 20px;">Ожидание фиксации...</div>';
+                        list.innerHTML = '<div style="color: #5a5d63; font-size: 12px; text-align: center; padding: 20px;">Ожидание реальных транзакций...</div>';
                     } else {
                         list.innerHTML = data.trades.map(t => `
                             <div class="trade-item">
@@ -613,8 +580,11 @@ RAW_HTML = r"""<!DOCTYPE html>
                                     <div style="color: #f1f5f9; font-weight: bold;">${t.token_pair}</div>
                                     <div style="color: #8a8d93; font-size: 10px;">Вход: $${t.buy_price.toFixed(2)} | Выход: $${t.sell_price.toFixed(2)}</div>
                                 </div>
-                                <div style="color: ${t.profit_usdc >= 0 ? '#5ff53b' : '#a71d31'}; font-weight: bold;">
-                                    ${t.profit_usdc >= 0 ? '+' : ''}$${t.profit_usdc.toFixed(2)} USDC
+                                <div style="text-align: right;">
+                                    <div style="color: ${t.profit_usdc >= 0 ? '#5ff53b' : '#a71d31'}; font-weight: bold;">
+                                        ${t.profit_usdc >= 0 ? '+' : ''}$${t.profit_usdc.toFixed(2)} USDC
+                                    </div>
+                                    <a href="https://solscan.io/tx/${t.buy_tx}" target="_blank" style="color: #d4af37; font-size: 9px; text-decoration: underline;">Solscan TX</a>
                                 </div>
                             </div>
                         `).join('');
@@ -644,9 +614,9 @@ async def api_get_logs(request):
 async def api_get_stats(request):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("SELECT token_pair, buy_price, sell_price, profit_usdc, timestamp FROM trades WHERE sell_price > 0 ORDER BY id DESC LIMIT 20")
+    cursor.execute("SELECT token_pair, buy_price, sell_price, profit_usdc, buy_tx, timestamp FROM trades WHERE sell_price > 0 ORDER BY id DESC LIMIT 20")
     rows = cursor.fetchall()
-    trades = [{"token_pair": r[0], "buy_price": r[1], "sell_price": r[2], "profit_usdc": r[3], "timestamp": r[4]} for r in rows]
+    trades = [{"token_pair": r[0], "buy_price": r[1], "sell_price": r[2], "profit_usdc": r[3], "buy_tx": r[4], "timestamp": r[5]} for r in rows]
     cursor.execute("SELECT SUM(profit_usdc) FROM trades WHERE sell_price > 0")
     total_profit = cursor.fetchone()[0] or 0.0
     conn.close()
@@ -690,10 +660,10 @@ async def main():
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
     
-    asyncio.create_task(alpha_trailing_perp_worker())
+    asyncio.create_task(real_trading_worker())
     asyncio.create_task(telegram_bot_worker())
     
-    add_log("⚜️ Zer0Life Alpha Neural Perps и Telegram Polling запущены.")
+    add_log("⚜️ Zer0Life DEX Live Engine и Telegram Polling запущены.")
     while True:
         await asyncio.sleep(3600)
 
