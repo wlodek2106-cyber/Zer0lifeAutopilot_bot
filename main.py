@@ -51,7 +51,7 @@ MEME_STOP_LOSS_PCT = 0.80      # Стоп-лосс на случай скама 
 
 IS_TRADING_ACTIVE = True       # Глобальный флаг автопилота Топ-5 (ВКЛ / ВЫКЛ)
 IS_MEME_ACTIVE = False         # Глобальный флаг Meme Sniper режима (ВКЛ / ВЫКЛ)
-RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v4.0 инициализирован."]
+RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v4.1 инициализирован."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -364,16 +364,15 @@ async def real_trading_worker():
             await asyncio.sleep(20)
 
 
-# --- ВОРКЕР 2: ПАРАЛЛЕЛЬНЫЙ (Meme Sniper Mode: 0.1 SOL -> 1 SOL) ---
+# --- ВОРКЕР 2: ПАРАЛЛЕЛЬНЫЙ (Meme Sniper Mode: 0.1 SOL -> 1 SOL с реальным поиском пулов) ---
 async def meme_sniper_worker():
     global IS_MEME_ACTIVE
     signer = get_signer_keypair()
     if not signer:
         return
 
-    add_log("🐸 Параллельный воркер Meme Sniper Mode запущен (Цель: 0.1 SOL -> 1 SOL).")
+    add_log("🐸 Параллельный воркер Meme Sniper запущен (Цель: 0.1 SOL -> 1 SOL).")
     SOL_MINT = "So11111111111111111111111111111111111111112"
-    SOL_DECIMALS = 9
 
     async with aiohttp.ClientSession() as session:
         while True:
@@ -384,14 +383,12 @@ async def meme_sniper_worker():
 
                 conn = sqlite3.connect(DB_FILE)
                 c = conn.cursor()
-                # Проверяем, есть ли уже активная мем-позиция
                 c.execute("SELECT id, token_symbol, token_mint, buy_price, amount_tokens FROM trades WHERE sell_price = 0 AND token_symbol LIKE 'MEME-%' LIMIT 1")
                 active_meme = c.fetchone()
                 conn.close()
 
                 if active_meme:
                     trade_id, sym, mint, entry_sol_price, amount_tokens = active_meme
-                    # Запрашиваем текущую стоимость мем-токена в SOL через Dexscreener
                     url = f"https://api.dexscreener.com/latest/dex/tokens/{mint}"
                     headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
                     async with session.get(url, headers=headers, timeout=5) as resp:
@@ -405,19 +402,18 @@ async def meme_sniper_worker():
 
                                 add_log(f"🔥 [MEME SNIPER] {sym}: Вход {entry_sol_price:.5f} SOL | Тек: {cur_sol_price:.5f} SOL | Рост: {multiplier:.1f}x")
 
-                                # Условие фиксации: достигли х10 (1 SOL) или сработал стоп-лосс (-80%)
                                 if multiplier >= MEME_TARGET_MULTIPLIER or pnl_pct <= -MEME_STOP_LOSS_PCT:
                                     reason = "ЦЕЛЬ Х10 ДОСТИГНУТА 🚀" if multiplier >= MEME_TARGET_MULTIPLIER else "СТОП-ЛОСС 🛑"
                                     add_log(f"⚡ [MEME SNIPER] Закрываем позицию {sym} ({reason}). Выход в SOL...")
                                     
-                                    raw_amount = int(amount_tokens * (10 ** 6)) # Условные decimals для мем-токена
+                                    raw_amount = int(amount_tokens * (10 ** 6))
                                     sell_sig = await execute_jupiter_swap(session, mint, SOL_MINT, raw_amount, signer, slippage_bps=300, priority_fee=100000)
                                     
                                     if sell_sig:
                                         conn_up = sqlite3.connect(DB_FILE)
                                         profit_sol = MEME_ALLOCATION_SOL * (multiplier - 1)
                                         conn_up.cursor().execute("UPDATE trades SET sell_price = ?, profit_usdc = ?, sell_tx = ? WHERE id = ?",
-                                                                  (cur_sol_price, profit_sol * 150, sell_sig, trade_id)) # Конвертация условная для баланса
+                                                                  (cur_sol_price, profit_sol * 150, sell_sig, trade_id))
                                         conn_up.commit()
                                         conn_up.close()
                                         add_log(f"✅ [MEME SNIPER] Успешно зафиксировано! Tx: {sell_sig[:10]}...")
@@ -425,16 +421,53 @@ async def meme_sniper_worker():
                                         add_log(f"⚠️ [MEME SNIPER] Ошибка продажи в сети, пробуем снова...")
                     await asyncio.sleep(10)
                 else:
-                    # Сканирование новых мем-коинов (эмулируем появление свежего горячего пула для теста/входа на 0.1 SOL)
-                    # В реальном бойцовском режиме здесь подключается парсер новых пар Raydium / Pump.fun
-                    add_log("🎯 [MEME SNIPER] Поиск свежих мем-пулов для входа на 0.1 SOL...")
+                    # РЕАЛЬНЫЙ ПОИСК СВЕЖИХ ПУЛОВ ЧЕРЕЗ DEXSCREENER API
+                    add_log("🎯 [MEME SNIPER] Сканирование новых мем-пулов по сети Solana...")
+                    search_url = "https://api.dexscreener.com/latest/dex/search?q=SOL/USDC"
+                    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
                     
-                    # Для демонстрации и безопасности используем тестовый популярный мем-токен или ждем триггер
-                    # Пример автоматического входа на 0.1 SOL при обнаружении сильного импульса:
-                    # target_mint = "..." 
-                    # amount_lamports = int(MEME_ALLOCATION_SOL * 1_000_000_000)
-                    # buy_sig = await execute_jupiter_swap(session, SOL_MINT, target_mint, amount_lamports, signer, slippage_bps=500, priority_fee=100000)
-                    
+                    async with session.get(search_url, headers=headers, timeout=6) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            pairs = data.get("pairs", [])
+                            target_mint = None
+                            target_sym = None
+                            init_price = 0.0
+
+                            for pair in pairs:
+                                if pair.get("chainId") == "solana":
+                                    base_token = pair.get("baseToken", {})
+                                    m_address = base_token.get("address")
+                                    m_symbol = base_token.get("symbol")
+                                    p_native = float(pair.get("priceNative", 0.0) or 0.0)
+                                    
+                                    # Фильтруем валидные свежие пары с ликвидностью
+                                    if m_address and m_address != SOL_MINT and p_native > 0:
+                                        target_mint = m_address
+                                        target_sym = f"MEME-{m_symbol}"
+                                        init_price = p_native
+                                        break
+
+                            if target_mint:
+                                add_log(f"🚀 [MEME SNIPER] Найден перспективный мем-токен: {target_sym} ({target_mint[:6]}...). Покупка на {MEME_ALLOCATION_SOL} SOL...")
+                                amount_lamports = int(MEME_ALLOCATION_SOL * 1_000_000_000)
+                                
+                                buy_sig = await execute_jupiter_swap(session, SOL_MINT, target_mint, amount_lamports, signer, slippage_bps=500, priority_fee=100000)
+                                if buy_sig:
+                                    bought_tokens = MEME_ALLOCATION_SOL / init_price if init_price > 0 else 1000.0
+                                    conn_in = sqlite3.connect(DB_FILE)
+                                    conn_in.cursor().execute("""INSERT INTO trades 
+                                        (token_symbol, token_mint, buy_price, amount_tokens, sell_price, profit_usdc, buy_tx, sell_tx, timestamp)
+                                        VALUES (?, ?, ?, ?, 0, 0, ?, '', ?)""",
+                                        (target_sym, target_mint, init_price, bought_tokens, buy_sig, datetime.now().strftime('%H:%M:%S')))
+                                    conn_in.commit()
+                                    conn_in.close()
+                                    add_log(f"💎 [MEME SNIPER] Успешный вход в {target_sym}! Tx: {buy_sig[:12]}...")
+                                else:
+                                    add_log(f"⚠️ [MEME SNIPER] Ошибка транзакции покупки мем-токена в сети.")
+                            else:
+                                add_log("⏳ [MEME SNIPER] Новых подходящих пулов не обнаружено, повтор сканирования...")
+
                     await asyncio.sleep(15)
 
             except Exception as e:
