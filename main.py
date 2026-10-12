@@ -160,31 +160,27 @@ async def verify_solana_usdc_tx(session: aiohttp.ClientSession, tx_sig: str, tar
         return False, 0.0, f"Ошибка RPC: {str(e)[:40]}"
 
 async def get_token_prices(session: aiohttp.ClientSession) -> dict:
-    mints = ",".join([v["mint"] for v in WATCHLIST.values()])
-    url = f"https://price.jup.ag/v4/price?ids={mints}"
     prices = {}
-    try:
-        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                price_data = data.get("data", {})
-                for sym, info in WATCHLIST.items():
-                    token_info = price_data.get(info["mint"], {})
-                    p = token_info.get("price")
-                    if p:
-                        prices[sym] = float(p)
-            else:
-                add_log(f"⚠️ Ошибка Jupiter API статус: {resp.status}")
-    except Exception as e:
-        add_log(f"⚠️ Ошибка получения цен: {e}")
+    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+    for sym, info in WATCHLIST.items():
+        try:
+            # Запрашиваем котировку для 1 единицы базового токена к USDC для определения цены
+            test_amount = int(10 ** info["decimals"])
+            url = f"https://quote-api.jup.ag/v6/quote?inputMint={info['mint']}&outputMint={USDC_MINT}&amount={test_amount}&slippageBps=50"
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=4)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    out_amount = int(data.get("outAmount", 0))
+                    prices[sym] = out_amount / 1_000_000  # Перевод из микро-USDC в USD
+        except Exception as e:
+            pass
     return prices
 
 async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, output_mint: str, amount_raw: int, signer: Keypair) -> str:
     try:
         user_pubkey = str(signer.pubkey())
         headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        quote_url = f"https://api.jup.ag/swap/v1/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount_raw}&slippageBps={MAX_SLIPPAGE_BPS}"
+        quote_url = f"https://quote-api.jup.ag/v6/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount_raw}&slippageBps={MAX_SLIPPAGE_BPS}"
         async with session.get(quote_url, headers=headers, timeout=aiohttp.ClientTimeout(total=6)) as resp:
             if resp.status != 200:
                 err_text = await resp.text()
@@ -198,7 +194,7 @@ async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, 
             "wrapAndUnwrapSol": True,
             "prioritizationFeeLamports": 25000
         }
-        async with session.post("https://api.jup.ag/swap/v1/swap", headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=7)) as resp:
+        async with session.post("https://quote-api.jup.ag/v6/swap", headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=7)) as resp:
             if resp.status != 200:
                 err_text = await resp.text()
                 add_log(f"⚠️ Ошибка формирования Swap: {resp.status} {err_text[:50]}")
