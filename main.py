@@ -429,7 +429,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(10, 12, 18, 0.95); backdrop-filter: blur(20px); border-top: 1px solid #192033; padding: 12px 16px; display: flex; justify-content: space-around; z-index: 900; }
         .nav-btn { background: transparent; border: none; color: #64748b; font-size: 11px; font-weight: 600; cursor: pointer; }
         .nav-btn.active { color: #22c55e; }
-        .tab-panel { display: none; height: 100vh; overflow-y: auto; padding: 16px; padding-bottom: 95px; }
+        .tab-panel { display: none; height: 100vh; overflow-y: auto; padding: 16px; padding-bottom: 125px; }
         .tab-panel.active { display: block; }
     </style>
 </head>
