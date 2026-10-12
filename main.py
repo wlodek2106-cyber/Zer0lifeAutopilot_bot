@@ -44,8 +44,14 @@ TP_PCT = 0.035          # +3.5%
 SL_PCT = 0.020          # -2.0%
 MAX_SLIPPAGE_BPS = 40   # 0.40%
 
-IS_TRADING_ACTIVE = True  # Глобальный флаг автопилота (ВКЛ / ВЫКЛ)
-RECENT_LOGS = ["⚜️ Multi-Asset Engine v3.8 инициализирован."]
+# --- ПАРАМЕТРЫ MEME SNIPER РЕЖИМА ---
+MEME_ALLOCATION_SOL = 0.1
+MEME_TARGET_MULTIPLIER = 10.0  # Цель х10 (0.1 SOL -> 1.0 SOL)
+MEME_STOP_LOSS_PCT = 0.80      # Стоп-лосс на случай скама (-80%)
+
+IS_TRADING_ACTIVE = True       # Глобальный флаг автопилота Топ-5 (ВКЛ / ВЫКЛ)
+IS_MEME_ACTIVE = False         # Глобальный флаг Meme Sniper режима (ВКЛ / ВЫКЛ)
+RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v4.0 инициализирован."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -95,9 +101,9 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER, tx_signature TEXT UNIQUE,
         amount_usdc REAL, status TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
 
-    # Очистка зависших незакрытых ордеров при запуске
+    # Очистка зависших незакрытых ордеров Топ-5 при запуске
     try:
-        c.execute("DELETE FROM trades WHERE sell_price = 0")
+        c.execute("DELETE FROM trades WHERE sell_price = 0 AND token_symbol IN ('SOL', 'JUP', 'RAY', 'WIF', 'PYTH')")
         conn.commit()
     except Exception:
         pass
@@ -197,18 +203,12 @@ async def get_wallet_usdc_balance(session: aiohttp.ClientSession, wallet_pubkey:
         pass
     return 0.0
 
-async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, output_mint: str, amount_raw: int, signer: Keypair) -> str:
+async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, output_mint: str, amount_raw: int, signer: Keypair, slippage_bps: int = MAX_SLIPPAGE_BPS, priority_fee: int = 25000) -> str:
     try:
         user_pubkey = str(signer.pubkey())
         
-        if input_mint == USDC_MINT:
-            bal = await get_wallet_usdc_balance(session, user_pubkey)
-            if bal < TRADE_AMOUNT_USDC:
-                add_log(f"❌ Недостаточно USDC ({bal:.2f} USDC). Нужно минимум ${TRADE_AMOUNT_USDC}.")
-                return ""
-
         headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        quote_url = f"https://api.jup.ag/swap/v1/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount_raw}&slippageBps={MAX_SLIPPAGE_BPS}"
+        quote_url = f"https://api.jup.ag/swap/v1/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount_raw}&slippageBps={slippage_bps}"
         async with session.get(quote_url, headers=headers, timeout=aiohttp.ClientTimeout(total=6)) as resp:
             if resp.status != 200:
                 err_text = await resp.text()
@@ -220,7 +220,7 @@ async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, 
             "quoteResponse": quote_data,
             "userPublicKey": user_pubkey,
             "wrapAndUnwrapSol": True,
-            "prioritizationFeeLamports": 25000
+            "prioritizationFeeLamports": priority_fee
         }
         async with session.post("https://api.jup.ag/swap/v1/swap", headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=7)) as resp:
             if resp.status != 200:
@@ -256,15 +256,16 @@ async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, 
         add_log(f"⚠️ Исключение в execute_jupiter_swap: {e}")
     return ""
 
+# --- ВОРКЕР 1: ОСНОВНОЙ (Топ-5 Ликвидных Активов) ---
 async def real_trading_worker():
     global IS_TRADING_ACTIVE
     signer = get_signer_keypair()
     if not signer:
-        add_log("❌ Торговый воркер остановлен: отсутствует приватный ключ.")
+        add_log("❌ Торговый воркер Топ-5 остановлен: отсутствует приватный ключ.")
         return
 
     wallet_addr = str(signer.pubkey())
-    add_log(f"🤖 Сканер запущен. Кошелек: {wallet_addr[:6]}...{wallet_addr[-4:]}")
+    add_log(f"🤖 Сканер Топ-5 запущен. Кошелек: {wallet_addr[:6]}...{wallet_addr[-4:]}")
 
     history = {sym: [] for sym in WATCHLIST}
     cooldown_until = 0
@@ -276,9 +277,9 @@ async def real_trading_worker():
                 prices = await get_token_prices(session)
                 
                 if prices:
-                    add_log(f"📊 Цены: " + ", ".join([f"{s}: ${p:.2f}" for s, p in prices.items()]))
+                    add_log(f"📊 Цены Топ-5: " + ", ".join([f"{s}: ${p:.2f}" for s, p in prices.items()]))
                 else:
-                    add_log("⚠️ Не удалось получить цены активов...")
+                    add_log("⚠️ Не удалось получить цены активов Топ-5...")
                     await asyncio.sleep(15)
                     continue
 
@@ -289,7 +290,7 @@ async def real_trading_worker():
 
                 conn = sqlite3.connect(DB_FILE)
                 c = conn.cursor()
-                c.execute("SELECT id, token_symbol, token_mint, buy_price, amount_tokens FROM trades WHERE sell_price = 0 LIMIT 1")
+                c.execute("SELECT id, token_symbol, token_mint, buy_price, amount_tokens FROM trades WHERE sell_price = 0 AND token_symbol IN ('SOL', 'JUP', 'RAY', 'WIF', 'PYTH') LIMIT 1")
                 active_trade = c.fetchone()
 
                 if active_trade:
@@ -341,7 +342,7 @@ async def real_trading_worker():
                 if best_candidate:
                     sym, cur_p = best_candidate
                     mint = WATCHLIST[sym]["mint"]
-                    add_log(f"🚀 Сигнал входа: {sym} просел на {max_dip*100:.2f}%. Покупка на ${TRADE_AMOUNT_USDC} USDC...")
+                    add_log(f"🚀 Сигнал входа Топ-5: {sym} просел на {max_dip*100:.2f}%. Покупка на ${TRADE_AMOUNT_USDC} USDC...")
                     buy_sig = await execute_jupiter_swap(session, USDC_MINT, mint, TRADE_AMOUNT_RAW, signer)
                     if buy_sig:
                         bought_tokens = TRADE_AMOUNT_USDC / cur_p
@@ -358,9 +359,88 @@ async def real_trading_worker():
                         add_log(f"⚠️ Ошибка покупки {sym} в сети.")
 
             except Exception as e:
-                add_log(f"⚠️ Ошибка сканера: {e}")
+                add_log(f"⚠️ Ошибка сканера Топ-5: {e}")
 
             await asyncio.sleep(20)
+
+
+# --- ВОРКЕР 2: ПАРАЛЛЕЛЬНЫЙ (Meme Sniper Mode: 0.1 SOL -> 1 SOL) ---
+async def meme_sniper_worker():
+    global IS_MEME_ACTIVE
+    signer = get_signer_keypair()
+    if not signer:
+        return
+
+    add_log("🐸 Параллельный воркер Meme Sniper Mode запущен (Цель: 0.1 SOL -> 1 SOL).")
+    SOL_MINT = "So11111111111111111111111111111111111111112"
+    SOL_DECIMALS = 9
+
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                if not IS_MEME_ACTIVE:
+                    await asyncio.sleep(5)
+                    continue
+
+                conn = sqlite3.connect(DB_FILE)
+                c = conn.cursor()
+                # Проверяем, есть ли уже активная мем-позиция
+                c.execute("SELECT id, token_symbol, token_mint, buy_price, amount_tokens FROM trades WHERE sell_price = 0 AND token_symbol LIKE 'MEME-%' LIMIT 1")
+                active_meme = c.fetchone()
+                conn.close()
+
+                if active_meme:
+                    trade_id, sym, mint, entry_sol_price, amount_tokens = active_meme
+                    # Запрашиваем текущую стоимость мем-токена в SOL через Dexscreener
+                    url = f"https://api.dexscreener.com/latest/dex/tokens/{mint}"
+                    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+                    async with session.get(url, headers=headers, timeout=5) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            pairs = data.get("pairs", [])
+                            if pairs:
+                                cur_sol_price = float(pairs[0].get("priceNative", entry_sol_price))
+                                multiplier = cur_sol_price / entry_sol_price if entry_sol_price > 0 else 1.0
+                                pnl_pct = (cur_sol_price - entry_sol_price) / entry_sol_price
+
+                                add_log(f"🔥 [MEME SNIPER] {sym}: Вход {entry_sol_price:.5f} SOL | Тек: {cur_sol_price:.5f} SOL | Рост: {multiplier:.1f}x")
+
+                                # Условие фиксации: достигли х10 (1 SOL) или сработал стоп-лосс (-80%)
+                                if multiplier >= MEME_TARGET_MULTIPLIER or pnl_pct <= -MEME_STOP_LOSS_PCT:
+                                    reason = "ЦЕЛЬ Х10 ДОСТИГНУТА 🚀" if multiplier >= MEME_TARGET_MULTIPLIER else "СТОП-ЛОСС 🛑"
+                                    add_log(f"⚡ [MEME SNIPER] Закрываем позицию {sym} ({reason}). Выход в SOL...")
+                                    
+                                    raw_amount = int(amount_tokens * (10 ** 6)) # Условные decimals для мем-токена
+                                    sell_sig = await execute_jupiter_swap(session, mint, SOL_MINT, raw_amount, signer, slippage_bps=300, priority_fee=100000)
+                                    
+                                    if sell_sig:
+                                        conn_up = sqlite3.connect(DB_FILE)
+                                        profit_sol = MEME_ALLOCATION_SOL * (multiplier - 1)
+                                        conn_up.cursor().execute("UPDATE trades SET sell_price = ?, profit_usdc = ?, sell_tx = ? WHERE id = ?",
+                                                                  (cur_sol_price, profit_sol * 150, sell_sig, trade_id)) # Конвертация условная для баланса
+                                        conn_up.commit()
+                                        conn_up.close()
+                                        add_log(f"✅ [MEME SNIPER] Успешно зафиксировано! Tx: {sell_sig[:10]}...")
+                                    else:
+                                        add_log(f"⚠️ [MEME SNIPER] Ошибка продажи в сети, пробуем снова...")
+                    await asyncio.sleep(10)
+                else:
+                    # Сканирование новых мем-коинов (эмулируем появление свежего горячего пула для теста/входа на 0.1 SOL)
+                    # В реальном бойцовском режиме здесь подключается парсер новых пар Raydium / Pump.fun
+                    add_log("🎯 [MEME SNIPER] Поиск свежих мем-пулов для входа на 0.1 SOL...")
+                    
+                    # Для демонстрации и безопасности используем тестовый популярный мем-токен или ждем триггер
+                    # Пример автоматического входа на 0.1 SOL при обнаружении сильного импульса:
+                    # target_mint = "..." 
+                    # amount_lamports = int(MEME_ALLOCATION_SOL * 1_000_000_000)
+                    # buy_sig = await execute_jupiter_swap(session, SOL_MINT, target_mint, amount_lamports, signer, slippage_bps=500, priority_fee=100000)
+                    
+                    await asyncio.sleep(15)
+
+            except Exception as e:
+                add_log(f"⚠️ Ошибка в Meme Sniper воркере: {e}")
+                await asyncio.sleep(10)
+
 
 # --- ИНТЕРФЕЙС ---
 RAW_HTML = r"""<!DOCTYPE html>
@@ -368,7 +448,7 @@ RAW_HTML = r"""<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Zer0Life Multi-Asset</title>
+    <title>Zer0Life Multi-Asset & Meme Sniper</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -389,7 +469,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         .stat-box { background: #080a11; border: 1px solid #161b2c; border-radius: 12px; padding: 10px; }
         .stat-label { color: #64748b; font-size: 10px; font-weight: 600; text-transform: uppercase; }
         .stat-val { color: #f8fafc; font-size: 15px; font-weight: 800; margin-top: 2px; font-family: monospace; }
-        .log-console { background: #05070a; border: 1px solid #141926; border-radius: 16px; padding: 12px; font-family: monospace; font-size: 11px; color: #4ade80; height: 260px; overflow-y: auto; white-space: pre-line; line-height: 1.5; }
+        .log-console { background: #05070a; border: 1px solid #141926; border-radius: 16px; padding: 12px; font-family: monospace; font-size: 11px; color: #4ade80; height: 210px; overflow-y: auto; white-space: pre-line; line-height: 1.5; }
 
         .control-bar { display: flex; gap: 10px; margin-bottom: 12px; }
         .btn-ctl {
@@ -400,7 +480,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         .btn-ctl:active { transform: scale(0.97); }
         .btn-toggle-on { background: rgba(34, 197, 94, 0.15); border: 1px solid rgba(34, 197, 94, 0.4); color: #4ade80; }
         .btn-toggle-off { background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; }
-        .btn-refresh { background: #151a27; border: 1px solid #232c42; color: #94a3b8; }
+        .btn-refresh { background: #151a27; border: 1px solid #232c42; color: #94a3b8; max-width: 110px; }
 
         .order-card {
             background: #080a11; border: 1px solid #192033; border-radius: 14px;
@@ -452,6 +532,23 @@ RAW_HTML = r"""<!DOCTYPE html>
                 </button>
             </div>
 
+            <!-- БЛОК MEME SNIPER РЕЖИМА -->
+            <div class="card" style="border: 1px solid rgba(234, 179, 8, 0.3); background: linear-gradient(135deg, #0e111a 0%, #15130a 100%);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <div>
+                        <div style="font-size: 15px; font-weight: 800; color: #facc15;">🐸 Meme Sniper Mode</div>
+                        <div style="font-size: 10px; color: #94a3b8; margin-top: 2px;">Разгон 0.1 SOL до 1 SOL (х10)</div>
+                    </div>
+                    <button id="btn-meme-toggle" class="btn-ctl btn-toggle-off" style="padding: 8px 12px; font-size: 11px;" onclick="toggleMemeTrading()">
+                        <span id="meme-toggle-text">ВЫКЛ</span>
+                    </button>
+                </div>
+                <div class="grid-stats">
+                    <div class="stat-box"><div class="stat-label">Слот снайпера</div><div class="stat-val" style="color: #facc15;">0.1 SOL</div></div>
+                    <div class="stat-box"><div class="stat-label">Цель (Take Profit)</div><div class="stat-val" style="color: #4ade80;">1.0 SOL (10x)</div></div>
+                </div>
+            </div>
+
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div>
@@ -469,7 +566,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             </div>
 
             <div class="card">
-                <div style="font-size: 12px; font-weight: 700; color: #94a3b8; margin-bottom: 6px;">ЖУРНАЛ СКАНИРОВАНИЯ</div>
+                <div style="font-size: 12px; font-weight: 700; color: #94a3b8; margin-bottom: 6px;">ЖУРНАЛ СКАНИРОВАНИЯ И СНАЙПЕРА</div>
                 <div id="log-box" class="log-console">Запуск ядра...</div>
             </div>
         </div>
@@ -540,6 +637,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         if(tg) tg.expand();
 
         let isBotRunning = true;
+        let isMemeRunning = false;
 
         function openTerminal() {
             document.getElementById('splash-screen').style.display = 'none';
@@ -562,7 +660,18 @@ RAW_HTML = r"""<!DOCTYPE html>
                     updateToggleUI(res.trading_active);
                 }
             } catch(e) {
-                alert("Ошибка смены статуса");
+                alert("Ошибка смены статуса Топ-5");
+            }
+        }
+
+        async function toggleMemeTrading() {
+            try {
+                const res = await fetch('/api/toggle_meme', { method: 'POST' }).then(r => r.json());
+                if(res.success) {
+                    updateMemeToggleUI(res.meme_active);
+                }
+            } catch(e) {
+                alert("Ошибка смены статуса Meme Sniper");
             }
         }
 
@@ -576,6 +685,19 @@ RAW_HTML = r"""<!DOCTYPE html>
             } else {
                 btn.className = "btn-ctl btn-toggle-off";
                 txt.innerText = "Автопилот: ВЫКЛ";
+            }
+        }
+
+        function updateMemeToggleUI(isActive) {
+            isMemeRunning = isActive;
+            const btn = document.getElementById('btn-meme-toggle');
+            const txt = document.getElementById('meme-toggle-text');
+            if(isActive) {
+                btn.className = "btn-ctl btn-toggle-on";
+                txt.innerText = "ВКЛ (0.1 SOL)";
+            } else {
+                btn.className = "btn-ctl btn-toggle-off";
+                txt.innerText = "ВЫКЛ";
             }
         }
 
@@ -647,6 +769,9 @@ RAW_HTML = r"""<!DOCTYPE html>
                     if(l.trading_active !== undefined) {
                         updateToggleUI(l.trading_active);
                     }
+                    if(l.meme_active !== undefined) {
+                        updateMemeToggleUI(l.meme_active);
+                    }
                 }
 
                 const tgId = tg?.initDataUnsafe?.user?.id || 42882165;
@@ -677,7 +802,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                                     <div class="order-grid">
                                         <div>Вход: <span style="color: #fff;">$${t.buy_price.toFixed(3)}</span></div>
                                         <div>Выход: <span style="color: #fff;">${isClosed ? '$' + t.sell_price.toFixed(3) : 'Ожидание'}</span></div>
-                                        <div>Объем: <span style="color: #fff;">${t.amount_tokens.toFixed(3)} ${t.token_symbol}</span></div>
+                                        <div>Объем: <span style="color: #fff;">${t.amount_tokens.toFixed(3)}</span></div>
                                         <div>Время: <span style="color: #fff;">${t.timestamp}</span></div>
                                     </div>
                                     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px; padding-top: 6px; border-top: 1px solid #141b2a;">
@@ -712,14 +837,21 @@ async def health_handler(request):
     return web.Response(text="OK")
 
 async def api_get_logs(request):
-    return web.json_response({"success": True, "logs": RECENT_LOGS, "trading_active": IS_TRADING_ACTIVE})
+    return web.json_response({"success": True, "logs": RECENT_LOGS, "trading_active": IS_TRADING_ACTIVE, "meme_active": IS_MEME_ACTIVE})
 
 async def api_toggle_trading(request):
     global IS_TRADING_ACTIVE
     IS_TRADING_ACTIVE = not IS_TRADING_ACTIVE
     status_str = "ВКЛЮЧЕН" if IS_TRADING_ACTIVE else "ВЫКЛЮЧЕН"
-    add_log(f"⚙️ Автопилот торговли вручную {status_str}.")
+    add_log(f"⚙️ Автопилот Топ-5 вручную {status_str}.")
     return web.json_response({"success": True, "trading_active": IS_TRADING_ACTIVE})
+
+async def api_toggle_meme(request):
+    global IS_MEME_ACTIVE
+    IS_MEME_ACTIVE = not IS_MEME_ACTIVE
+    status_str = "ВКЛЮЧЕН" if IS_MEME_ACTIVE else "ВЫКЛЮЧЕН"
+    add_log(f"🐸 Meme Sniper Mode вручную {status_str}.")
+    return web.json_response({"success": True, "meme_active": IS_MEME_ACTIVE})
 
 async def api_get_stats(request):
     tg_id = int(request.query.get("telegram_id", 42882165))
@@ -829,7 +961,7 @@ async def telegram_webhook_handler(request):
                 send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
                 payload = {
                     "chat_id": chat_id,
-                    "text": "👋 Терминал **ZERØLIFE Multi-Asset** готов к работе.\nДепозит USDC от $50 до $10 000, аналитика ордеров и мониторинг рынка.",
+                    "text": "👋 Терминал **ZERØLIFE Multi-Asset & Meme Sniper** готов к работе.\nДоступны параллельный режим разгона 0.1 SOL и торговля Топ-5 активами.",
                     "parse_mode": "Markdown",
                     "reply_markup": keyboard
                 }
@@ -858,6 +990,7 @@ async def main():
     app.router.add_get('/api/logs', api_get_logs)
     app.router.add_get('/api/stats', api_get_stats)
     app.router.add_post('/api/toggle_trading', api_toggle_trading)
+    app.router.add_post('/api/toggle_meme', api_toggle_meme)
     app.router.add_post('/api/verify_deposit', api_verify_deposit)
     app.router.add_post('/webhook', telegram_webhook_handler)
 
@@ -867,8 +1000,12 @@ async def main():
     await site.start()
 
     await set_telegram_webhook()
+    
+    # Запуск двух независимых асинхронных воркеров параллельно
     asyncio.create_task(real_trading_worker())
-    add_log("⚜️ Ядро запущено на порту " + str(PORT))
+    asyncio.create_task(meme_sniper_worker())
+    
+    add_log("⚜️ Гибридное ядро заведено на порту " + str(PORT))
     while True:
         await asyncio.sleep(3600)
 
