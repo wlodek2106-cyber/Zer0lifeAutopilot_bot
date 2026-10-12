@@ -172,8 +172,8 @@ async def get_token_prices(session: aiohttp.ClientSession) -> dict:
                     p = price_data.get(info["mint"], {}).get("price")
                     if p:
                         prices[sym] = float(p)
-    except Exception:
-        pass
+    except Exception as e:
+        add_log(f"⚠️ Ошибка получения цен: {e}")
     return prices
 
 async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, output_mint: str, amount_raw: int, signer: Keypair) -> str:
@@ -183,6 +183,8 @@ async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, 
         quote_url = f"https://api.jup.ag/swap/v1/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount_raw}&slippageBps={MAX_SLIPPAGE_BPS}"
         async with session.get(quote_url, headers=headers, timeout=aiohttp.ClientTimeout(total=6)) as resp:
             if resp.status != 200:
+                err_text = await resp.text()
+                add_log(f"⚠️ Ошибка котировки Jupiter: {resp.status} {err_text[:50]}")
                 return ""
             quote_data = await resp.json()
 
@@ -194,6 +196,8 @@ async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, 
         }
         async with session.post("https://api.jup.ag/swap/v1/swap", headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=7)) as resp:
             if resp.status != 200:
+                err_text = await resp.text()
+                add_log(f"⚠️ Ошибка формирования транзакции Swap: {resp.status} {err_text[:50]}")
                 return ""
             res = await resp.json()
             swap_b64 = res.get("swapTransaction")
@@ -215,9 +219,13 @@ async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, 
         async with session.post(SOLANA_RPC, json=rpc_payload, timeout=aiohttp.ClientTimeout(total=8)) as resp:
             if resp.status == 200:
                 data = await resp.json()
-                return str(data.get("result", ""))
+                sig = data.get("result")
+                if sig:
+                    return str(sig)
+                else:
+                    add_log(f"⚠️ Ошибка отправки транзакции: {data.get('error')}")
     except Exception as e:
-        add_log(f"⚠️ Ошибка свопа: {e}")
+        add_log(f"⚠️ Исключение в execute_jupiter_swap: {e}")
     return ""
 
 async def real_trading_worker():
@@ -225,6 +233,7 @@ async def real_trading_worker():
     add_log("🤖 Сканер Топ-5 активов запущен.")
     signer = get_signer_keypair()
     if not signer:
+        add_log("❌ Торговый воркер остановлен: отсутствует приватный ключ.")
         return
 
     history = {sym: [] for sym in WATCHLIST}
@@ -241,7 +250,7 @@ async def real_trading_worker():
 
                 for sym, p in prices.items():
                     history[sym].append(p)
-                    if len(history[sym]) > 30:
+                    if len(history[sym]) > 10:  # Накапливаем быстрый буфер для анализа
                         history[sym].pop(0)
 
                 conn = sqlite3.connect(DB_FILE)
@@ -249,16 +258,16 @@ async def real_trading_worker():
                 c.execute("SELECT id, token_symbol, token_mint, buy_price, amount_tokens FROM trades WHERE sell_price = 0 LIMIT 1")
                 active_trade = c.fetchone()
 
-                # Управление открытой позицией (сопровождение активно даже если автопилот временно выключен)
+                # Управление открытой позицией
                 if active_trade:
                     trade_id, sym, mint, entry_px, amount_tokens = active_trade
                     cur_px = prices.get(sym, entry_px)
                     pnl_pct = (cur_px - entry_px) / entry_px
-                    add_log(f"🎯 Позиция [{sym}]: ${cur_px:.4f} | PnL: {pnl_pct*100:+.2f}%")
+                    add_log(f"🎯 Позиция [{sym}]: Вход ${entry_px:.4f} | Тек: ${cur_px:.4f} | PnL: {pnl_pct*100:+.2f}%")
 
                     if pnl_pct >= TP_PCT or pnl_pct <= -SL_PCT:
                         action = "TP" if pnl_pct >= TP_PCT else "SL"
-                        add_log(f"⚡ Закрытие {sym} по {action} ({pnl_pct*100:+.2f}%)...")
+                        add_log(f"⚡ Закрытие {sym} по срабатыванию {action} ({pnl_pct*100:+.2f}%)...")
                         raw_amount = int(amount_tokens * (10 ** WATCHLIST[sym]["decimals"]))
                         sell_sig = await execute_jupiter_swap(session, mint, USDC_MINT, raw_amount, signer)
                         if sell_sig:
@@ -266,31 +275,35 @@ async def real_trading_worker():
                             c.execute("UPDATE trades SET sell_price = ?, profit_usdc = ?, sell_tx = ? WHERE id = ?", 
                                       (cur_px, profit_usd, sell_sig, trade_id))
                             conn.commit()
-                            add_log(f"✅ Успешно! PnL: {profit_usd:+.2f} USDC ({pnl_pct*100:+.2f}%) | Tx: {sell_sig[:10]}...")
-                            cooldown_until = now_ts + 900
+                            add_log(f"✅ Ордер закрыт! PnL: {profit_usd:+.2f} USDC ({pnl_pct*100:+.2f}%) | Tx: {sell_sig[:10]}...")
+                            cooldown_until = now_ts + 60
+                        else:
+                            add_log(f"⚠️ Не удалось отправить транзакцию продажи {sym}, повторная попытка позже...")
                     conn.close()
-                    await asyncio.sleep(20)
+                    await asyncio.sleep(15)
                     continue
 
                 conn.close()
 
-                # Проверка флага автопилота для открытия новых сделок
+                # Проверка флага автопилота
                 if not IS_TRADING_ACTIVE:
                     await asyncio.sleep(15)
                     continue
 
                 if now_ts < cooldown_until:
-                    await asyncio.sleep(25)
+                    await asyncio.sleep(15)
                     continue
 
+                # Ищем актив для входа (смягченное условие для ускорения тестов/сделок)
                 best_candidate = None
                 max_dip = 0.0
                 for sym, p_list in history.items():
-                    if len(p_list) >= 15:
+                    if len(p_list) >= 5:
                         avg_p = sum(p_list) / len(p_list)
                         cur_p = p_list[-1]
                         dip = (avg_p - cur_p) / avg_p
-                        if dip >= 0.018 and cur_p > min(p_list[-4:]):
+                        # Снизили порог до 0.3% для демонстрации входа при незначительных колебаниях
+                        if dip >= 0.003:
                             if dip > max_dip:
                                 max_dip = dip
                                 best_candidate = (sym, cur_p)
@@ -298,7 +311,7 @@ async def real_trading_worker():
                 if best_candidate:
                     sym, cur_p = best_candidate
                     mint = WATCHLIST[sym]["mint"]
-                    add_log(f"🚀 Сигнал на отскок: {sym} просел на {max_dip*100:.2f}%. Покупка на $20 USDC...")
+                    add_log(f"🚀 Сигнал входа: {sym} просел на {max_dip*100:.2f}%. Покупка на ${TRADE_AMOUNT_USDC} USDC...")
                     buy_sig = await execute_jupiter_swap(session, USDC_MINT, mint, TRADE_AMOUNT_RAW, signer)
                     if buy_sig:
                         bought_tokens = TRADE_AMOUNT_USDC / cur_p
@@ -309,14 +322,17 @@ async def real_trading_worker():
                             (sym, mint, cur_p, bought_tokens, buy_sig, datetime.now().strftime('%H:%M:%S')))
                         c_in.commit()
                         c_in.close()
-                        add_log(f"💎 Куплен {sym}! Tx: {buy_sig[:12]}...")
+                        add_log(f"💎 Успешно куплен {sym}! Tx: {buy_sig[:12]}...")
+                        cooldown_until = now_ts + 30
+                    else:
+                        add_log(f"⚠️ Ошибка исполнения покупки {sym} через Jupiter.")
 
             except Exception as e:
-                add_log(f"⚠️ Ошибка сканера: {e}")
+                add_log(f"⚠️ Ошибка в цикле сканера: {e}")
 
-            await asyncio.sleep(25)
+            await asyncio.sleep(15)
 
-# --- ИНТЕРФЕЙС С КНОПКАМИ ВКЛ/ВЫКЛ И ОБНОВЛЕНИЯ ---
+# --- ИНТЕРФЕЙС ---
 RAW_HTML = r"""<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -345,7 +361,6 @@ RAW_HTML = r"""<!DOCTYPE html>
         .stat-val { color: #f8fafc; font-size: 15px; font-weight: 800; margin-top: 2px; font-family: monospace; }
         .log-console { background: #05070a; border: 1px solid #141926; border-radius: 16px; padding: 12px; font-family: monospace; font-size: 11px; color: #4ade80; height: 260px; overflow-y: auto; white-space: pre-line; line-height: 1.5; }
 
-        /* ПАНЕЛЬ УПРАВЛЕНИЯ: КНОПКИ ВКЛ И ОБНОВИТЬ */
         .control-bar { display: flex; gap: 10px; margin-bottom: 12px; }
         .btn-ctl {
             flex: 1; padding: 12px 14px; border-radius: 14px; font-weight: 800; font-size: 12px;
@@ -396,7 +411,6 @@ RAW_HTML = r"""<!DOCTYPE html>
     <div id="app" style="display: none;">
         <!-- TAB 1: TERMINAL -->
         <div id="tab-terminal" class="tab-panel active">
-            <!-- ПАНЕЛЬ КНОПОК ВКЛ И ОБНОВИТЬ -->
             <div class="control-bar">
                 <button id="btn-toggle" class="btn-ctl btn-toggle-on" onclick="toggleTrading()">
                     <span id="toggle-dot">●</span>
