@@ -186,7 +186,7 @@ async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, 
     try:
         user_pubkey = str(signer.pubkey())
         headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        quote_url = f"https://quote-api.jup.ag/v6/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount_raw}&slippageBps={MAX_SLIPPAGE_BPS}"
+        quote_url = f"https://api.jup.ag/swap/v1/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount_raw}&slippageBps={MAX_SLIPPAGE_BPS}"
         async with session.get(quote_url, headers=headers, timeout=aiohttp.ClientTimeout(total=6)) as resp:
             if resp.status != 200:
                 err_text = await resp.text()
@@ -200,7 +200,7 @@ async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, 
             "wrapAndUnwrapSol": True,
             "prioritizationFeeLamports": 25000
         }
-        async with session.post("https://quote-api.jup.ag/v6/swap", headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=7)) as resp:
+        async with session.post("https://api.jup.ag/swap/v1/swap", headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=7)) as resp:
             if resp.status != 200:
                 err_text = await resp.text()
                 add_log(f"⚠️ Ошибка формирования Swap: {resp.status} {err_text[:50]}")
@@ -471,7 +471,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             </div>
 
             <div class="card">
-                <div style="font-size: 12px; font-weight: 700; color: #94a3b8; margin-bottom: 6px;">ЖУРНАЛ СКАНИРОВАНИЯ</div>
+                <div style="font-size: 12px; font-weight: 700; color: #94a3b8; margin-bottom: 6px;">ЖУРНАЛ СКАНЕРИРОВАНИЯ</div>
                 <div id="log-box" class="log-console">Запуск ядра...</div>
             </div>
         </div>
@@ -510,7 +510,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <div style="color: #64748b; font-size: 11px; margin-top: 4px;">Send SPL-USDC on Solana. Enter transaction signature</div>
                 </div>
 
-                <button class="btn-green-main" id="btn-show-addr" onclick="toggleDepositDetails()">Show Deposit Address 🚀</button>
+<button class="btn-green-main" id="btn-show-addr" onclick="toggleDepositDetails()">Show Deposit Address 🚀</button>
 
                 <div id="deposit-details" style="display: none; margin-top: 14px;">
                     <div style="text-align: center; color: #94a3b8; font-size: 11px; margin-bottom: 8px;">Transfer USDC (Solana SPL) to:</div>
@@ -643,7 +643,7 @@ RAW_HTML = r"""<!DOCTYPE html>
 
         async function refresh() {
             try {
-                const l = await fetch('/api/logs').then(r => r.json());
+                const l = await fetch('/api/logs').text();
                 if(l.success) {
                     document.getElementById('log-box').innerText = l.logs.join('\n');
                     if(l.trading_active !== undefined) {
@@ -800,6 +800,9 @@ async def api_verify_deposit(request):
         conn.commit()
         conn.close()
 
+        add_log(f"📥 Зачислен ончейн-депозит: +${amount_usdc} USDC ({tx[:10]}...)")
+        return web.json_response({"success": True, "message": f"✅ Успешно! Зачислено ${amount_usdc} USDC на ваш баланс."})
+
     except Exception as e:
         return web.json_response({"success": False, "message": f"Ошибка сервера: {str(e)}"})
 
@@ -856,7 +859,7 @@ async def main():
     app.router.add_get('/health', health_handler)
     app.router.add_get('/api/logs', api_get_logs)
     app.router.add_get('/api/stats', api_get_stats)
-    app.router.add_post('/api/toggle_trading', api_toggle_trade := api_toggle_trading)
+    app.router.add_post('/api/toggle_trading', api_toggle_trading)
     app.router.add_post('/api/verify_deposit', api_verify_deposit)
     app.router.add_post('/webhook', telegram_webhook_handler)
 
