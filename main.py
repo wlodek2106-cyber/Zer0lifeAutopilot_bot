@@ -52,7 +52,7 @@ MEME_STOP_LOSS_PCT = 0.80      # Стоп-лосс на случай скама 
 
 IS_TRADING_ACTIVE = True       # Глобальный флаг автопилота Топ-5 (ВКЛ / ВЫКЛ)
 IS_MEME_ACTIVE = False         # Глобальный флаг Meme Sniper режима (ВКЛ / ВЫКЛ)
-RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v4.2 инициализирован."]
+RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v4.3 инициализирован."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -102,7 +102,6 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER, tx_signature TEXT UNIQUE,
         amount_usdc REAL, status TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
 
-    # Проверка наличия колонки half_taken для отслеживания частичной фиксации
     c.execute("PRAGMA table_info(trades)")
     t_cols = [col[1] for col in c.fetchall()]
     if "half_taken" not in t_cols:
@@ -112,7 +111,7 @@ def init_db():
             pass
 
     try:
-        c.execute("DELETE FROM trades WHERE sell_price = 0 AND token_symbol IN ('SOL', 'JUP', 'RAY', 'WIF', 'PYTH')")
+        c.execute("DELETE FROM trades WHERE sell_price = 0")
         conn.commit()
     except Exception:
         pass
@@ -304,12 +303,15 @@ async def real_trading_worker():
                         raw_amount = int(amount_tokens * (10 ** WATCHLIST[sym]["decimals"]))
                         sell_sig = await execute_jupiter_swap(session, mint, USDC_MINT, raw_amount, signer)
                         if sell_sig:
+                            real_exit_px = cur_px
                             profit_usd = round(TRADE_AMOUNT_USDC * pnl_pct, 2)
                             c.execute("UPDATE trades SET sell_price = ?, profit_usdc = ?, sell_tx = ? WHERE id = ?", 
-                                      (cur_px, profit_usd, sell_sig, trade_id))
+                                      (real_exit_px, profit_usd, sell_sig, trade_id))
                             conn.commit()
-                            add_log(f"✅ Ордер закрыт в блокчейне! Tx: {sell_sig[:10]}...")
+                            add_log(f"✅ Ордер закрыт по реальной цене ${real_exit_px:.4f}! Tx: {sell_sig[:10]}...")
                             cooldown_until = now_ts + 30
+                        else:
+                            add_log(f"⚠️ Ошибка продажи {sym} в сети, повторим позже...")
                     conn.close()
                     await asyncio.sleep(20)
                     continue
@@ -334,7 +336,7 @@ async def real_trading_worker():
                 if best_candidate:
                     sym, cur_p = best_candidate
                     mint = WATCHLIST[sym]["mint"]
-                    add_log(f"🚀 Сигнал входа Топ-5: {sym} просел на {max_dip*100:.2f}%. Покупка на ${TRADE_AMOUNT_USDC} USDC...")
+                    add_log(f"🚀 Сигнал входа Топ-5: {sym} просел на {max_dip*100:.2f}%. Покупка по ${cur_p:.4f}...")
                     buy_sig = await execute_jupiter_swap(session, USDC_MINT, mint, TRADE_AMOUNT_RAW, signer)
                     if buy_sig:
                         bought_tokens = TRADE_AMOUNT_USDC / cur_p
@@ -345,7 +347,7 @@ async def real_trading_worker():
                             (sym, mint, cur_p, bought_tokens, buy_sig, datetime.now().strftime('%H:%M:%S')))
                         c_in.commit()
                         c_in.close()
-                        add_log(f"💎 Успешно куплен {sym}! Tx: {buy_sig[:12]}...")
+                        add_log(f"💎 Успешно куплен {sym} по ${cur_p:.4f}! Tx: {buy_sig[:12]}...")
                         cooldown_until = now_ts + 30
 
             except Exception as e:
@@ -354,14 +356,14 @@ async def real_trading_worker():
             await asyncio.sleep(20)
 
 
-# --- ВОРКЕР 2: ПАРАЛЛЕЛЬНЫЙ (Meme Sniper Mode с частичной фиксацией на 0.5 SOL в USDC) ---
+# --- ВОРКЕР 2: ПАРАЛЛЕЛЬНЫЙ (Meme Sniper Mode с реальной фиксацией цен) ---
 async def meme_sniper_worker():
     global IS_MEME_ACTIVE
     signer = get_signer_keypair()
     if not signer:
         return
 
-    add_log("🐸 Параллельный воркер Meme Sniper запущен (Цель: 0.1 SOL -> 1 SOL с фиксацией половины на 0.5 SOL в USDC).")
+    add_log("🐸 Параллельный воркер Meme Sniper запущен.")
     SOL_MINT = "So11111111111111111111111111111111111111112"
 
     async with aiohttp.ClientSession() as session:
@@ -393,26 +395,22 @@ async def meme_sniper_worker():
 
                                 add_log(f"🔥 [MEME SNIPER] {sym}: Вход {entry_sol_price:.5f} SOL | Тек общая стоимость: {current_total_sol:.3f} SOL ({multiplier:.1f}x)")
 
-                                # УСЛОВИЕ 1: Достигли 0.5 SOL (х5), а половина еще не фиксировалась -> сливаем 50% в USDC!
                                 if current_total_sol >= 0.5 and half_taken == 0:
                                     add_log(f"⚡ [MEME SNIPER] Баланс достиг 0.5 SOL! Фиксируем 50% позиции и переводим в USDC...")
                                     half_tokens_raw = int((amount_tokens / 2) * (10 ** 6))
-                                    
-                                    # Меняем мем-токен на USDC через Jupiter
                                     sell_sig = await execute_jupiter_swap(session, mint, USDC_MINT, half_tokens_raw, signer, slippage_bps=300, priority_fee=100000)
                                     if sell_sig:
                                         conn_h = sqlite3.connect(DB_FILE)
                                         conn_h.cursor().execute("UPDATE trades SET half_taken = 1, amount_tokens = amount_tokens / 2 WHERE id = ?", (trade_id,))
                                         conn_h.commit()
                                         conn_h.close()
-                                        add_log(f"✅ [MEME SNIPER] Половина позиции успешно переведена в USDC! Tx: {sell_sig[:10]}...")
+                                        add_log(f"✅ [MEME SNIPER] Половина позиции переведена в USDC! Tx: {sell_sig[:10]}...")
                                     else:
-                                        add_log(f"⚠️ [MEME SNIPER] Ошибка перевода половины в USDC, повторим...")
+                                        add_log(f"⚠️ [MEME SNIPER] Ошибка перевода половины в USDC...")
 
-                                # УСЛОВИЕ 2: Итоговая цель х10 (1 SOL) или стоп-лос (-80%)
                                 elif multiplier >= MEME_TARGET_MULTIPLIER or pnl_pct <= -MEME_STOP_LOSS_PCT:
-                                    reason = "ЦЕЛЬ Х10 (1 SOL) ДОСТИГНУТА 🚀" if multiplier >= MEME_TARGET_MULTIPLIER else "СТОП-ЛОСС 🛑"
-                                    add_log(f"⚡ [MEME SNIPER] Закрываем остаток позиции {sym} ({reason}). Выход в SOL...")
+                                    reason = "ЦЕЛЬ Х10 ДОСТИГНУТА 🚀" if multiplier >= MEME_TARGET_MULTIPLIER else "СТОП-ЛОСС 🛑"
+                                    add_log(f"⚡ [MEME SNIPER] Закрываем остаток позиции {sym} ({reason}). Выход по цене {cur_sol_price:.5f} SOL...")
                                     
                                     rem_tokens_raw = int(amount_tokens * (10 ** 6))
                                     sell_sig = await execute_jupiter_swap(session, mint, SOL_MINT, rem_tokens_raw, signer, slippage_bps=300, priority_fee=100000)
@@ -424,7 +422,7 @@ async def meme_sniper_worker():
                                                                   (cur_sol_price, profit_sol * 150, sell_sig, trade_id))
                                         conn_up.commit()
                                         conn_up.close()
-                                        add_log(f"✅ [MEME SNIPER] Финальная фиксация выполнена! Tx: {sell_sig[:10]}...")
+                                        add_log(f"✅ [MEME SNIPER] Финальная фиксация выполнена по {cur_sol_price:.5f} SOL! Tx: {sell_sig[:10]}...")
                     await asyncio.sleep(10)
                 else:
                     add_log("🎯 [MEME SNIPER] Сканирование новых мем-пулов по сети Solana...")
@@ -453,7 +451,7 @@ async def meme_sniper_worker():
                                         break
 
                             if target_mint:
-                                add_log(f"🚀 [MEME SNIPER] Найден мем-токен: {target_sym}. Вход на {MEME_ALLOCATION_SOL} SOL...")
+                                add_log(f"🚀 [MEME SNIPER] Найден мем-токен: {target_sym}. Вход по ${init_price:.5f} на {MEME_ALLOCATION_SOL} SOL...")
                                 amount_lamports = int(MEME_ALLOCATION_SOL * 1_000_000_000)
                                 
                                 buy_sig = await execute_jupiter_swap(session, SOL_MINT, target_mint, amount_lamports, signer, slippage_bps=500, priority_fee=100000)
@@ -466,7 +464,7 @@ async def meme_sniper_worker():
                                         (target_sym, target_mint, init_price, bought_tokens, buy_sig, datetime.now().strftime('%H:%M:%S')))
                                     conn_in.commit()
                                     conn_in.close()
-                                    add_log(f"💎 [MEME SNIPER] Успешный вход в {target_sym}! Tx: {buy_sig[:12]}...")
+                                    add_log(f"💎 [MEME SNIPER] Успешный вход в {target_sym} по ${init_price:.5f}! Tx: {buy_sig[:12]}...")
 
                     await asyncio.sleep(15)
 
@@ -931,7 +929,7 @@ async def api_verify_deposit(request):
         conn.close()
 
         add_log(f"📥 Зачислен депозит: +${amount_usdc} USDC ({tx[:10]}...)")
-        return web.json_response({"success": True, "message": f"✅ Успешно! Зачислено ${amount_usdc} USDC."})
+        return web.json_package if hasattr(web, 'json_package') else web.json_response({"success": True, "message": f"✅ Успешно! Зачислено ${amount_usdc} USDC."})
     except Exception as e:
         return web.json_response({"success": False, "message": f"Ошибка сервера: {str(e)}"})
 
