@@ -45,7 +45,7 @@ SL_PCT = 0.020          # -2.0%
 MAX_SLIPPAGE_BPS = 40   # 0.40%
 
 IS_TRADING_ACTIVE = True  # Глобальный флаг автопилота (ВКЛ / ВЫКЛ)
-RECENT_LOGS = ["⚜️ Multi-Asset Engine v3.6 (Real Trading) инициализирован."]
+RECENT_LOGS = ["⚜️ Multi-Asset Engine v3.8 инициализирован."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -86,11 +86,6 @@ def init_db():
         except Exception:
             pass
 
-    c.execute("PRAGMA table_info(trades)")
-    t_cols = [col[1] for col in c.fetchall()]
-    if t_cols and "token_symbol" not in t_cols:
-        c.execute("DROP TABLE trades")
-
     c.execute('''CREATE TABLE IF NOT EXISTS trades (
         id INTEGER PRIMARY KEY AUTOINCREMENT, token_symbol TEXT, token_mint TEXT,
         buy_price REAL, amount_tokens REAL, sell_price REAL DEFAULT 0,
@@ -100,13 +95,12 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER, tx_signature TEXT UNIQUE,
         amount_usdc REAL, status TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
 
-    c.execute("PRAGMA table_info(deposits)")
-    d_cols = [col[1] for col in c.fetchall()]
-    if "amount_usdc" not in d_cols:
-        try:
-            c.execute("ALTER TABLE deposits ADD COLUMN amount_usdc REAL DEFAULT 0.0")
-        except Exception:
-            pass
+    # Очистка зависших незакрытых ордеров при запуске
+    try:
+        c.execute("DELETE FROM trades WHERE sell_price = 0")
+        conn.commit()
+    except Exception:
+        pass
 
     conn.commit()
     conn.close()
@@ -207,11 +201,10 @@ async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, 
     try:
         user_pubkey = str(signer.pubkey())
         
-        # Проверяем реальный баланс USDC перед покупкой
         if input_mint == USDC_MINT:
             bal = await get_wallet_usdc_balance(session, user_pubkey)
             if bal < TRADE_AMOUNT_USDC:
-                add_log(f"❌ Недостаточно USDC на кошельке ({bal:.2f} USDC). Нужно минимум ${TRADE_AMOUNT_USDC}.")
+                add_log(f"❌ Недостаточно USDC ({bal:.2f} USDC). Нужно минимум ${TRADE_AMOUNT_USDC}.")
                 return ""
 
         headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
@@ -275,7 +268,6 @@ async def real_trading_worker():
 
     history = {sym: [] for sym in WATCHLIST}
     cooldown_until = 0
-    forced_test_done = False
 
     async with aiohttp.ClientSession() as session:
         while True:
@@ -300,7 +292,6 @@ async def real_trading_worker():
                 c.execute("SELECT id, token_symbol, token_mint, buy_price, amount_tokens FROM trades WHERE sell_price = 0 LIMIT 1")
                 active_trade = c.fetchone()
 
-                # Управление открытой позицией
                 if active_trade:
                     trade_id, sym, mint, entry_px, amount_tokens = active_trade
                     cur_px = prices.get(sym, entry_px)
@@ -335,30 +326,6 @@ async def real_trading_worker():
                     await asyncio.sleep(20)
                     continue
 
-                # РЕАЛЬНЫЙ ТЕСТОВЫЙ ВХОД СРАЗУ ПРИ СТАРТЕ
-                if not forced_test_done and "SOL" in prices:
-                    forced_test_done = True
-                    sym = "SOL"
-                    cur_p = prices[sym]
-                    mint = WATCHLIST[sym]["mint"]
-                    add_log(f"🚀 РЕАЛЬНЫЙ ВХОД: Покупка {sym} на ${TRADE_AMOUNT_USDC} USDC в сети...")
-                    buy_sig = await execute_jupiter_swap(session, USDC_MINT, mint, TRADE_AMOUNT_RAW, signer)
-                    if buy_sig:
-                        bought_tokens = TRADE_AMOUNT_USDC / cur_p
-                        c_in = sqlite3.connect(DB_FILE)
-                        c_in.cursor().execute("""INSERT INTO trades 
-                            (token_symbol, token_mint, buy_price, amount_tokens, sell_price, profit_usdc, buy_tx, sell_tx, timestamp)
-                            VALUES (?, ?, ?, ?, 0, 0, ?, '', ?)""",
-                            (sym, mint, cur_p, bought_tokens, buy_sig, datetime.now().strftime('%H:%M:%S')))
-                        c_in.commit()
-                        c_in.close()
-                        add_log(f"💎 Успешно куплен {sym} за реальные USDC! Tx: {buy_sig[:12]}...")
-                    else:
-                        add_log(f"❌ Ошибка блокчейн-свопа SOL. Проверьте баланс USDC и SOL на газе.")
-                    await asyncio.sleep(20)
-                    continue
-
-                # Обычное сканирование просадок
                 best_candidate = None
                 max_dip = 0.0
                 for sym, p_list in history.items():
@@ -457,7 +424,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         .sig-input { background: #06080e; border: 1px solid #1c2436; border-radius: 12px; padding: 14px; width: 100%; color: #fff; font-family: monospace; font-size: 12px; outline: none; margin-bottom: 12px; }
         .btn-verify { background: #86efac; color: #000; border: none; width: 100%; padding: 15px; border-radius: 14px; font-size: 14px; font-weight: 800; cursor: pointer; }
 
-        .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(10, 12, 18, 0.95); backdrop-filter: blur(20px); border-top: 1px solid #192033; padding: 12px 16px; display: flex; justify-content: space-around; z-index: 900; }
+        .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(10, 12, 18, 0.95); backdrop-filter: blur(20px); border-top: 1px solid #192033; padding: 12px 16px; padding-bottom: calc(12px + env(safe-area-inset-bottom, 16px)); display: flex; justify-content: space-around; z-index: 900; }
         .nav-btn { background: transparent; border: none; color: #64748b; font-size: 11px; font-weight: 600; cursor: pointer; }
         .nav-btn.active { color: #22c55e; }
         .tab-panel { display: none; height: 100vh; overflow-y: auto; padding: 16px; padding-bottom: 125px; }
