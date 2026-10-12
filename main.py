@@ -234,7 +234,7 @@ async def real_trading_worker():
                     diff_pct = (current_price - entry_px) / entry_px
                     
                     if cycle_counter % 3 == 0:
-                        add_log(f"📈 Позиция активна: SOL ${current_price:.2f} \vert{} Вход ${entry_px:.2f} ({diff_pct*100:+.2f}%)")
+                        add_log(f"📈 Позиция активна: SOL ${current_price:.2f} | Вход ${entry_px:.2f} ({diff_pct*100:+.2f}%)")
 
                     if diff_pct >= TP_PCT or diff_pct <= -SL_PCT:
                         add_log(f"🔔 Закрытие сделки! Профит: {diff_pct*100:+.2f}%. Отправка SOL -> USDC...")
