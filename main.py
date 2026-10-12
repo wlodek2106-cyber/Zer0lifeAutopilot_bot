@@ -31,7 +31,7 @@ TRADE_AMOUNT_RAW = int(TRADE_AMOUNT_USDC * 1_000_000)  # USDC 6 decimals
 TP_PCT = 0.012  # +1.2% Тейк-профит
 SL_PCT = 0.010  # -1.0% Стоп-лосс
 
-RECENT_LOGS = ["⚜️ Zer0Life Live DEX Engine запущен."]
+RECENT_LOGS = ["Zer0Life Live DEX Engine запущен."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -48,7 +48,7 @@ from solders.transaction import VersionedTransaction
 def get_signer_keypair():
     pk_env = os.getenv("SOLANA_PRIVATE_KEY", "").strip()
     if not pk_env:
-        add_log("❌ Ошибка: SOLANA_PRIVATE_KEY пуст в переменных Render!")
+        add_log("Ошибка: SOLANA_PRIVATE_KEY пуст в переменных Render!")
         return None
     try:
         pk_clean = pk_env.replace('"', '').replace("'", "").strip()
@@ -57,7 +57,7 @@ def get_signer_keypair():
         else:
             return Keypair.from_bytes(base58.b58decode(pk_clean))
     except Exception as e:
-        add_log(f"⚠️ Ошибка разбора приватного ключа: {e}")
+        add_log(f"Ошибка разбора приватного ключа: {e}")
         return None
 
 # --- БАЗА ДАННЫХ ---
@@ -128,7 +128,7 @@ async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, 
         async with session.get(quote_url, headers=API_HEADERS, timeout=6) as resp:
             if resp.status != 200:
                 err_text = await resp.text()
-                add_log(f"❌ Jupiter Quote ({resp.status}): {err_text[:70]}")
+                add_log(f"Jupiter Quote ({resp.status}): {err_text[:70]}")
                 return ""
             quote_data = await resp.json()
 
@@ -143,13 +143,13 @@ async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, 
         async with session.post("https://quote-api.jup.ag/v6/swap", headers=API_HEADERS, json=swap_payload, timeout=8) as resp:
             if resp.status != 200:
                 err_text = await resp.text()
-                add_log(f"❌ Jupiter Swap ({resp.status}): {err_text[:70]}")
+                add_log(f"Jupiter Swap ({resp.status}): {err_text[:70]}")
                 return ""
             swap_res = await resp.json()
             swap_tx_b64 = swap_res.get("swapTransaction")
 
         if not swap_tx_b64:
-            add_log("❌ Ошибка: пустой swapTransaction от Jupiter")
+            add_log("Ошибка: пустой swapTransaction от Jupiter")
             return ""
 
         # 3. Десериализация и подпись через VersionedTransaction
@@ -172,11 +172,11 @@ async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, 
                     return str(rpc_res["result"])
                 else:
                     err_msg = rpc_res.get("error", {}).get("message", "RPC Error")
-                    add_log(f"❌ RPC отказ: {err_msg}")
+                    add_log(f"RPC отказ: {err_msg}")
             else:
-                add_log(f"❌ Ошибка RPC HTTP {resp.status}")
+                add_log(f"Ошибка RPC HTTP {resp.status}")
     except Exception as e:
-        add_log(f"⚠️ Ошибка выполнения свопа: {e}")
+        add_log(f"Ошибка выполнения свопа: {e}")
     return ""
 
 async def get_sol_price(session: aiohttp.ClientSession) -> float:
@@ -200,14 +200,14 @@ async def get_sol_price(session: aiohttp.ClientSession) -> float:
 
 # --- БОЕВОЙ ТОРГОВЫЙ ЦИКЛ ---
 async def real_trading_worker():
-    add_log("🚀 Инициализация ончейн-исполнителя Jupiter...")
+    add_log("Инициализация ончейн-исполнителя Jupiter...")
     signer = get_signer_keypair()
     if not signer:
-        add_log("❌ ОСТАНОВКА: Проверьте SOLANA_PRIVATE_KEY на Render!")
+        add_log("ОСТАНОВКА: Проверьте SOLANA_PRIVATE_KEY на Render!")
         return
 
     wallet_addr = str(signer.pubkey())
-    add_log(f"🔑 Live Mode: Авторизован кошелек {wallet_addr[:6]}...{wallet_addr[-4:]}")
+    add_log(f"Live Mode: Авторизован кошелек {wallet_addr[:6]}...{wallet_addr[-4:]}")
 
     price_history = []
 
@@ -228,14 +228,14 @@ async def real_trading_worker():
                 cursor.execute("SELECT id, buy_price, amount_lamports, buy_tx FROM trades WHERE sell_price = 0 LIMIT 1")
                 active_trade = cursor.fetchone()
 
-                # 1. Позиция открыта — проверяем тейк и стоп
+                # 1. Позиция открыта — проверка тейка и стопа
                 if active_trade:
                     trade_id, entry_px, lamports, buy_tx = active_trade
                     diff_pct = (current_price - entry_px) / entry_px
-                    add_log(f"📊 Позиция: SOL ${current_price:.2f} \vert{} Вход: ${entry_px:.2f} (PnL: {diff_pct*100:+.2f}%)")
+                    add_log(f"Позиция: SOL ${current_price:.2f} \vert{} Вход: ${entry_px:.2f} (PnL: {diff_pct*100:+.2f}%)")
 
                     if diff_pct >= TP_PCT or diff_pct <= -SL_PCT:
-                        add_log("🔄 Сигнал выхода: отправка SOL -> USDC в Jupiter...")
+                        add_log("Сигнал выхода: отправка SOL -> USDC в Jupiter...")
                         sell_sig = await execute_jupiter_swap(
                             session=session,
                             input_mint=SOL_MINT,
@@ -249,15 +249,15 @@ async def real_trading_worker():
                             cursor.execute("UPDATE trades SET sell_price = ?, profit_usdc = ?, sell_tx = ? WHERE id = ?", (current_price, pnl_usd, sell_sig, trade_id))
                             conn.commit()
 
-                            add_log(f"✅ Позиция закрыта! PnL: {'+' if pnl_usd >= 0 else ''}{pnl_usd} USDC. TX: {sell_sig[:10]}...")
-                            add_log(f"🔗 Solscan: https://solscan.io/tx/{sell_sig}")
+                            add_log(f"Позиция закрыта! PnL: {'+' if pnl_usd >= 0 else ''}{pnl_usd} USDC. TX: {sell_sig[:10]}...")
+                            add_log(f"Solscan: https://solscan.io/tx/{sell_sig}")
 
                             cursor.execute("SELECT telegram_id FROM users WHERE trading_active = 1")
                             users = cursor.fetchall()
                             for u in users:
-                                await send_telegram_notification(u[0], f"🎯 *Сделка закрыта!*\n• Вход: `${entry_px:.2f}` -> Выход: `${current_price:.2f}`\n• PnL: `+{pnl_usd} USDC` 💵\n• [Смотреть транзакцию в Solscan](https://solscan.io/tx/{sell_sig})")
+                                await send_telegram_notification(u[0], f"Сделка закрыта!\n• Вход: ${entry_px:.2f} -> Выход: ${current_price:.2f}\n• PnL: +{pnl_usd} USDC\n• https://solscan.io/tx/{sell_sig}")
                         else:
-                            add_log("⚠️ Ошибка отправки транзакции закрытия в Solana. Повтор...")
+                            add_log("Ошибка отправки транзакции закрытия в Solana. Повтор...")
 
                     conn.close()
                     await asyncio.sleep(5)
@@ -269,11 +269,11 @@ async def real_trading_worker():
                 if len(price_history) >= 4:
                     avg_p = sum(price_history[-4:-1]) / 3
                     momentum = (current_price - avg_p) / avg_p
-                    add_log(f"🔍 Скринер: SOL ${current_price:.2f} | Импульс: {momentum*100:+.3f}%")
+                    add_log(f"Скринер: SOL ${current_price:.2f} | Импульс: {momentum*100:+.3f}%")
 
                     # Вход при фиксации импульса
                     if momentum >= 0.0003:
-                        add_log(f"⚡ Вход по сигналу (+{momentum*100:.3f}%): Отправка 25 USDC -> SOL в Jupiter...")
+                        add_log(f"Вход по сигналу (+{momentum*100:.3f}%): Отправка 25 USDC -> SOL в Jupiter...")
                         buy_sig = await execute_jupiter_swap(
                             session=session,
                             input_mint=USDC_MINT,
@@ -293,16 +293,16 @@ async def real_trading_worker():
                             c.commit()
                             c.close()
 
-                            add_log(f"💎 ПОКУПКА В СЕТИ ПОДТВЕРЖДЕНА! SOL куплен по ${current_price:.2f}")
-                            add_log(f"🔗 Solscan TX: https://solscan.io/tx/{buy_sig}")
+                            add_log(f"ПОКУПКА В СЕТИ ПОДТВЕРЖДЕНА! SOL куплен по ${current_price:.2f}")
+                            add_log(f"Solscan TX: https://solscan.io/tx/{buy_sig}")
 
                             c = sqlite3.connect(DB_FILE)
                             active_u = c.cursor().execute("SELECT telegram_id FROM users WHERE trading_active = 1").fetchall()
                             c.close()
                             for u in active_u:
-                                await send_telegram_notification(u[0], f"🚀 *Покупка SOL на Phantom!*\n• Сумма: `25 USDC`\n• Цена: `${current_price:.2f}`\n• [Транзакция в Solscan](https://solscan.io/tx/{buy_sig})")
+                                await send_telegram_notification(u[0], f"Покупка SOL на Phantom!\n• Сумма: 25 USDC\n• Цена: ${current_price:.2f}\n• https://solscan.io/tx/{buy_sig}")
                         else:
-                            add_log("⚠️ Своп не выполнен. Проверьте баланс SOL на газ.")
+                            add_log("Своп не выполнен. Проверьте баланс SOL на газ.")
 
             except Exception as e:
                 logging.error(f"Trading loop error: {e}")
@@ -339,11 +339,11 @@ async def telegram_bot_worker():
 
                                 reply = {
                                     "chat_id": chat_id,
-                                    "text": "⚜️ *Zer0Life Real DEX Engine Активен!*\n\nКаждая сделка совершается реально на Jupiter DEX с баланса вашего кошелька.\n\n👇 Нажмите кнопку ниже:",
+                                    "text": "Zer0Life Real DEX Engine Активен!\n\nКаждая сделка совершается реально на Jupiter DEX с баланса вашего кошелька.\n\nНажмите кнопку ниже:",
                                     "parse_mode": "Markdown",
                                     "reply_markup": {
                                         "inline_keyboard": [[
-                                            {"text": "🚀 Открыть Zer0Life Run", "web_app": {"url": RENDER_URL}}
+                                            {"text": "Открыть Zer0Life Run", "web_app": {"url": RENDER_URL}}
                                         ]]
                                     }
                                 }
@@ -429,7 +429,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         <!-- TAB 1: TRADER -->
         <div id="tab-trader" class="tab-content active">
             <div class="card">
-                <h3 class="title-gold">⚡ Live Onchain Jupiter DEX</h3>
+                <h3 class="title-gold">Live Onchain Jupiter DEX</h3>
                 <div class="metric"><span>Режим:</span> <span class="val" style="color: #5ff53b;">100% Ончейн (Real Swaps)</span></div>
                 <div class="metric"><span>Сделка:</span> <span class="val">$25.00 USDC -> SOL</span></div>
                 <div class="metric"><span>Кошелек:</span> <span class="val">8hxi...dM6L</span></div>
@@ -440,7 +440,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 </div>
             </div>
             <div class="card">
-                <h3 class="title-gold">📡 Журнал Реальных Транзакций</h3>
+                <h3 class="title-gold">Журнал Реальных Транзакций</h3>
                 <div id="logs-box" class="logs">Связь с блокчейном Solana...</div>
             </div>
         </div>
@@ -448,12 +448,12 @@ RAW_HTML = r"""<!DOCTYPE html>
         <!-- TAB 2: STATS -->
         <div id="tab-stats" class="tab-content">
             <div class="card">
-                <h3 class="title-gold">📊 Статистика Доходности</h3>
+                <h3 class="title-gold">Статистика Доходности</h3>
                 <div class="metric"><span>Чистый PnL:</span> <span id="stat-profit" class="val" style="color: #5ff53b;">+$0.00 USDC</span></div>
                 <button class="btn-gold" onclick="loadStats()">Обновить</button>
             </div>
             <div class="card">
-                <h3 class="title-gold">📜 Исполненные Сделки (Solscan)</h3>
+                <h3 class="title-gold">Исполненные Сделки (Solscan)</h3>
                 <div id="trades-list" style="max-height: 250px; overflow-y: auto;">
                     <div style="color: #5a5d63; font-size: 12px; text-align: center; padding: 20px;">Ожидание сделок...</div>
                 </div>
@@ -465,10 +465,10 @@ RAW_HTML = r"""<!DOCTYPE html>
             <div class="neon-card">
                 <div class="header-row">
                     <div>
-                        <div class="user-name">CryptoWlodek | ZRL szn ∞</div>
+                        <div class="user-name">CryptoWlodek | ZRL szn</div>
                         <div class="user-id">ID: 42882165</div>
                     </div>
-                    <div class="pool-badge">🔥 Pool Limit: 0.25 - 100 SOL</div>
+                    <div class="pool-badge">Pool Limit: 0.25 - 100 SOL</div>
                 </div>
 
                 <div class="label-text">Адрес депозита экосистемы:</div>
@@ -480,14 +480,14 @@ RAW_HTML = r"""<!DOCTYPE html>
                     </div>
                 </div>
 
-                <button class="btn-purple" onclick="copyDepositAddress()">📋 Копировать адрес</button>
+                <button class="btn-purple" onclick="copyDepositAddress()">Копировать адрес</button>
             </div>
 
             <div class="neon-card">
-                <div class="card-title">🎽 Верификация депозита</div>
+                <div class="card-title">Верификация депозита</div>
                 <div class="label-text" style="margin-top: 10px;">Хэш транзакции (Signature):</div>
                 <input type="text" id="tx-input" class="input-tx" placeholder="Вставьте хэш транзакции...">
-                <button class="btn-green" onclick="verifyDeposit()">Verify & Credit SOL 🔄</button>
+                <button class="btn-green" onclick="verifyDeposit()">Verify & Credit SOL</button>
             </div>
         </div>
     </div>
@@ -542,7 +542,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         window.copyDepositAddress = function() {
             const addr = document.getElementById('sol-address').innerText.trim();
             if (navigator.clipboard) {
-                navigator.clipboard.writeText(addr).then(() => { alert("✅ Адрес депозита скопирован!"); });
+                navigator.clipboard.writeText(addr).then(() => { alert("Адрес депозита скопирован!"); });
             } else { alert("Адрес: " + addr); }
         };
 
@@ -557,9 +557,9 @@ RAW_HTML = r"""<!DOCTYPE html>
                 });
                 const data = await res.json();
                 if(data.success) {
-                    alert("🎉 Транзакция подтверждена!");
+                    alert("Транзакция подтверждена!");
                     document.getElementById('tx-input').value = "";
-                } else { alert("⚠️ " + (data.message || "Ошибка верификации.")); }
+                } else { alert(data.message || "Ошибка верификации."); }
             } catch(e) { alert("Ошибка запроса."); }
         };
 
@@ -652,7 +652,7 @@ async def api_verify_deposit(request):
         conn.commit()
         conn.close()
 
-        add_log(f"📥 Депозит верифицирован: {tx[:10]}... на баланс Solana!")
+        add_log(f"Депозит верифицирован: {tx[:10]}... на баланс Solana!")
         return web.json_response({"success": True, "message": "Депозит подтвержден"})
     except Exception as e:
         return web.json_response({"success": False, "message": str(e)})
@@ -674,9 +674,10 @@ async def main():
     asyncio.create_task(real_trading_worker())
     asyncio.create_task(telegram_bot_worker())
 
-    add_log("⚜️ Zer0Life DEX Live Engine и Telegram Polling запущены.")
+    add_log("Zer0Life DEX Live Engine и Telegram Polling запущены.")
     while True:
         await asyncio.sleep(3600)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
