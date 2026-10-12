@@ -161,17 +161,21 @@ async def verify_solana_usdc_tx(session: aiohttp.ClientSession, tx_sig: str, tar
 
 async def get_token_prices(session: aiohttp.ClientSession) -> dict:
     mints = ",".join([v["mint"] for v in WATCHLIST.values()])
-    url = f"https://api.jup.ag/price/v2?ids={mints}"
+    url = f"https://price.jup.ag/v4/price?ids={mints}"
     prices = {}
     try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=4)) as resp:
+        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as resp:
             if resp.status == 200:
                 data = await resp.json()
                 price_data = data.get("data", {})
                 for sym, info in WATCHLIST.items():
-                    p = price_data.get(info["mint"], {}).get("price")
+                    token_info = price_data.get(info["mint"], {})
+                    p = token_info.get("price")
                     if p:
                         prices[sym] = float(p)
+            else:
+                add_log(f"⚠️ Ошибка Jupiter API статус: {resp.status}")
     except Exception as e:
         add_log(f"⚠️ Ошибка получения цен: {e}")
     return prices
@@ -238,7 +242,7 @@ async def real_trading_worker():
 
     history = {sym: [] for sym in WATCHLIST}
     cooldown_until = 0
-    forced_test_done = False  # Флаг для совершения гарантированной первой сделки
+    forced_test_done = False
 
     async with aiohttp.ClientSession() as session:
         while True:
@@ -870,4 +874,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
