@@ -25,12 +25,11 @@ SOLANA_RPC = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-ke
 SHARED_DEPOSIT_WALLET = os.getenv("DEPOSIT_WALLET", "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L").strip()
 SPLASH_IMAGE_URL = "https://i.postimg.cc/52n94Pzg/57D47DDD-9BED-4D4B-AA69-2B59CAB400AD.png"
 
-# Токен USDC и лимиты депозита
+# Токен USDC и параметры торговли
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 MIN_DEPOSIT_USDC = 50.0
 MAX_DEPOSIT_USDC = 10000.0
 
-# Топ-5 проверенных ликвидных активов
 WATCHLIST = {
     "SOL":  {"mint": "So11111111111111111111111111111111111111112", "decimals": 9},
     "JUP":  {"mint": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", "decimals": 6},
@@ -45,7 +44,8 @@ TP_PCT = 0.035          # +3.5%
 SL_PCT = 0.020          # -2.0%
 MAX_SLIPPAGE_BPS = 40   # 0.40%
 
-RECENT_LOGS = ["⚜️ Multi-Asset Engine v3.4 инициализирован."]
+IS_TRADING_ACTIVE = True  # Глобальный флаг автопилота (ВКЛ / ВЫКЛ)
+RECENT_LOGS = ["⚜️ Multi-Asset Engine v3.6 инициализирован."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -77,26 +77,46 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         telegram_id INTEGER PRIMARY KEY, username TEXT, balance_usdc REAL DEFAULT 0.0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+    
+    c.execute("PRAGMA table_info(users)")
+    u_cols = [col[1] for col in c.fetchall()]
+    if "balance_usdc" not in u_cols:
+        try:
+            c.execute("ALTER TABLE users ADD COLUMN balance_usdc REAL DEFAULT 0.0")
+        except Exception:
+            pass
+
+    c.execute("PRAGMA table_info(trades)")
+    t_cols = [col[1] for col in c.fetchall()]
+    if t_cols and "token_symbol" not in t_cols:
+        c.execute("DROP TABLE trades")
+
     c.execute('''CREATE TABLE IF NOT EXISTS trades (
         id INTEGER PRIMARY KEY AUTOINCREMENT, token_symbol TEXT, token_mint TEXT,
         buy_price REAL, amount_tokens REAL, sell_price REAL DEFAULT 0,
         profit_usdc REAL DEFAULT 0.0, buy_tx TEXT, sell_tx TEXT, timestamp TEXT)''')
+
     c.execute('''CREATE TABLE IF NOT EXISTS deposits (
         id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER, tx_signature TEXT UNIQUE,
         amount_usdc REAL, status TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+
+    c.execute("PRAGMA table_info(deposits)")
+    d_cols = [col[1] for col in c.fetchall()]
+    if "amount_usdc" not in d_cols:
+        try:
+            c.execute("ALTER TABLE deposits ADD COLUMN amount_usdc REAL DEFAULT 0.0")
+        except Exception:
+            pass
+
     conn.commit()
     conn.close()
 
-# --- ОНЧЕЙН ВЕРИФИКАЦИЯ USDC (SPL TOKEN) ---
 async def verify_solana_usdc_tx(session: aiohttp.ClientSession, tx_sig: str, target_wallet: str):
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "getTransaction",
-        "params": [
-            tx_sig,
-            {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}
-        ]
+        "params": [tx_sig, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}]
     }
     try:
         async with session.post(SOLANA_RPC, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
@@ -114,9 +134,7 @@ async def verify_solana_usdc_tx(session: aiohttp.ClientSession, tx_sig: str, tar
             pre_token_balances = meta.get("preTokenBalances", []) or []
             post_token_balances = meta.get("postTokenBalances", []) or []
 
-            pre_amount = 0.0
-            post_amount = 0.0
-            found_target = False
+            pre_amount, post_amount, found_target = 0.0, 0.0, False
 
             for b in post_token_balances:
                 if b.get("mint") == USDC_MINT and b.get("owner") == target_wallet:
@@ -130,13 +148,10 @@ async def verify_solana_usdc_tx(session: aiohttp.ClientSession, tx_sig: str, tar
                     break
 
             diff_usdc = round(post_amount - pre_amount, 2)
-
             if not found_target or diff_usdc <= 0:
                 return False, 0.0, f"Не найдено зачисление USDC на адрес {target_wallet[:6]}..."
-
             if diff_usdc < MIN_DEPOSIT_USDC:
                 return False, 0.0, f"Сумма ${diff_usdc:.2f} USDC меньше минимума (${MIN_DEPOSIT_USDC:.0f} USDC)."
-
             if diff_usdc > MAX_DEPOSIT_USDC:
                 return False, 0.0, f"Сумма ${diff_usdc:.2f} USDC превышает максимум (${MAX_DEPOSIT_USDC:.0f} USDC)."
 
@@ -206,6 +221,7 @@ async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, 
     return ""
 
 async def real_trading_worker():
+    global IS_TRADING_ACTIVE
     add_log("🤖 Сканер Топ-5 активов запущен.")
     signer = get_signer_keypair()
     if not signer:
@@ -233,6 +249,7 @@ async def real_trading_worker():
                 c.execute("SELECT id, token_symbol, token_mint, buy_price, amount_tokens FROM trades WHERE sell_price = 0 LIMIT 1")
                 active_trade = c.fetchone()
 
+                # Управление открытой позицией (сопровождение активно даже если автопилот временно выключен)
                 if active_trade:
                     trade_id, sym, mint, entry_px, amount_tokens = active_trade
                     cur_px = prices.get(sym, entry_px)
@@ -256,6 +273,11 @@ async def real_trading_worker():
                     continue
 
                 conn.close()
+
+                # Проверка флага автопилота для открытия новых сделок
+                if not IS_TRADING_ACTIVE:
+                    await asyncio.sleep(15)
+                    continue
 
                 if now_ts < cooldown_until:
                     await asyncio.sleep(25)
@@ -294,7 +316,7 @@ async def real_trading_worker():
 
             await asyncio.sleep(25)
 
-# --- ИНТЕРФЕЙС БЕЗ СТОРОННИХ БАННЕРОВ DAO ---
+# --- ИНТЕРФЕЙС С КНОПКАМИ ВКЛ/ВЫКЛ И ОБНОВЛЕНИЯ ---
 RAW_HTML = r"""<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -321,7 +343,19 @@ RAW_HTML = r"""<!DOCTYPE html>
         .stat-box { background: #080a11; border: 1px solid #161b2c; border-radius: 12px; padding: 10px; }
         .stat-label { color: #64748b; font-size: 10px; font-weight: 600; text-transform: uppercase; }
         .stat-val { color: #f8fafc; font-size: 15px; font-weight: 800; margin-top: 2px; font-family: monospace; }
-        .log-console { background: #05070a; border: 1px solid #141926; border-radius: 16px; padding: 12px; font-family: monospace; font-size: 11px; color: #4ade80; height: 280px; overflow-y: auto; white-space: pre-line; line-height: 1.5; }
+        .log-console { background: #05070a; border: 1px solid #141926; border-radius: 16px; padding: 12px; font-family: monospace; font-size: 11px; color: #4ade80; height: 260px; overflow-y: auto; white-space: pre-line; line-height: 1.5; }
+
+        /* ПАНЕЛЬ УПРАВЛЕНИЯ: КНОПКИ ВКЛ И ОБНОВИТЬ */
+        .control-bar { display: flex; gap: 10px; margin-bottom: 12px; }
+        .btn-ctl {
+            flex: 1; padding: 12px 14px; border-radius: 14px; font-weight: 800; font-size: 12px;
+            cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px;
+            border: none; transition: transform 0.15s ease;
+        }
+        .btn-ctl:active { transform: scale(0.97); }
+        .btn-toggle-on { background: rgba(34, 197, 94, 0.15); border: 1px solid rgba(34, 197, 94, 0.4); color: #4ade80; }
+        .btn-toggle-off { background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; }
+        .btn-refresh { background: #151a27; border: 1px solid #232c42; color: #94a3b8; }
 
         .order-card {
             background: #080a11; border: 1px solid #192033; border-radius: 14px;
@@ -331,12 +365,11 @@ RAW_HTML = r"""<!DOCTYPE html>
         .order-badge { padding: 3px 8px; border-radius: 6px; font-size: 10px; font-weight: 800; }
         .badge-open { background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
         .badge-closed { background: rgba(34, 197, 94, 0.15); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); }
-
         .order-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 6px 0; color: #94a3b8; font-size: 11px; }
         .order-tx-row { display: flex; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed #161c2d; font-size: 10px; }
         .tx-link { color: #60a5fa; text-decoration: none; display: inline-flex; align-items: center; gap: 2px; }
 
-        .deposit-modal { background: #0b0d14; border: 1px solid #1c2333; border-radius: 24px; padding: 18px; margin-top: 6px; }
+        .deposit-modal { background: #0b0d14; border: 1px solid #1c2333; border-radius: 24px; padding: 18px; }
         .banner-limit { background: rgba(22, 101, 52, 0.12); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: 14px; padding: 12px; text-align: center; margin-bottom: 12px; }
         .btn-green-main { background: #22c55e; color: #000; border: none; width: 100%; padding: 14px; border-radius: 14px; font-size: 14px; font-weight: 800; cursor: pointer; }
         .qr-section { text-align: center; margin: 16px 0; }
@@ -363,6 +396,18 @@ RAW_HTML = r"""<!DOCTYPE html>
     <div id="app" style="display: none;">
         <!-- TAB 1: TERMINAL -->
         <div id="tab-terminal" class="tab-panel active">
+            <!-- ПАНЕЛЬ КНОПОК ВКЛ И ОБНОВИТЬ -->
+            <div class="control-bar">
+                <button id="btn-toggle" class="btn-ctl btn-toggle-on" onclick="toggleTrading()">
+                    <span id="toggle-dot">●</span>
+                    <span id="toggle-text">Автопилот: ВКЛ</span>
+                </button>
+                <button id="btn-refresh-top" class="btn-ctl btn-refresh" onclick="manualRefresh()">
+                    <span id="refresh-icon">🔄</span>
+                    <span>Обновить</span>
+                </button>
+            </div>
+
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div>
@@ -378,6 +423,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <div class="stat-box"><div class="stat-label">Stop Loss</div><div class="stat-val" style="color: #f87171;">-2.00%</div></div>
                 </div>
             </div>
+
             <div class="card">
                 <div style="font-size: 12px; font-weight: 700; color: #94a3b8; margin-bottom: 6px;">ЖУРНАЛ СКАНИРОВАНИЯ</div>
                 <div id="log-box" class="log-console">Запуск ядра...</div>
@@ -405,7 +451,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- TAB 3: ДЕПОЗИТ USDC -->
+        <!-- TAB 3: DEPOSIT -->
         <div id="tab-deposit" class="tab-panel">
             <div class="deposit-modal">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
@@ -449,6 +495,8 @@ RAW_HTML = r"""<!DOCTYPE html>
         const tg = window.Telegram?.WebApp;
         if(tg) tg.expand();
 
+        let isBotRunning = true;
+
         function openTerminal() {
             document.getElementById('splash-screen').style.display = 'none';
             document.getElementById('app').style.display = 'block';
@@ -461,6 +509,42 @@ RAW_HTML = r"""<!DOCTYPE html>
             document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
             document.getElementById('tab-' + id).classList.add('active');
             if(btn) btn.classList.add('active');
+        }
+
+        async function toggleTrading() {
+            try {
+                const res = await fetch('/api/toggle_trading', { method: 'POST' }).then(r => r.json());
+                if(res.success) {
+                    updateToggleUI(res.trading_active);
+                }
+            } catch(e) {
+                alert("Ошибка смены статуса");
+            }
+        }
+
+        function updateToggleUI(isActive) {
+            isBotRunning = isActive;
+            const btn = document.getElementById('btn-toggle');
+            const txt = document.getElementById('toggle-text');
+            if(isActive) {
+                btn.className = "btn-ctl btn-toggle-on";
+                txt.innerText = "Автопилот: ВКЛ";
+            } else {
+                btn.className = "btn-ctl btn-toggle-off";
+                txt.innerText = "Автопилот: ВЫКЛ";
+            }
+        }
+
+        async function manualRefresh() {
+            const icon = document.getElementById('refresh-icon');
+            icon.style.display = "inline-block";
+            icon.style.transform = "rotate(360deg)";
+            icon.style.transition = "transform 0.5s ease";
+            await refresh();
+            setTimeout(() => {
+                icon.style.transform = "rotate(0deg)";
+                icon.style.transition = "none";
+            }, 500);
         }
 
         function toggleDepositDetails() {
@@ -514,7 +598,12 @@ RAW_HTML = r"""<!DOCTYPE html>
         async function refresh() {
             try {
                 const l = await fetch('/api/logs').then(r => r.json());
-                if(l.success) document.getElementById('log-box').innerText = l.logs.join('\n');
+                if(l.success) {
+                    document.getElementById('log-box').innerText = l.logs.join('\n');
+                    if(l.trading_active !== undefined) {
+                        updateToggleUI(l.trading_active);
+                    }
+                }
 
                 const tgId = tg?.initDataUnsafe?.user?.id || 42882165;
                 const s = await fetch('/api/stats?telegram_id=' + tgId).then(r => r.json());
@@ -541,21 +630,18 @@ RAW_HTML = r"""<!DOCTYPE html>
                                             ${isClosed ? 'ЗАКРЫТА' : 'В РЫНКЕ'}
                                         </div>
                                     </div>
-
                                     <div class="order-grid">
                                         <div>Вход: <span style="color: #fff;">$${t.buy_price.toFixed(3)}</span></div>
                                         <div>Выход: <span style="color: #fff;">${isClosed ? '$' + t.sell_price.toFixed(3) : 'Ожидание'}</span></div>
                                         <div>Объем: <span style="color: #fff;">${t.amount_tokens.toFixed(3)} ${t.token_symbol}</span></div>
                                         <div>Время: <span style="color: #fff;">${t.timestamp}</span></div>
                                     </div>
-
                                     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px; padding-top: 6px; border-top: 1px solid #141b2a;">
                                         <div style="font-size: 11px; color: #64748b;">Результат:</div>
                                         <div style="font-weight: 800; font-size: 13px; color: ${isClosed ? pnlColor : '#60a5fa'};">
                                             ${isClosed ? `${pnlSign}$${t.profit_usdc.toFixed(2)} (${pnlSign}${t.profit_pct.toFixed(2)}%)` : 'Открытая позиция'}
                                         </div>
                                     </div>
-
                                     <div class="order-tx-row">
                                         ${t.buy_tx ? `<a class="tx-link" href="https://solscan.io/tx/${t.buy_tx}" target="_blank">↗ Покупка (Tx)</a>` : ''}
                                         ${t.sell_tx ? `<a class="tx-link" style="color: #4ade80;" href="https://solscan.io/tx/${t.sell_tx}" target="_blank">↗ Продажа (Tx)</a>` : ''}
@@ -567,7 +653,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 }
             } catch(e) {}
         }
-        setInterval(refresh, 4000);
+        setInterval(refresh, 5000);
     </script>
 </body>
 </html>
@@ -582,7 +668,14 @@ async def health_handler(request):
     return web.Response(text="OK")
 
 async def api_get_logs(request):
-    return web.json_response({"success": True, "logs": RECENT_LOGS})
+    return web.json_response({"success": True, "logs": RECENT_LOGS, "trading_active": IS_TRADING_ACTIVE})
+
+async def api_toggle_trading(request):
+    global IS_TRADING_ACTIVE
+    IS_TRADING_ACTIVE = not IS_TRADING_ACTIVE
+    status_str = "ВКЛЮЧЕН" if IS_TRADING_ACTIVE else "ВЫКЛЮЧЕН"
+    add_log(f"⚙️ Автопилот торговли вручную {status_str}.")
+    return web.json_response({"success": True, "trading_active": IS_TRADING_ACTIVE})
 
 async def api_get_stats(request):
     tg_id = int(request.query.get("telegram_id", 42882165))
@@ -720,6 +813,7 @@ async def main():
     app.router.add_get('/health', health_handler)
     app.router.add_get('/api/logs', api_get_logs)
     app.router.add_get('/api/stats', api_get_stats)
+    app.router.add_post('/api/toggle_trading', api_toggle_trading)
     app.router.add_post('/api/verify_deposit', api_verify_deposit)
     app.router.add_post('/webhook', telegram_webhook_handler)
 
