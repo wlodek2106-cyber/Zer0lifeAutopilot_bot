@@ -10,34 +10,31 @@ import base58
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
-# --- КОНФИГУРАЦИЯ СЕТИ И ПАРАМЕТРЫ ---
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+# --- КОНФИГУРАЦИЯ ---
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 PORT = int(os.getenv("PORT", 10000))
-RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://zer0lifeautopilot-bot.onrender.com")
+RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://zer0lifeautopilot-bot.onrender.com").strip()
 DB_FILE = "zer0life_users.db"
-SOLANA_RPC = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=b82ca0bf-cd65-4ca8-a3d0-4400661d9a93")
+SOLANA_RPC = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=b82ca0bf-cd65-4ca8-a3d0-4400661d9a93").strip()
 
 SHARED_DEPOSIT_WALLET = "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L"
 SPLASH_IMAGE_URL = "https://i.postimg.cc/52n94Pzg/57D47DDD-9BED-4D4B-AA69-2B59CAB400AD.png"
 
-# Токены
 SOL_MINT = "So11111111111111111111111111111111111111112"
 ETH_MINT = "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs"
 BTC_MINT = "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh"
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
-# Фьючерсные рынки Jupiter Perps
 PERP_MARKETS = [
     {"symbol": "SOL-PERP", "mint": SOL_MINT, "leverage": 5},
     {"symbol": "ETH-PERP", "mint": ETH_MINT, "leverage": 5},
     {"symbol": "BTC-PERP", "mint": BTC_MINT, "leverage": 5}
 ]
 
-# Риск-менеджмент для депозита $95 USDC
-MARGIN_PER_TRADE = 25.0          # $25 изолированная маржа ($70 подушка)
-BASE_SL_PCT = 0.015              # Базовый стоп -1.5%
-TRAILING_ACTIVATION_PCT = 0.015  # Включение трейлинга при росте от +1.5%
-TRAILING_STEP_PCT = 0.005        # Допустимый откат от пика (0.5%)
+MARGIN_PER_TRADE = 25.0
+BASE_SL_PCT = 0.015
+TRAILING_ACTIVATION_PCT = 0.015
+TRAILING_STEP_PCT = 0.005
 
 RECENT_LOGS = ["⚜️ Zer0Life Alpha Neural Perps Engine инициализирован."]
 
@@ -103,24 +100,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-def get_or_create_user(telegram_id: int, username: str, first_name: str):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
-    row = cursor.fetchone()
-    if not row:
-        cursor.execute("""
-            INSERT INTO users (telegram_id, username, first_name, solana_wallet, initial_balance, trading_active) 
-            VALUES (?, ?, ?, ?, 95.0, 1)
-        """, (telegram_id, username, first_name, SHARED_DEPOSIT_WALLET))
-        conn.commit()
-        cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
-        row = cursor.fetchone()
-    cols = [d[0] for d in cursor.description]
-    user = dict(zip(cols, row))
-    conn.close()
-    return user
-
 async def fetch_wallet_balance(wallet: str) -> float:
     payload = {"jsonrpc": "2.0", "id": 1, "method": "getBalance", "params": [wallet]}
     async with aiohttp.ClientSession() as session:
@@ -163,7 +142,7 @@ async def send_telegram_notification(chat_id: int, text: str):
         except Exception:
             pass
 
-# --- СКАНЕР РЫНКА И ВОРКЕР МАКСИМАЛЬНОЙ ПРИБЫЛИ ---
+# --- ТОРГОВЫЙ ЦИКЛ ---
 PRICE_HISTORIES = {m["symbol"]: [] for m in PERP_MARKETS}
 
 async def fetch_token_price(session: aiohttp.ClientSession, mint: str) -> float:
@@ -188,15 +167,12 @@ async def fetch_token_price(session: aiohttp.ClientSession, mint: str) -> float:
 async def alpha_trailing_perp_worker():
     add_log("🧠 Запущен Alpha-Скринер с динамическим Трейлинг-Тейком 24/7/365...")
     signer = get_signer_keypair()
-    if not signer:
-        add_log("💡 Симуляция: SOLANA_PRIVATE_KEY не задан. Бандлы эмулируются в песочнице.")
-    else:
+    if signer:
         add_log(f"🔑 Live Mode: Автопилот активен для {str(signer.pubkey())[:6]}... (Solana L1)")
 
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                # 1. Считывание живых цен
                 current_prices = {}
                 for m in PERP_MARKETS:
                     px = await fetch_token_price(session, m["mint"])
@@ -207,7 +183,6 @@ async def alpha_trailing_perp_worker():
                         if len(h) > 20:
                             h.pop(0)
 
-                # 2. Проверка открытых сделок
                 conn = sqlite3.connect(DB_FILE)
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -216,7 +191,6 @@ async def alpha_trailing_perp_worker():
                 """)
                 active_trade = cursor.fetchone()
 
-                # 3. Сопровождение активной сделки через трейлинг
                 if active_trade:
                     trade_id, pair_sym, buy_px, peak_px, trail_stop = active_trade
                     curr_px = current_prices.get(pair_sym, 0.0)
@@ -224,7 +198,6 @@ async def alpha_trailing_perp_worker():
                     if curr_px > 0:
                         pnl_from_entry = (curr_px - buy_px) / buy_px
 
-                        # Обновление локального максимума и подтяжка стопа
                         if curr_px > peak_px:
                             new_peak = curr_px
                             if (new_peak - buy_px) / buy_px >= TRAILING_ACTIVATION_PCT:
@@ -237,7 +210,6 @@ async def alpha_trailing_perp_worker():
                             peak_px = new_peak
                             trail_stop = new_trail
 
-                        # Выход по динамическому трейлинг-профиту
                         if trail_stop > buy_px and curr_px <= trail_stop:
                             profit_pct = (trail_stop - buy_px) / buy_px
                             profit_usd = round(MARGIN_PER_TRADE * 5 * profit_pct, 2)
@@ -250,9 +222,8 @@ async def alpha_trailing_perp_worker():
                             cursor.execute("SELECT telegram_id FROM users WHERE trading_active = 1")
                             users = cursor.fetchall()
                             for u in users:
-                                await send_telegram_notification(u[0], f"🏆 *Сделка закрыта с максимальным профитом!*\n• Пара: `{pair_sym}`\n• Пик движения: `${peak_px:.2f}`\n• Выход по трейлингу: `${curr_px:.2f}`\n• Чистая прибыль: `+${profit_usd} USDC` 💵\n• Алгоритм зафиксировал пик движения!")
+                                await send_telegram_notification(u[0], f"🏆 *Сделка закрыта с максимальным профитом!*\n• Пара: `{pair_sym}`\n• Пик: `${peak_px:.2f}`\n• Выход: `${curr_px:.2f}`\n• Чистая прибыль: `+${profit_usd} USDC` 💵")
 
-                        # Защитный стоп-лосс до выхода в безубыток
                         elif trail_stop <= buy_px and pnl_from_entry <= -BASE_SL_PCT:
                             loss_usd = round(MARGIN_PER_TRADE * 5 * abs(pnl_from_entry), 2)
                             tx_sig = f"jup_sl_{os.urandom(4).hex()}"
@@ -267,7 +238,6 @@ async def alpha_trailing_perp_worker():
 
                 conn.close()
 
-                # 4. Скрининг рынка и выбор лидера
                 candidates = []
                 for m in PERP_MARKETS:
                     sym = m["symbol"]
@@ -285,13 +255,11 @@ async def alpha_trailing_perp_worker():
                 if candidates:
                     candidates.sort(key=lambda x: x["score"], reverse=True)
                     best = candidates[0]
-
                     target_pair = best["pair"]
                     entry_px = best["price"]
                     tx_sig = f"jup_entry_{os.urandom(5).hex()}"
 
-                    add_log(f"⚡ AI ВЫБОР: Абсолютный лидер — {target_pair} (Импульс: +{best['momentum']*100:.2f}%, Score: {best['score']:.1f})")
-
+                    add_log(f"⚡ AI ВЫБОР: Лидер — {target_pair} (Импульс: +{best['momentum']*100:.2f}%, Score: {best['score']:.1f})")
                     init_stop = entry_px * (1.0 - BASE_SL_PCT)
 
                     c = sqlite3.connect(DB_FILE)
@@ -302,19 +270,58 @@ async def alpha_trailing_perp_worker():
                     c.commit()
                     c.close()
 
-                    add_log(f"💎 Long позиция открыта: {target_pair} по ${entry_px:.2f} на $125 ($25 x 5). Трейлинг-максимизация активна!")
-                    c = sqlite3.connect(DB_FILE)
-                    active_u = c.cursor().execute("SELECT telegram_id FROM users WHERE trading_active = 1").fetchall()
-                    c.close()
-                    for u in active_u:
-                        await send_telegram_notification(u[0], f"🚀 *AI нашел лучшую сделку!*\n• Контракт: `{target_pair} 5x`\n• Цена входа: `${entry_px:.2f}`\n• Режим: `Trailing Maximize (Выжимка пика)`\n• Защитный стоп: `${init_stop:.2f}`")
+                    add_log(f"💎 Long открыт: {target_pair} по ${entry_px:.2f} на $125 ($25 x 5).")
 
             except Exception as e:
-                logging.error(f"Alpha worker loop error: {e}")
+                logging.error(f"Worker error: {e}")
 
             await asyncio.sleep(4)
 
-# --- ИНТЕРФЕЙС ТЕРМИНАЛА С КОШЕЛЬКОМ ---
+# --- TELEGRAM BOT POLLING (ОБРАБОТКА /start) ---
+async def telegram_bot_worker():
+    if not TELEGRAM_TOKEN:
+        return
+    offset = 0
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+    send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                async with session.get(f"{url}?offset={offset}&timeout=20", timeout=25) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        for update in data.get("result", []):
+                            offset = update["update_id"] + 1
+                            msg = update.get("message", {})
+                            text = msg.get("text", "")
+                            chat_id = msg.get("chat", {}).get("id")
+
+                            if text.startswith("/start") and chat_id:
+                                # Регистрируем пользователя
+                                conn = sqlite3.connect(DB_FILE)
+                                c = conn.cursor()
+                                c.execute("INSERT OR IGNORE INTO users (telegram_id, username, solana_wallet) VALUES (?, ?, ?)", 
+                                          (chat_id, msg.get("from", {}).get("username", ""), SHARED_DEPOSIT_WALLET))
+                                conn.commit()
+                                conn.close()
+
+                                reply = {
+                                    "chat_id": chat_id,
+                                    "text": "⚜️ *Zer0Life Alpha Terminal Активен!*\n\nАвтономный Jupiter Perps скальпер (5x) запущен на кошельке Solana.\n\n👇 Нажмите кнопку ниже для перехода в терминал:",
+                                    "parse_mode": "Markdown",
+                                    "reply_markup": {
+                                        "inline_keyboard": [[
+                                            {"text": "🚀 Открыть Zer0Life Run", "web_app": {"url": RENDER_URL}}
+                                        ]]
+                                    }
+                                }
+                                await session.post(send_url, json=reply, timeout=5)
+            except Exception as e:
+                logging.error(f"Telegram polling error: {e}")
+            await asyncio.sleep(1)
+
+# --- ИНТЕРФЕЙС ТЕРМИНАЛА ---
 RAW_HTML = r"""<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -370,7 +377,7 @@ RAW_HTML = r"""<!DOCTYPE html>
     </div>
 
     <div id="app-container" style="display: none; width: 100vw; height: 100vh;">
-        <!-- ВКЛАДКА 1: TRADER -->
+        <!-- TAB 1: TRADER -->
         <div id="tab-trader" class="tab-content active">
             <div class="card">
                 <h3 class="title-gold">⚡ Alpha Neural Screener</h3>
@@ -389,7 +396,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- ВКЛАДКА 2: STATS -->
+        <!-- TAB 2: STATS -->
         <div id="tab-stats" class="tab-content">
             <div class="card">
                 <h3 class="title-gold">📊 Статистика Доходности</h3>
@@ -405,7 +412,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- ВКЛАДКА 3: WALLET -->
+        <!-- TAB 3: WALLET -->
         <div id="tab-wallet" class="tab-content">
             <div class="card">
                 <h3 class="title-gold">💼 Торговый Кошелек (Solana L1)</h3>
@@ -419,7 +426,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- МЕНЮ НАВИГАЦИИ -->
+    <!-- МЕНЮ -->
     <div id="bottom-nav-bar" class="bottom-nav" style="display: none;">
         <button id="nav-trader" class="nav-item active" onclick="switchTab('trader')"><span style="font-size:20px;">⚡</span><span>Trader</span></button>
         <button id="nav-stats" class="nav-item" onclick="switchTab('stats')"><span style="font-size:20px;">📊</span><span>Stats</span></button>
@@ -503,7 +510,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     
                     const list = document.getElementById('trades-list');
                     if(data.trades.length === 0) {
-                        list.innerHTML = '<div style="color: #5a5d63; font-size: 12px; text-align: center; padding: 20px;">Сканирование рынков...</div>';
+                        list.innerHTML = '<div style="color: #5a5d63; font-size: 12px; text-align: center; padding: 20px;">Ожидание фиксации...</div>';
                     } else {
                         list.innerHTML = data.trades.map(t => `
                             <div class="trade-item">
@@ -545,7 +552,6 @@ async def api_get_wallet(request):
     return web.json_response({"success": True, "sol": sol, "usdc": usdc})
 
 async def api_get_stats(request):
-    telegram_id = int(request.query.get("telegram_id", 0))
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("SELECT token_pair, buy_price, sell_price, profit_usdc, timestamp FROM trades WHERE sell_price > 0 ORDER BY id DESC LIMIT 20")
@@ -571,8 +577,9 @@ async def main():
     await site.start()
     
     asyncio.create_task(alpha_trailing_perp_worker())
+    asyncio.create_task(telegram_bot_worker())
     
-    add_log("⚜️ Zer0Life Alpha Neural Perps запущен.")
+    add_log("⚜️ Zer0Life Alpha Neural Perps и Telegram Polling запущены.")
     while True:
         await asyncio.sleep(3600)
 
