@@ -7,6 +7,7 @@ import logging
 from datetime import datetime
 import json
 import base58
+import base64
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -26,9 +27,9 @@ USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
 # Риск-менеджмент ($25 реального USDC на вход)
 TRADE_AMOUNT_USDC = 25.0
-TRADE_AMOUNT_RAW = int(TRADE_AMOUNT_USDC * 1_000_000) # USDC 6 decimals
-TP_PCT = 0.015  # +1.5% фиксация прибыли
-SL_PCT = 0.012  # -1.2% стоп-лосс
+TRADE_AMOUNT_RAW = int(TRADE_AMOUNT_USDC * 1_000_000)  # USDC 6 decimals
+TP_PCT = 0.012  # +1.2% Тейк-профит
+SL_PCT = 0.010  # -1.0% Стоп-лосс
 
 RECENT_LOGS = ["⚜️ Zer0Life Live DEX Engine запущен."]
 
@@ -47,12 +48,14 @@ from solders.transaction import VersionedTransaction
 def get_signer_keypair():
     pk_env = os.getenv("SOLANA_PRIVATE_KEY", "").strip()
     if not pk_env:
+        add_log("❌ Ошибка: SOLANA_PRIVATE_KEY пуст в переменных Render!")
         return None
     try:
-        if pk_env.startswith("["):
-            return Keypair.from_bytes(bytes(json.loads(pk_env)))
+        pk_clean = pk_env.replace('"', '').replace("'", "").strip()
+        if pk_clean.startswith("["):
+            return Keypair.from_bytes(bytes(json.loads(pk_clean)))
         else:
-            return Keypair.from_bytes(base58.b58decode(pk_env))
+            return Keypair.from_bytes(base58.b58decode(pk_clean))
     except Exception as e:
         add_log(f"⚠️ Ошибка разбора приватного ключа: {e}")
         return None
@@ -110,66 +113,68 @@ async def send_telegram_notification(chat_id: int, text: str):
             pass
 
 # --- РЕАЛЬНОЕ ИСПОЛНЕНИЕ ЧЕРЕЗ JUPITER SWAP API V6 ---
+API_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "application/json"
+}
+
 async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, output_mint: str, amount_raw: int, signer: Keypair) -> str:
     """Выполняет реальный своп в блокчейне Solana через Jupiter v6."""
     try:
         user_pubkey = str(signer.pubkey())
-        
-        # 1. Получаем котировку (Quote)
-        quote_url = f"https://quote-api.jup.ag/v6/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount_raw}&slippageBps=50"
-        async with session.get(quote_url, timeout=5) as resp:
+
+        # 1. Запрос котировки (Quote)
+        quote_url = f"https://quote-api.jup.ag/v6/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount_raw}&slippageBps=100"
+        async with session.get(quote_url, headers=API_HEADERS, timeout=6) as resp:
             if resp.status != 200:
                 err_text = await resp.text()
-                add_log(f"❌ Ошибка Quote API: {err_text[:80]}")
+                add_log(f"❌ Jupiter Quote ({resp.status}): {err_text[:70]}")
                 return ""
             quote_data = await resp.json()
 
-        # 2. Получаем сериализованную транзакцию
+        # 2. Получение сериализованной транзакции (Swap)
         swap_payload = {
             "quoteResponse": quote_data,
             "userPublicKey": user_pubkey,
             "wrapAndUnwrapSol": True,
             "dynamicComputeUnitLimit": True,
-            "prioritizationFeeLamports": "auto"
+            "prioritizationFeeLamports": 50000
         }
-        async with session.post("https://quote-api.jup.ag/v6/swap", json=swap_payload, timeout=6) as resp:
+        async with session.post("https://quote-api.jup.ag/v6/swap", headers=API_HEADERS, json=swap_payload, timeout=8) as resp:
             if resp.status != 200:
                 err_text = await resp.text()
-                add_log(f"❌ Ошибка Swap API: {err_text[:80]}")
+                add_log(f"❌ Jupiter Swap ({resp.status}): {err_text[:70]}")
                 return ""
             swap_res = await resp.json()
             swap_tx_b64 = swap_res.get("swapTransaction")
 
         if not swap_tx_b64:
+            add_log("❌ Ошибка: пустой swapTransaction от Jupiter")
             return ""
 
-        # 3. Подписываем транзакцию
-        raw_tx_bytes = base58.b58decode(swap_tx_b64) if not swap_tx_b64.endswith("=") else None
-        if not raw_tx_bytes:
-            import base64
-            raw_tx_bytes = base64.b64decode(swap_tx_b64)
-
+        # 3. Десериализация и подпись через VersionedTransaction
+        raw_tx_bytes = base64.b64decode(swap_tx_b64)
         tx = VersionedTransaction.from_bytes(raw_tx_bytes)
-        signature = signer.sign_message(bytes(tx.message))
-        signed_tx = VersionedTransaction.populate(tx.message, [signature])
+        signed_tx = VersionedTransaction(tx.message, [signer])
 
-        # 4. Отправляем в сеть через Helius RPC
-        import base64
+        # 4. Отправка в сеть через RPC
         signed_b64 = base64.b64encode(bytes(signed_tx)).decode("utf-8")
         rpc_payload = {
             "jsonrpc": "2.0",
             "id": 1,
             "method": "sendTransaction",
-            "params": [signed_b64, {"skipPreflight": True, "encoding": "base64", "maxRetries": 3}]
+            "params": [signed_b64, {"skipPreflight": False, "encoding": "base64", "preflightCommitment": "confirmed"}]
         }
-        async with session.post(SOLANA_RPC, json=rpc_payload, timeout=8) as resp:
+        async with session.post(SOLANA_RPC, json=rpc_payload, timeout=10) as resp:
             if resp.status == 200:
                 rpc_res = await resp.json()
-                tx_sig = rpc_res.get("result")
-                if tx_sig:
-                    return str(tx_sig)
+                if "result" in rpc_res and rpc_res["result"]:
+                    return str(rpc_res["result"])
                 else:
-                    add_log(f"❌ RPC отказ: {rpc_res.get('error')}")
+                    err_msg = rpc_res.get("error", {}).get("message", "RPC Error")
+                    add_log(f"❌ RPC отказ: {err_msg}")
+            else:
+                add_log(f"❌ Ошибка RPC HTTP {resp.status}")
     except Exception as e:
         add_log(f"⚠️ Ошибка выполнения свопа: {e}")
     return ""
@@ -177,20 +182,28 @@ async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, 
 async def get_sol_price(session: aiohttp.ClientSession) -> float:
     try:
         url = "https://api.jup.ag/price/v2?ids=So11111111111111111111111111111111111111112"
-        async with session.get(url, timeout=3) as resp:
+        async with session.get(url, headers=API_HEADERS, timeout=4) as resp:
             if resp.status == 200:
                 d = await resp.json()
                 return float(d.get("data", {}).get(SOL_MINT, {}).get("price", 0.0))
     except Exception:
         pass
+    try:
+        url = "https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112"
+        async with session.get(url, timeout=4) as resp:
+            if resp.status == 200:
+                d = await resp.json()
+                return float(d.get("pairs", [{}])[0].get("priceUsd", 0.0))
+    except Exception:
+        pass
     return 0.0
 
-# --- БОЕВОЙ ТОРГОВЫЙ ЦИКЛ (БЕЗ ФЕЙКОВ) ---
+# --- БОЕВОЙ ТОРГОВЫЙ ЦИКЛ ---
 async def real_trading_worker():
-    add_log("🚀 Запуск БОЕВОГО ончейн-исполнителя (Jupiter Real Swaps)...")
+    add_log("🚀 Инициализация ончейн-исполнителя Jupiter...")
     signer = get_signer_keypair()
     if not signer:
-        add_log("❌ ОШИБКА: SOLANA_PRIVATE_KEY не задан! Реальные транзакции невозможны.")
+        add_log("❌ ОСТАНОВКА: Проверьте SOLANA_PRIVATE_KEY на Render!")
         return
 
     wallet_addr = str(signer.pubkey())
@@ -207,7 +220,7 @@ async def real_trading_worker():
                     continue
 
                 price_history.append(current_price)
-                if len(price_history) > 25:
+                if len(price_history) > 20:
                     price_history.pop(0)
 
                 conn = sqlite3.connect(DB_FILE)
@@ -215,15 +228,14 @@ async def real_trading_worker():
                 cursor.execute("SELECT id, buy_price, amount_lamports, buy_tx FROM trades WHERE sell_price = 0 LIMIT 1")
                 active_trade = cursor.fetchone()
 
-                # 1. Если позиция открыта — проверяем тейк/стоп для РЕАЛЬНОЙ продажи
+                # 1. Позиция открыта — проверяем тейк и стоп
                 if active_trade:
                     trade_id, entry_px, lamports, buy_tx = active_trade
                     diff_pct = (current_price - entry_px) / entry_px
+                    add_log(f"📊 Позиция: SOL ${current_price:.2f} \vert{} Вход: ${entry_px:.2f} (PnL: {diff_pct*100:+.2f}%)")
 
-                    # Условие закрытия: TP (+1.5%) или SL (-1.2%)
                     if diff_pct >= TP_PCT or diff_pct <= -SL_PCT:
-                        add_log(f"🔄 СИГНАЛ ВЫХОДА: Отправка РЕАЛЬНОГО свопа SOL -> USDC в блокчейн...")
-                        
+                        add_log("🔄 Сигнал выхода: отправка SOL -> USDC в Jupiter...")
                         sell_sig = await execute_jupiter_swap(
                             session=session,
                             input_mint=SOL_MINT,
@@ -237,15 +249,15 @@ async def real_trading_worker():
                             cursor.execute("UPDATE trades SET sell_price = ?, profit_usdc = ?, sell_tx = ? WHERE id = ?", (current_price, pnl_usd, sell_sig, trade_id))
                             conn.commit()
 
-                            add_log(f"✅ УСПЕХ: Позиция закрыта в блокчейне! PnL: {'+' if pnl_usd >= 0 else ''}{pnl_usd} USDC. TX: {sell_sig[:10]}...")
-                            add_log(f"🔗 Ссылка: https://solscan.io/tx/{sell_sig}")
+                            add_log(f"✅ Позиция закрыта! PnL: {'+' if pnl_usd >= 0 else ''}{pnl_usd} USDC. TX: {sell_sig[:10]}...")
+                            add_log(f"🔗 Solscan: https://solscan.io/tx/{sell_sig}")
 
                             cursor.execute("SELECT telegram_id FROM users WHERE trading_active = 1")
                             users = cursor.fetchall()
                             for u in users:
-                                await send_telegram_notification(u[0], f"🎯 *Реальная сделка закрыта!*\n• Вход: `${entry_px:.2f}` -> Выход: `${current_price:.2f}`\n• PnL: `+{pnl_usd} USDC` 💵\n• [Смотреть транзакцию в Solscan](https://solscan.io/tx/{sell_sig})")
+                                await send_telegram_notification(u[0], f"🎯 *Сделка закрыта!*\n• Вход: `${entry_px:.2f}` -> Выход: `${current_price:.2f}`\n• PnL: `+{pnl_usd} USDC` 💵\n• [Смотреть транзакцию в Solscan](https://solscan.io/tx/{sell_sig})")
                         else:
-                            add_log("⚠️ Ошибка отправки транзакции закрытия в сеть Solana. Повтор...")
+                            add_log("⚠️ Ошибка отправки транзакции закрытия в Solana. Повтор...")
 
                     conn.close()
                     await asyncio.sleep(5)
@@ -253,15 +265,15 @@ async def real_trading_worker():
 
                 conn.close()
 
-                # 2. Если свободен — ищем импульс для РЕАЛЬНОЙ покупки
-                if len(price_history) >= 8:
-                    avg_p = sum(price_history[-8:-1]) / 7
+                # 2. Позиции нет — скрининг рынка
+                if len(price_history) >= 4:
+                    avg_p = sum(price_history[-4:-1]) / 3
                     momentum = (current_price - avg_p) / avg_p
+                    add_log(f"🔍 Скринер: SOL ${current_price:.2f} | Импульс: {momentum*100:+.3f}%")
 
-                    # Входим при импульсе от +0.10%
-                    if momentum >= 0.0010:
-                        add_log(f"⚡ ОБНАРУЖЕН ИМПУЛЬС (+{momentum*100:.2f}%): Отправка РЕАЛЬНОГО свопа 25 USDC -> SOL...")
-                        
+                    # Вход при фиксации импульса
+                    if momentum >= 0.0003:
+                        add_log(f"⚡ Вход по сигналу (+{momentum*100:.3f}%): Отправка 25 USDC -> SOL в Jupiter...")
                         buy_sig = await execute_jupiter_swap(
                             session=session,
                             input_mint=USDC_MINT,
@@ -271,7 +283,6 @@ async def real_trading_worker():
                         )
 
                         if buy_sig:
-                            # Рассчитываем количество полученных SOL
                             sol_bought_lamports = int((TRADE_AMOUNT_USDC / current_price) * 1_000_000_000)
 
                             c = sqlite3.connect(DB_FILE)
@@ -282,16 +293,16 @@ async def real_trading_worker():
                             c.commit()
                             c.close()
 
-                            add_log(f"💎 ПОКУПКА В СЕТИ ПОДТВЕРЖДЕНА! Куплен SOL на 25 USDC по ${current_price:.2f}")
-                            add_log(f"🔗 Ссылка на покупку: https://solscan.io/tx/{buy_sig}")
+                            add_log(f"💎 ПОКУПКА В СЕТИ ПОДТВЕРЖДЕНА! SOL куплен по ${current_price:.2f}")
+                            add_log(f"🔗 Solscan TX: https://solscan.io/tx/{buy_sig}")
 
                             c = sqlite3.connect(DB_FILE)
                             active_u = c.cursor().execute("SELECT telegram_id FROM users WHERE trading_active = 1").fetchall()
                             c.close()
                             for u in active_u:
-                                await send_telegram_notification(u[0], f"🚀 *Реальная покупка на Phantom!*\n• Куплен `SOL` за `25 USDC`\n• Цена: `${current_price:.2f}`\n• [Транзакция в Solscan](https://solscan.io/tx/{buy_sig})")
+                                await send_telegram_notification(u[0], f"🚀 *Покупка SOL на Phantom!*\n• Сумма: `25 USDC`\n• Цена: `${current_price:.2f}`\n• [Транзакция в Solscan](https://solscan.io/tx/{buy_sig})")
                         else:
-                            add_log("⚠️ Не удалось выполнить покупку (проверьте наличие газа SOL на кошельке).")
+                            add_log("⚠️ Своп не выполнен. Проверьте баланс SOL на газ.")
 
             except Exception as e:
                 logging.error(f"Trading loop error: {e}")
@@ -654,15 +665,15 @@ async def main():
     app.router.add_get('/api/logs', api_get_logs)
     app.router.add_get('/api/stats', api_get_stats)
     app.router.add_post('/api/verify_deposit', api_verify_deposit)
-    
+
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
-    
+
     asyncio.create_task(real_trading_worker())
     asyncio.create_task(telegram_bot_worker())
-    
+
     add_log("⚜️ Zer0Life DEX Live Engine и Telegram Polling запущены.")
     while True:
         await asyncio.sleep(3600)
