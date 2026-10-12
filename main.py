@@ -45,7 +45,7 @@ SL_PCT = 0.020          # -2.0%
 MAX_SLIPPAGE_BPS = 40   # 0.40%
 
 IS_TRADING_ACTIVE = True  # Глобальный флаг автопилота (ВКЛ / ВЫКЛ)
-RECENT_LOGS = ["⚜️ Multi-Asset Engine v3.6 инициализирован."]
+RECENT_LOGS = ["⚜️ Multi-Asset Engine v3.6 (Real Trading) инициализирован."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -182,9 +182,38 @@ async def get_token_prices(session: aiohttp.ClientSession) -> dict:
         add_log(f"⚠️ Ошибка запроса цен: {str(e)[:40]}")
     return prices
 
+async def get_wallet_usdc_balance(session: aiohttp.ClientSession, wallet_pubkey: str) -> float:
+    payload = {
+        "jsonrpc": "2.0", "id": 1,
+        "method": "getTokenAccountsByOwner",
+        "params": [
+            wallet_pubkey,
+            {"mint": USDC_MINT},
+            {"encoding": "jsonParsed"}
+        ]
+    }
+    try:
+        async with session.post(SOLANA_RPC, json=payload, timeout=6) as resp:
+            data = await resp.json()
+            accounts = data.get("result", {}).get("value", [])
+            if accounts:
+                info = accounts[0]["account"]["data"]["parsed"]["info"]["tokenAmount"]
+                return float(info.get("uiAmount", 0.0) or 0.0)
+    except Exception:
+        pass
+    return 0.0
+
 async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, output_mint: str, amount_raw: int, signer: Keypair) -> str:
     try:
         user_pubkey = str(signer.pubkey())
+        
+        # Проверяем реальный баланс USDC перед покупкой
+        if input_mint == USDC_MINT:
+            bal = await get_wallet_usdc_balance(session, user_pubkey)
+            if bal < TRADE_AMOUNT_USDC:
+                add_log(f"❌ Недостаточно USDC на кошельке ({bal:.2f} USDC). Нужно минимум ${TRADE_AMOUNT_USDC}.")
+                return ""
+
         headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
         quote_url = f"https://api.jup.ag/swap/v1/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount_raw}&slippageBps={MAX_SLIPPAGE_BPS}"
         async with session.get(quote_url, headers=headers, timeout=aiohttp.ClientTimeout(total=6)) as resp:
@@ -220,7 +249,7 @@ async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, 
             "jsonrpc": "2.0",
             "id": 1,
             "method": "sendTransaction",
-            "params": [signed_b64, {"skipPreflight": True, "encoding": "base64"}]
+            "params": [signed_b64, {"skipPreflight": False, "encoding": "base64"}]
         }
         async with session.post(SOLANA_RPC, json=rpc_payload, timeout=aiohttp.ClientTimeout(total=8)) as resp:
             if resp.status == 200:
@@ -229,18 +258,20 @@ async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, 
                 if sig:
                     return str(sig)
                 else:
-                    add_log(f"⚠️ Ошибка отправки Tx: {data.get('error')}")
+                    add_log(f"⚠️ Ошибка отправки Tx в блокчейн: {data.get('error')}")
     except Exception as e:
         add_log(f"⚠️ Исключение в execute_jupiter_swap: {e}")
     return ""
 
 async def real_trading_worker():
     global IS_TRADING_ACTIVE
-    add_log("🤖 Сканер Топ-5 активов запущен.")
     signer = get_signer_keypair()
     if not signer:
         add_log("❌ Торговый воркер остановлен: отсутствует приватный ключ.")
         return
+
+    wallet_addr = str(signer.pubkey())
+    add_log(f"🤖 Сканер запущен. Кошелек: {wallet_addr[:6]}...{wallet_addr[-4:]}")
 
     history = {sym: [] for sym in WATCHLIST}
     cooldown_until = 0
@@ -286,10 +317,10 @@ async def real_trading_worker():
                             c.execute("UPDATE trades SET sell_price = ?, profit_usdc = ?, sell_tx = ? WHERE id = ?", 
                                       (cur_px, profit_usd, sell_sig, trade_id))
                             conn.commit()
-                            add_log(f"✅ Ордер закрыт! PnL: {profit_usd:+.2f} USDC | Tx: {sell_sig[:10]}...")
+                            add_log(f"✅ Ордер закрыт в блокчейне! Tx: {sell_sig[:10]}...")
                             cooldown_until = now_ts + 30
                         else:
-                            add_log(f"⚠️ Ошибка продажи {sym}, повторим позже...")
+                            add_log(f"⚠️ Ошибка продажи {sym} в сети, повторим позже...")
                     conn.close()
                     await asyncio.sleep(20)
                     continue
@@ -304,13 +335,13 @@ async def real_trading_worker():
                     await asyncio.sleep(20)
                     continue
 
-                # ГАРАНТИРОВАННЫЙ ТЕСТОВЫЙ ВХОД СРАЗУ ПРИ СТАРТЕ
+                # РЕАЛЬНЫЙ ТЕСТОВЫЙ ВХОД СРАЗУ ПРИ СТАРТЕ
                 if not forced_test_done and "SOL" in prices:
                     forced_test_done = True
                     sym = "SOL"
                     cur_p = prices[sym]
                     mint = WATCHLIST[sym]["mint"]
-                    add_log(f"🚀 ТЕСТОВЫЙ ВХОД: Покупка {sym} на ${TRADE_AMOUNT_USDC} USDC...")
+                    add_log(f"🚀 РЕАЛЬНЫЙ ВХОД: Покупка {sym} на ${TRADE_AMOUNT_USDC} USDC в сети...")
                     buy_sig = await execute_jupiter_swap(session, USDC_MINT, mint, TRADE_AMOUNT_RAW, signer)
                     if buy_sig:
                         bought_tokens = TRADE_AMOUNT_USDC / cur_p
@@ -321,9 +352,9 @@ async def real_trading_worker():
                             (sym, mint, cur_p, bought_tokens, buy_sig, datetime.now().strftime('%H:%M:%S')))
                         c_in.commit()
                         c_in.close()
-                        add_log(f"💎 Успешно куплен {sym}! Tx: {buy_sig[:12]}...")
+                        add_log(f"💎 Успешно куплен {sym} за реальные USDC! Tx: {buy_sig[:12]}...")
                     else:
-                        add_log(f"❌ Ошибка тестового свопа SOL. Проверьте баланс SOL на газе и приватный ключ.")
+                        add_log(f"❌ Ошибка блокчейн-свопа SOL. Проверьте баланс USDC и SOL на газе.")
                     await asyncio.sleep(20)
                     continue
 
@@ -357,7 +388,7 @@ async def real_trading_worker():
                         add_log(f"💎 Успешно куплен {sym}! Tx: {buy_sig[:12]}...")
                         cooldown_until = now_ts + 30
                     else:
-                        add_log(f"⚠️ Ошибка покупки {sym} через Jupiter.")
+                        add_log(f"⚠️ Ошибка покупки {sym} в сети.")
 
             except Exception as e:
                 add_log(f"⚠️ Ошибка сканера: {e}")
