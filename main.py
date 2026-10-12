@@ -22,7 +22,7 @@ DB_DIR = "/var/data"
 DB_FILE = os.path.join(DB_DIR, "zer0life_users.db") if os.path.exists(DB_DIR) else "zer0life_users.db"
 
 SOLANA_RPC = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=b82ca0bf-cd65-4ca8-a3d0-4400661d9a93").strip()
-SHARED_DEPOSIT_WALLET = os.getenv("DEPOSIT_WALLET", "HWkraaCqG3iY7hMbBZMsrYrChmctsvcmPdumGE8RVAix").strip()
+SHARED_DEPOSIT_WALLET = os.getenv("DEPOSIT_WALLET", "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L").strip()
 SPLASH_IMAGE_URL = "https://i.postimg.cc/52n94Pzg/57D47DDD-9BED-4D4B-AA69-2B59CAB400AD.png"
 
 # Токен USDC и лимиты депозита
@@ -45,7 +45,7 @@ TP_PCT = 0.035          # +3.5%
 SL_PCT = 0.020          # -2.0%
 MAX_SLIPPAGE_BPS = 40   # 0.40%
 
-RECENT_LOGS = ["⚜️ Multi-Asset Engine v3.3 (Order Analytics) инициализирован."]
+RECENT_LOGS = ["⚜️ Multi-Asset Engine v3.4 инициализирован."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -294,7 +294,7 @@ async def real_trading_worker():
 
             await asyncio.sleep(25)
 
-# --- ИНТЕРФЕЙС ТЕРМИНАЛА, СТАТИСТИКИ И ДЕПОЗИТА ---
+# --- ИНТЕРФЕЙС БЕЗ СТОРОННИХ БАННЕРОВ DAO ---
 RAW_HTML = r"""<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -323,7 +323,6 @@ RAW_HTML = r"""<!DOCTYPE html>
         .stat-val { color: #f8fafc; font-size: 15px; font-weight: 800; margin-top: 2px; font-family: monospace; }
         .log-console { background: #05070a; border: 1px solid #141926; border-radius: 16px; padding: 12px; font-family: monospace; font-size: 11px; color: #4ade80; height: 280px; overflow-y: auto; white-space: pre-line; line-height: 1.5; }
 
-        /* КАРТОЧКА СДЕЛКИ В СТАТИСТИКЕ */
         .order-card {
             background: #080a11; border: 1px solid #192033; border-radius: 14px;
             padding: 12px; margin-bottom: 8px; font-family: monospace; font-size: 12px;
@@ -337,11 +336,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         .order-tx-row { display: flex; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed #161c2d; font-size: 10px; }
         .tx-link { color: #60a5fa; text-decoration: none; display: inline-flex; align-items: center; gap: 2px; }
 
-        /* ДЕПОЗИТ */
-        .toast-banner { background: rgba(14, 21, 26, 0.9); border: 1px solid #15803d; border-radius: 16px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
-        .toast-title { color: #22c55e; font-size: 11px; font-weight: 800; }
-        .toast-sub { color: #cbd5e1; font-size: 11px; margin-top: 2px; }
-        .deposit-modal { background: #0b0d14; border: 1px solid #1c2333; border-radius: 24px; padding: 18px; }
+        .deposit-modal { background: #0b0d14; border: 1px solid #1c2333; border-radius: 24px; padding: 18px; margin-top: 6px; }
         .banner-limit { background: rgba(22, 101, 52, 0.12); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: 14px; padding: 12px; text-align: center; margin-bottom: 12px; }
         .btn-green-main { background: #22c55e; color: #000; border: none; width: 100%; padding: 14px; border-radius: 14px; font-size: 14px; font-weight: 800; cursor: pointer; }
         .qr-section { text-align: center; margin: 16px 0; }
@@ -366,7 +361,7 @@ RAW_HTML = r"""<!DOCTYPE html>
     </div>
 
     <div id="app" style="display: none;">
-        <!-- TAB 1: ТЕРМИНАЛ -->
+        <!-- TAB 1: TERMINAL -->
         <div id="tab-terminal" class="tab-panel active">
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -389,7 +384,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- TAB 2: СТАТИСТИКА ОРДЕРОВ -->
+        <!-- TAB 2: STATS -->
         <div id="tab-stats" class="tab-panel">
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -412,14 +407,6 @@ RAW_HTML = r"""<!DOCTYPE html>
 
         <!-- TAB 3: ДЕПОЗИТ USDC -->
         <div id="tab-deposit" class="tab-panel">
-            <div class="toast-banner">
-                <span style="font-size: 20px;">🔥</span>
-                <div>
-                    <div class="toast-title">DAO VOTE BURN</div>
-                    <div class="toast-sub">CyberRunner burned 10 ZRL for DAO vote!</div>
-                </div>
-            </div>
-
             <div class="deposit-modal">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
                     <div style="font-size: 17px; font-weight: 800; color: #fff;">Deposit Crypto (USDC Top-Up)</div>
@@ -597,13 +584,10 @@ async def health_handler(request):
 async def api_get_logs(request):
     return web.json_response({"success": True, "logs": RECENT_LOGS})
 
-# --- ПОДРОБНАЯ СТАТИСТИКА ВСЕХ ОРДЕРОВ ---
 async def api_get_stats(request):
     tg_id = int(request.query.get("telegram_id", 42882165))
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    
-    # Извлекаем все ордера (и закрытые, и текущие в рынке)
     c.execute("""SELECT id, token_symbol, buy_price, amount_tokens, sell_price, profit_usdc, buy_tx, sell_tx, timestamp 
                  FROM trades ORDER BY id DESC LIMIT 25""")
     rows = c.fetchall()
@@ -708,7 +692,7 @@ async def telegram_webhook_handler(request):
                 send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
                 payload = {
                     "chat_id": chat_id,
-                    "text": "👋 Терминал **ZERØLIFE Multi-Asset** готов к работе.\nДоступна детальная аналитика ордеров в $ и %, ончейн-депозит и мониторинг рынка.",
+                    "text": "👋 Терминал **ZERØLIFE Multi-Asset** готов к работе.\nДепозит USDC от $50 до $10 000, аналитика ордеров и мониторинг рынка.",
                     "parse_mode": "Markdown",
                     "reply_markup": keyboard
                 }
