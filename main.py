@@ -197,7 +197,7 @@ async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, 
         async with session.post("https://api.jup.ag/swap/v1/swap", headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=7)) as resp:
             if resp.status != 200:
                 err_text = await resp.text()
-                add_log(f"⚠️ Ошибка формирования транзакции Swap: {resp.status} {err_text[:50]}")
+                add_log(f"⚠️ Ошибка формирования Swap: {resp.status} {err_text[:50]}")
                 return ""
             res = await resp.json()
             swap_b64 = res.get("swapTransaction")
@@ -223,7 +223,7 @@ async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, 
                 if sig:
                     return str(sig)
                 else:
-                    add_log(f"⚠️ Ошибка отправки транзакции: {data.get('error')}")
+                    add_log(f"⚠️ Ошибка отправки Tx: {data.get('error')}")
     except Exception as e:
         add_log(f"⚠️ Исключение в execute_jupiter_swap: {e}")
     return ""
@@ -238,19 +238,24 @@ async def real_trading_worker():
 
     history = {sym: [] for sym in WATCHLIST}
     cooldown_until = 0
+    forced_test_done = False  # Флаг для совершения гарантированной первой сделки
 
     async with aiohttp.ClientSession() as session:
         while True:
             try:
                 now_ts = datetime.now().timestamp()
                 prices = await get_token_prices(session)
-                if not prices:
-                    await asyncio.sleep(15)
+                
+                if prices:
+                    add_log(f"📊 Цены: " + ", ".join([f"{s}: ${p:.2f}" for s, p in prices.items()]))
+                else:
+                    add_log("⚠️ Не удалось получить цены от Jupiter API...")
+                    await asyncio.sleep(10)
                     continue
 
                 for sym, p in prices.items():
                     history[sym].append(p)
-                    if len(history[sym]) > 10:  # Накапливаем быстрый буфер для анализа
+                    if len(history[sym]) > 10:
                         history[sym].pop(0)
 
                 conn = sqlite3.connect(DB_FILE)
@@ -267,7 +272,7 @@ async def real_trading_worker():
 
                     if pnl_pct >= TP_PCT or pnl_pct <= -SL_PCT:
                         action = "TP" if pnl_pct >= TP_PCT else "SL"
-                        add_log(f"⚡ Закрытие {sym} по срабатыванию {action} ({pnl_pct*100:+.2f}%)...")
+                        add_log(f"⚡ Закрытие {sym} по {action} ({pnl_pct*100:+.2f}%)...")
                         raw_amount = int(amount_tokens * (10 ** WATCHLIST[sym]["decimals"]))
                         sell_sig = await execute_jupiter_swap(session, mint, USDC_MINT, raw_amount, signer)
                         if sell_sig:
@@ -275,17 +280,16 @@ async def real_trading_worker():
                             c.execute("UPDATE trades SET sell_price = ?, profit_usdc = ?, sell_tx = ? WHERE id = ?", 
                                       (cur_px, profit_usd, sell_sig, trade_id))
                             conn.commit()
-                            add_log(f"✅ Ордер закрыт! PnL: {profit_usd:+.2f} USDC ({pnl_pct*100:+.2f}%) | Tx: {sell_sig[:10]}...")
-                            cooldown_until = now_ts + 60
+                            add_log(f"✅ Ордер закрыт! PnL: {profit_usd:+.2f} USDC | Tx: {sell_sig[:10]}...")
+                            cooldown_until = now_ts + 30
                         else:
-                            add_log(f"⚠️ Не удалось отправить транзакцию продажи {sym}, повторная попытка позже...")
+                            add_log(f"⚠️ Ошибка продажи {sym}, повторим позже...")
                     conn.close()
                     await asyncio.sleep(15)
                     continue
 
                 conn.close()
 
-                # Проверка флага автопилота
                 if not IS_TRADING_ACTIVE:
                     await asyncio.sleep(15)
                     continue
@@ -294,7 +298,30 @@ async def real_trading_worker():
                     await asyncio.sleep(15)
                     continue
 
-                # Ищем актив для входа (смягченное условие для ускорения тестов/сделок)
+                # ГАРАНТИРОВАННЫЙ ТЕСТОВЫЙ ВХОД СРАЗУ ПРИ СТАРТЕ
+                if not forced_test_done and "SOL" in prices:
+                    forced_test_done = True
+                    sym = "SOL"
+                    cur_p = prices[sym]
+                    mint = WATCHLIST[sym]["mint"]
+                    add_log(f"🚀 ТЕСТОВЫЙ ВХОД: Покупка {sym} на ${TRADE_AMOUNT_USDC} USDC...")
+                    buy_sig = await execute_jupiter_swap(session, USDC_MINT, mint, TRADE_AMOUNT_RAW, signer)
+                    if buy_sig:
+                        bought_tokens = TRADE_AMOUNT_USDC / cur_p
+                        c_in = sqlite3.connect(DB_FILE)
+                        c_in.cursor().execute("""INSERT INTO trades 
+                            (token_symbol, token_mint, buy_price, amount_tokens, sell_price, profit_usdc, buy_tx, sell_tx, timestamp)
+                            VALUES (?, ?, ?, ?, 0, 0, ?, '', ?)""",
+                            (sym, mint, cur_p, bought_tokens, buy_sig, datetime.now().strftime('%H:%M:%S')))
+                        c_in.commit()
+                        c_in.close()
+                        add_log(f"💎 Успешно куплен {sym}! Tx: {buy_sig[:12]}...")
+                    else:
+                        add_log(f"❌ Ошибка тестового свопа SOL. Проверьте баланс SOL на газе и приватный ключ.")
+                    await asyncio.sleep(15)
+                    continue
+
+                # Обычное сканирование просадок
                 best_candidate = None
                 max_dip = 0.0
                 for sym, p_list in history.items():
@@ -302,7 +329,6 @@ async def real_trading_worker():
                         avg_p = sum(p_list) / len(p_list)
                         cur_p = p_list[-1]
                         dip = (avg_p - cur_p) / avg_p
-                        # Снизили порог до 0.3% для демонстрации входа при незначительных колебаниях
                         if dip >= 0.003:
                             if dip > max_dip:
                                 max_dip = dip
@@ -325,10 +351,10 @@ async def real_trading_worker():
                         add_log(f"💎 Успешно куплен {sym}! Tx: {buy_sig[:12]}...")
                         cooldown_until = now_ts + 30
                     else:
-                        add_log(f"⚠️ Ошибка исполнения покупки {sym} через Jupiter.")
+                        add_log(f"⚠️ Ошибка покупки {sym} через Jupiter.")
 
             except Exception as e:
-                add_log(f"⚠️ Ошибка в цикле сканера: {e}")
+                add_log(f"⚠️ Ошибка сканера: {e}")
 
             await asyncio.sleep(15)
 
@@ -844,3 +870,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
