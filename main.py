@@ -8,6 +8,8 @@ from datetime import datetime
 import json
 import base58
 import base64
+from solders.keypair import Keypair
+from solders.transaction import VersionedTransaction
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -39,9 +41,6 @@ def add_log(msg: str):
     if len(RECENT_LOGS) > 50:
         RECENT_LOGS.pop()
     logging.info(msg)
-
-from solders.keypair import Keypair
-from solders.transaction import VersionedTransaction
 
 def get_signer_keypair():
     pk_env = os.getenv("SOLANA_PRIVATE_KEY", "").strip()
@@ -454,6 +453,76 @@ async def api_verify_deposit(request):
     except Exception as e:
         return web.json_response({"success": False, "message": str(e)})
 
+# --- ОБРАБОТКА СООБЩЕНИЙ TELEGRAM (WEBHOOK) ---
+async def telegram_webhook_handler(request):
+    try:
+        data = await request.json()
+        if "message" in data:
+            message = data["message"]
+            chat_id = message.get("chat", {}).get("id")
+            text = message.get("text", "")
+            username = message.get("from", {}).get("username", "Unknown")
+
+            if text.startswith("/start") and chat_id and TELEGRAM_TOKEN:
+                # Регистрация / обновление пользователя в БД
+                try:
+                    conn = sqlite3.connect(DB_FILE)
+                    c = conn.cursor()
+                    c.execute("""INSERT INTO users (telegram_id, username) 
+                                 VALUES (?, ?) 
+                                 ON CONFLICT(telegram_id) DO UPDATE SET username=excluded.username""", 
+                              (chat_id, username))
+                    conn.commit()
+                    conn.close()
+                except Exception as db_err:
+                    logging.error(f"Ошибка БД при регистрации пользователя: {db_err}")
+
+                keyboard = {
+                    "inline_keyboard": [
+                        [
+                            {
+                                "text": "🚀 Launch Terminal",
+                                "web_app": {"url": RENDER_URL}
+                            }
+                        ]
+                    ]
+                }
+                
+                send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+                payload = {
+                    "chat_id": chat_id,
+                    "text": "👋 Привет! Терминал **ZERØLIFE AI Trader** готов к работе.\n\nНажмите кнопку ниже, чтобы запустить автономное управление и отслеживать сделки в реальном времени:",
+                    "parse_mode": "Markdown",
+                    "reply_markup": keyboard
+                }
+                
+                async with aiohttp.ClientSession() as session:
+                    await session.post(send_url, json=payload)
+
+        return web.Response(text="OK")
+    except Exception as e:
+        logging.error(f"Ошибка webhook: {e}")
+        return web.Response(text="Error", status=500)
+
+async def set_telegram_webhook():
+    if not TELEGRAM_TOKEN or not RENDER_URL:
+        add_log("⚠️ TELEGRAM_TOKEN или RENDER_EXTERNAL_URL не заданы. Webhook пропущен.")
+        return
+
+    webhook_url = f"{RENDER_URL.rstrip('/')}/webhook"
+    set_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}"
+    
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(set_url) as resp:
+                res = await resp.json()
+                if res.get("ok"):
+                    add_log(f"✅ Webhook успешно привязан: {webhook_url}")
+                else:
+                    add_log(f"❌ Ошибка регистрации webhook: {res.get('description')}")
+        except Exception as e:
+            add_log(f"❌ Сбой сети при установке webhook: {e}")
+
 async def main():
     init_db()
     app = web.Application()
@@ -462,11 +531,17 @@ async def main():
     app.router.add_get('/api/logs', api_get_logs)
     app.router.add_get('/api/stats', api_get_stats)
     app.router.add_post('/api/verify_deposit', api_verify_deposit)
+    
+    # Роут входящего webhook Telegram
+    app.router.add_post('/webhook', telegram_webhook_handler)
 
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
+
+    # Автоматическая привязка вебхука в Telegram
+    await set_telegram_webhook()
 
     asyncio.create_task(real_trading_worker())
     add_log("⚜️ Ядро полностью запущено на порту " + str(PORT))
