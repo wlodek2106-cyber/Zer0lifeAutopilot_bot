@@ -161,19 +161,21 @@ async def verify_solana_usdc_tx(session: aiohttp.ClientSession, tx_sig: str, tar
 
 async def get_token_prices(session: aiohttp.ClientSession) -> dict:
     prices = {}
-    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-    for sym, info in WATCHLIST.items():
-        try:
-            # Запрашиваем котировку для 1 единицы базового токена к USDC для определения цены
-            test_amount = int(10 ** info["decimals"])
-            url = f"https://quote-api.jup.ag/v6/quote?inputMint={info['mint']}&outputMint={USDC_MINT}&amount={test_amount}&slippageBps=50"
-            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=4)) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    out_amount = int(data.get("outAmount", 0))
-                    prices[sym] = out_amount / 1_000_000  # Перевод из микро-USDC в USD
-        except Exception as e:
-            pass
+    url = "https://api.coingecko.com/api/v3/simple/price?ids=solana,jupiter-exchange-solana,raydium,wif,pyth-network&vs_currencies=usd"
+    try:
+        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                if "solana" in data: prices["SOL"] = float(data["solana"]["usd"])
+                if "jupiter-exchange-solana" in data: prices["JUP"] = float(data["jupiter-exchange-solana"]["usd"])
+                if "raydium" in data: prices["RAY"] = float(data["raydium"]["usd"])
+                if "wif" in data: prices["WIF"] = float(data["wif"]["usd"])
+                if "pyth-network" in data: prices["PYTH"] = float(data["pyth-network"]["usd"])
+            else:
+                add_log(f"⚠️ Ошибка цен CoinGecko, статус: {resp.status}")
+    except Exception as e:
+        add_log(f"⚠️ Ошибка запроса цен: {str(e)[:40]}")
     return prices
 
 async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, output_mint: str, amount_raw: int, signer: Keypair) -> str:
@@ -249,7 +251,7 @@ async def real_trading_worker():
                 if prices:
                     add_log(f"📊 Цены: " + ", ".join([f"{s}: ${p:.2f}" for s, p in prices.items()]))
                 else:
-                    add_log("⚠️ Не удалось получить цены от Jupiter API...")
+                    add_log("⚠️ Не удалось получить цены активов...")
                     await asyncio.sleep(10)
                     continue
 
