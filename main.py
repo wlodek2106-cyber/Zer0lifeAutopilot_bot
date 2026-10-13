@@ -29,7 +29,7 @@ SPLASH_IMAGE_URL = "https://i.postimg.cc/52n94Pzg/57D47DDD-9BED-4D4B-AA69-2B59CA
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 MIN_DEPOSIT_USDC = 50.0
 MAX_DEPOSIT_USDC = 10000.0
-MIN_BOT_BALANCE_USDC = 50.0  # Минимальный остаток для работы бота
+MIN_BOT_BALANCE_USDC = 50.0  # Минимальный остаток для работы бота (несгораемый)
 
 WATCHLIST = {
     "SOL":  {"mint": "So11111111111111111111111111111111111111112", "decimals": 9},
@@ -53,7 +53,7 @@ MEME_STOP_LOSS_PCT = 0.80      # Стоп-лосс на случай скама 
 
 IS_TRADING_ACTIVE = True       # Глобальный флаг автопилота Топ-5 (ВКЛ / ВЫКЛ)
 IS_MEME_ACTIVE = False         # Глобальный флаг Meme Sniper режима (ВКЛ / ВЫКЛ)
-RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v4.5 (Portfolio Tracker) инициализирован."]
+RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v5.0 (Individual Accs & Sell All) инициализирован."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -82,6 +82,7 @@ def get_signer_keypair():
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+    # Индивидуальные балансы пользователей
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         telegram_id INTEGER PRIMARY KEY, username TEXT, balance_usdc REAL DEFAULT 0.0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
@@ -95,14 +96,16 @@ def init_db():
             pass
 
     c.execute('''CREATE TABLE IF NOT EXISTS trades (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, token_symbol TEXT, token_mint TEXT,
+        id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER, token_symbol TEXT, token_mint TEXT,
         buy_price REAL, amount_tokens REAL, sell_price REAL DEFAULT 0,
-        profit_usdc REAL DEFAULT 0.0, buy_tx TEXT, sell_tx TEXT, timestamp TEXT)''')
+        profit_usdc REAL DEFAULT 0.0, buy_tx TEXT, sell_tx TEXT, timestamp TEXT, half_taken INTEGER DEFAULT 0)''')
 
+    # Изолированные депозиты
     c.execute('''CREATE TABLE IF NOT EXISTS deposits (
         id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER, tx_signature TEXT UNIQUE,
         amount_usdc REAL, status TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
 
+    # Изолированные выводы
     c.execute('''CREATE TABLE IF NOT EXISTS withdrawals (
         id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER, token TEXT,
         amount REAL, recipient_address TEXT, tx_signature TEXT, status TEXT, 
@@ -110,6 +113,11 @@ def init_db():
 
     c.execute("PRAGMA table_info(trades)")
     t_cols = [col[1] for col in c.fetchall()]
+    if "telegram_id" not in t_cols:
+        try:
+            c.execute("ALTER TABLE trades ADD COLUMN telegram_id INTEGER")
+        except Exception:
+            pass
     if "half_taken" not in t_cols:
         try:
             c.execute("ALTER TABLE trades ADD COLUMN half_taken INTEGER DEFAULT 0")
@@ -201,8 +209,6 @@ async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, 
         quote_url = f"https://api.jup.ag/swap/v1/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount_raw}&slippageBps={slippage_bps}"
         async with session.get(quote_url, headers=headers, timeout=aiohttp.ClientTimeout(total=6)) as resp:
             if resp.status != 200:
-                err_text = await resp.text()
-                add_log(f"⚠️ Ошибка котировки Jupiter: {resp.status} {err_text[:50]}")
                 return ""
             quote_data = await resp.json()
 
@@ -214,8 +220,6 @@ async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, 
         }
         async with session.post("https://api.jup.ag/swap/v1/swap", headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=7)) as resp:
             if resp.status != 200:
-                err_text = await resp.text()
-                add_log(f"⚠️ Ошибка формирования Swap: {resp.status} {err_text[:50]}")
                 return ""
             res = await resp.json()
             swap_b64 = res.get("swapTransaction")
@@ -262,9 +266,6 @@ async def real_trading_worker():
             try:
                 now_ts = datetime.now().timestamp()
                 prices = await get_token_prices(session)
-                
-                if prices:
-                    add_log(f"📊 Цены Топ-5: " + ", ".join([f"{s}: ${p:.2f}" for s, p in prices.items()]))
 
                 for sym, p in prices.items():
                     history[sym].append(p)
@@ -280,7 +281,6 @@ async def real_trading_worker():
                     trade_id, sym, mint, entry_px, amount_tokens = active_trade
                     cur_px = prices.get(sym, entry_px)
                     pnl_pct = (cur_px - entry_px) / entry_px
-                    add_log(f"🎯 Позиция [{sym}]: Вход ${entry_px:.4f} | Тек: ${cur_px:.4f} | PnL: {pnl_pct*100:+.2f}%")
 
                     if pnl_pct >= TP_PCT or pnl_pct <= -SL_PCT:
                         action = "TP" if pnl_pct >= TP_PCT else "SL"
@@ -295,8 +295,6 @@ async def real_trading_worker():
                             conn.commit()
                             add_log(f"✅ Ордер закрыт по реальной цене ${real_exit_px:.4f}! Tx: {sell_sig[:10]}...")
                             cooldown_until = now_ts + 30
-                        else:
-                            add_log(f"⚠️ Ошибка продажи {sym} в сети, повторим позже...")
                     conn.close()
                     await asyncio.sleep(20)
                     continue
@@ -332,11 +330,11 @@ async def real_trading_worker():
                             (sym, mint, cur_p, bought_tokens, buy_sig, datetime.now().strftime('%H:%M:%S')))
                         c_in.commit()
                         c_in.close()
-                        add_log(f"💎 Успешно куплен {sym} по ${cur_p:.4f}! Tx: {buy_sig[:12]}...")
+                        add_log(f"💎 Успешно куплен {sym}! Tx: {buy_sig[:12]}...")
                         cooldown_until = now_ts + 30
 
             except Exception as e:
-                add_log(f"⚠️ Ошибка сканера Топ-5: {e}")
+                pass
 
             await asyncio.sleep(20)
 
@@ -348,7 +346,6 @@ async def meme_sniper_worker():
     if not signer:
         return
 
-    add_log("🐸 Параллельный воркер Meme Sniper запущен.")
     SOL_MINT = "So11111111111111111111111111111111111111112"
 
     async with aiohttp.ClientSession() as session:
@@ -378,10 +375,8 @@ async def meme_sniper_worker():
                                 pnl_pct = (cur_sol_price - entry_sol_price) / entry_sol_price
                                 current_total_sol = MEME_ALLOCATION_SOL * multiplier
 
-                                add_log(f"🔥 [MEME SNIPER] {sym}: Вход {entry_sol_price:.5f} SOL | Тек общая стоимость: {current_total_sol:.3f} SOL ({multiplier:.1f}x)")
-
                                 if current_total_sol >= 0.5 and half_taken == 0:
-                                    add_log(f"⚡ [MEME SNIPER] Баланс достиг 0.5 SOL! Фиксируем 50% позиции и переводим в USDC...")
+                                    add_log(f"⚡ [MEME] Баланс 0.5 SOL! Фиксируем 50%...")
                                     half_tokens_raw = int((amount_tokens / 2) * (10 ** 6))
                                     sell_sig = await execute_jupiter_swap(session, mint, USDC_MINT, half_tokens_raw, signer, slippage_bps=300, priority_fee=100000)
                                     if sell_sig:
@@ -389,17 +384,10 @@ async def meme_sniper_worker():
                                         conn_h.cursor().execute("UPDATE trades SET half_taken = 1, amount_tokens = amount_tokens / 2 WHERE id = ?", (trade_id,))
                                         conn_h.commit()
                                         conn_h.close()
-                                        add_log(f"✅ [MEME SNIPER] Половина позиции переведена в USDC! Tx: {sell_sig[:10]}...")
-                                    else:
-                                        add_log(f"⚠️ [MEME SNIPER] Ошибка перевода половины в USDC...")
 
                                 elif multiplier >= MEME_TARGET_MULTIPLIER or pnl_pct <= -MEME_STOP_LOSS_PCT:
-                                    reason = "ЦЕЛЬ Х10 ДОСТИГНУТА 🚀" if multiplier >= MEME_TARGET_MULTIPLIER else "СТОП-ЛОСС 🛑"
-                                    add_log(f"⚡ [MEME SNIPER] Закрываем остаток позиции {sym} ({reason}). Выход по цене {cur_sol_price:.5f} SOL...")
-                                    
                                     rem_tokens_raw = int(amount_tokens * (10 ** 6))
                                     sell_sig = await execute_jupiter_swap(session, mint, SOL_MINT, rem_tokens_raw, signer, slippage_bps=300, priority_fee=100000)
-                                    
                                     if sell_sig:
                                         conn_up = sqlite3.connect(DB_FILE)
                                         profit_sol = current_total_sol - MEME_ALLOCATION_SOL
@@ -407,10 +395,9 @@ async def meme_sniper_worker():
                                                                   (cur_sol_price, profit_sol * 150, sell_sig, trade_id))
                                         conn_up.commit()
                                         conn_up.close()
-                                        add_log(f"✅ [MEME SNIPER] Финальная фиксация выполнена по {cur_sol_price:.5f} SOL! Tx: {sell_sig[:10]}...")
+                                        add_log(f"✅ [MEME] Финальная фиксация выполнена!")
                     await asyncio.sleep(10)
                 else:
-                    add_log("🎯 [MEME SNIPER] Сканирование новых мем-пулов по сети Solana...")
                     search_url = "https://api.dexscreener.com/latest/dex/search?q=SOL/USDC"
                     headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
                     
@@ -428,7 +415,6 @@ async def meme_sniper_worker():
                                     m_address = base_token.get("address")
                                     m_symbol = base_token.get("symbol")
                                     p_native = float(pair.get("priceNative", 0.0) or 0.0)
-                                    
                                     if m_address and m_address != SOL_MINT and p_native > 0:
                                         target_mint = m_address
                                         target_sym = f"MEME-{m_symbol}"
@@ -436,9 +422,7 @@ async def meme_sniper_worker():
                                         break
 
                             if target_mint:
-                                add_log(f"🚀 [MEME SNIPER] Найден мем-токен: {target_sym}. Вход по ${init_price:.5f} на {MEME_ALLOCATION_SOL} SOL...")
                                 amount_lamports = int(MEME_ALLOCATION_SOL * 1_000_000_000)
-                                
                                 buy_sig = await execute_jupiter_swap(session, SOL_MINT, target_mint, amount_lamports, signer, slippage_bps=500, priority_fee=100000)
                                 if buy_sig:
                                     bought_tokens = MEME_ALLOCATION_SOL / init_price if init_price > 0 else 1000.0
@@ -449,12 +433,10 @@ async def meme_sniper_worker():
                                         (target_sym, target_mint, init_price, bought_tokens, buy_sig, datetime.now().strftime('%H:%M:%S')))
                                     conn_in.commit()
                                     conn_in.close()
-                                    add_log(f"💎 [MEME SNIPER] Успешный вход в {target_sym} по ${init_price:.5f}! Tx: {buy_sig[:12]}...")
 
                     await asyncio.sleep(15)
 
             except Exception as e:
-                add_log(f"⚠️ Ошибка в Meme Sniper воркере: {e}")
                 await asyncio.sleep(10)
 
 
@@ -464,11 +446,11 @@ RAW_HTML = r"""<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Zer0Life Multi-Asset & Meme Sniper</title>
+    <title>Zer0Life Multi-Asset</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-        body { background: #07080c; color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 0; width: 100vw; height: 100vh; overflow: hidden; }
+        body { background: #07080c; color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 0; width: 100vw; height: 100vh; overflow: hidden; }
         
         #splash-screen {
             position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
@@ -504,7 +486,6 @@ RAW_HTML = r"""<!DOCTYPE html>
             cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px;
             margin-bottom: 12px; transition: transform 0.15s ease;
         }
-        .btn-sell-all:active { transform: scale(0.97); }
 
         .order-card {
             background: #080a11; border: 1px solid #192033; border-radius: 14px;
@@ -520,7 +501,7 @@ RAW_HTML = r"""<!DOCTYPE html>
 
         .deposit-modal { background: #0b0d14; border: 1px solid #1c2333; border-radius: 24px; padding: 18px; }
         .banner-limit { background: rgba(22, 101, 52, 0.12); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: 14px; padding: 12px; text-align: center; margin-bottom: 12px; }
-        .btn-green-main { background: #22c55e; color: #000; border: none; width: 100%; padding: 14px; border-radius: 14px; font-size: 14px; font-weight: 800; cursor: pointer; }
+        .btn-green-main { background: #22c55e; color: #000; border: none; width: 100%; padding: 14px; border-radius: 14px; font-size: 14px; font-weight: 800; cursor: pointer; margin-top: 8px; }
         .qr-section { text-align: center; margin: 16px 0; }
         .qr-img { background: #fff; padding: 10px; border-radius: 16px; }
         .address-box { background: #06080e; border: 1px solid #192030; border-radius: 12px; padding: 12px; color: #22c55e; font-family: monospace; font-size: 11px; word-break: break-all; text-align: center; margin-bottom: 10px; }
@@ -565,57 +546,27 @@ RAW_HTML = r"""<!DOCTYPE html>
             </div>
 
             <button class="btn-sell-all" onclick="closeAllPositions()">
-                <span>⚠️ Закрыть все позиции (Продать всё)</span>
+                <span>⚠️ Экстренно закрыть все позиции</span>
             </button>
 
-            <!-- БЛОК ПОРТФЕЛЯ И БАЛАНСА -->
+            <!-- БЛОК ИНДИВИДУАЛЬНОГО ПОРТФЕЛЯ -->
             <div class="card" style="border: 1px solid rgba(34, 197, 94, 0.3); background: linear-gradient(135deg, #0e111a 0%, #0a150d 100%);">
-                <div style="font-size: 13px; font-weight: 800; color: #22c55e; margin-bottom: 8px;">💼 РЕАЛЬНЫЙ БАЛАНС И ПОРТФЕЛЬ</div>
+                <div style="font-size: 13px; font-weight: 800; color: #22c55e; margin-bottom: 8px; display: flex; justify-content: space-between;">
+                    <span>💼 ВАШ ЛИЧНЫЙ БАЛАНС</span>
+                    <span id="display-username" style="color: #fff; font-size: 12px;"></span>
+                </div>
                 <div class="grid-stats">
-                    <div class="stat-box"><div class="stat-label">Баланс в боте</div><div class="stat-val" id="port-balance" style="color: #fff;">$0.00</div></div>
+                    <div class="stat-box"><div class="stat-label">Депозит / Текущий</div><div class="stat-val" id="port-balance" style="color: #fff;">$0.00</div></div>
                     <div class="stat-box"><div class="stat-label">Доступно к выводу</div><div class="stat-val" id="port-withdrawable" style="color: #22c55e;">$0.00</div></div>
                 </div>
                 <div style="margin-top: 8px; display: flex; justify-content: space-between; align-items: center; background: #06080e; padding: 8px 12px; border-radius: 10px;">
-                    <div style="font-size: 11px; color: #94a3b8;">Чистая прибыль (PnL):</div>
+                    <div style="font-size: 11px; color: #94a3b8;">Индивидуальный PnL:</div>
                     <div id="port-pnl" style="font-size: 13px; font-weight: 900; font-family: monospace; color: #4ade80;">+$0.00 (0.0%)</div>
                 </div>
             </div>
 
-            <!-- БЛОК MEME SNIPER РЕЖИМА -->
-            <div class="card" style="border: 1px solid rgba(234, 179, 8, 0.3); background: linear-gradient(135deg, #0e111a 0%, #15130a 100%);">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                    <div>
-                        <div style="font-size: 15px; font-weight: 800; color: #facc15;">🐸 Meme Sniper Mode</div>
-                        <div style="font-size: 10px; color: #94a3b8; margin-top: 2px;">0.1 SOL → 0.5 SOL (50% в USDC) → 1 SOL</div>
-                    </div>
-                    <button id="btn-meme-toggle" class="btn-ctl btn-toggle-off" style="padding: 8px 12px; font-size: 11px;" onclick="toggleMemeTrading()">
-                        <span id="meme-toggle-text">ВЫКЛ</span>
-                    </button>
-                </div>
-                <div class="grid-stats">
-                    <div class="stat-box"><div class="stat-label">Слот снайпера</div><div class="stat-val" style="color: #facc15;">0.1 SOL</div></div>
-                    <div class="stat-box"><div class="stat-label">Цель фиксации</div><div class="stat-val" style="color: #4ade80;">0.5 SOL (USDC) + 1 SOL</div></div>
-                </div>
-            </div>
-
             <div class="card">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div>
-                        <div style="font-size: 17px; font-weight: 800; color: #fff;">Топ-5 Ликвидных Активов</div>
-                        <div style="font-size: 11px; color: #64748b; margin-top: 2px;">SOL • JUP • RAY • WIF • PYTH</div>
-                    </div>
-                    <div id="user-bal" style="font-size: 12px; color: #22c55e; font-family: monospace; font-weight: 700;">$0.00 USDC</div>
-                </div>
-                <div class="grid-stats">
-                    <div class="stat-box"><div class="stat-label">Размер слота</div><div class="stat-val">$20.00 USDC</div></div>
-                    <div class="stat-box"><div class="stat-label">Slippage</div><div class="stat-val" style="color: #60a5fa;">0.40%</div></div>
-                    <div class="stat-box"><div class="stat-label">Take Profit</div><div class="stat-val" style="color: #4ade80;">+3.50%</div></div>
-                    <div class="stat-box"><div class="stat-label">Stop Loss</div><div class="stat-val" style="color: #f87171;">-2.00%</div></div>
-                </div>
-            </div>
-
-            <div class="card">
-                <div style="font-size: 12px; font-weight: 700; color: #94a3b8; margin-bottom: 6px;">ЖУРНАЛ СКАНИРОВАНИЯ И СНАЙПЕРА</div>
+                <div style="font-size: 12px; font-weight: 700; color: #94a3b8; margin-bottom: 6px;">ЖУРНАЛ СКАНИРОВАНИЯ</div>
                 <div id="log-box" class="log-console">Запуск ядра...</div>
             </div>
         </div>
@@ -625,7 +576,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div>
-                        <div style="font-size: 12px; color: #94a3b8; text-transform: uppercase;">Итоговый результат</div>
+                        <div style="font-size: 12px; color: #94a3b8; text-transform: uppercase;">Глобальный результат</div>
                         <div id="pnl-val" style="font-size: 26px; font-weight: 900; color: #4ade80; font-family: monospace; margin-top: 4px;">+$0.00 USDC</div>
                     </div>
                     <div style="text-align: right;">
@@ -636,8 +587,8 @@ RAW_HTML = r"""<!DOCTYPE html>
             </div>
 
             <div class="card">
-                <div style="font-size: 13px; font-weight: 800; color: #f8fafc; margin-bottom: 12px;">ЖУРНАЛ ПОКУПОК И ПРОДАЖ</div>
-                <div id="history-box" style="color: #64748b; font-size: 11px; text-align: center; padding: 20px;">Нет зафиксированных ордеров</div>
+                <div style="font-size: 13px; font-weight: 800; color: #f8fafc; margin-bottom: 12px;">ЖУРНАЛ СДЕЛОК (Общий пул)</div>
+                <div id="history-box" style="color: #64748b; font-size: 11px; text-align: center; padding: 20px;">Ордера загружаются...</div>
             </div>
         </div>
 
@@ -645,7 +596,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         <div id="tab-deposit" class="tab-panel">
             <div class="deposit-modal">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
-                    <div style="font-size: 17px; font-weight: 800; color: #fff;" id="wallet-modal-title">Deposit Crypto (USDC Top-Up)</div>
+                    <div style="font-size: 17px; font-weight: 800; color: #fff;" id="wallet-modal-title">Deposit Crypto (USDC)</div>
                     <span style="color: #64748b; cursor: pointer; font-size: 18px;" onclick="gotoTab('terminal', document.querySelectorAll('.nav-btn')[0])">✕</span>
                 </div>
 
@@ -658,7 +609,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div id="section-deposit">
                     <div class="banner-limit">
                         <div style="color: #22c55e; font-size: 13px; font-weight: 700;">Deposit from $50 to $10,000 USDC per transaction</div>
-                        <div style="color: #64748b; font-size: 11px; margin-top: 4px;">Send SPL-USDC on Solana. Enter transaction signature</div>
+                        <div style="color: #64748b; font-size: 11px; margin-top: 4px;">Send SPL-USDC on Solana. Enter transaction signature below.</div>
                     </div>
 
                     <button class="btn-green-main" id="btn-show-addr" onclick="toggleDepositDetails()">Show Deposit Address 🚀</button>
@@ -710,9 +661,17 @@ RAW_HTML = r"""<!DOCTYPE html>
         const tg = window.Telegram?.WebApp;
         if(tg) tg.expand();
 
-        let isBotRunning = true;
-        let isMemeRunning = false;
         let currentWithdrawToken = 'USDC';
+
+        // Получаем ИНДИВИДУАЛЬНЫЕ данные пользователя
+        function getUserData() {
+            const initDataUnsafe = tg?.initDataUnsafe || {};
+            const user = initDataUnsafe.user || {};
+            return {
+                id: user.id || 42882165,
+                username: user.username || user.first_name || 'Guest'
+            };
+        }
 
         function openTerminal() {
             document.getElementById('splash-screen').style.display = 'none';
@@ -734,7 +693,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             document.getElementById('wtab-withdraw').className = !isDep ? 'wallet-tab active' : 'wallet-tab';
             document.getElementById('section-deposit').style.display = isDep ? 'block' : 'none';
             document.getElementById('section-withdraw').style.display = !isDep ? 'block' : 'none';
-            document.getElementById('wallet-modal-title').innerText = isDep ? 'Deposit Crypto (USDC Top-Up)' : 'Withdraw Crypto';
+            document.getElementById('wallet-modal-title').innerText = isDep ? 'Deposit Crypto (USDC)' : 'Withdraw Crypto';
         }
 
         function selectWithdrawToken(token) {
@@ -744,13 +703,13 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         async function closeAllPositions() {
-            if(!confirm("Вы уверены, что хотите закрыть все открытые позиции?")) return;
+            if(!confirm("Вы уверены, что хотите продать все открытые позиции?")) return;
             try {
-                const tgId = tg?.initDataUnsafe?.user?.id || 42882165;
+                const user = getUserData();
                 const res = await fetch('/api/close_all', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ telegram_id: tgId })
+                    body: JSON.stringify({ telegram_id: user.id })
                 });
                 const d = await res.json();
                 alert(d.message);
@@ -763,18 +722,18 @@ RAW_HTML = r"""<!DOCTYPE html>
         async function submitWithdraw() {
             const addr = document.getElementById('withdraw-address').value.trim();
             const amount = document.getElementById('withdraw-amount').value.trim();
-            if(!addr || !amount) { alert("Заполните адрес получателя и сумму."); return; }
+            if(!addr || !amount) { alert("Заполните адрес и сумму."); return; }
 
             const btn = document.getElementById('btn-withdraw-action');
-            btn.innerText = "Обработка вывода...";
+            btn.innerText = "Обработка...";
             btn.disabled = true;
 
             try {
-                const tgId = tg?.initDataUnsafe?.user?.id || 42882165;
+                const user = getUserData();
                 const res = await fetch('/api/withdraw', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ telegram_id: tgId, token: currentWithdrawToken, recipient_address: addr, amount: parseFloat(amount) })
+                    body: JSON.stringify({ telegram_id: user.id, token: currentWithdrawToken, recipient_address: addr, amount: parseFloat(amount) })
                 });
                 const d = await res.json();
                 alert(d.message);
@@ -784,7 +743,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     refresh();
                 }
             } catch(e) {
-                alert("Ошибка соединения.");
+                alert("Ошибка сети.");
             } finally {
                 btn.innerText = "Withdraw 🚀";
                 btn.disabled = false;
@@ -792,43 +751,17 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         async function toggleTrading() {
-            try {
-                const res = await fetch('/api/toggle_trading', { method: 'POST' }).then(r => r.json());
-                if(res.success) updateToggleUI(res.trading_active);
-            } catch(e) {}
+            try { await fetch('/api/toggle_trading', { method: 'POST' }); } catch(e) {}
         }
 
         async function toggleMemeTrading() {
-            try {
-                const res = await fetch('/api/toggle_meme', { method: 'POST' }).then(r => r.json());
-                if(res.success) updateMemeToggleUI(res.meme_active);
-            } catch(e) {}
+            try { await fetch('/api/toggle_meme', { method: 'POST' }); } catch(e) {}
         }
 
         function updateToggleUI(isActive) {
-            isBotRunning = isActive;
             const btn = document.getElementById('btn-toggle');
-            const txt = document.getElementById('toggle-text');
-            if(isActive) {
-                btn.className = "btn-ctl btn-toggle-on";
-                txt.innerText = "Автопилот: ВКЛ";
-            } else {
-                btn.className = "btn-ctl btn-toggle-off";
-                txt.innerText = "Автопилот: ВЫКЛ";
-            }
-        }
-
-        function updateMemeToggleUI(isActive) {
-            isMemeRunning = isActive;
-            const btn = document.getElementById('btn-meme-toggle');
-            const txt = document.getElementById('meme-toggle-text');
-            if(isActive) {
-                btn.className = "btn-ctl btn-toggle-on";
-                txt.innerText = "ВКЛ (0.1 SOL)";
-            } else {
-                btn.className = "btn-ctl btn-toggle-off";
-                txt.innerText = "ВЫКЛ";
-            }
+            btn.className = isActive ? "btn-ctl btn-toggle-on" : "btn-ctl btn-toggle-off";
+            document.getElementById('toggle-text').innerText = isActive ? "Автопилот: ВКЛ" : "Автопилот: ВЫКЛ";
         }
 
         async function manualRefresh() {
@@ -837,19 +770,12 @@ RAW_HTML = r"""<!DOCTYPE html>
             icon.style.transform = "rotate(360deg)";
             icon.style.transition = "transform 0.5s ease";
             await refresh();
-            setTimeout(() => {
-                icon.style.transform = "rotate(0deg)";
-                icon.style.transition = "none";
-            }, 500);
+            setTimeout(() => { icon.style.transform = "rotate(0deg)"; icon.style.transition = "none"; }, 500);
         }
 
         function toggleDepositDetails() {
-            const el = document.getElementById('deposit-details');
-            const btn = document.getElementById('btn-show-addr');
-            if(el.style.display === 'none') {
-                el.style.display = 'block';
-                btn.style.display = 'none';
-            }
+            document.getElementById('deposit-details').style.display = 'block';
+            document.getElementById('btn-show-addr').style.display = 'none';
         }
 
         function copyWallet() {
@@ -862,15 +788,15 @@ RAW_HTML = r"""<!DOCTYPE html>
             if(!sig) { alert("Вставьте Signature транзакции."); return; }
 
             const btn = document.getElementById('btn-verify-action');
-            btn.innerText = "Верификация USDC в сети...";
+            btn.innerText = "Верификация...";
             btn.disabled = true;
 
             try {
-                const tgId = tg?.initDataUnsafe?.user?.id || 42882165;
+                const user = getUserData();
                 const res = await fetch('/api/verify_deposit', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ telegram_id: tgId, tx_signature: sig })
+                    body: JSON.stringify({ telegram_id: user.id, username: user.username, tx_signature: sig })
                 });
                 const d = await res.json();
                 alert(d.message);
@@ -892,18 +818,21 @@ RAW_HTML = r"""<!DOCTYPE html>
                 if(l.success) {
                     document.getElementById('log-box').innerText = l.logs.join('\n');
                     if(l.trading_active !== undefined) updateToggleUI(l.trading_active);
-                    if(l.meme_active !== undefined) updateMemeToggleUI(l.meme_active);
                 }
 
-                const tgId = tg?.initDataUnsafe?.user?.id || 42882165;
-                const s = await fetch('/api/stats?telegram_id=' + tgId).then(r => r.json());
+                // ПЕРЕДАЕМ ИНДИВИДУАЛЬНЫЕ ДАННЫЕ НА СЕРВЕР
+                const user = getUserData();
+                const s = await fetch(`/api/stats?telegram_id=${user.id}&username=${user.username}`).then(r => r.json());
+                
                 if(s.success) {
+                    document.getElementById('display-username').innerText = "@" + s.username;
+                    
                     const p = s.profit_usdc;
                     document.getElementById('pnl-val').innerText = (p >= 0 ? "+$" : "-$") + Math.abs(p).toFixed(2) + " USDC";
                     document.getElementById('closed-count').innerText = s.closed_count;
-                    if(s.user_balance !== undefined) document.getElementById('user-bal').innerText = "$" + s.user_balance.toFixed(2) + " USDC";
-
-                    document.getElementById('port-balance').innerText = "$" + (s.user_balance || 0).toFixed(2);
+                    
+                    // Обновляем ИНДИВИДУАЛЬНЫЕ балансы
+                    document.getElementById('port-balance').innerText = "$" + (s.total_deposited \vert{}\vert{} 0).toFixed(2) + " / $" + (s.user_balance || 0).toFixed(2);
                     document.getElementById('port-withdrawable').innerText = "$" + (s.withdrawable || 0).toFixed(2);
                     
                     const portPnlEl = document.getElementById('port-pnl');
@@ -980,19 +909,38 @@ async def api_toggle_meme(request):
     return web.json_response({"success": True, "meme_active": IS_MEME_ACTIVE})
 
 async def api_get_stats(request):
-    tg_id = int(request.query.get("telegram_id", 42882165))
+    # Получаем Индивидуальный Telegram ID
+    tg_id_str = request.query.get("telegram_id")
+    if not tg_id_str or not tg_id_str.isdigit():
+        return web.json_response({"success": False, "message": "Не передан telegram_id"})
+    
+    tg_id = int(tg_id_str)
+    username = request.query.get("username", "Unknown")
+
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+    
+    # Создаем аккаунт пользователя при первом входе, если его нет
+    c.execute("INSERT OR IGNORE INTO users (telegram_id, username, balance_usdc) VALUES (?, ?, 0.0)", (tg_id, username))
+    conn.commit()
+
+    # Запрашиваем историю торгов (пока что оставляем глобальную историю, чтобы было видно работу бота)
     c.execute("""SELECT id, token_symbol, buy_price, amount_tokens, sell_price, profit_usdc, buy_tx, sell_tx, timestamp 
                  FROM trades ORDER BY id DESC LIMIT 25""")
     rows = c.fetchall()
     
     trades = []
+    tot_profit = 0.0
+    closed_count = 0
     for r in rows:
         buy_px = r[2]
         sell_px = r[4]
         is_closed = sell_px > 0
         pnl_pct = round(((sell_px - buy_px) / buy_px) * 100, 2) if is_closed else 0.0
+        
+        if is_closed:
+            tot_profit += r[5]
+            closed_count += 1
 
         trades.append({
             "id": r[0], "token_symbol": r[1], "buy_price": buy_px, "amount_tokens": r[3],
@@ -1001,16 +949,13 @@ async def api_get_stats(request):
             "status": "CLOSED" if is_closed else "OPEN"
         })
 
-    c.execute("SELECT SUM(profit_usdc) FROM trades WHERE sell_price > 0")
-    tot_profit = c.fetchone()[0] or 0.0
-
-    c.execute("SELECT COUNT(*) FROM trades WHERE sell_price > 0")
-    closed_count = c.fetchone()[0] or 0
-
-    c.execute("SELECT balance_usdc FROM users WHERE telegram_id = ?", (tg_id,))
+    # Получаем ИНДИВИДУАЛЬНЫЙ баланс пользователя
+    c.execute("SELECT balance_usdc, username FROM users WHERE telegram_id = ?", (tg_id,))
     u_row = c.fetchone()
     user_bal = u_row[0] if u_row else 0.0
+    db_username = u_row[1] if u_row else username
 
+    # Получаем ИНДИВИДУАЛЬНУЮ сумму депозитов пользователя
     c.execute("SELECT SUM(amount_usdc) FROM deposits WHERE telegram_id = ? AND status = 'VERIFIED'", (tg_id,))
     dep_row = c.fetchone()
     total_deposited = dep_row[0] if dep_row and dep_row[0] else 0.0
@@ -1020,14 +965,14 @@ async def api_get_stats(request):
     total_pnl = user_bal - total_deposited
     total_roi = (total_pnl / total_deposited * 100) if total_deposited > 0 else 0.0
     
-    # Расчет суммы доступной к выводу (все, что выше минимального лимита работы бота $50)
+    # Доступная сумма к выводу (выше минимального несгораемого баланса $50)
     withdrawable = max(0.0, user_bal - MIN_BOT_BALANCE_USDC)
 
     return web.json_response({
         "success": True, "profit_usdc": tot_profit, "closed_count": closed_count,
         "trades": trades, "user_balance": user_bal,
         "total_deposited": total_deposited, "total_pnl": total_pnl, "total_roi": total_roi,
-        "withdrawable": withdrawable
+        "withdrawable": withdrawable, "username": db_username
     })
 
 async def api_verify_deposit(request):
@@ -1053,13 +998,15 @@ async def api_verify_deposit(request):
             conn.close()
             return web.json_response({"success": False, "message": f"Отказ: {msg}"})
 
+        # Привязываем депозит к ИНДИВИДУАЛЬНОМУ пользователю
         c.execute("INSERT INTO deposits (telegram_id, tx_signature, amount_usdc, status) VALUES (?, ?, ?, 'VERIFIED')", (tg_id, tx, amount_usdc))
+        # Начисляем USDC на ИНДИВИДУАЛЬНЫЙ баланс
         c.execute("UPDATE users SET balance_usdc = balance_usdc + ? WHERE telegram_id = ?", (amount_usdc, tg_id))
         conn.commit()
         conn.close()
 
-        add_log(f"📥 Зачислен депозит: +${amount_usdc} USDC ({tx[:10]}...)")
-        return web.json_response({"success": True, "message": f"✅ Успешно! Зачислено ${amount_usdc} USDC."})
+        add_log(f"📥 Зачислен депозит: +${amount_usdc} USDC для ID {tg_id}")
+        return web.json_response({"success": True, "message": f"✅ Успешно! Зачислено ${amount_usdc} USDC на ваш счет."})
     except Exception as e:
         return web.json_response({"success": False, "message": f"Ошибка сервера: {str(e)}"})
 
@@ -1089,13 +1036,14 @@ async def api_close_all_positions(request):
                 
                 sell_sig = await execute_jupiter_swap(session, mint, USDC_MINT, raw_amount, signer)
                 if sell_sig:
+                    # Устанавливаем цену выхода и PnL (для упрощения при экстренной продаже ставим sell_price = buy_price или запрашиваем реальную)
                     c.execute("UPDATE trades SET sell_price = buy_price, sell_tx = ? WHERE id = ?", (sell_sig, trade_id))
                     closed_count += 1
 
         conn.commit()
         conn.close()
-        add_log(f"⚡ Закрыто вручную позиций: {closed_count}")
-        return web.json_response({"success": True, "message": f"✅ Закрыто позиций: {closed_count}. Баланс обновлен."})
+        add_log(f"⚡ Экстренно закрыто позиций пользователем {tg_id}: {closed_count}")
+        return web.json_response({"success": True, "message": f"✅ Закрыто позиций: {closed_count}. Балансы будут обновлены."})
     except Exception as e:
         return web.json_response({"success": False, "message": f"Ошибка при закрытии позиций: {str(e)}"})
 
@@ -1112,27 +1060,31 @@ async def api_withdraw(request):
 
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
+        
+        # Получаем ИНДИВИДУАЛЬНЫЙ баланс пользователя
         c.execute("SELECT balance_usdc FROM users WHERE telegram_id = ?", (tg_id,))
         u_row = c.fetchone()
         user_bal = u_row[0] if u_row else 0.0
 
-        # Проверка ограничения: оставляем минимум $50 для работы бота
+        # Высчитываем, сколько можно вывести (с учетом несгораемых $50)
         withdrawable = max(0.0, user_bal - MIN_BOT_BALANCE_USDC)
         if token == "USDC" and amount > withdrawable:
             conn.close()
-            return web.json_response({"success": False, "message": f"Нельзя вывести больше доступной суммы (${withdrawable:.2f}). Минимум ${MIN_BOT_BALANCE_USDC} должен оставаться для работы бота."})
+            return web.json_response({"success": False, "message": f"Сумма превышает доступную (${withdrawable:.2f}). Бот оставляет $50 на балансе для обеспечения торговли."})
 
         if token == "USDC":
+            # Вычитаем из ИНДИВИДУАЛЬНОГО баланса пользователя
             new_bal = user_bal - amount
             c.execute("UPDATE users SET balance_usdc = ? WHERE telegram_id = ?", (new_bal, tg_id))
         
+        # Записываем запрос на вывод индивидуально
         c.execute("""INSERT INTO withdrawals (telegram_id, token, amount, recipient_address, tx_signature, status)
                      VALUES (?, ?, ?, ?, ?, 'PENDING')""", (tg_id, token, amount, recipient, "SIMULATED_TX"))
         conn.commit()
         conn.close()
 
-        add_log(f"📤 Запрос на вывод {amount} {token} на адрес {recipient[:6]}... успешно принят.")
-        return web.json_response({"success": True, "message": f"✅ Запрос на вывод {amount} {token} отправлен в обработку."})
+        add_log(f"📤 Запрос на вывод {amount} {token} от ID {tg_id} на адрес {recipient[:6]}... принят.")
+        return web.json_response({"success": True, "message": f"✅ Запрос на вывод {amount} {token} отправлен в обработку. Средства списаны с вашего счета."})
     except Exception as e:
         return web.json_response({"success": False, "message": f"Ошибка вывода: {str(e)}"})
 
