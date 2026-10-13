@@ -53,7 +53,7 @@ MEME_STOP_LOSS_PCT = 0.80      # Стоп-лосс на случай скама 
 
 IS_TRADING_ACTIVE = True       # Глобальный флаг автопилота Топ-5 (ВКЛ / ВЫКЛ)
 IS_MEME_ACTIVE = False         # Глобальный флаг Meme Sniper режима (ВКЛ / ВЫКЛ)
-RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v5.0 (Individual Accs & Sell All) инициализирован."]
+RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v5.2 (Biometrics, Individual Accs, Sell All) инициализирован."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -82,6 +82,7 @@ def get_signer_keypair():
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+    
     # Индивидуальные балансы пользователей
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         telegram_id INTEGER PRIMARY KEY, username TEXT, balance_usdc REAL DEFAULT 0.0,
@@ -95,6 +96,7 @@ def init_db():
         except Exception:
             pass
 
+    # Таблица сделок
     c.execute('''CREATE TABLE IF NOT EXISTS trades (
         id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER, token_symbol TEXT, token_mint TEXT,
         buy_price REAL, amount_tokens REAL, sell_price REAL DEFAULT 0,
@@ -528,6 +530,7 @@ RAW_HTML = r"""<!DOCTYPE html>
     <div id="splash-screen">
         <div class="brand-title">ZERØLIFE</div>
         <div class="brand-run">MULTI-ASSET</div>
+        <!-- Кнопка входа вызывает функцию с запросом биометрии -->
         <button class="start-btn" onclick="openTerminal()">Launch Terminal</button>
     </div>
 
@@ -644,7 +647,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <div style="font-size: 12px; color: #94a3b8; margin-bottom: 6px;">Amount:</div>
                     <input id="withdraw-amount" type="number" step="any" class="sig-input" placeholder="0.00">
 
-                    <button class="btn-green-main" id="btn-withdraw-action" onclick="submitWithdraw()">Withdraw 🚀</button>
+                    <!-- Кнопка вызывает безопасный вывод с биометрией -->
+                    <button class="btn-green-main" id="btn-withdraw-action" onclick="secureWithdraw()">Withdraw 🚀</button>
                 </div>
             </div>
         </div>
@@ -661,6 +665,12 @@ RAW_HTML = r"""<!DOCTYPE html>
         const tg = window.Telegram?.WebApp;
         if(tg) tg.expand();
 
+        // Инициализация менеджера биометрии
+        const bioManager = window.Telegram?.WebApp?.BiometricManager;
+        if (bioManager) {
+            bioManager.init();
+        }
+
         let currentWithdrawToken = 'USDC';
 
         // Получаем ИНДИВИДУАЛЬНЫЕ данные пользователя
@@ -673,7 +683,18 @@ RAW_HTML = r"""<!DOCTYPE html>
             };
         }
 
+        // Обновленная функция входа: запрашиваем доступ к Face ID, если он есть, но еще не выдан
         function openTerminal() {
+            if (bioManager && bioManager.isBiometricAvailable && !bioManager.isAccessGranted) {
+                bioManager.requestAccess({ reason: "Для защиты ваших средств при выводе" }, (granted) => {
+                    proceedToTerminal();
+                });
+            } else {
+                proceedToTerminal();
+            }
+        }
+
+        function proceedToTerminal() {
             document.getElementById('splash-screen').style.display = 'none';
             document.getElementById('app').style.display = 'block';
             document.getElementById('nav').style.display = 'flex';
@@ -719,6 +740,29 @@ RAW_HTML = r"""<!DOCTYPE html>
             }
         }
 
+        // Защищенный вывод средств через Face ID / Touch ID
+        function secureWithdraw() {
+            // Если на устройстве биометрии нет (например, ПК)
+            if (!bioManager || !bioManager.isBiometricAvailable) {
+                submitWithdraw();
+                return;
+            }
+
+            // Если доступ разрешен - сканируем
+            if (bioManager.isAccessGranted) {
+                bioManager.authenticate({ reason: "Подтвердите транзакцию вывода" }, (success) => {
+                    if (success) {
+                        submitWithdraw(); // Успешно - переходим к выводу
+                    } else {
+                        alert("❌ Аутентификация не пройдена. Вывод отменен.");
+                    }
+                });
+            } else {
+                alert("⚠️ Для безопасного вывода необходимо разрешить доступ к Face ID / Touch ID в настройках Telegram.");
+            }
+        }
+
+        // Оригинальная логика отправки на сервер
         async function submitWithdraw() {
             const addr = document.getElementById('withdraw-address').value.trim();
             const amount = document.getElementById('withdraw-amount').value.trim();
