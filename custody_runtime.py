@@ -19,6 +19,7 @@ from solders.transaction import Transaction, VersionedTransaction
 
 from wallet_runtime import WalletRuntime, WalletError, amount_raw, associated, TOKEN, ATA, SYSTEM, MEMO, GENESIS
 from custody_ledger import CustodyLedger, LedgerError, USDC, SOL, FEE_CAP, available, position_account
+from legacy_retirement import prove_retirement, RECOVERY_RPC
 
 WRAPPED_SOL = "So11111111111111111111111111111111111111112"
 
@@ -349,6 +350,10 @@ class CustodyRuntime(WalletRuntime):
             payload["legacy_check_error"] = str(exc) if isinstance(exc, WalletError) else "Не удалось проверить старую операцию: " + type(exc).__name__
         payload["legacy_operations"] = [{key: row.get(key) for key in ("id", "signature", "kind", "state", "timestamp")}
                                         for row in self.legacy_pending()]
+        with self.ledger.db() as db:
+            exists = db.execute("SELECT name FROM sqlite_master WHERE name='wallet_operations'").fetchone()
+            payload["retired_legacy_operations"] = [dict(row) for row in db.execute(
+                "SELECT signature,kind,state,timestamp FROM wallet_operations WHERE state='EXPIRED_UNCONFIRMED'")] if exists else []
         try:
             backing = await self.solvent(session)
         except Exception as exc:
@@ -361,6 +366,57 @@ class CustodyRuntime(WalletRuntime):
             "unassigned_usdc": display_raw(backing[USDC]["raw"] - liabilities.get(USDC, 0), 6),
             "unassigned_sol": display_raw(backing[SOL]["raw"] - liabilities.get(SOL, 0), 9),
             "fee_reserve_sol": display_raw(fee["raw"] if fee else 0, 9)})
+
+    async def recovery_rpc(self, session, method, params):
+        # Fixed, independently verified mainnet endpoint; keys/credentials never sent.
+        async with session.post(RECOVERY_RPC, json={"jsonrpc": "2.0", "id": 1,
+                "method": method, "params": params}, timeout=aiohttp.ClientTimeout(total=8)) as response:
+            if response.status != 200:
+                raise WalletError("RPC восстановления недоступен; запись не изменена.")
+            result = await response.json()
+        if "error" in result or "result" not in result:
+            raise WalletError("RPC не предоставил доказательства для восстановления; запись не изменена.")
+        return result["result"]
+
+    async def retire_legacy(self, request, session):
+        if self.uid(request) != self.owner_id or self.public_enabled:
+            raise WalletError("Восстановление старой личной записи разрешено только владельцу в закрытом режиме.", 403)
+        super().ready()
+        body = await request.json()
+        if body.get("confirm_archive_unknown") is not True:
+            raise WalletError("Нужно подтвердить архивирование без возврата денег и без признания сделки успешной.", 400)
+        valid, _ = self.pin_fn(self.owner_id, str(body.get("pin", "")))
+        if not valid:
+            raise WalletError("Неверный PIN или PIN временно заблокирован.", 403)
+        row = next((r for r in self.legacy_pending() if r["signature"] == body.get("signature")), None)
+        if not row or row["kind"] not in ("BUY", "SELL", "WITHDRAW"):
+            raise WalletError("Эта старая операция не находится в ожидании.", 409)
+        async with self.lock:
+            async with asyncio.timeout(30):
+                async def read_rpc(method, params):
+                    return await self.recovery_rpc(session, method, params)
+                evidence = await prove_retirement(read_rpc, self.wallet, row)
+            # No credits, refunds, position changes or network sends. Preserve signature.
+            with self.ledger.db() as db:
+                db.execute("""CREATE TABLE IF NOT EXISTS legacy_retirement_audit(
+                    signature TEXT PRIMARY KEY, actor_id INTEGER NOT NULL,
+                    state_before TEXT NOT NULL, evidence TEXT NOT NULL,
+                    timestamp TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+                db.execute("""CREATE TRIGGER IF NOT EXISTS immutable_retirement_update
+                    BEFORE UPDATE ON legacy_retirement_audit
+                    BEGIN SELECT RAISE(ABORT,'immutable recovery audit'); END""")
+                db.execute("""CREATE TRIGGER IF NOT EXISTS immutable_retirement_delete
+                    BEFORE DELETE ON legacy_retirement_audit
+                    BEGIN SELECT RAISE(ABORT,'immutable recovery audit'); END""")
+                changed = db.execute("""UPDATE wallet_operations SET state='EXPIRED_UNCONFIRMED'
+                    WHERE id=? AND signature=? AND state IN ('PREPARED','SUBMITTED','UNKNOWN')""",
+                    (row["id"], row["signature"])).rowcount
+                if not changed:
+                    raise WalletError("Статус уже изменился. Обновите проверку.", 409)
+                db.execute("INSERT INTO legacy_retirement_audit(signature,actor_id,state_before,evidence) VALUES(?,?,?,?)",
+                           (row["signature"], self.owner_id, row["state"], json.dumps(evidence)))
+        return web.json_response({"success": True, "state": "EXPIRED_UNCONFIRMED",
+            "message": "Старая запись сохранена в архиве как неподтверждённая с истёкшим окном исполнения. Деньги не зачислялись и повторно не отправлялись. Используйте только фактические остатки кошелька."})
 
     async def reconcile(self, session):
         with self.ledger.db() as db:

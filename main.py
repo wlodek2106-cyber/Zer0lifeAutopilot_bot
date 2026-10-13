@@ -35,7 +35,7 @@ TELEGRAM_INIT_DATA_MAX_AGE_SECONDS = 86400
 PIN_HASH_ITERATIONS = 310000
 PIN_MAX_ATTEMPTS = 5
 PIN_LOCK_SECONDS = 900
-ADMIN_API_PATHS = {"/api/admin/status", "/api/admin/fee_reserve", "/api/admin/opening_balance"}
+ADMIN_API_PATHS = {"/api/admin/status", "/api/admin/fee_reserve", "/api/admin/opening_balance", "/api/admin/retire_legacy"}
 WITHDRAW_LOCKS = {}
 CUSTODY_SAFE_MODE = True
 CUSTODY_PAUSE_MESSAGE = "Операции с реальными средствами временно приостановлены до сверки балансов и миграции реестра."
@@ -972,18 +972,31 @@ RAW_HTML = r"""<!DOCTYPE html>
                 if (result.unassigned_usdc !== undefined) lines.push('Старые нераспределённые монеты: ' + result.unassigned_usdc + ' USDC; ' + result.unassigned_sol + ' SOL. Это не личный баланс нового учёта.');
                 const operations = result.legacy_operations || [];
                 if (!operations.length && !result.legacy_check_error) lines.push('Незавершённых старых операций нет.');
-                operations.forEach(op => lines.push('Старая операция: ' + op.kind + ' / ' + op.state + '\\nПодпись: ' + op.signature + '\\nДата: ' + op.timestamp));
+                operations.forEach(op => lines.push('Старая операция: ' + op.kind + ' / ' + op.state + '\nПодпись: ' + op.signature + '\nДата: ' + op.timestamp));
+                (result.retired_legacy_operations || []).forEach(op => lines.push('Архив: ' + op.kind + ' / ' + op.state + '\nПодпись: ' + op.signature + '\nИсход не подтверждён, возврата/повторной отправки не было.'));
                 if (operations.length) lines.push('Исход пока неизвестен: запись сохранена, повторной отправки не было. Не удаляйте её вручную.');
-                box.textContent = lines.join('\\n\\n');
+                box.textContent = lines.join('\n\n');
                 operations.forEach(op => {
                     const a = document.createElement('a');
                     a.href = 'https://solscan.io/tx/' + encodeURIComponent(op.signature);
-                    a.textContent = '\\nОткрыть старую транзакцию в Solscan';
+                    a.textContent = '\nОткрыть старую транзакцию в Solscan';
                     a.target = '_blank'; a.rel = 'noopener noreferrer';
                     box.appendChild(a);
+                    const button = document.createElement('button');
+                    button.className = 'btn-copy';
+                    button.textContent = 'Проверить истечение и архивировать эту запись';
+                    button.onclick = () => retireLegacyOperation(op.signature);
+                    box.appendChild(button);
                 });
                 await refresh();
             } catch(e) { box.textContent = e.message || 'Не удалось проверить старые операции.'; }
+        }
+        async function retireLegacyOperation(signature) {
+            if (!confirm('Только для старой личной операции. Сервер сначала проверит отсутствие транзакции, истечение blockhash и историю nonce. Если доказательств нет, ничего не изменится. Запись сохраняется как неподтверждённая; это не возврат денег и не успешная сделка. Продолжить?')) return;
+            const pin = prompt('Введите ваш PIN подтверждения:');
+            if (!pin) return;
+            await adminLedgerAction('/api/admin/retire_legacy', {signature, pin, confirm_archive_unknown:true});
+            await checkLegacyOperations();
         }
         async function setupFeeReserve() {
             const amount = prompt('Сколько своих SOL выделить на комиссии? Сначала используется ваш личный SOL-баланс, затем только ваши нераспределённые монеты.', '0.01');
@@ -1769,6 +1782,7 @@ async def main():
     app.router.add_post('/api/verify_deposit', wallet_handler(runtime.deposit))
     app.router.add_post('/api/deposit_invoice', wallet_handler(runtime.create_invoice))
     app.router.add_get('/api/admin/status', wallet_handler(runtime.admin_status))
+    app.router.add_post('/api/admin/retire_legacy', wallet_handler(runtime.retire_legacy))
     app.router.add_post('/api/admin/fee_reserve', wallet_handler(runtime.reserve_fees))
     app.router.add_post('/api/admin/opening_balance', wallet_handler(runtime.opening_balance))
     app.router.add_post('/api/close_all', wallet_handler(runtime.close_all))
