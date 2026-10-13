@@ -21,6 +21,7 @@ from solders.system_program import transfer, TransferParams
 from solders.message import Message
 from solders.hash import Hash
 from solders.instruction import Instruction, AccountMeta
+from owner_test_withdrawal import OwnerTestWithdrawal
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -762,7 +763,7 @@ RAW_HTML = r"""<!DOCTYPE html>
     <div id="app" style="display: none;">
         <div id="tab-terminal" class="tab-panel active">
             <div class="banner-limit" style="border-color:#ef4444; background:#2a1014; margin-bottom:12px;">
-                <div style="color:#fca5a5; font-size:13px; font-weight:800;">SAFE MODE — операции с реальными средствами остановлены</div>
+                <div style="color:#fca5a5; font-size:13px; font-weight:800;">SAFE MODE — торговля и обычные операции остановлены</div>
                 <div style="color:#fecaca; font-size:11px; margin-top:4px;">Показанные старые балансы и позиции не сверены с сетью. Не отправляйте средства и не считайте эти цифры доступными до аудита.</div>
             </div>
             <div class="control-bar">
@@ -874,8 +875,16 @@ RAW_HTML = r"""<!DOCTYPE html>
 
                 <div id="section-withdraw" style="display: none;">
                     <div class="banner-limit" style="border-color:#ef4444; background:#2a1014;">
-                        <div style="color:#fca5a5; font-size:13px; font-weight:800;">Вывод приостановлен до сверки обязательств</div>
+                        <div style="color:#fca5a5; font-size:13px; font-weight:800;">Обычный вывод приостановлен</div>
                         <div style="color:#fecaca; font-size:11px; margin-top:4px;">Старые внутренние балансы и позиции не подтверждены реестром и фактическими остатками кошелька.</div>
+                    </div>
+                    <div id="owner-test-panel" class="banner-limit" style="display:none; margin-top:12px;">
+                        <div style="font-weight:800;">Тест владельца — 1 USDC</div>
+                        <div style="font-size:11px; margin-top:6px;">Прямой перевод с серверного кошелька, не списание виртуального баланса. Торговля остаётся выключенной.</div>
+                        <div id="owner-test-address" style="font-size:11px; overflow-wrap:anywhere; margin-top:8px;"></div>
+                        <div id="owner-test-status" style="font-size:12px; margin-top:8px;"></div>
+                        <a id="owner-test-tx" target="_blank" rel="noopener noreferrer" style="display:none;">Открыть транзакцию</a>
+                        <button id="owner-test-send" class="btn-main" style="display:none; margin-top:10px;" onclick="sendOwnerTest()">Подтвердить тест: 1 USDC</button>
                     </div>
                 </div>
             </div>
@@ -907,6 +916,50 @@ RAW_HTML = r"""<!DOCTYPE html>
         } catch (e) {}
 
         let currentWithdrawToken = 'USDC';
+        let ownerTestRecipient = '';
+        let ownerTestSending = false;
+
+        async function loadOwnerTest() {
+            const btn = document.getElementById('owner-test-send');
+            try {
+                const res = await apiFetch('/api/test_withdraw');
+                const data = await res.json();
+                document.getElementById('owner-test-status').textContent = data.message || 'Статус недоступен.';
+                ownerTestRecipient = data.recipient || '';
+                document.getElementById('owner-test-address').textContent = ownerTestRecipient ? 'Получатель: ' + ownerTestRecipient : '';
+                btn.style.display = res.ok && data.can_send ? 'block' : 'none';
+                btn.disabled = ownerTestSending;
+                const link = document.getElementById('owner-test-tx');
+                link.style.display = data.signature ? 'block' : 'none';
+                if (data.signature) link.href = 'https://solscan.io/tx/' + encodeURIComponent(data.signature);
+            } catch (e) {
+                btn.style.display = 'none';
+                document.getElementById('owner-test-status').textContent = 'Статус неизвестен. Не повторяйте перевод.';
+            }
+        }
+
+        async function sendOwnerTest() {
+            if (ownerTestSending || !ownerTestRecipient) return;
+            const recipient = ownerTestRecipient;
+            if (!confirm('Отправить реальные 1 USDC с серверного кошелька на ' + recipient + '? Комиссия оплачивается в SOL.')) return;
+            const pin = prompt('Введите PIN подтверждения:');
+            if (!pin) return;
+            ownerTestSending = true;
+            document.getElementById('owner-test-send').disabled = true;
+            try {
+                const res = await apiFetch('/api/test_withdraw', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({confirm: true, recipient_address: recipient, pin})
+                });
+                const data = await res.json();
+                alert(data.message || 'Проверьте статус теста.');
+            } catch (e) {
+                alert('Результат неизвестен. Не повторяйте отправку — проверьте статус и подпись.');
+            } finally {
+                ownerTestSending = false;
+                await loadOwnerTest();
+            }
+        }
 
         function getUserData() {
             const user = tg?.initDataUnsafe?.user;
@@ -1135,6 +1188,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const s = await apiFetch('/api/stats?' + params.toString()).then(r => r.json());
                 
                 if (s.success) {
+                    document.getElementById('owner-test-panel').style.display = s.owner_test ? 'block' : 'none';
+                    if (s.owner_test) await loadOwnerTest();
                     const userEl = document.getElementById('display-username');
                     if (userEl) userEl.innerText = "@" + s.username;
                     
@@ -1365,7 +1420,8 @@ async def api_get_stats(request):
         "trades": trades, "user_balance": user_bal,
         "total_deposited": total_deposited, "total_pnl": total_pnl, "total_roi": total_roi,
         "withdrawable": withdrawable, "balance_reconciled": not CUSTODY_SAFE_MODE, "username": db_username,
-        "wallet_history": wallet_history
+        "wallet_history": wallet_history,
+        "owner_test": request.app["owner_test_withdrawal"].is_owner(tg_id)
     })
 
 async def api_verify_deposit(request):
@@ -1579,8 +1635,11 @@ async def set_telegram_webhook():
 async def main():
     init_db()
     if CUSTODY_SAFE_MODE:
-        add_log("🛑 SAFE MODE: торговля, пополнения и выводы отключены до сверки реестра и средств.")
+        add_log("🛑 SAFE MODE: торговля, пополнения и обычные выводы отключены. Тест владельца настраивается отдельно.")
     app = web.Application(middlewares=[telegram_auth_middleware])
+    owner_test = OwnerTestWithdrawal(DB_FILE, SOLANA_RPC, ADMIN_TELEGRAM_ID,
+        SHARED_DEPOSIT_WALLET, get_signer_keypair, verify_user_pin, add_log)
+    app["owner_test_withdrawal"] = owner_test
     app.router.add_get('/', index_handler)
     app.router.add_get('/health', health_handler)
     app.router.add_get('/api/logs', api_get_logs)
@@ -1590,6 +1649,8 @@ async def main():
     app.router.add_post('/api/verify_deposit', api_verify_deposit)
     app.router.add_post('/api/close_all', api_close_all_positions)
     app.router.add_post('/api/withdraw', api_withdraw)
+    app.router.add_get('/api/test_withdraw', owner_test.status)
+    app.router.add_post('/api/test_withdraw', owner_test.send)
     app.router.add_get('/api/security_status', api_security_status)
     app.router.add_post('/api/set_security', api_set_security)
     app.router.add_post('/api/verify_security', api_verify_security)
