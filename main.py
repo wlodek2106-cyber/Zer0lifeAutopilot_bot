@@ -9,7 +9,11 @@ import json
 import base58
 import base64
 from solders.keypair import Keypair
-from solders.transaction import VersionedTransaction
+from solders.transaction import VersionedTransaction, Transaction
+from solders.pubkey import Pubkey
+from solders.system_program import transfer, TransferParams
+from solders.message import Message
+from solders.hash import Hash
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -53,7 +57,7 @@ MEME_STOP_LOSS_PCT = 0.80      # Стоп-лосс на случай скама 
 
 IS_TRADING_ACTIVE = True       # Глобальный флаг автопилота Топ-5 (ВКЛ / ВЫКЛ)
 IS_MEME_ACTIVE = False         # Глобальный флаг Meme Sniper режима (ВКЛ / ВЫКЛ)
-RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v5.6 (Restored UI) инициализирован."]
+RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v6.0 (Wallet History + PnL Fix) инициализирован."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -249,6 +253,43 @@ async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, 
     except Exception as e:
         add_log(f"⚠️ Исключение в execute_jupiter_swap: {e}")
     return ""
+
+# Новая функция для реальной отправки SOL в блокчейн
+async def execute_native_sol_transfer(session: aiohttp.ClientSession, signer: Keypair, recipient_addr: str, amount_sol: float):
+    try:
+        lamports = int(amount_sol * 1_000_000_000)
+        recipient_pubkey = Pubkey.from_string(recipient_addr)
+
+        # 1. Получаем свежий blockhash от сети
+        payload = {"jsonrpc": "2.0", "id": 1, "method": "getLatestBlockhash", "params": [{"commitment": "finalized"}]}
+        async with session.post(SOLANA_RPC, json=payload) as resp:
+            data = await resp.json()
+            blockhash_str = data["result"]["value"]["blockhash"]
+
+        blockhash = Hash.from_string(blockhash_str)
+
+        # 2. Формируем инструкцию перевода
+        ix = transfer(TransferParams(from_pubkey=signer.pubkey(), to_pubkey=recipient_pubkey, lamports=lamports))
+
+        # 3. Создаем и подписываем транзакцию
+        msg = Message.new_with_blockhash([ix], signer.pubkey(), blockhash)
+        tx = Transaction([signer], msg, blockhash)
+        tx_b64 = base64.b64encode(bytes(tx)).decode('utf-8')
+
+        # 4. Отправляем в Helius RPC
+        send_payload = {
+            "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
+            "params": [tx_b64, {"encoding": "base64", "skipPreflight": False}]
+        }
+        async with session.post(SOLANA_RPC, json=send_payload) as resp:
+            send_data = await resp.json()
+            if "error" in send_data:
+                add_log(f"⚠️ Ошибка RPC при выводе SOL: {send_data['error']}")
+                return None
+            return send_data.get("result") # Возвращает сигнатуру реальной транзакции
+    except Exception as e:
+        add_log(f"⚠️ Ошибка формирования перевода SOL: {e}")
+        return None
 
 # --- ВОРКЕР 1: ОСНОВНОЙ (Топ-5 Ликвидных Активов) ---
 async def real_trading_worker():
@@ -567,7 +608,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 </div>
             </div>
 
-            <!-- БЛОК MEME SNIPER РЕЖИМА (ВОССТАНОВЛЕН) -->
+            <!-- БЛОК MEME SNIPER РЕЖИМА -->
             <div class="card" style="border: 1px solid rgba(234, 179, 8, 0.3); background: linear-gradient(135deg, #0e111a 0%, #15130a 100%);">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <div>
@@ -584,7 +625,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 </div>
             </div>
 
-            <!-- БЛОК ТОП-5 АКТИВОВ (ВОССТАНОВЛЕН) -->
+            <!-- БЛОК ТОП-5 АКТИВОВ -->
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div>
@@ -630,7 +671,7 @@ RAW_HTML = r"""<!DOCTYPE html>
 
         <!-- TAB 3: WALLET -->
         <div id="tab-deposit" class="tab-panel">
-            <div class="deposit-modal">
+            <div class="deposit-modal" style="margin-bottom: 14px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
                     <div style="font-size: 17px; font-weight: 800; color: #fff;" id="wallet-modal-title">Deposit Crypto (USDC)</div>
                     <span style="color: #64748b; cursor: pointer; font-size: 18px;" onclick="gotoTab('terminal', document.querySelectorAll('.nav-btn')[0])">✕</span>
@@ -683,6 +724,12 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <button class="btn-green-main" id="btn-withdraw-action" onclick="secureWithdraw()">Withdraw 🚀</button>
                 </div>
             </div>
+
+            <!-- ИСТОРИЯ КОШЕЛЬКА -->
+            <div class="card" style="background: #0b0d14; border-color: #1c2333;">
+                <div style="font-size: 13px; font-weight: 800; color: #fff; margin-bottom: 12px;">История Транзакций</div>
+                <div id="wallet-history-box" style="font-size: 11px; color: #64748b; text-align: center;">Транзакции отсутствуют...</div>
+            </div>
         </div>
     </div>
 
@@ -725,19 +772,12 @@ RAW_HTML = r"""<!DOCTYPE html>
             return { id: id, username: username };
         }
 
-        // БЕЗОПАСНЫЙ ВХОД: без блокирующих запросов, 100% открывает приложение
+        // Вход в терминал без блокировок
         function openTerminal() {
-            try {
-                const splash = document.getElementById('splash-screen');
-                const app = document.getElementById('app');
-                const nav = document.getElementById('nav');
-                if (splash) splash.style.display = 'none';
-                if (app) app.style.display = 'block';
-                if (nav) nav.style.display = 'flex';
-                refresh();
-            } catch (e) {
-                console.error("Ошибка при открытии терминала", e);
-            }
+            document.getElementById('splash-screen').style.display = 'none';
+            document.getElementById('app').style.display = 'block';
+            document.getElementById('nav').style.display = 'flex';
+            refresh();
         }
 
         function gotoTab(id, btn) {
@@ -780,7 +820,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             }
         }
 
-        // БИОМЕТРИЯ ПРИ ВЫВОДЕ
+        // БЕЗОПАСНЫЙ ВЫВОД С БИОМЕТРИЕЙ
         function secureWithdraw() {
             try {
                 if (!bioManager || !bioManager.isBiometricAvailable) {
@@ -958,6 +998,33 @@ RAW_HTML = r"""<!DOCTYPE html>
                     portPnlEl.innerText = pnlSign + "$" + portPnlVal.toFixed(2) + " (" + pnlSign + portRoiVal.toFixed(1) + "%)";
                     portPnlEl.style.color = portPnlVal >= 0 ? '#4ade80' : '#f87171';
 
+                    // Отрисовка Истории транзакций (Wallet History)
+                    if (s.wallet_history && s.wallet_history.length > 0) {
+                        document.getElementById('wallet-history-box').innerHTML = s.wallet_history.map(h => {
+                            const isDep = h.type === 'DEPOSIT';
+                            const color = isDep ? '#4ade80' : '#f87171';
+                            const sign = isDep ? '+' : '-';
+                            const txLink = (h.tx && h.tx !== 'SIMULATED_TX') 
+                                ? `<a href="https://solscan.io/tx/${h.tx}" target="_blank" style="color: #60a5fa; text-decoration: none; font-size: 11px;">Tx ↗</a>` 
+                                : `<span style="color: #64748b; font-size: 10px;">Обработка</span>`;
+                            
+                            return `
+                                <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #1c2333; text-align: left;">
+                                    <div>
+                                        <div style="color: ${color}; font-weight: 800; font-size: 13px;">${sign} ${h.amount}</div>
+                                        <div style="font-size: 10px; color: #64748b; margin-top: 2px;">${h.time}</div>
+                                    </div>
+                                    <div style="text-align: right;">
+                                        <div style="font-size: 10px; color: ${h.status === 'VERIFIED' || h.status === 'COMPLETED' ? '#4ade80' : '#facc15'}; margin-bottom: 2px;">${h.status}</div>
+                                        ${txLink}
+                                    </div>
+                                </div>
+                            `;
+                        }).join('');
+                    } else {
+                        document.getElementById('wallet-history-box').innerHTML = "Нет транзакций";
+                    }
+
                     if (s.trades && s.trades.length > 0) {
                         document.getElementById('history-box').innerHTML = s.trades.map(t => {
                             const isClosed = t.status === 'CLOSED';
@@ -1071,9 +1138,21 @@ async def api_get_stats(request):
     dep_row = c.fetchone()
     total_deposited = dep_row[0] if dep_row and dep_row[0] else 0.0
 
+    # История кошелька (депозиты + выводы)
+    c.execute("SELECT amount_usdc, tx_signature, timestamp, status FROM deposits WHERE telegram_id = ? ORDER BY id DESC LIMIT 15", (tg_id,))
+    deps = [{"type": "DEPOSIT", "amount": f"${r[0]:.2f} USDC", "tx": r[1], "time": r[2][:19], "status": r[3]} for r in c.fetchall()]
+
+    c.execute("SELECT amount, token, tx_signature, timestamp, status FROM withdrawals WHERE telegram_id = ? ORDER BY id DESC LIMIT 15", (tg_id,))
+    withs = [{"type": "WITHDRAW", "amount": f"{r[0]} {r[1]}", "tx": r[2], "time": r[3][:19], "status": r[4]} for r in c.fetchall()]
+    
+    wallet_history = deps + withs
+    wallet_history.sort(key=lambda x: x["time"], reverse=True)
+    wallet_history = wallet_history[:20]
+
     conn.close()
 
-    total_pnl = user_bal - total_deposited
+    # Фикс логики PnL: Теперь PnL = чистая прибыль с закрытых сделок (tot_profit)
+    total_pnl = tot_profit
     total_roi = (total_pnl / total_deposited * 100) if total_deposited > 0 else 0.0
     
     withdrawable = max(0.0, user_bal - MIN_BOT_BALANCE_USDC)
@@ -1082,7 +1161,8 @@ async def api_get_stats(request):
         "success": True, "profit_usdc": tot_profit, "closed_count": closed_count,
         "trades": trades, "user_balance": user_bal,
         "total_deposited": total_deposited, "total_pnl": total_pnl, "total_roi": total_roi,
-        "withdrawable": withdrawable, "username": db_username
+        "withdrawable": withdrawable, "username": db_username,
+        "wallet_history": wallet_history
     })
 
 async def api_verify_deposit(request):
@@ -1163,31 +1243,56 @@ async def api_withdraw(request):
         amount = float(body.get("amount", 0.0))
 
         if not recipient or len(recipient) < 30 or amount <= 0:
-            return web.json_response({"success": False, "message": "Проверьте правильность адреса и суммы вывода."})
+            return web.json_response({"success": False, "message": "Проверьте правильность адреса и суммы."})
 
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
-        
         c.execute("SELECT balance_usdc FROM users WHERE telegram_id = ?", (tg_id,))
         u_row = c.fetchone()
         user_bal = u_row[0] if u_row else 0.0
 
-        withdrawable = max(0.0, user_bal - MIN_BOT_BALANCE_USDC)
-        if token == "USDC" and amount > withdrawable:
-            conn.close()
-            return web.json_response({"success": False, "message": f"Сумма превышает доступную (${withdrawable:.2f}). Бот оставляет $50 на балансе для обеспечения торговли."})
+        usdc_deduction = amount
+        if token == "SOL":
+            async with aiohttp.ClientSession() as session:
+                prices = await get_token_prices(session)
+                sol_price = prices.get("SOL", 0)
+                if sol_price <= 0:
+                    conn.close()
+                    return web.json_response({"success": False, "message": "Не удалось получить текущий курс SOL. Попробуйте позже."})
+                usdc_deduction = amount * sol_price
 
-        if token == "USDC":
-            new_bal = user_bal - amount
-            c.execute("UPDATE users SET balance_usdc = ? WHERE telegram_id = ?", (new_bal, tg_id))
+        withdrawable = max(0.0, user_bal - MIN_BOT_BALANCE_USDC)
+        if usdc_deduction > withdrawable:
+            conn.close()
+            return web.json_response({"success": False, "message": f"Сумма превышает доступную. Эквивалент: ${usdc_deduction:.2f}, Доступно: ${withdrawable:.2f}."})
+
+        signer = get_signer_keypair()
+        if not signer:
+            conn.close()
+            return web.json_response({"success": False, "message": "Внутренняя ошибка: серверный кошелек недоступен."})
+
+        tx_signature = "SIMULATED_TX"
+        async with aiohttp.ClientSession() as session:
+            if token == "SOL":
+                sig = await execute_native_sol_transfer(session, signer, recipient, amount)
+                if not sig:
+                    conn.close()
+                    return web.json_response({"success": False, "message": "Ошибка отправки транзакции в сеть Solana. Средства не списаны."})
+                tx_signature = sig
+            elif token == "USDC":
+                conn.close()
+                return web.json_response({"success": False, "message": "Прямой вывод USDC находится в разработке. Пожалуйста, выберите вывод в Solana (SOL)."})
+
+        new_bal = user_bal - usdc_deduction
+        c.execute("UPDATE users SET balance_usdc = ? WHERE telegram_id = ?", (new_bal, tg_id))
         
         c.execute("""INSERT INTO withdrawals (telegram_id, token, amount, recipient_address, tx_signature, status)
-                     VALUES (?, ?, ?, ?, ?, 'PENDING')""", (tg_id, token, amount, recipient, "SIMULATED_TX"))
+                     VALUES (?, ?, ?, ?, ?, 'COMPLETED')""", (tg_id, token, amount, recipient, tx_signature))
         conn.commit()
         conn.close()
 
-        add_log(f"📤 Запрос на вывод {amount} {token} от ID {tg_id} на адрес {recipient[:6]}... принят.")
-        return web.json_response({"success": True, "message": f"✅ Запрос на вывод {amount} {token} отправлен в обработку. Средства списаны с вашего счета."})
+        add_log(f"📤 Вывод {amount} {token} (списано ${usdc_deduction:.2f}) на {recipient[:6]}... выполнен. Tx: {tx_signature[:10]}")
+        return web.json_response({"success": True, "message": f"✅ Успешно! {amount} {token} отправлены на ваш кошелек в сети Solana."})
     except Exception as e:
         return web.json_response({"success": False, "message": f"Ошибка вывода: {str(e)}"})
 
