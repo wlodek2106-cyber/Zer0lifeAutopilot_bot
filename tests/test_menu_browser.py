@@ -40,7 +40,10 @@ class MenuBrowserTests(unittest.TestCase):
                 proceedToTerminal(); await refresh();
                 const assert=(condition,message)=>{if(!condition)failures.push(message);};
                 assert(document.querySelectorAll('.nav-btn').length===4,'four navigation items');
-                assert(!document.getElementById('obsolete-meme-card'),'obsolete Meme Sniper removed');
+                assert(document.getElementById('meme-sniper-card').closest('.tab-panel').id==='tab-trading','SOL sniper in Trading, not Overview');
+                assert(document.getElementById('sniper-sol-balance').textContent==='0.164009 SOL','sniper shows personal SOL');
+                assert(document.getElementById('btn-meme-toggle').disabled,'unconnected sniper cannot trade');
+                assert(document.getElementById('meme-toggle-text').textContent==='НЕ ПОДКЛЮЧЁН','honest sniper status');
                 assert(document.getElementById('btn-toggle').closest('.tab-panel').id==='tab-trading','controls in Trading');
                 assert(document.getElementById('admin-custody-panel').closest('.tab-panel').id==='tab-settings','admin in Settings');
                 assert(document.getElementById('port-balance').textContent==='34.037005 USDC','personal USDC value');
