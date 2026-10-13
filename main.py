@@ -53,7 +53,7 @@ MEME_STOP_LOSS_PCT = 0.80      # Стоп-лосс на случай скама 
 
 IS_TRADING_ACTIVE = True       # Глобальный флаг автопилота Топ-5 (ВКЛ / ВЫКЛ)
 IS_MEME_ACTIVE = False         # Глобальный флаг Meme Sniper режима (ВКЛ / ВЫКЛ)
-RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v5.3 (Active) инициализирован."]
+RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v5.5 (Fixed Biometrics) инициализирован."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -660,54 +660,36 @@ RAW_HTML = r"""<!DOCTYPE html>
     </div>
 
     <script>
-        const tg = window.Telegram?.WebApp;
-        if (tg) {
-            tg.expand();
-            tg.ready();
-        }
+        let tg;
+        try {
+            tg = window.Telegram?.WebApp;
+            if (tg) {
+                tg.expand();
+                tg.ready();
+            }
+        } catch (e) {}
 
-        let isBioReady = false;
-        const bioManager = window.Telegram?.WebApp?.BiometricManager;
-
-        if (bioManager) {
-            bioManager.init(() => {
-                isBioReady = true;
-            });
-        }
+        let bioManager = window.Telegram?.WebApp?.BiometricManager || null;
 
         let currentWithdrawToken = 'USDC';
 
         function getUserData() {
-            const initDataUnsafe = tg?.initDataUnsafe || {};
-            const user = initDataUnsafe.user || {};
-            return {
-                id: user.id || 42882165,
-                username: user.username || user.first_name || 'Guest'
-            };
-        }
-
-        function openTerminal() {
+            let id = 42882165;
+            let username = 'Guest';
             try {
-                if (isBioReady && bioManager && bioManager.isBiometricAvailable && !bioManager.isAccessGranted) {
-                    bioManager.requestAccess({ reason: "Для защиты ваших средств при выводе" }, () => {
-                        proceedToTerminal();
-                    });
-                    setTimeout(proceedToTerminal, 1000);
-                } else {
-                    proceedToTerminal();
+                if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
+                    id = tg.initDataUnsafe.user.id || id;
+                    username = tg.initDataUnsafe.user.username || tg.initDataUnsafe.user.first_name || username;
                 }
-            } catch (err) {
-                proceedToTerminal();
-            }
+            } catch (e) {}
+            return { id: id, username: username };
         }
 
-        function proceedToTerminal() {
-            const splash = document.getElementById('splash-screen');
-            const app = document.getElementById('app');
-            const nav = document.getElementById('nav');
-            if (splash) splash.style.display = 'none';
-            if (app) app.style.display = 'block';
-            if (nav) nav.style.display = 'flex';
+        // Вход в терминал без блокировок
+        function openTerminal() {
+            document.getElementById('splash-screen').style.display = 'none';
+            document.getElementById('app').style.display = 'block';
+            document.getElementById('nav').style.display = 'flex';
             refresh();
         }
 
@@ -751,29 +733,52 @@ RAW_HTML = r"""<!DOCTYPE html>
             }
         }
 
+        // БЕЗОПАСНЫЙ ВЫВОД С БИОМЕТРИЕЙ
         function secureWithdraw() {
-            if (!isBioReady || !bioManager || !bioManager.isBiometricAvailable) {
+            if (!bioManager) {
+                // Платформа не поддерживает API
                 submitWithdraw();
                 return;
             }
 
-            if (bioManager.isAccessGranted) {
-                bioManager.authenticate({ reason: "Подтвердите транзакцию вывода" }, (success) => {
-                    if (success) {
-                        submitWithdraw();
+            // Инициализируем, если еще не было
+            if (!bioManager.isInited) {
+                bioManager.init(() => {
+                    checkAndAuthenticate();
+                });
+            } else {
+                checkAndAuthenticate();
+            }
+        }
+
+        function checkAndAuthenticate() {
+            if (!bioManager.isBiometricAvailable) {
+                // Если Touch ID / Face ID выключен или не поддерживается
+                submitWithdraw();
+                return;
+            }
+
+            if (!bioManager.isAccessGranted) {
+                bioManager.requestAccess({ reason: "Для подтверждения вывода средств" }, (granted) => {
+                    if (granted) {
+                        executeScan();
                     } else {
-                        alert("❌ Аутентификация не пройдена. Вывод отменен.");
+                        alert("⚠️ Для безопасного вывода необходимо разрешить биометрию.");
                     }
                 });
             } else {
-                bioManager.requestAccess({ reason: "Для подтверждения вывода средств" }, (granted) => {
-                    if (granted) {
-                        secureWithdraw();
-                    } else {
-                        alert("⚠️ Для вывода необходимо разрешить биометрию.");
-                    }
-                });
+                executeScan();
             }
+        }
+
+        function executeScan() {
+            bioManager.authenticate({ reason: "Сканирование для вывода средств" }, (success) => {
+                if (success) {
+                    submitWithdraw();
+                } else {
+                    alert("❌ Аутентификация не пройдена. Вывод отменен.");
+                }
+            });
         }
 
         async function submitWithdraw() {
@@ -894,18 +899,22 @@ RAW_HTML = r"""<!DOCTYPE html>
                     const userEl = document.getElementById('display-username');
                     if (userEl) userEl.innerText = "@" + s.username;
                     
-                    const p = s.profit_usdc;
+                    const p = s.profit_usdc ? s.profit_usdc : 0;
                     document.getElementById('pnl-val').innerText = (p >= 0 ? "+$" : "-$") + Math.abs(p).toFixed(2) + " USDC";
-                    document.getElementById('closed-count').innerText = s.closed_count;
+                    document.getElementById('closed-count').innerText = s.closed_count ? s.closed_count : 0;
                     
-                    document.getElementById('port-balance').innerText = "$" + (s.total_deposited \vert{}\vert{} 0).toFixed(2) + " / $" + (s.user_balance || 0).toFixed(2);
-                    document.getElementById('port-withdrawable').innerText = "$" + (s.withdrawable || 0).toFixed(2);
+                    const dep = s.total_deposited ? s.total_deposited : 0;
+                    const bal = s.user_balance ? s.user_balance : 0;
+                    const wth = s.withdrawable ? s.withdrawable : 0;
+
+                    document.getElementById('port-balance').innerText = "$" + dep.toFixed(2) + " / $" + bal.toFixed(2);
+                    document.getElementById('port-withdrawable').innerText = "$" + wth.toFixed(2);
                     
                     const portPnlEl = document.getElementById('port-pnl');
-                    const portPnlVal = s.total_pnl || 0;
-                    const portRoiVal = s.total_roi || 0;
+                    const portPnlVal = s.total_pnl ? s.total_pnl : 0;
+                    const portRoiVal = s.total_roi ? s.total_roi : 0;
                     const pnlSign = portPnlVal >= 0 ? "+" : "";
-                    portPnlEl.innerText = `${pnlSign}$${portPnlVal.toFixed(2)} (${pnlSign}${portRoiVal.toFixed(1)}%)`;
+                    portPnlEl.innerText = pnlSign + "$" + portPnlVal.toFixed(2) + " (" + pnlSign + portRoiVal.toFixed(1) + "%)";
                     portPnlEl.style.color = portPnlVal >= 0 ? '#4ade80' : '#f87171';
 
                     if (s.trades && s.trades.length > 0) {
@@ -931,12 +940,12 @@ RAW_HTML = r"""<!DOCTYPE html>
                                     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px; padding-top: 6px; border-top: 1px solid #141b2a;">
                                         <div style="font-size: 11px; color: #64748b;">Результат:</div>
                                         <div style="font-weight: 800; font-size: 13px; color: ${isClosed ? pnlColor : '#60a5fa'};">
-                                            ${isClosed ? `${tPnlSign}$${t.profit_usdc.toFixed(2)} (${tPnlSign}${t.profit_pct.toFixed(2)}%)` : 'Открытая позиция'}
+                                            ${isClosed ? (tPnlSign + '$' + t.profit_usdc.toFixed(2) + ' (' + tPnlSign + t.profit_pct.toFixed(2) + '%)') : 'Открытая позиция'}
                                         </div>
                                     </div>
                                     <div class="order-tx-row">
-                                        ${t.buy_tx ? `<a class="tx-link" href="https://solscan.io/tx/${t.buy_tx}" target="_blank">↗ Покупка (Tx)</a>` : ''}
-                                        ${t.sell_tx ? `<a class="tx-link" style="color: #4ade80;" href="https://solscan.io/tx/${t.sell_tx}" target="_blank">↗ Продажа (Tx)</a>` : ''}
+                                        ${t.buy_tx ? '<a class="tx-link" href="https://solscan.io/tx/' + t.buy_tx + '" target="_blank">↗ Покупка (Tx)</a>' : ''}
+                                        ${t.sell_tx ? '<a class="tx-link" style="color: #4ade80;" href="https://solscan.io/tx/' + t.sell_tx + '" target="_blank">↗ Продажа (Tx)</a>' : ''}
                                     </div>
                                 </div>
                             `;
