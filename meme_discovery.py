@@ -177,6 +177,10 @@ class MemeDiscovery:
                     metrics = json.loads(row["metrics"]); metrics["eligible"] = False
                     db.execute("UPDATE custody_meme_assets SET metrics=? WHERE code=?", (json.dumps(metrics), row["code"]))
                 for item in accepted:
+                    previous = db.execute("SELECT mint,decimals FROM custody_meme_assets WHERE code=?",
+                                          (item["code"],)).fetchone()
+                    if previous and (previous["mint"], previous["decimals"]) != (item["mint"], item["decimals"]):
+                        raise ValueError("Candidate identity or decimals changed. New entries paused.")
                     db.execute("""INSERT INTO custody_meme_assets VALUES(?,?,?,?,?)
                         ON CONFLICT(code) DO UPDATE SET metrics=excluded.metrics,checked_at=excluded.checked_at""",
                         (item["code"], item["mint"], item["decimals"], json.dumps(item), now))

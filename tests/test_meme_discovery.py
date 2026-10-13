@@ -98,6 +98,16 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(matches),1)
         self.assertEqual(matches[0]["code"],"WIF")
 
+    async def test_identity_collision_does_not_rebind_an_old_mint(self):
+        code="M_"+hashlib.sha256(MINT.encode()).hexdigest()[:16]
+        with self.ledger.db() as db:
+            db.execute("INSERT INTO custody_meme_assets VALUES(?,?,?,?,?)",
+                       (code,OTHER,6,json.dumps({"eligible":False}),int(time.time())))
+        with self.assertRaises(ValueError):
+            await self.discovery.scan(None)
+        self.assertEqual(self.discovery.assets()[0]["mint"],OTHER)
+        self.assertTrue(self.ledger.audit())
+
     def test_unsafe_illiquid_young_pumped_or_malformed_pools_excluded(self):
         for changes in ({"liquidity":{"usd":99999}},{"volume":{"h24":99999}},
                         {"txns":{"h24":{"buys":1,"sells":1}}},{"priceUsd":"nan"},
