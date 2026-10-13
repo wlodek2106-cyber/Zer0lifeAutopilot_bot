@@ -792,10 +792,10 @@ RAW_HTML = r"""<!DOCTYPE html>
     <div id="splash-screen">
         <div class="brand-title">ZERØLIFE</div>
         <div class="brand-run">MULTI-ASSET</div>
-        <button class="start-btn" onclick="openTerminal()">Launch Terminal</button>
+        <button id="launch-terminal" class="start-btn" onclick="openTerminal()">Launch Terminal</button>
     </div>
 
-    <section id="account-signup" class="card" data-account-version="telegram-passkey-v1" style="display:none;position:fixed;inset:7vh 18px auto;z-index:150;max-width:460px;margin:auto">
+    <section id="account-signup" class="card" data-account-version="telegram-passkey-v1" data-entry-fix="signup-above-splash-v1" style="display:none;position:fixed;inset:7vh 18px auto;z-index:10001;max-width:460px;max-height:82vh;overflow-y:auto;-webkit-overflow-scrolling:touch;margin:auto">
         <h2>Create your account</h2><p class="muted">Your verified Telegram account is your login. No email or password required.</p>
         <label for="account-nickname">Nickname</label>
         <input id="account-nickname" class="sig-input" autocomplete="nickname" minlength="3" maxlength="24" pattern="[A-Za-z0-9_]{3,24}" placeholder="Your nickname">
@@ -1223,6 +1223,9 @@ RAW_HTML = r"""<!DOCTYPE html>
         async function openTerminal() {
             const user = getUserData();
             if (!user) { alert("Open this app from Telegram."); return; }
+            const launch=document.getElementById('launch-terminal');
+            if(launch.disabled)return;
+            launch.disabled=true;launch.textContent='Checking account...';
             try {
                 const profile=await loadAccount();
                 if(!profile.registered){
@@ -1232,6 +1235,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 }
                 await finishAccount();
             } catch(e){alert(e.message||'Could not verify account.');}
+            finally{launch.disabled=false;launch.textContent='Launch Terminal';}
         }
         async function createAccount() {
             const button=document.getElementById('account-create');button.disabled=true;
