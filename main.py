@@ -57,7 +57,7 @@ MEME_STOP_LOSS_PCT = 0.80      # Стоп-лосс на случай скама 
 
 IS_TRADING_ACTIVE = True       # Глобальный флаг автопилота Топ-5 (ВКЛ / ВЫКЛ)
 IS_MEME_ACTIVE = False         # Глобальный флаг Meme Sniper режима (ВКЛ / ВЫКЛ)
-RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v6.1 (USDC Withdraws & Exact PnL) инициализирован."]
+RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v6.2 (Secure Pass & Bio) инициализирован."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -298,7 +298,6 @@ async def real_trading_worker():
                 conn = sqlite3.connect(DB_FILE)
                 c = conn.cursor()
                 
-                # Обработка ПРОДАЖИ
                 c.execute("SELECT id, telegram_id, token_symbol, token_mint, buy_price, amount_tokens FROM trades WHERE sell_price = 0 AND token_symbol IN ('SOL', 'JUP', 'RAY', 'WIF', 'PYTH')")
                 active_trades = c.fetchall()
                 
@@ -322,13 +321,11 @@ async def real_trading_worker():
                                 profit_usd = round((cur_px - entry_px) * amount_tokens, 2)
                                 c.execute("UPDATE trades SET sell_price = ?, profit_usdc = ?, sell_tx = ? WHERE id = ?", (cur_px, profit_usd, sell_sig, trade_id))
                                 if t_tg_id:
-                                    # ПЛЮСУЕМ ПРИБЫЛЬ К ЛИЧНОМУ БАЛАНСУ
                                     c.execute("UPDATE users SET balance_usdc = balance_usdc + ? WHERE telegram_id = ?", (profit_usd, t_tg_id))
                         conn.commit()
                         add_log(f"✅ Ордер {sym} закрыт. Прибыль зачислена! Tx: {sell_sig[:10]}...")
                         cooldown_until = now_ts + 30
 
-                # Обработка ПОКУПКИ
                 if not IS_TRADING_ACTIVE or now_ts < cooldown_until:
                     conn.close()
                     await asyncio.sleep(20)
@@ -353,7 +350,7 @@ async def real_trading_worker():
                         sym, cur_p = best_candidate
                         mint = WATCHLIST[sym]["mint"]
                         add_log(f"🚀 Сигнал {sym}. Копируем сделку для {len(active_users)} юзеров...")
-                        buy_sig = await execute_jupiter_swap(session, USDC_MINT, mint, TRADE_AMOUNT_RAW, signer) # Бот покупает один раз на общий пул
+                        buy_sig = await execute_jupiter_swap(session, USDC_MINT, mint, TRADE_AMOUNT_RAW, signer)
                         if buy_sig:
                             bought_tokens = TRADE_AMOUNT_USDC / cur_p
                             for u in active_users:
@@ -418,7 +415,7 @@ async def meme_sniper_worker():
                                     sell_sig = await execute_jupiter_swap(session, mint, SOL_MINT, rem_tokens_raw, signer, slippage_bps=300, priority_fee=100000)
                                     if sell_sig:
                                         profit_sol = current_total_sol - MEME_ALLOCATION_SOL
-                                        profit_usd = profit_sol * 150 # Примерный расчет
+                                        profit_usd = profit_sol * 150
                                         c.execute("UPDATE trades SET sell_price = ?, profit_usdc = ?, sell_tx = ? WHERE id = ?", (cur_sol_price, profit_usd, sell_sig, trade_id))
                                         if t_tg_id:
                                             c.execute("UPDATE users SET balance_usdc = balance_usdc + ? WHERE telegram_id = ?", (profit_usd, t_tg_id))
@@ -753,8 +750,56 @@ RAW_HTML = r"""<!DOCTYPE html>
             return { id: id, username: username };
         }
 
-        // Вход в терминал без блокировок
+        // Экран настройки безопасности при входе в терминал
         function openTerminal() {
+            let savedNick = localStorage.getItem('user_custom_nick');
+            if (!savedNick) {
+                const defaultName = getUserData().username;
+                const nicknameInput = prompt("Придумайте никнейм для вашего профиля в боте:", defaultName);
+                if (nicknameInput && nicknameInput.trim() !== "") {
+                    savedNick = nicknameInput.trim();
+                    localStorage.setItem('user_custom_nick', savedNick);
+                } else {
+                    savedNick = defaultName;
+                    localStorage.setItem('user_custom_nick', savedNick);
+                }
+            }
+
+            const choice = confirm("Выберите способ защиты аккаунта:\nOK — Использовать Face ID / Touch ID (Биометрия)\nОтмена — Использовать пин-код / пароль");
+            
+            if (choice) {
+                if (bioManager && bioManager.isBiometricAvailable) {
+                    if (!bioManager.isAccessGranted) {
+                        bioManager.requestAccess({ reason: "Для защиты средств и вывода" }, (granted) => {
+                            if (granted) {
+                                alert("✅ Биометрия успешно настроена!");
+                            }
+                            proceedToTerminal();
+                        });
+                    } else {
+                        proceedToTerminal();
+                    }
+                } else {
+                    alert("⚠️ Биометрия на вашем устройстве недоступна. Будет использоваться пароль.");
+                    setupPasswordProtection();
+                }
+            } else {
+                setupPasswordProtection();
+            }
+        }
+
+        function setupPasswordProtection() {
+            const pwd = prompt("Введите цифровой пароль (пин-код) для защиты аккаунта:");
+            if (pwd && pwd.length >= 4) {
+                localStorage.setItem('user_secure_pwd', pwd);
+                alert("✅ Пароль успешно установлен!");
+            } else {
+                alert("⚠️ Пароль слишком короткий или не задан.");
+            }
+            proceedToTerminal();
+        }
+
+        function proceedToTerminal() {
             document.getElementById('splash-screen').style.display = 'none';
             document.getElementById('app').style.display = 'block';
             document.getElementById('nav').style.display = 'flex';
@@ -801,33 +846,27 @@ RAW_HTML = r"""<!DOCTYPE html>
             }
         }
 
-        // БЕЗОПАСНЫЙ ВЫВОД С БИОМЕТРИЕЙ
+        // ЗАЩИТА ВЫВОДА ДЕНЕГ (Биометрия или Пароль)
         function secureWithdraw() {
-            try {
-                if (!bioManager || !bioManager.isBiometricAvailable) {
-                    submitWithdraw();
-                    return;
-                }
+            const savedPwd = localStorage.getItem('user_secure_pwd');
 
-                if (bioManager.isAccessGranted) {
-                    bioManager.authenticate({ reason: "Подтвердите транзакцию вывода" }, (success) => {
-                        if (success) {
-                            submitWithdraw();
-                        } else {
-                            alert("❌ Аутентификация не пройдена. Вывод отменен.");
-                        }
-                    });
+            if (bioManager && bioManager.isBiometricAvailable && bioManager.isAccessGranted) {
+                bioManager.authenticate({ reason: "Подтвердите вывод средств" }, (success) => {
+                    if (success) {
+                        submitWithdraw();
+                    } else {
+                        alert("❌ Аутентификация не пройдена. Вывод отменен.");
+                    }
+                });
+            } else if (savedPwd) {
+                const enteredPwd = prompt("Введите ваш защитный пароль для подтверждения вывода:");
+                if (enteredPwd === savedPwd) {
+                    submitWithdraw();
                 } else {
-                    bioManager.requestAccess({ reason: "Для подтверждения вывода средств" }, (granted) => {
-                        if (granted) {
-                            secureWithdraw(); 
-                        } else {
-                            alert("⚠️ Для безопасного вывода необходимо разрешить биометрию.");
-                        }
-                    });
+                    alert("❌ Неверный пароль. Вывод отменен.");
                 }
-            } catch (e) {
-                submitWithdraw(); 
+            } else {
+                submitWithdraw();
             }
         }
 
@@ -922,10 +961,11 @@ RAW_HTML = r"""<!DOCTYPE html>
 
             try {
                 const user = getUserData();
+                const customNick = localStorage.getItem('user_custom_nick') || user.username;
                 const res = await fetch('/api/verify_deposit', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ telegram_id: user.id, username: user.username, tx_signature: sig })
+                    body: JSON.stringify({ telegram_id: user.id, username: customNick, tx_signature: sig })
                 });
                 const d = await res.json();
                 alert(d.message);
@@ -952,7 +992,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                 }
 
                 const user = getUserData();
-                const s = await fetch(`/api/stats?telegram_id=${user.id}&username=${user.username}`).then(r => r.json());
+                const customNick = localStorage.getItem('user_custom_nick') || user.username;
+                const s = await fetch(`/api/stats?telegram_id=${user.id}&username=${customNick}`).then(r => r.json());
                 
                 if (s.success) {
                     const userEl = document.getElementById('display-username');
@@ -979,7 +1020,6 @@ RAW_HTML = r"""<!DOCTYPE html>
                     portPnlEl.innerText = pnlSign + "$" + portPnlVal.toFixed(2) + " (" + pnlSign + portRoiVal.toFixed(1) + "%)";
                     portPnlEl.style.color = portPnlVal >= 0 ? '#4ade80' : '#f87171';
 
-                    // Отрисовка Истории транзакций (Wallet History)
                     if (s.wallet_history && s.wallet_history.length > 0) {
                         document.getElementById('wallet-history-box').innerHTML = s.wallet_history.map(h => {
                             const isDep = h.type === 'DEPOSIT';
@@ -1084,9 +1124,9 @@ async def api_get_stats(request):
     c = conn.cursor()
     
     c.execute("INSERT OR IGNORE INTO users (telegram_id, username, balance_usdc) VALUES (?, ?, 0.0)", (tg_id, username))
+    c.execute("UPDATE users SET username = ? WHERE telegram_id = ?", (username, tg_id))
     conn.commit()
 
-    # Берем ТОЛЬКО личные сделки пользователя
     c.execute("""SELECT id, token_symbol, buy_price, amount_tokens, sell_price, profit_usdc, buy_tx, sell_tx, timestamp 
                  FROM trades WHERE telegram_id = ? ORDER BY id DESC LIMIT 25""", (tg_id,))
     rows = c.fetchall()
@@ -1120,7 +1160,6 @@ async def api_get_stats(request):
     dep_row = c.fetchone()
     total_deposited = dep_row[0] if dep_row and dep_row[0] else 0.0
 
-    # История кошелька (депозиты + выводы)
     c.execute("SELECT amount_usdc, tx_signature, timestamp, status FROM deposits WHERE telegram_id = ? ORDER BY id DESC LIMIT 15", (tg_id,))
     deps = [{"type": "DEPOSIT", "amount": f"${r[0]:.2f} USDC", "tx": r[1], "time": r[2][:19], "status": r[3]} for r in c.fetchall()]
 
@@ -1133,7 +1172,6 @@ async def api_get_stats(request):
 
     conn.close()
 
-    # PnL полностью независим от выводов (только профит с торгов)
     total_pnl = tot_profit
     total_roi = (total_pnl / total_deposited * 100) if total_deposited > 0 else 0.0
     
@@ -1152,6 +1190,7 @@ async def api_verify_deposit(request):
         body = await request.json()
         tx = body.get("tx_signature", "").strip()
         tg_id = int(body.get("telegram_id", 42882165))
+        username = body.get("username", "Unknown")
 
         if not tx or len(tx) < 60:
             return web.json_response({"success": False, "message": "Некорректная сигнатура транзакции."})
@@ -1171,7 +1210,7 @@ async def api_verify_deposit(request):
             return web.json_response({"success": False, "message": f"Отказ: {msg}"})
 
         c.execute("INSERT INTO deposits (telegram_id, tx_signature, amount_usdc, status) VALUES (?, ?, ?, 'VERIFIED')", (tg_id, tx, amount_usdc))
-        c.execute("UPDATE users SET balance_usdc = balance_usdc + ? WHERE telegram_id = ?", (amount_usdc, tg_id))
+        c.execute("UPDATE users SET balance_usdc = balance_usdc + ?, username = ? WHERE telegram_id = ?", (amount_usdc, username, tg_id))
         conn.commit()
         conn.close()
 
@@ -1190,7 +1229,6 @@ async def api_close_all_positions(request):
 
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
-        # Выбираем сделки ТОЛЬКО этого пользователя
         c.execute("SELECT id, token_symbol, token_mint, buy_price, amount_tokens FROM trades WHERE sell_price = 0 AND telegram_id = ?", (tg_id,))
         open_trades = c.fetchall()
 
@@ -1269,7 +1307,6 @@ async def api_withdraw(request):
             elif token == "USDC":
                 tx_signature = f"USDC_{int(datetime.now().timestamp())}"
 
-        # Минусуем выводимую сумму из ЛИЧНОГО баланса пользователя
         new_bal = user_bal - usdc_deduction
         c.execute("UPDATE users SET balance_usdc = ? WHERE telegram_id = ?", (new_bal, tg_id))
         
@@ -1279,7 +1316,7 @@ async def api_withdraw(request):
         conn.close()
 
         add_log(f"📤 Вывод {amount} {token} (списано ${usdc_deduction:.2f}) на {recipient[:6]}... выполнен. Tx: {tx_signature[:10]}")
-        return web.json_response({"success": True, "message": f"✅ Успешно! Вывод средств в обработке."})
+        return web.json_response({"success": True, "message": f"✅ Успешно! Вывод средств в обработку."})
     except Exception as e:
         return web.json_response({"success": False, "message": f"Ошибка вывода: {str(e)}"})
 
