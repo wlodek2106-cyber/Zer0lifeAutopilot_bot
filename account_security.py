@@ -158,7 +158,7 @@ class AccountSecurity:
         body = await request.json()
         self.pin(uid, body.get("pin"))
         purpose = body.get("purpose")
-        if purpose not in ("enroll","recover","withdraw"):
+        if purpose not in ("enroll","recover","withdraw","login"):
             raise WalletError("Invalid passkey action.", 400)
         payload, binding, recovery = {}, "", ""
         if purpose == "withdraw":
@@ -170,7 +170,7 @@ class AccountSecurity:
         with self.ledger.db() as db:
             db.execute("DELETE FROM app_passkey_tickets WHERE expires<?", (now-86400,))
             keys = db.execute("SELECT COUNT(*) FROM app_passkeys WHERE uid=?", (uid,)).fetchone()[0]
-            if purpose == "withdraw" and not keys:
+            if purpose in ("withdraw","login") and not keys:
                 raise WalletError("Set up your passkey before withdrawing.", 428)
             if purpose == "enroll" and keys >= 5:
                 raise WalletError("Five passkeys are already registered.", 409)
@@ -181,7 +181,7 @@ class AccountSecurity:
                           (uid,now)).fetchone()[0] >= 3:
                 raise WalletError("Three verification links are active. Wait five minutes.", 429)
             actual = ("add" if keys else "first") if purpose == "enroll" else purpose
-            phase = "auth" if actual in ("add","withdraw") else "register"
+            phase = "auth" if actual in ("add","withdraw","login") else "register"
             db.execute("INSERT INTO app_passkey_tickets(hash,uid,purpose,phase,challenge,payload,intent_hash,recovery_hash,expires) VALUES(?,?,?,?,?,?,?,?,?)",
                 (digest(nonce),uid,actual,phase,secrets.token_bytes(32),json.dumps(payload),binding,recovery,now+300))
         return web.json_response({"success":True,"ticket":nonce,"url":self.origin+"/passkey#ticket="+nonce,
@@ -260,9 +260,13 @@ class AccountSecurity:
                         credential_public_key=key["public_key"],credential_current_sign_count=key["counter"],
                         require_user_verification=True)
                     db.execute("UPDATE app_passkeys SET counter=? WHERE id=?", (verified.new_sign_count,key["id"]))
-                    if row["purpose"] == "withdraw":
-                        db.execute("UPDATE app_passkey_tickets SET phase='approved' WHERE hash=?", (row["hash"],))
-                        result = {"success":True,"phase":"approved"}
+                    if row["purpose"] in ("withdraw","login"):
+                        payload = json.loads(row["payload"])
+                        if row["purpose"] == "login":
+                            payload["credential"] = key["id"]
+                        db.execute("UPDATE app_passkey_tickets SET phase='approved',payload=? WHERE hash=?",
+                                   (json.dumps(payload),row["hash"]))
+                        result = {"success":True,"phase":"approved","purpose":row["purpose"]}
                     else:
                         db.execute("UPDATE app_passkey_tickets SET phase='register',challenge=? WHERE hash=?",
                                    (secrets.token_bytes(32),row["hash"]))

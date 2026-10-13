@@ -241,6 +241,9 @@ class CustodyRuntime(WalletRuntime):
     async def handle(self, request, action):
         try:
             self.owner(request)
+            if (getattr(self, "web_access", None) and request.method == "POST"
+                    and action.__name__ in {"ai_preview", "scan_candidates", "trading_readiness", "save_trading_settings"}):
+                self.web_access.trading_request(request)
             if (getattr(self, "accounts", None) and request.method == "POST" and action.__name__ in
                     {"create_invoice","deposit","wallet_link","toggle","toggle_sniper","withdraw"}):
                 self.accounts.require(self.uid(request))
@@ -801,6 +804,9 @@ class CustodyRuntime(WalletRuntime):
     async def send_reserved(self, session, tx, row, info):
         try:
             wire = await self.safe_simulation(session, tx, row, info)
+            if getattr(self, "web_access", None) and row["kind"] in ("BUY", "SELL"):
+                self.web_access.require(row["uid"], row["kind"], row.get("position_id"),
+                                        manual=info.get("manual_close") is True)
             signature = str(tx.signatures[0])
             self.ledger.prepared(row["id"], signature, wire)
         except Exception:
@@ -866,7 +872,9 @@ class CustodyRuntime(WalletRuntime):
                 raise
             return self.result(await self.send_reserved(session, tx, row, {}))
 
-    async def trade(self, session, uid, asset, output_asset, raw, kind, metadata, position_id=None):
+    async def trade(self, session, uid, asset, output_asset, raw, kind, metadata, position_id=None, manual=False):
+        if getattr(self, "web_access", None):
+            self.web_access.require(uid, kind, position_id, manual)
         self.admit(uid)
         if kind == "BUY" and getattr(self, "accounts", None):
             self.accounts.require(uid)
@@ -893,7 +901,7 @@ class CustodyRuntime(WalletRuntime):
                     or quote.get("swapMode") != "ExactIn"
                     or not 0 < int(quote.get("otherAmountThreshold", 0)) <= int(quote.get("outAmount", 0))):
                 raise WalletError("Неверная котировка Jupiter.")
-            info = {**metadata, "minimum_out": int(quote["otherAmountThreshold"])}
+            info = {**metadata, "minimum_out": int(quote["otherAmountThreshold"]), "manual_close": manual}
             async with session.post("https://api.jup.ag/swap/v1/swap", headers=headers, json={
                 "quoteResponse": quote, "userPublicKey": self.wallet, "wrapAndUnwrapSol": True,
                 "prioritizationFeeLamports": 25000}) as response:
@@ -903,6 +911,8 @@ class CustodyRuntime(WalletRuntime):
             unsigned = VersionedTransaction.from_bytes(base64.b64decode(data["swapTransaction"]))
             if str(unsigned.message.account_keys[0]) != self.wallet or unsigned.message.header.num_required_signatures != 1:
                 raise WalletError("Неверный подписант Jupiter.")
+            if getattr(self, "web_access", None):
+                self.web_access.require(uid, kind, position_id, manual)
             transaction = VersionedTransaction(unsigned.message, [self.ready()])
         except Exception:
             self.ledger.fail(row["id"])
@@ -911,6 +921,8 @@ class CustodyRuntime(WalletRuntime):
 
     async def stats(self, request, session):
         uid = self.uid(request)
+        if getattr(self, "web_access", None):
+            self.web_access.pause_expired(uid)
         await self.reconcile(session)
         self.ledger.audit()
         positions = self.ledger.positions(uid)
@@ -1043,6 +1055,8 @@ class CustodyRuntime(WalletRuntime):
             if settings["sniper_trading"]:
                 self.ledger.settings(uid, sniper_enabled=False)
             else:
+                if getattr(self, "web_access", None):
+                    self.web_access.trading_request(request)
                 symbols = self.ai_universes()["sniper"]
                 if not symbols:
                     raise WalletError("No verified shortlist yet. Use Scan candidates, then retry.", 409)
@@ -1052,6 +1066,8 @@ class CustodyRuntime(WalletRuntime):
                 mint = self.watchlist[symbols[0]]["mint"]
                 await self.verify_sniper_mint(session, symbols[0])
                 await self.trading_preflight(uid, session, settings["sniper_order_raw"], SOL, mint)
+                if getattr(self, "web_access", None):
+                    self.web_access.trading_request(request)
                 self.ledger.settings(uid, sniper_enabled=True)
         return web.json_response({"success": True, "sniper_active": bool(self.ledger.settings(uid)["sniper_trading"])})
 
@@ -1071,11 +1087,15 @@ class CustodyRuntime(WalletRuntime):
         if settings["trading"]:
             self.ledger.settings(uid, enabled=False)
         else:
+            if getattr(self, "web_access", None):
+                self.web_access.trading_request(request)
             body = await request.json()
             raw = amount_raw(body.get("trade_amount_usdc", "1"), 6)
             if raw > self.ledger.balance(uid, USDC) and not self.ledger.positions(uid, "OPEN"):
                 raise WalletError("Размер покупки превышает ваш собственный доступный USDC-баланс.", 409)
             await self.trading_preflight(uid, session, raw)
+            if getattr(self, "web_access", None):
+                self.web_access.trading_request(request)
             self.ledger.settings(uid, enabled=True, raw=raw)
         return web.json_response({"success": True, "trading_active": bool(self.ledger.settings(uid)["trading"])})
 
@@ -1162,6 +1182,8 @@ class CustodyRuntime(WalletRuntime):
         while True:
             try:
                 async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=35)) as session:
+                    if getattr(self, "web_access", None):
+                        self.web_access.pause_expired()
                     await self.reconcile(session)
                     await self.scan_deposits(session)
                     users = self.ledger.active_users()
@@ -1184,6 +1206,8 @@ class CustodyRuntime(WalletRuntime):
                             async with self.lock:
                                 if self.pending():
                                     break
+                                if getattr(self, "web_access", None):
+                                    self.web_access.pause_expired(uid)
                                 current = self.ledger.settings(uid)
                                 positions = self.ledger.positions(uid, "OPEN")
                                 target = next((p for p in positions if current["close_requested"] or (
@@ -1191,7 +1215,8 @@ class CustodyRuntime(WalletRuntime):
                                     and self.exit_triggered(p, prices))), None)
                                 if target:
                                     await self.trade(session, uid, target["asset"], target["funding_asset"], target["raw"], "SELL",
-                                        {"output_asset": target["funding_asset"]}, target["id"])
+                                        {"output_asset": target["funding_asset"]}, target["id"],
+                                        manual=bool(current["close_requested"]))
                                 elif current["close_requested"]:
                                     self.ledger.settings(uid, close=False)
                                 elif snapshot:

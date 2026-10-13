@@ -1,0 +1,34 @@
+<style>
+#web-login{position:fixed;inset:5vh 18px auto;z-index:10002;max-width:460px;max-height:88vh;overflow:auto;margin:auto;background:#0e1720;border:1px solid #254437;border-radius:22px;padding:24px}
+#web-login[hidden],#subscription-card[hidden]{display:none}
+#web-login input{display:block;width:100%;margin:8px 0 18px;padding:14px;font-size:16px;color:#fff;background:#080e16;border:1px solid #29384a;border-radius:12px;box-sizing:border-box}
+#web-login button{width:100%;padding:16px;border:0;border-radius:12px;font-weight:800;font-size:16px;background:#22c55e;color:#04110a}
+#web-login p,#subscription-card p{line-height:1.5;overflow-wrap:anywhere}
+#subscription-address{font-family:monospace;user-select:all}
+</style>
+<section id="web-login" hidden data-web-version="sol-access-v1">
+<h2>Sign in to Zer0Life</h2>
+<p class="section-note">Use your existing account nickname, withdrawal code and device passkey. Your balances stay with the same account.</p>
+<label for="web-nickname">Account nickname</label><input id="web-nickname" autocomplete="username" maxlength="24" autocapitalize="off">
+<label for="web-pin">Withdrawal confirmation code</label><input id="web-pin" type="password" autocomplete="current-password" maxlength="128">
+<button id="web-signin">Continue</button><p id="web-login-status" role="status"></p>
+<p class="section-note">New here? Register your account and set up a withdrawal passkey in Telegram first. Telegram is used for account identity, not subscription payments.</p>
+<a id="web-register" hidden target="_blank" rel="noopener noreferrer">Register / set up passkey in Telegram</a>
+</section>
+<section id="subscription-card" class="card" hidden>
+<h3>Trading access</h3><p id="subscription-state" role="status">Checking access...</p>
+<div id="subscription-purchase">
+<p><strong>0.5 SOL · 30 days</strong><br>Renewals add 30 days to your remaining time. No automatic charges.</p>
+<p class="section-note">Send exactly 0.5 native SOL from your confirmed wallet after creating a request. This fee does not increase your trading balance. No Memo required.</p>
+<button id="subscription-order" class="btn-green-main">Create payment request</button>
+<div id="subscription-transfer" hidden>
+<p>Payment receiver:</p><p id="subscription-address"></p>
+<p id="subscription-deadline" class="section-note"></p>
+<button id="subscription-copy" class="btn-copy">Copy payment address</button>
+<label for="subscription-tx">Transaction signature / explorer link</label>
+<input id="subscription-tx" class="sig-input" autocomplete="off" placeholder="Paste the payment Tx">
+<button id="subscription-verify" class="btn-green-main">Verify payment</button>
+</div></div>
+<p class="section-note">At expiry both automatic modes stop, including automated take-profit and stop-loss. Open positions remain. Withdrawals and explicitly requested manual position closing remain available. Payment does not enable trading automatically.</p>
+<button id="web-logout" class="btn-copy">Sign out of this browser</button>
+</section>
