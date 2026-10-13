@@ -102,6 +102,11 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER, tx_signature TEXT UNIQUE,
         amount_usdc REAL, status TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
 
+    c.execute('''CREATE TABLE IF NOT EXISTS withdrawals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER, token TEXT,
+        amount REAL, recipient_address TEXT, tx_signature TEXT, status TEXT, 
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+
     c.execute("PRAGMA table_info(trades)")
     t_cols = [col[1] for col in c.fetchall()]
     if "half_taken" not in t_cols:
@@ -514,6 +519,14 @@ RAW_HTML = r"""<!DOCTYPE html>
         .sig-input { background: #06080e; border: 1px solid #1c2436; border-radius: 12px; padding: 14px; width: 100%; color: #fff; font-family: monospace; font-size: 12px; outline: none; margin-bottom: 12px; }
         .btn-verify { background: #86efac; color: #000; border: none; width: 100%; padding: 15px; border-radius: 14px; font-size: 14px; font-weight: 800; cursor: pointer; }
 
+        .wallet-tabs { display: flex; gap: 8px; margin-bottom: 14px; background: #06080e; padding: 4px; border-radius: 14px; border: 1px solid #192030; }
+        .wallet-tab { flex: 1; padding: 10px; text-align: center; font-size: 13px; font-weight: 700; border-radius: 10px; cursor: pointer; color: #64748b; border: none; background: transparent; }
+        .wallet-tab.active { background: #192033; color: #fff; }
+
+        .token-selector { display: flex; gap: 8px; margin-bottom: 12px; }
+        .token-btn { flex: 1; padding: 10px; border-radius: 12px; border: 1px solid #1c2436; background: #06080e; color: #64748b; font-weight: 700; font-size: 12px; cursor: pointer; text-align: center; }
+        .token-btn.active { border-color: #22c55e; color: #22c55e; background: rgba(34, 197, 94, 0.1); }
+
         .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(10, 12, 18, 0.95); backdrop-filter: blur(20px); border-top: 1px solid #192033; padding: 12px 16px; padding-bottom: calc(12px + env(safe-area-inset-bottom, 16px)); display: flex; justify-content: space-around; z-index: 900; }
         .nav-btn { background: transparent; border: none; color: #64748b; font-size: 11px; font-weight: 600; cursor: pointer; }
         .nav-btn.active { color: #22c55e; }
@@ -615,34 +628,59 @@ RAW_HTML = r"""<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- TAB 3: DEPOSIT -->
+        <!-- TAB 3: WALLET -->
         <div id="tab-deposit" class="tab-panel">
             <div class="deposit-modal">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
-                    <div style="font-size: 17px; font-weight: 800; color: #fff;">Deposit Crypto (USDC Top-Up)</div>
+                    <div style="font-size: 17px; font-weight: 800; color: #fff;" id="wallet-modal-title">Deposit Crypto (USDC Top-Up)</div>
                     <span style="color: #64748b; cursor: pointer; font-size: 18px;" onclick="gotoTab('terminal', document.querySelectorAll('.nav-btn')[0])">✕</span>
                 </div>
 
-                <div class="banner-limit">
-                    <div style="color: #22c55e; font-size: 13px; font-weight: 700;">Deposit from $50 to $10,000 USDC per transaction</div>
-                    <div style="color: #64748b; font-size: 11px; margin-top: 4px;">Send SPL-USDC on Solana. Enter transaction signature</div>
+                <div class="wallet-tabs">
+                    <button class="wallet-tab active" id="wtab-deposit" onclick="switchWalletTab('deposit')">Deposit</button>
+                    <button class="wallet-tab" id="wtab-withdraw" onclick="switchWalletTab('withdraw')">Withdraw</button>
                 </div>
 
-                <button class="btn-green-main" id="btn-show-addr" onclick="toggleDepositDetails()">Show Deposit Address 🚀</button>
-
-                <div id="deposit-details" style="display: none; margin-top: 14px;">
-                    <div style="text-align: center; color: #94a3b8; font-size: 11px; margin-bottom: 8px;">Transfer USDC (Solana SPL) to:</div>
-                    <div class="qr-section">
-                        <img class="qr-img" src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=__DEPOSIT_WALLET__">
+                <!-- СЕКЦИЯ ДЕПОЗИТА -->
+                <div id="section-deposit">
+                    <div class="banner-limit">
+                        <div style="color: #22c55e; font-size: 13px; font-weight: 700;">Deposit from $50 to $10,000 USDC per transaction</div>
+                        <div style="color: #64748b; font-size: 11px; margin-top: 4px;">Send SPL-USDC on Solana. Enter transaction signature</div>
                     </div>
 
-                    <div class="address-box" id="wallet-text">__DEPOSIT_WALLET__</div>
-                    <button class="btn-copy" onclick="copyWallet()">📋 Copy Address</button>
+                    <button class="btn-green-main" id="btn-show-addr" onclick="toggleDepositDetails()">Show Deposit Address 🚀</button>
 
-                    <div style="color: #22c55e; font-size: 11px; font-weight: 700; margin-bottom: 6px;">Transaction Signature:</div>
-                    <input id="dep-signature" class="sig-input" placeholder="Paste signature from your wallet...">
+                    <div id="deposit-details" style="display: none; margin-top: 14px;">
+                        <div style="text-align: center; color: #94a3b8; font-size: 11px; margin-bottom: 8px;">Transfer USDC (Solana SPL) to:</div>
+                        <div class="qr-section">
+                            <img class="qr-img" src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=__DEPOSIT_WALLET__">
+                        </div>
 
-                    <button class="btn-verify" id="btn-verify-action" onclick="verifyOnchainDeposit()">Verify & Credit USDC 🔄</button>
+                        <div class="address-box" id="wallet-text">__DEPOSIT_WALLET__</div>
+                        <button class="btn-copy" onclick="copyWallet()">📋 Copy Address</button>
+
+                        <div style="color: #22c55e; font-size: 11px; font-weight: 700; margin-bottom: 6px;">Transaction Signature:</div>
+                        <input id="dep-signature" class="sig-input" placeholder="Paste signature from your wallet...">
+
+                        <button class="btn-verify" id="btn-verify-action" onclick="verifyOnchainDeposit()">Verify & Credit USDC 🔄</button>
+                    </div>
+                </div>
+
+                <!-- СЕКЦИЯ ВЫВОДА -->
+                <div id="section-withdraw" style="display: none;">
+                    <div style="font-size: 12px; color: #94a3b8; margin-bottom: 8px;">Select Token to Withdraw:</div>
+                    <div class="token-selector">
+                        <button class="token-btn active" id="wtoken-usdc" onclick="selectWithdrawToken('USDC')">USDC</button>
+                        <button class="token-btn" id="wtoken-sol" onclick="selectWithdrawToken('SOL')">Solana (SOL)</button>
+                    </div>
+
+                    <div style="font-size: 12px; color: #94a3b8; margin-bottom: 6px;">Recipient Solana Address:</div>
+                    <input id="withdraw-address" class="sig-input" placeholder="Enter recipient wallet address...">
+
+                    <div style="font-size: 12px; color: #94a3b8; margin-bottom: 6px;">Amount:</div>
+                    <input id="withdraw-amount" type="number" step="any" class="sig-input" placeholder="0.00">
+
+                    <button class="btn-green-main" id="btn-withdraw-action" onclick="submitWithdraw()">Withdraw 🚀</button>
                 </div>
             </div>
         </div>
@@ -652,7 +690,7 @@ RAW_HTML = r"""<!DOCTYPE html>
     <div id="nav" class="bottom-nav" style="display: none;">
         <button class="nav-btn active" onclick="gotoTab('terminal', this)">⚡ Terminal</button>
         <button class="nav-btn" onclick="gotoTab('stats', this)">📊 Stats</button>
-        <button class="nav-btn" onclick="gotoTab('deposit', this)">💼 Deposit</button>
+        <button class="nav-btn" onclick="gotoTab('deposit', this)">💼 Wallet</button>
     </div>
 
     <script>
@@ -661,6 +699,7 @@ RAW_HTML = r"""<!DOCTYPE html>
 
         let isBotRunning = true;
         let isMemeRunning = false;
+        let currentWithdrawToken = 'USDC';
 
         function openTerminal() {
             document.getElementById('splash-screen').style.display = 'none';
@@ -674,6 +713,52 @@ RAW_HTML = r"""<!DOCTYPE html>
             document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
             document.getElementById('tab-' + id).classList.add('active');
             if(btn) btn.classList.add('active');
+        }
+
+        function switchWalletTab(tab) {
+            const isDep = tab === 'deposit';
+            document.getElementById('wtab-deposit').className = isDep ? 'wallet-tab active' : 'wallet-tab';
+            document.getElementById('wtab-withdraw').className = !isDep ? 'wallet-tab active' : 'wallet-tab';
+            document.getElementById('section-deposit').style.display = isDep ? 'block' : 'none';
+            document.getElementById('section-withdraw').style.display = !isDep ? 'block' : 'none';
+            document.getElementById('wallet-modal-title').innerText = isDep ? 'Deposit Crypto (USDC Top-Up)' : 'Withdraw Crypto';
+        }
+
+        function selectWithdrawToken(token) {
+            currentWithdrawToken = token;
+            document.getElementById('wtoken-usdc').className = token === 'USDC' ? 'token-btn active' : 'token-btn';
+            document.getElementById('wtoken-sol').className = token === 'SOL' ? 'token-btn active' : 'token-btn';
+        }
+
+        async function submitWithdraw() {
+            const addr = document.getElementById('withdraw-address').value.trim();
+            const amount = document.getElementById('withdraw-amount').value.trim();
+            if(!addr || !amount) { alert("Заполните адрес получателя и сумму."); return; }
+
+            const btn = document.getElementById('btn-withdraw-action');
+            btn.innerText = "Обработка вывода...";
+            btn.disabled = true;
+
+            try {
+                const tgId = tg?.initDataUnsafe?.user?.id || 42882165;
+                const res = await fetch('/api/withdraw', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ telegram_id: tgId, token: currentWithdrawToken, recipient_address: addr, amount: parseFloat(amount) })
+                });
+                const d = await res.json();
+                alert(d.message);
+                if(d.success) {
+                    document.getElementById('withdraw-address').value = '';
+                    document.getElementById('withdraw-amount').value = '';
+                    refresh();
+                }
+            } catch(e) {
+                alert("Ошибка соединения.");
+            } finally {
+                btn.innerText = "Withdraw 🚀";
+                btn.disabled = false;
+            }
         }
 
         async function toggleTrading() {
@@ -788,7 +873,6 @@ RAW_HTML = r"""<!DOCTYPE html>
                     document.getElementById('closed-count').innerText = s.closed_count;
                     if(s.user_balance !== undefined) document.getElementById('user-bal').innerText = "$" + s.user_balance.toFixed(2) + " USDC";
 
-                    // Обновление нового блока реального портфеля
                     document.getElementById('port-deposited').innerText = "$" + (s.total_deposited || 0).toFixed(2);
                     document.getElementById('port-balance').innerText = "$" + (s.user_balance || 0).toFixed(2);
                     
@@ -897,7 +981,6 @@ async def api_get_stats(request):
     u_row = c.fetchone()
     user_bal = u_row[0] if u_row else 0.0
 
-    # Считаем сумму всех верифицированных депозитов пользователя
     c.execute("SELECT SUM(amount_usdc) FROM deposits WHERE telegram_id = ? AND status = 'VERIFIED'", (tg_id,))
     dep_row = c.fetchone()
     total_deposited = dep_row[0] if dep_row and dep_row[0] else 0.0
@@ -945,6 +1028,47 @@ async def api_verify_deposit(request):
         return web.json_response({"success": True, "message": f"✅ Успешно! Зачислено ${amount_usdc} USDC."})
     except Exception as e:
         return web.json_response({"success": False, "message": f"Ошибка сервера: {str(e)}"})
+
+async def api_withdraw(request):
+    try:
+        body = await request.json()
+        tg_id = int(body.get("telegram_id", 42882165))
+        token = body.get("token", "USDC")
+        recipient = body.get("recipient_address", "").strip()
+        amount = float(body.get("amount", 0.0))
+
+        if not recipient or len(recipient) < 30 or amount <= 0:
+            return web.json_response({"success": False, "message": "Проверьте правильность адреса и суммы вывода."})
+
+        signer = get_signer_keypair()
+        if not signer:
+            return web.json_response({"success": False, "message": "Ошибка кошелька сервера."})
+
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT balance_usdc FROM users WHERE telegram_id = ?", (tg_id,))
+        u_row = c.fetchone()
+        user_bal = u_row[0] if u_row else 0.0
+
+        if token == "USDC" and user_bal < amount:
+            conn.close()
+            return web.json_response({"success": False, "message": f"Недостаточно USDC. Ваш баланс: ${user_bal:.2f}"})
+
+        # Логика отправки через Jupiter/Solana RPC может быть интегрирована здесь
+        # Пример: уменьшаем баланс и фиксируем запрос на вывод
+        if token == "USDC":
+            new_bal = user_bal - amount
+            c.execute("UPDATE users SET balance_usdc = ? WHERE telegram_id = ?", (new_bal, tg_id))
+        
+        c.execute("""INSERT INTO withdrawals (telegram_id, token, amount, recipient_address, tx_signature, status)
+                     VALUES (?, ?, ?, ?, ?, 'PENDING')""", (tg_id, token, amount, recipient, "SIMULATED_TX"))
+        conn.commit()
+        conn.close()
+
+        add_log(f"📤 Запрос на вывод {amount} {token} на адрес {recipient[:6]}... успешно принят.")
+        return web.json_response({"success": True, "message": f"✅ Запрос на вывод {amount} {token} отправлен в обработку."})
+    except Exception as e:
+        return web.json_response({"success": False, "message": f"Ошибка вывода: {str(e)}"})
 
 async def telegram_webhook_handler(request):
     try:
@@ -998,6 +1122,7 @@ async def main():
     app.router.add_post('/api/toggle_trading', api_toggle_trading)
     app.router.add_post('/api/toggle_meme', api_toggle_meme)
     app.router.add_post('/api/verify_deposit', api_verify_deposit)
+    app.router.add_post('/api/withdraw', api_withdraw)
     app.router.add_post('/webhook', telegram_webhook_handler)
 
     runner = web.AppRunner(app)
