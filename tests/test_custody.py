@@ -917,6 +917,28 @@ class SimulationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.simulate(before, after, kind="BUY",
             info={"output_asset": SOL, "minimum_out": 9_000_000}, versioned=True))
 
+    async def test_native_sniper_buy_with_operator_paid_new_ata_rent(self):
+        mint = str(Keypair().pubkey())
+        before = [self.native(50_000_000), self.token_account(USDC, 10_000_000), None]
+        after = [self.native(42_955_720), self.token_account(USDC, 10_000_000), self.token_account(mint, 2_600_000)]
+        self.assertTrue(await self.simulate(before, after, asset=SOL, raw=5_000_000, kind="BUY",
+            info={"output_asset": mint, "minimum_out": 2_500_000}, versioned=True))
+
+    async def test_native_sniper_buy_cannot_spend_usdc(self):
+        mint = str(Keypair().pubkey())
+        before = [self.native(50_000_000), self.token_account(USDC, 10_000_000), self.token_account(mint, 0)]
+        after = [self.native(44_995_000), self.token_account(USDC, 9_999_999), self.token_account(mint, 2_600_000)]
+        with self.assertRaises(legacy.WalletError):
+            await self.simulate(before, after, asset=SOL, raw=5_000_000, kind="BUY",
+                info={"output_asset": mint, "minimum_out": 2_500_000})
+
+    async def test_native_sniper_sell_returns_sol(self):
+        mint = str(Keypair().pubkey())
+        before = [self.native(50_000_000), self.token_account(USDC, 10_000_000), self.token_account(mint, 2_600_000)]
+        after = [self.native(55_995_000), self.token_account(USDC, 10_000_000), self.token_account(mint, 0)]
+        self.assertTrue(await self.simulate(before, after, asset=mint, raw=2_600_000, kind="SELL",
+            info={"output_asset": SOL, "minimum_out": 5_900_000}, versioned=True))
+
 
 if __name__ == "__main__":
     unittest.main()
