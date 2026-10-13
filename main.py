@@ -784,7 +784,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         <button class="start-btn" onclick="openTerminal()">Launch Terminal</button>
     </div>
 
-    <div id="app" data-ui-version="console-v1" style="display: none;">
+    <div id="app" data-ui-version="console-v2" style="display: none;">
         <div id="tab-terminal" class="tab-panel active">
             <header class="page-heading"><div><p class="eyebrow">ZERØLIFE · Личный кабинет</p><h1>Обзор счёта</h1></div></header>
             <div class="banner-limit" style="border-color:#ef4444; background:#2a1014; margin-bottom:12px;">
@@ -821,26 +821,29 @@ RAW_HTML = r"""<!DOCTYPE html>
                 </div>
             </div>
 
-            <div class="card" id="obsolete-meme-card" style="display:none;">
+            <div class="card" id="meme-sniper-card">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <div>
-                        <div style="font-size: 15px; font-weight: 800; color: #facc15;">🐸 Meme Sniper Mode</div>
-                        <div style="font-size: 10px; color: #94a3b8; margin-top: 2px;">0.1 SOL → 0.5 SOL (50% в USDC) → 1 SOL</div>
+                        <div style="font-size: 17px; font-weight: 800; color: #fff;">Meme Sniper · SOL</div>
+                        <div class="section-note">Второй режим связки · покупки мемкоинов за SOL</div>
                     </div>
                     <button id="btn-meme-toggle" class="btn-ctl btn-toggle-off" style="padding: 8px 12px; font-size: 11px;" disabled>
-                        <span id="meme-toggle-text">ВЫКЛ</span>
+                        <span id="meme-toggle-text">НЕ ПОДКЛЮЧЁН</span>
                     </button>
                 </div>
                 <div class="grid-stats">
-                    <div class="stat-box"><div class="stat-label">Слот снайпера</div><div class="stat-val" style="color: #facc15;">0.1 SOL</div></div>
-                    <div class="stat-box"><div class="stat-label">Цель фиксации</div><div class="stat-val" style="color: #4ade80;">0.5 SOL (USDC) + 1 SOL</div></div>
+                    <div class="stat-box"><div class="stat-label">Ваш доступный SOL</div><div class="stat-val" id="sniper-sol-balance">Загрузка...</div></div>
+                    <div class="stat-box"><div class="stat-label">Размер покупки</div><div class="stat-val" style="color:#94a5bb;">Не настроен</div></div>
                 </div>
+                <p class="section-note">Основной режим использует ваш USDC, Meme Sniper — ваш SOL. Средства других пользователей и резерв комиссий не являются торговым капиталом. Автоматическая конвертация и распределение прибыли между режимами пока не настроены.</p>
+                <p class="section-note">Раздел восстановлен. Запуск снайпера заблокирован до подключения персонального учёта SOL-позиций и движка принятия решений. Фиксированные обещания дохода удалены.</p>
             </div>
 
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div>
-                        <div style="font-size: 17px; font-weight: 800; color: #fff;">Стратегия отката цены</div>
+                        <div style="font-size: 17px; font-weight: 800; color: #fff;">Основной режим · USDC</div>
+                        <div class="section-note">Текущий алгоритм: откат цены</div>
                         <div id="strategy-assets" style="font-size: 11px; color: #64748b; margin-top: 2px;">Загрузка списка активов</div>
                     </div>
                     <div id="user-bal-small" style="font-size: 12px; color: #22c55e; font-family: monospace; font-weight: 700;">$0.00 USDC</div>
@@ -935,6 +938,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             <div id="trading-controls"></div>
             <p class="section-note">Сейчас доступен алгоритм по правилам. AI-модель принятия решений ещё не подключена — это меню не выдаёт его за AI.</p>
             <div id="trading-strategy"></div>
+            <div id="trading-sniper"></div>
             <div class="card"><h3 style="margin-top:0">Перед запуском</h3>
                 <p class="section-note">Покупка при откате ≥0,3% от среднего последних котировок. До пяти позиций, одна операция кошелька за раз. После старта нужны минимум пять котировок; сделка появится только при сигнале.</p>
                 <p class="section-note">TP и SL — условия отправки, а не гарантированная цена исполнения. Комиссии и проскальзывание влияют на результат. Прибыль не гарантируется.</p>
@@ -987,7 +991,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         document.getElementById('trading-activity').appendChild(document.querySelector('.btn-sell-all'));
         document.getElementById('trading-activity').appendChild(document.getElementById('log-box').closest('.card'));
         document.getElementById('settings-admin').appendChild(document.getElementById('admin-custody-panel'));
-        document.getElementById('obsolete-meme-card').remove();
+        document.getElementById('trading-sniper').appendChild(document.getElementById('meme-sniper-card'));
         const overviewActions = document.createElement('div');
         overviewActions.className='quick-actions';
         for (const [label,tab,index] of [['Пополнить / вывести','deposit',2],['Настроить торговлю','trading',1]]) {
@@ -1264,7 +1268,9 @@ RAW_HTML = r"""<!DOCTYPE html>
             const btn = document.getElementById('btn-meme-toggle');
             if (btn) {
                 btn.className = isActive ? "btn-ctl btn-toggle-on" : "btn-ctl btn-toggle-off";
-                document.getElementById('meme-toggle-text').innerText = isActive ? "ВКЛ (0.1 SOL)" : "ВЫКЛ";
+                btn.disabled = true;
+                btn.className = "btn-ctl btn-toggle-off";
+                document.getElementById('meme-toggle-text').innerText = "НЕ ПОДКЛЮЧЁН";
             }
         }
 
@@ -1366,6 +1372,7 @@ RAW_HTML = r"""<!DOCTYPE html>
 
                     document.getElementById('port-balance').innerText = bal.toFixed(6) + ' USDC';
                     document.getElementById('port-withdrawable').innerText = s.sol_balance.toFixed(6) + ' SOL';
+                    document.getElementById('sniper-sol-balance').textContent=s.sol_balance.toFixed(6)+' SOL';
                     
                     const userBalSmall = document.getElementById('user-bal-small');
                     if(userBalSmall) userBalSmall.innerText = "$" + bal.toFixed(2) + " USDC";
