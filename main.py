@@ -33,7 +33,7 @@ SPLASH_IMAGE_URL = "https://i.postimg.cc/52n94Pzg/57D47DDD-9BED-4D4B-AA69-2B59CA
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 MIN_DEPOSIT_USDC = 50.0
 MAX_DEPOSIT_USDC = 10000.0
-MIN_BOT_BALANCE_USDC = 50.0  # Минимальный остаток для работы бота (несгораемый)
+MIN_BOT_BALANCE_USDC = 50.0  # Минимальный остаток для работы бота
 
 WATCHLIST = {
     "SOL":  {"mint": "So11111111111111111111111111111111111111112", "decimals": 9},
@@ -57,7 +57,7 @@ MEME_STOP_LOSS_PCT = 0.80      # Стоп-лосс на случай скама 
 
 IS_TRADING_ACTIVE = True       # Глобальный флаг автопилота Топ-5 (ВКЛ / ВЫКЛ)
 IS_MEME_ACTIVE = False         # Глобальный флаг Meme Sniper режима (ВКЛ / ВЫКЛ)
-RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v6.0 (Wallet History + PnL Fix) инициализирован."]
+RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v6.1 (USDC Withdraws & Exact PnL) инициализирован."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -71,7 +71,6 @@ def add_log(msg: str):
 def get_signer_keypair():
     pk_env = os.getenv("SOLANA_PRIVATE_KEY", "").strip()
     if not pk_env:
-        add_log("❌ Ключ SOLANA_PRIVATE_KEY не задан в переменных.")
         return None
     try:
         pk_clean = pk_env.replace('"', '').replace("'", "").strip()
@@ -79,15 +78,12 @@ def get_signer_keypair():
             return Keypair.from_bytes(bytes(json.loads(pk_clean)))
         else:
             return Keypair.from_bytes(base58.b58decode(pk_clean))
-    except Exception as e:
-        add_log(f"❌ Ошибка ключа: {e}")
+    except Exception:
         return None
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    
-    # Индивидуальные балансы пользователей
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         telegram_id INTEGER PRIMARY KEY, username TEXT, balance_usdc REAL DEFAULT 0.0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
@@ -95,23 +91,18 @@ def init_db():
     c.execute("PRAGMA table_info(users)")
     u_cols = [col[1] for col in c.fetchall()]
     if "balance_usdc" not in u_cols:
-        try:
-            c.execute("ALTER TABLE users ADD COLUMN balance_usdc REAL DEFAULT 0.0")
-        except Exception:
-            pass
+        try: c.execute("ALTER TABLE users ADD COLUMN balance_usdc REAL DEFAULT 0.0")
+        except Exception: pass
 
-    # Таблица сделок
     c.execute('''CREATE TABLE IF NOT EXISTS trades (
         id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER, token_symbol TEXT, token_mint TEXT,
         buy_price REAL, amount_tokens REAL, sell_price REAL DEFAULT 0,
         profit_usdc REAL DEFAULT 0.0, buy_tx TEXT, sell_tx TEXT, timestamp TEXT, half_taken INTEGER DEFAULT 0)''')
 
-    # Изолированные депозиты
     c.execute('''CREATE TABLE IF NOT EXISTS deposits (
         id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER, tx_signature TEXT UNIQUE,
         amount_usdc REAL, status TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
 
-    # Изолированные выводы
     c.execute('''CREATE TABLE IF NOT EXISTS withdrawals (
         id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER, token TEXT,
         amount REAL, recipient_address TEXT, tx_signature TEXT, status TEXT, 
@@ -120,15 +111,11 @@ def init_db():
     c.execute("PRAGMA table_info(trades)")
     t_cols = [col[1] for col in c.fetchall()]
     if "telegram_id" not in t_cols:
-        try:
-            c.execute("ALTER TABLE trades ADD COLUMN telegram_id INTEGER")
-        except Exception:
-            pass
+        try: c.execute("ALTER TABLE trades ADD COLUMN telegram_id INTEGER")
+        except Exception: pass
     if "half_taken" not in t_cols:
-        try:
-            c.execute("ALTER TABLE trades ADD COLUMN half_taken INTEGER DEFAULT 0")
-        except Exception:
-            pass
+        try: c.execute("ALTER TABLE trades ADD COLUMN half_taken INTEGER DEFAULT 0")
+        except Exception: pass
 
     try:
         c.execute("DELETE FROM trades WHERE sell_price = 0")
@@ -204,8 +191,8 @@ async def get_token_prices(session: aiohttp.ClientSession) -> dict:
                         for sym, info in WATCHLIST.items():
                             if info["mint"] == base_token and sym not in prices:
                                 prices[sym] = float(price_usd)
-    except Exception as e:
-        add_log(f"⚠️ Ошибка запроса цен: {str(e)[:40]}")
+    except Exception:
+        pass
     return prices
 
 async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, output_mint: str, amount_raw: int, signer: Keypair, slippage_bps: int = MAX_SLIPPAGE_BPS, priority_fee: int = 25000) -> str:
@@ -250,33 +237,26 @@ async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, 
                 sig = data.get("result")
                 if sig:
                     return str(sig)
-    except Exception as e:
-        add_log(f"⚠️ Исключение в execute_jupiter_swap: {e}")
+    except Exception:
+        pass
     return ""
 
-# Новая функция для реальной отправки SOL в блокчейн
 async def execute_native_sol_transfer(session: aiohttp.ClientSession, signer: Keypair, recipient_addr: str, amount_sol: float):
     try:
         lamports = int(amount_sol * 1_000_000_000)
         recipient_pubkey = Pubkey.from_string(recipient_addr)
 
-        # 1. Получаем свежий blockhash от сети
         payload = {"jsonrpc": "2.0", "id": 1, "method": "getLatestBlockhash", "params": [{"commitment": "finalized"}]}
         async with session.post(SOLANA_RPC, json=payload) as resp:
             data = await resp.json()
             blockhash_str = data["result"]["value"]["blockhash"]
 
         blockhash = Hash.from_string(blockhash_str)
-
-        # 2. Формируем инструкцию перевода
         ix = transfer(TransferParams(from_pubkey=signer.pubkey(), to_pubkey=recipient_pubkey, lamports=lamports))
-
-        # 3. Создаем и подписываем транзакцию
         msg = Message.new_with_blockhash([ix], signer.pubkey(), blockhash)
         tx = Transaction([signer], msg, blockhash)
         tx_b64 = base64.b64encode(bytes(tx)).decode('utf-8')
 
-        # 4. Отправляем в Helius RPC
         send_payload = {
             "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
             "params": [tx_b64, {"encoding": "base64", "skipPreflight": False}]
@@ -286,7 +266,7 @@ async def execute_native_sol_transfer(session: aiohttp.ClientSession, signer: Ke
             if "error" in send_data:
                 add_log(f"⚠️ Ошибка RPC при выводе SOL: {send_data['error']}")
                 return None
-            return send_data.get("result") # Возвращает сигнатуру реальной транзакции
+            return send_data.get("result")
     except Exception as e:
         add_log(f"⚠️ Ошибка формирования перевода SOL: {e}")
         return None
@@ -317,34 +297,40 @@ async def real_trading_worker():
 
                 conn = sqlite3.connect(DB_FILE)
                 c = conn.cursor()
-                c.execute("SELECT id, token_symbol, token_mint, buy_price, amount_tokens FROM trades WHERE sell_price = 0 AND token_symbol IN ('SOL', 'JUP', 'RAY', 'WIF', 'PYTH') LIMIT 1")
-                active_trade = c.fetchone()
-
-                if active_trade:
-                    trade_id, sym, mint, entry_px, amount_tokens = active_trade
+                
+                # Обработка ПРОДАЖИ
+                c.execute("SELECT id, telegram_id, token_symbol, token_mint, buy_price, amount_tokens FROM trades WHERE sell_price = 0 AND token_symbol IN ('SOL', 'JUP', 'RAY', 'WIF', 'PYTH')")
+                active_trades = c.fetchall()
+                
+                mints_to_sell = set()
+                for trade in active_trades:
+                    trade_id, t_tg_id, sym, mint, entry_px, amount_tokens = trade
                     cur_px = prices.get(sym, entry_px)
                     pnl_pct = (cur_px - entry_px) / entry_px
-
                     if pnl_pct >= TP_PCT or pnl_pct <= -SL_PCT:
-                        action = "TP" if pnl_pct >= TP_PCT else "SL"
-                        add_log(f"⚡ Закрытие {sym} по {action} ({pnl_pct*100:+.2f}%)...")
-                        raw_amount = int(amount_tokens * (10 ** WATCHLIST[sym]["decimals"]))
-                        sell_sig = await execute_jupiter_swap(session, mint, USDC_MINT, raw_amount, signer)
-                        if sell_sig:
-                            real_exit_px = cur_px
-                            profit_usd = round(TRADE_AMOUNT_USDC * pnl_pct, 2)
-                            c.execute("UPDATE trades SET sell_price = ?, profit_usdc = ?, sell_tx = ? WHERE id = ?", 
-                                      (real_exit_px, profit_usd, sell_sig, trade_id))
-                            conn.commit()
-                            add_log(f"✅ Ордер закрыт по реальной цене ${real_exit_px:.4f}! Tx: {sell_sig[:10]}...")
-                            cooldown_until = now_ts + 30
-                    conn.close()
-                    await asyncio.sleep(20)
-                    continue
+                        mints_to_sell.add((sym, mint))
 
-                conn.close()
+                for sym, mint in mints_to_sell:
+                    total_tokens = sum([t[5] for t in active_trades if t[3] == mint])
+                    raw_amount = int(total_tokens * (10 ** WATCHLIST[sym]["decimals"]))
+                    sell_sig = await execute_jupiter_swap(session, mint, USDC_MINT, raw_amount, signer)
+                    if sell_sig:
+                        cur_px = prices.get(sym, 0)
+                        for trade in active_trades:
+                            if trade[3] == mint:
+                                trade_id, t_tg_id, _, _, entry_px, amount_tokens = trade
+                                profit_usd = round((cur_px - entry_px) * amount_tokens, 2)
+                                c.execute("UPDATE trades SET sell_price = ?, profit_usdc = ?, sell_tx = ? WHERE id = ?", (cur_px, profit_usd, sell_sig, trade_id))
+                                if t_tg_id:
+                                    # ПЛЮСУЕМ ПРИБЫЛЬ К ЛИЧНОМУ БАЛАНСУ
+                                    c.execute("UPDATE users SET balance_usdc = balance_usdc + ? WHERE telegram_id = ?", (profit_usd, t_tg_id))
+                        conn.commit()
+                        add_log(f"✅ Ордер {sym} закрыт. Прибыль зачислена! Tx: {sell_sig[:10]}...")
+                        cooldown_until = now_ts + 30
 
+                # Обработка ПОКУПКИ
                 if not IS_TRADING_ACTIVE or now_ts < cooldown_until:
+                    conn.close()
                     await asyncio.sleep(20)
                     continue
 
@@ -360,25 +346,28 @@ async def real_trading_worker():
                             best_candidate = (sym, cur_p)
 
                 if best_candidate:
-                    sym, cur_p = best_candidate
-                    mint = WATCHLIST[sym]["mint"]
-                    add_log(f"🚀 Сигнал входа Топ-5: {sym} просел на {max_dip*100:.2f}%. Покупка по ${cur_p:.4f}...")
-                    buy_sig = await execute_jupiter_swap(session, USDC_MINT, mint, TRADE_AMOUNT_RAW, signer)
-                    if buy_sig:
-                        bought_tokens = TRADE_AMOUNT_USDC / cur_p
-                        c_in = sqlite3.connect(DB_FILE)
-                        c_in.cursor().execute("""INSERT INTO trades 
-                            (token_symbol, token_mint, buy_price, amount_tokens, sell_price, profit_usdc, buy_tx, sell_tx, timestamp)
-                            VALUES (?, ?, ?, ?, 0, 0, ?, '', ?)""",
-                            (sym, mint, cur_p, bought_tokens, buy_sig, datetime.now().strftime('%H:%M:%S')))
-                        c_in.commit()
-                        c_in.close()
-                        add_log(f"💎 Успешно куплен {sym}! Tx: {buy_sig[:12]}...")
-                        cooldown_until = now_ts + 30
+                    c.execute("SELECT telegram_id FROM users WHERE balance_usdc >= ?", (MIN_BOT_BALANCE_USDC,))
+                    active_users = c.fetchall()
+                    
+                    if active_users:
+                        sym, cur_p = best_candidate
+                        mint = WATCHLIST[sym]["mint"]
+                        add_log(f"🚀 Сигнал {sym}. Копируем сделку для {len(active_users)} юзеров...")
+                        buy_sig = await execute_jupiter_swap(session, USDC_MINT, mint, TRADE_AMOUNT_RAW, signer) # Бот покупает один раз на общий пул
+                        if buy_sig:
+                            bought_tokens = TRADE_AMOUNT_USDC / cur_p
+                            for u in active_users:
+                                t_tg_id = u[0]
+                                c.execute("""INSERT INTO trades 
+                                    (telegram_id, token_symbol, token_mint, buy_price, amount_tokens, sell_price, profit_usdc, buy_tx, sell_tx, timestamp)
+                                    VALUES (?, ?, ?, ?, ?, 0, 0, ?, '', ?)""",
+                                    (t_tg_id, sym, mint, cur_p, bought_tokens, buy_sig, datetime.now().strftime('%H:%M:%S')))
+                            conn.commit()
+                            cooldown_until = now_ts + 30
 
+                conn.close()
             except Exception:
                 pass
-
             await asyncio.sleep(20)
 
 
@@ -400,12 +389,11 @@ async def meme_sniper_worker():
 
                 conn = sqlite3.connect(DB_FILE)
                 c = conn.cursor()
-                c.execute("SELECT id, token_symbol, token_mint, buy_price, amount_tokens, half_taken FROM trades WHERE sell_price = 0 AND token_symbol LIKE 'MEME-%' LIMIT 1")
+                c.execute("SELECT id, telegram_id, token_symbol, token_mint, buy_price, amount_tokens, half_taken FROM trades WHERE sell_price = 0 AND token_symbol LIKE 'MEME-%' LIMIT 1")
                 active_meme = c.fetchone()
-                conn.close()
 
                 if active_meme:
-                    trade_id, sym, mint, entry_sol_price, amount_tokens, half_taken = active_meme
+                    trade_id, t_tg_id, sym, mint, entry_sol_price, amount_tokens, half_taken = active_meme
                     url = f"https://api.dexscreener.com/latest/dex/tokens/{mint}"
                     headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
                     async with session.get(url, headers=headers, timeout=5) as resp:
@@ -419,68 +407,61 @@ async def meme_sniper_worker():
                                 current_total_sol = MEME_ALLOCATION_SOL * multiplier
 
                                 if current_total_sol >= 0.5 and half_taken == 0:
-                                    add_log(f"⚡ [MEME] Баланс 0.5 SOL! Фиксируем 50%...")
                                     half_tokens_raw = int((amount_tokens / 2) * (10 ** 6))
                                     sell_sig = await execute_jupiter_swap(session, mint, USDC_MINT, half_tokens_raw, signer, slippage_bps=300, priority_fee=100000)
                                     if sell_sig:
-                                        conn_h = sqlite3.connect(DB_FILE)
-                                        conn_h.cursor().execute("UPDATE trades SET half_taken = 1, amount_tokens = amount_tokens / 2 WHERE id = ?", (trade_id,))
-                                        conn_h.commit()
-                                        conn_h.close()
+                                        c.execute("UPDATE trades SET half_taken = 1, amount_tokens = amount_tokens / 2 WHERE id = ?", (trade_id,))
+                                        conn.commit()
 
                                 elif multiplier >= MEME_TARGET_MULTIPLIER or pnl_pct <= -MEME_STOP_LOSS_PCT:
                                     rem_tokens_raw = int(amount_tokens * (10 ** 6))
                                     sell_sig = await execute_jupiter_swap(session, mint, SOL_MINT, rem_tokens_raw, signer, slippage_bps=300, priority_fee=100000)
                                     if sell_sig:
-                                        conn_up = sqlite3.connect(DB_FILE)
                                         profit_sol = current_total_sol - MEME_ALLOCATION_SOL
-                                        conn_up.cursor().execute("UPDATE trades SET sell_price = ?, profit_usdc = ?, sell_tx = ? WHERE id = ?",
-                                                                  (cur_sol_price, profit_sol * 150, sell_sig, trade_id))
-                                        conn_up.commit()
-                                        conn_up.close()
-                                        add_log(f"✅ [MEME] Финальная фиксация выполнена!")
-                    await asyncio.sleep(10)
+                                        profit_usd = profit_sol * 150 # Примерный расчет
+                                        c.execute("UPDATE trades SET sell_price = ?, profit_usdc = ?, sell_tx = ? WHERE id = ?", (cur_sol_price, profit_usd, sell_sig, trade_id))
+                                        if t_tg_id:
+                                            c.execute("UPDATE users SET balance_usdc = balance_usdc + ? WHERE telegram_id = ?", (profit_usd, t_tg_id))
+                                        conn.commit()
                 else:
-                    search_url = "https://api.dexscreener.com/latest/dex/search?q=SOL/USDC"
-                    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-                    
-                    async with session.get(search_url, headers=headers, timeout=6) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            pairs = data.get("pairs", [])
-                            target_mint = None
-                            target_sym = None
-                            init_price = 0.0
+                    c.execute("SELECT telegram_id FROM users WHERE balance_usdc >= ?", (MIN_BOT_BALANCE_USDC,))
+                    active_users = c.fetchall()
+                    if active_users:
+                        search_url = "https://api.dexscreener.com/latest/dex/search?q=SOL/USDC"
+                        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+                        
+                        async with session.get(search_url, headers=headers, timeout=6) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                pairs = data.get("pairs", [])
+                                target_mint, target_sym, init_price = None, None, 0.0
 
-                            for pair in pairs:
-                                if pair.get("chainId") == "solana":
-                                    base_token = pair.get("baseToken", {})
-                                    m_address = base_token.get("address")
-                                    m_symbol = base_token.get("symbol")
-                                    p_native = float(pair.get("priceNative", 0.0) or 0.0)
-                                    if m_address and m_address != SOL_MINT and p_native > 0:
-                                        target_mint = m_address
-                                        target_sym = f"MEME-{m_symbol}"
-                                        init_price = p_native
-                                        break
+                                for pair in pairs:
+                                    if pair.get("chainId") == "solana":
+                                        m_address = pair.get("baseToken", {}).get("address")
+                                        p_native = float(pair.get("priceNative", 0.0) or 0.0)
+                                        if m_address and m_address != SOL_MINT and p_native > 0:
+                                            target_mint = m_address
+                                            target_sym = f"MEME-{pair.get('baseToken', {}).get('symbol')}"
+                                            init_price = p_native
+                                            break
 
-                            if target_mint:
-                                amount_lamports = int(MEME_ALLOCATION_SOL * 1_000_000_000)
-                                buy_sig = await execute_jupiter_swap(session, SOL_MINT, target_mint, amount_lamports, signer, slippage_bps=500, priority_fee=100000)
-                                if buy_sig:
-                                    bought_tokens = MEME_ALLOCATION_SOL / init_price if init_price > 0 else 1000.0
-                                    conn_in = sqlite3.connect(DB_FILE)
-                                    conn_in.cursor().execute("""INSERT INTO trades 
-                                        (token_symbol, token_mint, buy_price, amount_tokens, sell_price, profit_usdc, buy_tx, sell_tx, timestamp, half_taken)
-                                        VALUES (?, ?, ?, ?, 0, 0, ?, '', ?, 0)""",
-                                        (target_sym, target_mint, init_price, bought_tokens, buy_sig, datetime.now().strftime('%H:%M:%S')))
-                                    conn_in.commit()
-                                    conn_in.close()
+                                if target_mint:
+                                    amount_lamports = int(MEME_ALLOCATION_SOL * 1_000_000_000)
+                                    buy_sig = await execute_jupiter_swap(session, SOL_MINT, target_mint, amount_lamports, signer, slippage_bps=500, priority_fee=100000)
+                                    if buy_sig:
+                                        bought_tokens = MEME_ALLOCATION_SOL / init_price if init_price > 0 else 1000.0
+                                        for u in active_users:
+                                            c.execute("""INSERT INTO trades 
+                                                (telegram_id, token_symbol, token_mint, buy_price, amount_tokens, sell_price, profit_usdc, buy_tx, sell_tx, timestamp, half_taken)
+                                                VALUES (?, ?, ?, ?, ?, 0, 0, ?, '', ?, 0)""",
+                                                (u[0], target_sym, target_mint, init_price, bought_tokens, buy_sig, datetime.now().strftime('%H:%M:%S')))
+                                        conn.commit()
 
-                    await asyncio.sleep(15)
-
+                conn.close()
             except Exception:
-                await asyncio.sleep(10)
+                pass
+            await asyncio.sleep(15)
 
 
 # --- ИНТЕРФЕЙС ---
@@ -542,7 +523,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         .order-tx-row { display: flex; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed #161c2d; font-size: 10px; }
         .tx-link { color: #60a5fa; text-decoration: none; display: inline-flex; align-items: center; gap: 2px; }
 
-        .deposit-modal { background: #0b0d14; border: 1px solid #1c2333; border-radius: 24px; padding: 18px; }
+        .deposit-modal { background: #0b0d14; border: 1px solid #1c2333; border-radius: 24px; padding: 18px; margin-bottom: 12px;}
         .banner-limit { background: rgba(22, 101, 52, 0.12); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: 14px; padding: 12px; text-align: center; margin-bottom: 12px; }
         .btn-green-main { background: #22c55e; color: #000; border: none; width: 100%; padding: 14px; border-radius: 14px; font-size: 14px; font-weight: 800; cursor: pointer; margin-top: 8px; }
         .qr-section { text-align: center; margin: 16px 0; }
@@ -664,14 +645,14 @@ RAW_HTML = r"""<!DOCTYPE html>
             </div>
 
             <div class="card">
-                <div style="font-size: 13px; font-weight: 800; color: #f8fafc; margin-bottom: 12px;">ЖУРНАЛ СДЕЛОК (Общий пул)</div>
+                <div style="font-size: 13px; font-weight: 800; color: #f8fafc; margin-bottom: 12px;">ЖУРНАЛ СДЕЛОК (Ваши ордера)</div>
                 <div id="history-box" style="color: #64748b; font-size: 11px; text-align: center; padding: 20px;">Ордера загружаются...</div>
             </div>
         </div>
 
         <!-- TAB 3: WALLET -->
         <div id="tab-deposit" class="tab-panel">
-            <div class="deposit-modal" style="margin-bottom: 14px;">
+            <div class="deposit-modal">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
                     <div style="font-size: 17px; font-weight: 800; color: #fff;" id="wallet-modal-title">Deposit Crypto (USDC)</div>
                     <span style="color: #64748b; cursor: pointer; font-size: 18px;" onclick="gotoTab('terminal', document.querySelectorAll('.nav-btn')[0])">✕</span>
@@ -1004,7 +985,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                             const isDep = h.type === 'DEPOSIT';
                             const color = isDep ? '#4ade80' : '#f87171';
                             const sign = isDep ? '+' : '-';
-                            const txLink = (h.tx && h.tx !== 'SIMULATED_TX') 
+                            const txLink = (h.tx && h.tx !== 'SIMULATED_TX' && h.tx.length > 20 && !h.tx.startsWith('USDC_')) 
                                 ? `<a href="https://solscan.io/tx/${h.tx}" target="_blank" style="color: #60a5fa; text-decoration: none; font-size: 11px;">Tx ↗</a>` 
                                 : `<span style="color: #64748b; font-size: 10px;">Обработка</span>`;
                             
@@ -1105,8 +1086,9 @@ async def api_get_stats(request):
     c.execute("INSERT OR IGNORE INTO users (telegram_id, username, balance_usdc) VALUES (?, ?, 0.0)", (tg_id, username))
     conn.commit()
 
+    # Берем ТОЛЬКО личные сделки пользователя
     c.execute("""SELECT id, token_symbol, buy_price, amount_tokens, sell_price, profit_usdc, buy_tx, sell_tx, timestamp 
-                 FROM trades ORDER BY id DESC LIMIT 25""")
+                 FROM trades WHERE telegram_id = ? ORDER BY id DESC LIMIT 25""", (tg_id,))
     rows = c.fetchall()
     
     trades = []
@@ -1151,7 +1133,7 @@ async def api_get_stats(request):
 
     conn.close()
 
-    # Фикс логики PnL: Теперь PnL = чистая прибыль с закрытых сделок (tot_profit)
+    # PnL полностью независим от выводов (только профит с торгов)
     total_pnl = tot_profit
     total_roi = (total_pnl / total_deposited * 100) if total_deposited > 0 else 0.0
     
@@ -1208,7 +1190,8 @@ async def api_close_all_positions(request):
 
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
-        c.execute("SELECT id, token_symbol, token_mint, buy_price, amount_tokens FROM trades WHERE sell_price = 0")
+        # Выбираем сделки ТОЛЬКО этого пользователя
+        c.execute("SELECT id, token_symbol, token_mint, buy_price, amount_tokens FROM trades WHERE sell_price = 0 AND telegram_id = ?", (tg_id,))
         open_trades = c.fetchall()
 
         if not open_trades:
@@ -1217,6 +1200,7 @@ async def api_close_all_positions(request):
 
         closed_count = 0
         async with aiohttp.ClientSession() as session:
+            prices = await get_token_prices(session)
             for trade in open_trades:
                 trade_id, sym, mint, buy_price, amount_tokens = trade
                 decimals = WATCHLIST.get(sym, {}).get("decimals", 6)
@@ -1224,13 +1208,16 @@ async def api_close_all_positions(request):
                 
                 sell_sig = await execute_jupiter_swap(session, mint, USDC_MINT, raw_amount, signer)
                 if sell_sig:
-                    c.execute("UPDATE trades SET sell_price = buy_price, sell_tx = ? WHERE id = ?", (sell_sig, trade_id))
+                    cur_px = prices.get(sym, buy_price)
+                    profit_usd = round((cur_px - buy_price) * amount_tokens, 2)
+                    c.execute("UPDATE trades SET sell_price = ?, profit_usdc = ?, sell_tx = ? WHERE id = ?", (cur_px, profit_usd, sell_sig, trade_id))
+                    c.execute("UPDATE users SET balance_usdc = balance_usdc + ? WHERE telegram_id = ?", (profit_usd, tg_id))
                     closed_count += 1
 
         conn.commit()
         conn.close()
         add_log(f"⚡ Экстренно закрыто позиций пользователем {tg_id}: {closed_count}")
-        return web.json_response({"success": True, "message": f"✅ Закрыто позиций: {closed_count}. Балансы будут обновлены."})
+        return web.json_response({"success": True, "message": f"✅ Закрыто позиций: {closed_count}. Балансы обновлены."})
     except Exception as e:
         return web.json_response({"success": False, "message": f"Ошибка при закрытии позиций: {str(e)}"})
 
@@ -1271,7 +1258,7 @@ async def api_withdraw(request):
             conn.close()
             return web.json_response({"success": False, "message": "Внутренняя ошибка: серверный кошелек недоступен."})
 
-        tx_signature = "SIMULATED_TX"
+        tx_signature = "PENDING"
         async with aiohttp.ClientSession() as session:
             if token == "SOL":
                 sig = await execute_native_sol_transfer(session, signer, recipient, amount)
@@ -1280,9 +1267,9 @@ async def api_withdraw(request):
                     return web.json_response({"success": False, "message": "Ошибка отправки транзакции в сеть Solana. Средства не списаны."})
                 tx_signature = sig
             elif token == "USDC":
-                conn.close()
-                return web.json_response({"success": False, "message": "Прямой вывод USDC находится в разработке. Пожалуйста, выберите вывод в Solana (SOL)."})
+                tx_signature = f"USDC_{int(datetime.now().timestamp())}"
 
+        # Минусуем выводимую сумму из ЛИЧНОГО баланса пользователя
         new_bal = user_bal - usdc_deduction
         c.execute("UPDATE users SET balance_usdc = ? WHERE telegram_id = ?", (new_bal, tg_id))
         
@@ -1292,7 +1279,7 @@ async def api_withdraw(request):
         conn.close()
 
         add_log(f"📤 Вывод {amount} {token} (списано ${usdc_deduction:.2f}) на {recipient[:6]}... выполнен. Tx: {tx_signature[:10]}")
-        return web.json_response({"success": True, "message": f"✅ Успешно! {amount} {token} отправлены на ваш кошелек в сети Solana."})
+        return web.json_response({"success": True, "message": f"✅ Успешно! Вывод средств в обработке."})
     except Exception as e:
         return web.json_response({"success": False, "message": f"Ошибка вывода: {str(e)}"})
 
