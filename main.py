@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import math
 import time
+from pathlib import Path
 from decimal import Decimal, InvalidOperation
 from urllib.parse import parse_qsl
 from solders.keypair import Keypair
@@ -21,7 +22,7 @@ from solders.system_program import transfer, TransferParams
 from solders.message import Message
 from solders.hash import Hash
 from solders.instruction import Instruction, AccountMeta
-from wallet_runtime import WalletRuntime
+from custody_runtime import CustodyRuntime
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -34,7 +35,7 @@ TELEGRAM_INIT_DATA_MAX_AGE_SECONDS = 86400
 PIN_HASH_ITERATIONS = 310000
 PIN_MAX_ATTEMPTS = 5
 PIN_LOCK_SECONDS = 900
-ADMIN_API_PATHS = {"/api/logs", "/api/toggle_trading", "/api/toggle_meme"}
+ADMIN_API_PATHS = {"/api/admin/status", "/api/admin/fee_reserve", "/api/admin/opening_balance"}
 WITHDRAW_LOCKS = {}
 CUSTODY_SAFE_MODE = True
 CUSTODY_PAUSE_MESSAGE = "Операции с реальными средствами временно приостановлены до сверки балансов и миграции реестра."
@@ -127,8 +128,6 @@ async def telegram_auth_middleware(request, handler):
     except TelegramAuthError as exc:
         return web.json_response({"success": False, "message": str(exc)}, status=401)
     request["telegram_user"] = telegram_user
-    if str(telegram_user["id"]) != ADMIN_TELEGRAM_ID:
-        return web.json_response({"success": False, "message": "Это личный бот владельца."}, status=403)
     if request.path in ADMIN_API_PATHS:
         try:
             admin_id = int(ADMIN_TELEGRAM_ID)
@@ -765,8 +764,8 @@ RAW_HTML = r"""<!DOCTYPE html>
     <div id="app" style="display: none;">
         <div id="tab-terminal" class="tab-panel active">
             <div class="banner-limit" style="border-color:#ef4444; background:#2a1014; margin-bottom:12px;">
-                <div style="color:#4ade80; font-size:13px; font-weight:800;">Личный кошелёк — USDC / SOL</div>
-                <div id="wallet-runtime-status" style="color:#cbd5e1; font-size:11px; margin-top:4px;">Баланс загружается из блокчейна. Автоторговля включается вручную.</div>
+                <div style="color:#4ade80; font-size:13px; font-weight:800;">Ваш личный счёт — USDC / SOL</div>
+                <div id="wallet-runtime-status" style="color:#cbd5e1; font-size:11px; margin-top:4px;">Учитываются только ваши пополнения и подтверждённые сделки. Торговля может привести к убытку; прибыль не гарантируется.</div>
             </div>
             <div class="control-bar">
                 <button id="btn-toggle" class="btn-ctl btn-toggle-off" onclick="toggleTrading()">
@@ -785,7 +784,7 @@ RAW_HTML = r"""<!DOCTYPE html>
 
             <div class="card" style="border: 1px solid rgba(34, 197, 94, 0.3); background: linear-gradient(135deg, #0e111a 0%, #0a150d 100%);">
                 <div style="font-size: 13px; font-weight: 800; color: #22c55e; margin-bottom: 8px; display: flex; justify-content: space-between;">
-                    <span>💼 БАЛАНС В СЕТИ: USDC / SOL</span>
+                    <span>💼 ВАШ ДОСТУПНЫЙ БАЛАНС: USDC / SOL</span>
                     <span id="display-username" style="color: #fff; font-size: 12px;"></span>
                 </div>
                 <div class="grid-stats">
@@ -871,10 +870,18 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div id="section-deposit">
                     <div class="banner-limit">
                         <div style="color:#4ade80; font-weight:800;">Пополнение USDC или SOL — сеть Solana</div>
-                        <div style="font-size:11px; margin-top:6px;">Это личный серверный кошелёк владельца. Реальный баланс обновляется автоматически после подтверждения сети.</div>
+                        <div style="font-size:11px; margin-top:6px;">Адрес общий, счёт — только ваш. Создайте запрос: его уникальный Memo обязателен. Без Memo перевод нельзя автоматически зачислить.</div>
                     </div>
-                    <div class="address-box" id="wallet-text">__DEPOSIT_WALLET__</div>
-                    <button class="btn-copy" onclick="copyWallet()">Копировать адрес</button>
+                    <select id="deposit-token" class="sig-input"><option value="USDC">USDC</option><option value="SOL">SOL</option></select>
+                    <input id="deposit-amount" type="number" step="any" class="sig-input" placeholder="Сумма пополнения">
+                    <button class="btn-green-main" onclick="createDepositInvoice()">Создать запрос пополнения</button>
+                    <div id="deposit-invoice-details" style="display:none;">
+                        <div class="address-box" id="wallet-text"></div>
+                        <div style="font-size:11px;">Обязательный Memo: <span id="deposit-memo" style="overflow-wrap:anywhere;"></span></div>
+                        <a id="deposit-wallet-link" target="_blank" rel="noopener noreferrer" class="btn-copy">Оплатить через кошелёк</a>
+                        <button class="btn-copy" onclick="copyDepositMemo()">Копировать Memo</button>
+                        <button class="btn-copy" onclick="copyWallet()">Копировать общий адрес</button>
+                    </div>
                     <input id="dep-signature" class="sig-input" placeholder="Подпись входящего перевода — необязательно">
                     <button class="btn-verify" id="btn-verify-action" onclick="verifyOnchainDeposit()">Проверить перевод USDC / SOL</button>
                 </div>
@@ -885,7 +892,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                         <button class="token-btn active" id="wtoken-usdc" onclick="selectWithdrawToken('USDC')">USDC</button>
                         <button class="token-btn" id="wtoken-sol" onclick="selectWithdrawToken('SOL')">Solana (SOL)</button>
                     </div>
-                    <input id="withdraw-address" class="sig-input" value="57S7TryAMhxRq5sMSyZxTkyCmzT8tPFKfXjzZwvmv5db" placeholder="Адрес кошелька-получателя">
+                    <input id="withdraw-address" class="sig-input" placeholder="Ваш адрес кошелька-получателя">
                     <input id="withdraw-amount" type="number" step="any" class="sig-input" placeholder="Сумма">
                     <button class="btn-green-main" id="btn-withdraw-action" onclick="secureWithdraw()">Withdraw</button>
                 </div>
@@ -894,6 +901,12 @@ RAW_HTML = r"""<!DOCTYPE html>
             <div class="card" style="background: #0b0d14; border-color: #1c2333;">
                 <div style="font-size: 13px; font-weight: 800; color: #fff; margin-bottom: 12px;">История Транзакций</div>
                 <div id="wallet-history-box" style="font-size: 11px; color: #64748b; text-align: center;">Транзакции отсутствуют...</div>
+            </div>
+            <div id="admin-custody-panel" class="card" style="display:none;">
+                <div style="font-weight:800;">Настройка администратора перед публичным открытием</div>
+                <div style="font-size:11px;margin-top:8px;">Комиссии оплачиваются из отдельного резерва оператора. Чужие балансы не используются.</div>
+                <button class="btn-copy" onclick="setupFeeReserve()">Выделить собственные SOL на комиссии</button>
+                <button class="btn-copy" onclick="importOwnOpeningBalance()">Перенести старый личный остаток</button>
             </div>
         </div>
     </div>
@@ -920,6 +933,50 @@ RAW_HTML = r"""<!DOCTYPE html>
         let currentWithdrawToken = 'USDC';
         let tradingActive = false;
         let withdrawSending = false;
+        let depositInvoiceId = localStorage.getItem('deposit_invoice_id') || '';
+
+        async function createDepositInvoice() {
+            try {
+                const token = document.getElementById('deposit-token').value;
+                const amount = document.getElementById('deposit-amount').value.trim();
+                if (!amount) { alert('Введите сумму пополнения.'); return; }
+                const response = await apiFetch('/api/deposit_invoice', {
+                    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token, amount})
+                });
+                const invoice = await response.json();
+                if (!response.ok || !invoice.success) throw new Error(invoice.message);
+                depositInvoiceId = invoice.invoice_id;
+                localStorage.setItem('deposit_invoice_id', depositInvoiceId);
+                document.getElementById('wallet-text').textContent = invoice.deposit_wallet;
+                document.getElementById('deposit-memo').textContent = invoice.memo;
+                document.getElementById('deposit-wallet-link').href = invoice.payment_url;
+                document.getElementById('deposit-invoice-details').style.display = 'block';
+                alert('Используйте страницу оплаты: она добавляет Memo автоматически. Не отправляйте просто на общий адрес без Memo.');
+            } catch(e) { alert(e.message || 'Не удалось создать платёжный запрос.'); }
+        }
+        function copyDepositMemo() {
+            navigator.clipboard.writeText(document.getElementById('deposit-memo').textContent);
+        }
+        async function setupFeeReserve() {
+            const amount = prompt('Сколько своих SOL выделить на комиссии? Сначала используется ваш личный SOL-баланс, затем только ваши нераспределённые монеты.', '0.01');
+            if (!amount || !confirm('Подтверждаете, что эта сумма принадлежит вам, не клиентам? Монеты не отправляются, меняется только учёт.')) return;
+            await adminLedgerAction('/api/admin/fee_reserve', {amount_sol:amount, confirm_own_unassigned:true});
+        }
+        async function importOwnOpeningBalance() {
+            const token = prompt('Актив для переноса старого личного остатка: USDC или SOL', 'USDC');
+            if (!token) return;
+            const amount = prompt('Точная сумма ваших старых собственных средств (не виртуальный баланс):');
+            if (!amount || !confirm('В этой сумме нет чужих средств? Перенос доступен только до публичного открытия и один раз для каждого актива.')) return;
+            await adminLedgerAction('/api/admin/opening_balance', {token, amount, confirm_own_unassigned:true});
+        }
+        async function adminLedgerAction(url, body) {
+            try {
+                const response = await apiFetch(url, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+                const result = await response.json();
+                alert(result.message);
+                await refresh();
+            } catch(e) { alert('Не удалось изменить учёт. Проверьте состояние, не повторяйте вслепую.'); }
+        }
 
         function getUserData() {
             const user = tg?.initDataUnsafe?.user;
@@ -1069,10 +1126,10 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         async function toggleTrading() {
-            let size = '20';
+            let size = '1';
             if (!tradingActive) {
-                size = prompt('Размер одной покупки в USDC (реальные деньги):', '20');
-                if (!size || !confirm('Включить автоматические сделки на своём кошельке? Размер покупки: ' + size + ' USDC.')) return;
+                size = prompt('Размер одной покупки из вашего личного USDC-баланса:', '1');
+                if (!size || !confirm('Включить торговлю только на своём счёте? Размер покупки: ' + size + ' USDC. Возможны убытки; прибыль не гарантируется.')) return;
             }
             try {
                 const response = await apiFetch('/api/toggle_trading', {
@@ -1132,6 +1189,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         async function verifyOnchainDeposit() {
             const sig = document.getElementById('dep-signature').value.trim();
             if (!sig) { alert("Вставьте Signature транзакции."); return; }
+            if (!depositInvoiceId) { alert('Сначала создайте свой платёжный запрос. Подпись без Memo не подтверждает владельца депозита.'); return; }
 
             const btn = document.getElementById('btn-verify-action');
             btn.innerText = "Верификация...";
@@ -1143,7 +1201,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const res = await apiFetch('/api/verify_deposit', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ username: customNick, tx_signature: sig })
+                    body: JSON.stringify({ invoice_id: depositInvoiceId, tx_signature: sig })
                 });
                 const d = await res.json();
                 alert(d.message);
@@ -1153,7 +1211,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 }
             } catch (e) { alert("Ошибка соединения."); }
             finally {
-                btn.innerText = "Verify & Credit USDC 🔄";
+                btn.innerText = "Проверить перевод USDC / SOL";
                 btn.disabled = false;
             }
         }
@@ -1179,10 +1237,12 @@ RAW_HTML = r"""<!DOCTYPE html>
                     document.getElementById('wallet-runtime-status').textContent =
                         !flags.wallet_configured ? 'Серверный ключ не соответствует адресу кошелька.' :
                         !flags.persistent_storage ? 'Операции заблокированы: нужен Persistent Disk /var/data.' :
-                        s.operation_pending ? 'Ожидается подтверждение операции. Не повторяйте отправку.' :
-                        'Реальные балансы загружены. Торговля включается кнопкой Автопилот.';
+                        !flags.finance_allowed ? 'Публичный приём средств ещё закрыт. Ваш личный счёт создан.' :
+                        s.operation_pending ? 'Ожидается подтверждение вашей операции. Не повторяйте отправку.' :
+                        'Показан только ваш счёт. Торговля рискованна и включается вами вручную.';
+                    document.getElementById('admin-custody-panel').style.display = s.is_admin ? 'block' : 'none';
                     updateToggleUI(s.trading_active);
-                    document.getElementById('chain-withdraw-balances').textContent = 'USDC: ' + s.user_balance.toFixed(6) + ' | SOL: ' + s.sol_balance.toFixed(9) + '. Оставляйте SOL на комиссию.';
+                    document.getElementById('chain-withdraw-balances').textContent = 'Ваш доступный остаток: ' + s.user_balance.toFixed(6) + ' USDC | ' + s.sol_balance.toFixed(9) + ' SOL. Комиссии оплачивает резерв оператора.';
                     const userEl = document.getElementById('display-username');
                     if (userEl) userEl.innerText = "@" + s.username;
                     
@@ -1284,7 +1344,7 @@ async def index_handler(request):
 async def health_handler(request):
     runtime = request.app["wallet_runtime"]
     flags = runtime.readiness()
-    return web.json_response({"status": "owner_wallet", **flags, "trading_active": runtime.trading})
+    return web.json_response({"status": "custody_beta", **flags, "trading_active": bool(runtime.ledger.active_users())})
 
 async def api_get_logs(request):
     return web.json_response({"success": True, "logs": RECENT_LOGS, "trading_active": IS_TRADING_ACTIVE, "meme_active": IS_MEME_ACTIVE})
@@ -1312,7 +1372,7 @@ async def api_security_status(request):
         c = conn.cursor()
         c.execute("SELECT pin_hash FROM user_security WHERE telegram_id = ?", (tg_id,))
         row = c.fetchone()
-        return web.json_response({"success": True, "has_pin": bool(row and row[0] and row[0].startswith("pbkdf2_sha256$"))})
+        return web.json_response({"success": True, "has_pin": bool(row and row[0])})
     finally:
         conn.close()
 
@@ -1327,6 +1387,23 @@ async def api_set_security(request):
         conn = sqlite3.connect(DB_FILE, timeout=10)
         try:
             c = conn.cursor()
+            c.execute("BEGIN IMMEDIATE")
+            old = c.execute("SELECT pin_hash,pin_attempts,pin_locked_until FROM user_security WHERE telegram_id=?", (tg_id,)).fetchone()
+            if old and old[0]:
+                now = int(time.time())
+                if int(old[2] or 0) > now:
+                    return web.json_response({"success": False, "message": "PIN временно заблокирован."}, status=423)
+                current_pin = str(body.get("current_pin", ""))
+                if not current_pin:
+                    return web.json_response({"success": False, "message": "Для изменения нужен текущий PIN."}, status=409)
+                correct, _ = verify_pin_hash(current_pin, old[0]) if len(current_pin) <= 128 else (False, False)
+                if not correct:
+                    previous = 0 if old[2] and old[2] <= now else int(old[1] or 0)
+                    attempts = previous + 1
+                    until = now + PIN_LOCK_SECONDS if attempts >= PIN_MAX_ATTEMPTS else 0
+                    c.execute("UPDATE user_security SET pin_attempts=?,pin_locked_until=? WHERE telegram_id=?", (attempts, until, tg_id))
+                    conn.commit()
+                    return web.json_response({"success": False, "message": "Неверный текущий PIN."}, status=423 if until else 401)
             c.execute("""INSERT INTO user_security (telegram_id, pin_hash, auth_type, biometric_enabled, pin_attempts, pin_locked_until)
                          VALUES (?, ?, 'PIN', 0, 0, 0)
                          ON CONFLICT(telegram_id) DO UPDATE SET pin_hash=excluded.pin_hash, auth_type='PIN', biometric_enabled=0, pin_attempts=0, pin_locked_until=0""",
@@ -1583,6 +1660,10 @@ async def api_withdraw(request):
         return await api_withdraw_impl(request)
 
 async def telegram_webhook_handler(request):
+    expected_secret = hmac.new(TELEGRAM_TOKEN.encode(), b"zerolife-webhook-v1", hashlib.sha256).hexdigest()
+    if not TELEGRAM_TOKEN or not hmac.compare_digest(
+            request.headers.get("X-Telegram-Bot-Api-Secret-Token", ""), expected_secret):
+        return web.Response(status=403, text="Forbidden")
     try:
         data = await request.json()
         if "message" in data:
@@ -1617,24 +1698,37 @@ async def set_telegram_webhook():
     if not TELEGRAM_TOKEN or not RENDER_URL:
         return
     webhook_url = f"{RENDER_URL.rstrip('/')}/webhook"
-    set_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}"
+    set_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook"
+    secret = hmac.new(TELEGRAM_TOKEN.encode(), b"zerolife-webhook-v1", hashlib.sha256).hexdigest()
     async with aiohttp.ClientSession() as session:
         try:
-            await session.get(set_url)
+            await session.post(set_url, json={"url": webhook_url, "secret_token": secret})
         except Exception:
             pass
 
 async def main():
     init_db()
     app = web.Application(middlewares=[telegram_auth_middleware])
-    runtime = WalletRuntime(DB_FILE, SOLANA_RPC, ADMIN_TELEGRAM_ID, SHARED_DEPOSIT_WALLET,
-        get_signer_keypair, verify_user_pin, get_token_prices, WATCHLIST, add_log)
+    runtime = CustodyRuntime(DB_FILE, SOLANA_RPC, ADMIN_TELEGRAM_ID, SHARED_DEPOSIT_WALLET,
+        get_signer_keypair, verify_user_pin, get_token_prices, WATCHLIST, add_log, base_url=RENDER_URL)
     runtime.recent_logs = lambda: RECENT_LOGS
     app["wallet_runtime"] = runtime
     def wallet_handler(action):
         async def handler(request):
             return await runtime.handle(request, action)
         return handler
+    def payment_handler(action):
+        async def handler(request):
+            return await runtime.public_handle(request, action)
+        return handler
+    payment_html = Path(__file__).with_name("deposit_payment.html").read_text(encoding="utf-8")
+    async def payment_page(request):
+        if not runtime.ledger.get_invoice(request.match_info["invoice"]):
+            raise web.HTTPNotFound()
+        return web.Response(text=payment_html, content_type="text/html", headers={
+            "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": "frame-ancestors 'none'; object-src 'none'; base-uri 'none'",
+            "X-Content-Type-Options": "nosniff"})
     app.router.add_get('/', index_handler)
     app.router.add_get('/health', health_handler)
     app.router.add_get('/api/logs', wallet_handler(runtime.logs))
@@ -1642,12 +1736,20 @@ async def main():
     app.router.add_post('/api/toggle_trading', wallet_handler(runtime.toggle))
     app.router.add_post('/api/toggle_meme', api_toggle_meme)
     app.router.add_post('/api/verify_deposit', wallet_handler(runtime.deposit))
+    app.router.add_post('/api/deposit_invoice', wallet_handler(runtime.create_invoice))
+    app.router.add_get('/api/admin/status', wallet_handler(runtime.admin_status))
+    app.router.add_post('/api/admin/fee_reserve', wallet_handler(runtime.reserve_fees))
+    app.router.add_post('/api/admin/opening_balance', wallet_handler(runtime.opening_balance))
     app.router.add_post('/api/close_all', wallet_handler(runtime.close_all))
     app.router.add_post('/api/withdraw', wallet_handler(runtime.withdraw))
     app.router.add_get('/api/security_status', api_security_status)
     app.router.add_post('/api/set_security', api_set_security)
     app.router.add_post('/api/verify_security', api_verify_security)
     app.router.add_post('/webhook', telegram_webhook_handler)
+    app.router.add_get('/deposit/{invoice}', payment_page)
+    app.router.add_get('/deposit/{invoice}/status', payment_handler(runtime.payment_status))
+    app.router.add_post('/deposit/{invoice}/transaction', payment_handler(runtime.deposit_transaction))
+    app.router.add_post('/deposit/{invoice}/confirm', payment_handler(runtime.payment_confirm))
 
     runner = web.AppRunner(app)
     await runner.setup()
