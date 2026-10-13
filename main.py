@@ -35,6 +35,8 @@ PIN_MAX_ATTEMPTS = 5
 PIN_LOCK_SECONDS = 900
 ADMIN_API_PATHS = {"/api/logs", "/api/toggle_trading", "/api/toggle_meme"}
 WITHDRAW_LOCKS = {}
+CUSTODY_SAFE_MODE = True
+CUSTODY_PAUSE_MESSAGE = "Операции с реальными средствами временно приостановлены до сверки балансов и миграции реестра."
 
 DB_DIR = "/var/data"
 DB_FILE = os.path.join(DB_DIR, "zer0life_users.db") if os.path.exists(DB_DIR) else "zer0life_users.db"
@@ -70,7 +72,7 @@ MEME_TARGET_MULTIPLIER = 10.0
 MEME_HALF_MULTIPLIER = 5.0
 MEME_STOP_LOSS_PCT = 0.80
 
-IS_TRADING_ACTIVE = True
+IS_TRADING_ACTIVE = False
 IS_MEME_ACTIVE = False
 RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v6.9 (Full Enterprise Recovery) инициализирован."]
 
@@ -246,12 +248,6 @@ def init_db():
         try: c.execute("ALTER TABLE trades ADD COLUMN half_taken INTEGER DEFAULT 0")
         except Exception: pass
 
-    try:
-        c.execute("DELETE FROM trades WHERE sell_price = 0")
-        conn.commit()
-    except Exception:
-        pass
-
     conn.commit()
     conn.close()
 
@@ -332,6 +328,8 @@ async def get_token_prices(session: aiohttp.ClientSession) -> dict:
     return prices
 
 async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, output_mint: str, amount_raw: int, signer: Keypair, slippage_bps: int = MAX_SLIPPAGE_BPS, priority_fee: int = 25000) -> str:
+    if CUSTODY_SAFE_MODE:
+        return ""
     try:
         user_pubkey = str(signer.pubkey())
         headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
@@ -378,6 +376,8 @@ async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, 
     return ""
 
 async def execute_native_sol_transfer(session: aiohttp.ClientSession, signer: Keypair, recipient_addr: str, amount_sol: float):
+    if CUSTODY_SAFE_MODE:
+        return None
     try:
         lamports = int(amount_sol * 1_000_000_000)
         recipient_pubkey = Pubkey.from_string(recipient_addr)
@@ -408,6 +408,8 @@ async def execute_native_sol_transfer(session: aiohttp.ClientSession, signer: Ke
         return None
 
 async def execute_spl_usdc_transfer(session: aiohttp.ClientSession, signer: Keypair, recipient_addr: str, amount_ui: Decimal) -> str:
+    if CUSTODY_SAFE_MODE:
+        return None
     try:
         raw_amount = int(amount_ui * Decimal(1_000_000))
         recipient_pubkey = Pubkey.from_string(recipient_addr)
@@ -759,10 +761,14 @@ RAW_HTML = r"""<!DOCTYPE html>
 
     <div id="app" style="display: none;">
         <div id="tab-terminal" class="tab-panel active">
+            <div class="banner-limit" style="border-color:#ef4444; background:#2a1014; margin-bottom:12px;">
+                <div style="color:#fca5a5; font-size:13px; font-weight:800;">SAFE MODE — операции с реальными средствами остановлены</div>
+                <div style="color:#fecaca; font-size:11px; margin-top:4px;">Показанные старые балансы и позиции не сверены с сетью. Не отправляйте средства и не считайте эти цифры доступными до аудита.</div>
+            </div>
             <div class="control-bar">
-                <button id="btn-toggle" class="btn-ctl btn-toggle-on" onclick="toggleTrading()">
+                <button id="btn-toggle" class="btn-ctl btn-toggle-off" disabled>
                     <span id="toggle-dot">●</span>
-                    <span id="toggle-text">Автопилот: ВКЛ</span>
+                    <span id="toggle-text">Автопилот: SAFE MODE</span>
                 </button>
                 <button id="btn-refresh-top" class="btn-ctl btn-refresh" onclick="manualRefresh()">
                     <span id="refresh-icon">🔄</span>
@@ -770,7 +776,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 </button>
             </div>
 
-            <button class="btn-sell-all" onclick="closeAllPositions()">
+            <button class="btn-sell-all" disabled>
                 <span>⚠️ Экстренно закрыть все позиции</span>
             </button>
 
@@ -795,7 +801,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                         <div style="font-size: 15px; font-weight: 800; color: #facc15;">🐸 Meme Sniper Mode</div>
                         <div style="font-size: 10px; color: #94a3b8; margin-top: 2px;">0.1 SOL → 0.5 SOL (50% в USDC) → 1 SOL</div>
                     </div>
-                    <button id="btn-meme-toggle" class="btn-ctl btn-toggle-off" style="padding: 8px 12px; font-size: 11px;" onclick="toggleMemeTrading()">
+                    <button id="btn-meme-toggle" class="btn-ctl btn-toggle-off" style="padding: 8px 12px; font-size: 11px;" disabled>
                         <span id="meme-toggle-text">ВЫКЛ</span>
                     </button>
                 </div>
@@ -860,43 +866,17 @@ RAW_HTML = r"""<!DOCTYPE html>
                 </div>
 
                 <div id="section-deposit">
-                    <div class="banner-limit">
-                        <div style="color: #22c55e; font-size: 13px; font-weight: 700;">Deposit from $50 to $10,000 USDC per transaction</div>
-                        <div style="color: #64748b; font-size: 11px; margin-top: 4px;">Send SPL-USDC on Solana. Enter transaction signature below.</div>
-                    </div>
-
-                    <button class="btn-green-main" id="btn-show-addr" onclick="toggleDepositDetails()">Show Deposit Address 🚀</button>
-
-                    <div id="deposit-details" style="display: none; margin-top: 14px;">
-                        <div style="text-align: center; color: #94a3b8; font-size: 11px; margin-bottom: 8px;">Transfer USDC (Solana SPL) to:</div>
-                        <div class="qr-section">
-                            <img class="qr-img" src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=__DEPOSIT_WALLET__">
-                        </div>
-
-                        <div class="address-box" id="wallet-text">__DEPOSIT_WALLET__</div>
-                        <button class="btn-copy" onclick="copyWallet()">📋 Copy Address</button>
-
-                        <div style="color: #22c55e; font-size: 11px; font-weight: 700; margin-bottom: 6px;">Transaction Signature:</div>
-                        <input id="dep-signature" class="sig-input" placeholder="Paste signature from your wallet...">
-
-                        <button class="btn-verify" id="btn-verify-action" onclick="verifyOnchainDeposit()">Verify & Credit USDC 🔄</button>
+                    <div class="banner-limit" style="border-color:#ef4444; background:#2a1014;">
+                        <div style="color:#fca5a5; font-size:13px; font-weight:800;">Пополнение приостановлено</div>
+                        <div style="color:#fecaca; font-size:11px; margin-top:4px;">Не отправляйте USDC на общий адрес: текущая схема не подтверждает, кто именно сделал перевод.</div>
                     </div>
                 </div>
 
                 <div id="section-withdraw" style="display: none;">
-                    <div style="font-size: 12px; color: #94a3b8; margin-bottom: 8px;">Select Token to Withdraw:</div>
-                    <div class="token-selector">
-                        <button class="token-btn active" id="wtoken-usdc" onclick="selectWithdrawToken('USDC')">USDC</button>
-                        <button class="token-btn" id="wtoken-sol" onclick="selectWithdrawToken('SOL')">Solana (SOL)</button>
+                    <div class="banner-limit" style="border-color:#ef4444; background:#2a1014;">
+                        <div style="color:#fca5a5; font-size:13px; font-weight:800;">Вывод приостановлен до сверки обязательств</div>
+                        <div style="color:#fecaca; font-size:11px; margin-top:4px;">Старые внутренние балансы и позиции не подтверждены реестром и фактическими остатками кошелька.</div>
                     </div>
-
-                    <div style="font-size: 12px; color: #94a3b8; margin-bottom: 6px;">Recipient Solana Address:</div>
-                    <input id="withdraw-address" class="sig-input" placeholder="Enter recipient wallet address...">
-
-                    <div style="font-size: 12px; color: #94a3b8; margin-bottom: 6px;">Amount:</div>
-                    <input id="withdraw-amount" type="number" step="any" class="sig-input" placeholder="0.00">
-
-                    <button class="btn-green-main" id="btn-withdraw-action" onclick="secureWithdraw()">Withdraw 🚀</button>
                 </div>
             </div>
 
@@ -1254,6 +1234,8 @@ async def index_handler(request):
     return web.Response(text=HTML_CONTENT, content_type='text/html', headers={"Cache-Control": "no-store"})
 
 async def health_handler(request):
+    if CUSTODY_SAFE_MODE:
+        return web.json_response({"status": "safe_mode", "custody_operations": "paused"})
     return web.Response(text="OK")
 
 async def api_get_logs(request):
@@ -1261,12 +1243,16 @@ async def api_get_logs(request):
 
 async def api_toggle_trading(request):
     global IS_TRADING_ACTIVE
+    if CUSTODY_SAFE_MODE:
+        return web.json_response({"success": False, "message": CUSTODY_PAUSE_MESSAGE}, status=503)
     IS_TRADING_ACTIVE = not IS_TRADING_ACTIVE
     add_log(f"⚙️ Автопилот Топ-5: {'ВКЛ' if IS_TRADING_ACTIVE else 'ВЫКЛ'}")
     return web.json_response({"success": True, "trading_active": IS_TRADING_ACTIVE})
 
 async def api_toggle_meme(request):
     global IS_MEME_ACTIVE
+    if CUSTODY_SAFE_MODE:
+        return web.json_response({"success": False, "message": CUSTODY_PAUSE_MESSAGE}, status=503)
     IS_MEME_ACTIVE = not IS_MEME_ACTIVE
     add_log(f"🐸 Meme Sniper Mode: {'ВКЛ' if IS_MEME_ACTIVE else 'ВЫКЛ'}")
     return web.json_response({"success": True, "meme_active": IS_MEME_ACTIVE})
@@ -1372,18 +1358,20 @@ async def api_get_stats(request):
 
     total_pnl = tot_profit
     total_roi = (total_pnl / total_deposited * 100) if total_deposited > 0 else 0.0
-    withdrawable = max(0.0, user_bal - MIN_BOT_BALANCE_USDC)
+    withdrawable = 0.0 if CUSTODY_SAFE_MODE else max(0.0, user_bal - MIN_BOT_BALANCE_USDC)
 
     return web.json_response({
         "success": True, "profit_usdc": tot_profit, "closed_count": closed_count,
         "trades": trades, "user_balance": user_bal,
         "total_deposited": total_deposited, "total_pnl": total_pnl, "total_roi": total_roi,
-        "withdrawable": withdrawable, "username": db_username,
+        "withdrawable": withdrawable, "balance_reconciled": not CUSTODY_SAFE_MODE, "username": db_username,
         "wallet_history": wallet_history
     })
 
 async def api_verify_deposit(request):
     try:
+        if CUSTODY_SAFE_MODE:
+            return web.json_response({"success": False, "message": CUSTODY_PAUSE_MESSAGE}, status=503)
         body = await request.json()
         tx = body.get("tx_signature", "").strip()
         tg_id = int(request["telegram_user"]["id"])
@@ -1418,6 +1406,8 @@ async def api_verify_deposit(request):
 
 async def api_close_all_positions(request):
     try:
+        if CUSTODY_SAFE_MODE:
+            return web.json_response({"success": False, "message": CUSTODY_PAUSE_MESSAGE}, status=503)
         body = await request.json()
         tg_id = int(request["telegram_user"]["id"])
         signer = get_signer_keypair()
@@ -1458,6 +1448,8 @@ async def api_close_all_positions(request):
 
 async def api_withdraw_impl(request):
     try:
+        if CUSTODY_SAFE_MODE:
+            return web.json_response({"success": False, "message": CUSTODY_PAUSE_MESSAGE}, status=503)
         body = await request.json()
         tg_id = int(request["telegram_user"]["id"])
         token = str(body.get("token", "USDC")).upper()
@@ -1586,6 +1578,8 @@ async def set_telegram_webhook():
 
 async def main():
     init_db()
+    if CUSTODY_SAFE_MODE:
+        add_log("🛑 SAFE MODE: торговля, пополнения и выводы отключены до сверки реестра и средств.")
     app = web.Application(middlewares=[telegram_auth_middleware])
     app.router.add_get('/', index_handler)
     app.router.add_get('/health', health_handler)
