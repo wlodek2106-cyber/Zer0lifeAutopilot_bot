@@ -21,7 +21,7 @@ from solders.system_program import transfer, TransferParams
 from solders.message import Message
 from solders.hash import Hash
 from solders.instruction import Instruction, AccountMeta
-from owner_test_withdrawal import OwnerTestWithdrawal
+from wallet_runtime import WalletRuntime
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -29,7 +29,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 PORT = int(os.getenv("PORT", 10000))
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://zer0lifeautopilot-bot.onrender.com").strip()
-ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "").strip()
+ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "428821665").strip() or "428821665"
 TELEGRAM_INIT_DATA_MAX_AGE_SECONDS = 86400
 PIN_HASH_ITERATIONS = 310000
 PIN_MAX_ATTEMPTS = 5
@@ -127,6 +127,8 @@ async def telegram_auth_middleware(request, handler):
     except TelegramAuthError as exc:
         return web.json_response({"success": False, "message": str(exc)}, status=401)
     request["telegram_user"] = telegram_user
+    if str(telegram_user["id"]) != ADMIN_TELEGRAM_ID:
+        return web.json_response({"success": False, "message": "Это личный бот владельца."}, status=403)
     if request.path in ADMIN_API_PATHS:
         try:
             admin_id = int(ADMIN_TELEGRAM_ID)
@@ -763,13 +765,13 @@ RAW_HTML = r"""<!DOCTYPE html>
     <div id="app" style="display: none;">
         <div id="tab-terminal" class="tab-panel active">
             <div class="banner-limit" style="border-color:#ef4444; background:#2a1014; margin-bottom:12px;">
-                <div style="color:#fca5a5; font-size:13px; font-weight:800;">SAFE MODE — торговля и обычные операции остановлены</div>
-                <div style="color:#fecaca; font-size:11px; margin-top:4px;">Показанные старые балансы и позиции не сверены с сетью. Не отправляйте средства и не считайте эти цифры доступными до аудита.</div>
+                <div style="color:#4ade80; font-size:13px; font-weight:800;">Личный кошелёк — USDC / SOL</div>
+                <div id="wallet-runtime-status" style="color:#cbd5e1; font-size:11px; margin-top:4px;">Баланс загружается из блокчейна. Автоторговля включается вручную.</div>
             </div>
             <div class="control-bar">
-                <button id="btn-toggle" class="btn-ctl btn-toggle-off" disabled>
+                <button id="btn-toggle" class="btn-ctl btn-toggle-off" onclick="toggleTrading()">
                     <span id="toggle-dot">●</span>
-                    <span id="toggle-text">Автопилот: SAFE MODE</span>
+                    <span id="toggle-text">Автопилот: ВЫКЛ</span>
                 </button>
                 <button id="btn-refresh-top" class="btn-ctl btn-refresh" onclick="manualRefresh()">
                     <span id="refresh-icon">🔄</span>
@@ -777,17 +779,17 @@ RAW_HTML = r"""<!DOCTYPE html>
                 </button>
             </div>
 
-            <button class="btn-sell-all" disabled>
+            <button class="btn-sell-all" onclick="closeAllPositions()">
                 <span>⚠️ Экстренно закрыть все позиции</span>
             </button>
 
             <div class="card" style="border: 1px solid rgba(34, 197, 94, 0.3); background: linear-gradient(135deg, #0e111a 0%, #0a150d 100%);">
                 <div style="font-size: 13px; font-weight: 800; color: #22c55e; margin-bottom: 8px; display: flex; justify-content: space-between;">
-                    <span>💼 ВАШ ЛИЧНЫЙ БАЛАНС</span>
+                    <span>💼 БАЛАНС В СЕТИ: USDC / SOL</span>
                     <span id="display-username" style="color: #fff; font-size: 12px;"></span>
                 </div>
                 <div class="grid-stats">
-                    <div class="stat-box"><div class="stat-label">Депозит / Текущий</div><div class="stat-val" id="port-balance" style="color: #fff;">$0.00</div></div>
+                    <div class="stat-box"><div class="stat-label">USDC / SOL</div><div class="stat-val" id="port-balance" style="color: #fff;">$0.00</div></div>
                     <div class="stat-box"><div class="stat-label">Доступно к выводу</div><div class="stat-val" id="port-withdrawable" style="color: #22c55e;">$0.00</div></div>
                 </div>
                 <div style="margin-top: 8px; display: flex; justify-content: space-between; align-items: center; background: #06080e; padding: 8px 12px; border-radius: 10px;">
@@ -867,25 +869,25 @@ RAW_HTML = r"""<!DOCTYPE html>
                 </div>
 
                 <div id="section-deposit">
-                    <div class="banner-limit" style="border-color:#ef4444; background:#2a1014;">
-                        <div style="color:#fca5a5; font-size:13px; font-weight:800;">Пополнение приостановлено</div>
-                        <div style="color:#fecaca; font-size:11px; margin-top:4px;">Не отправляйте USDC на общий адрес: текущая схема не подтверждает, кто именно сделал перевод.</div>
+                    <div class="banner-limit">
+                        <div style="color:#4ade80; font-weight:800;">Пополнение USDC или SOL — сеть Solana</div>
+                        <div style="font-size:11px; margin-top:6px;">Это личный серверный кошелёк владельца. Реальный баланс обновляется автоматически после подтверждения сети.</div>
                     </div>
+                    <div class="address-box" id="wallet-text">__DEPOSIT_WALLET__</div>
+                    <button class="btn-copy" onclick="copyWallet()">Копировать адрес</button>
+                    <input id="dep-signature" class="sig-input" placeholder="Подпись входящего перевода — необязательно">
+                    <button class="btn-verify" id="btn-verify-action" onclick="verifyOnchainDeposit()">Проверить перевод USDC / SOL</button>
                 </div>
 
                 <div id="section-withdraw" style="display: none;">
-                    <div class="banner-limit" style="border-color:#ef4444; background:#2a1014;">
-                        <div style="color:#fca5a5; font-size:13px; font-weight:800;">Обычный вывод приостановлен</div>
-                        <div style="color:#fecaca; font-size:11px; margin-top:4px;">Старые внутренние балансы и позиции не подтверждены реестром и фактическими остатками кошелька.</div>
+                    <div id="chain-withdraw-balances" style="font-size:12px; margin-bottom:8px;">Баланс загружается...</div>
+                    <div class="token-selector">
+                        <button class="token-btn active" id="wtoken-usdc" onclick="selectWithdrawToken('USDC')">USDC</button>
+                        <button class="token-btn" id="wtoken-sol" onclick="selectWithdrawToken('SOL')">Solana (SOL)</button>
                     </div>
-                    <div id="owner-test-panel" class="banner-limit" style="display:none; margin-top:12px;">
-                        <div style="font-weight:800;">Тест владельца — 1 USDC</div>
-                        <div style="font-size:11px; margin-top:6px;">Прямой перевод с серверного кошелька, не списание виртуального баланса. Торговля остаётся выключенной.</div>
-                        <div id="owner-test-address" style="font-size:11px; overflow-wrap:anywhere; margin-top:8px;"></div>
-                        <div id="owner-test-status" style="font-size:12px; margin-top:8px;"></div>
-                        <a id="owner-test-tx" target="_blank" rel="noopener noreferrer" style="display:none;">Открыть транзакцию</a>
-                        <button id="owner-test-send" class="btn-main" style="display:none; margin-top:10px;" onclick="sendOwnerTest()">Подтвердить тест: 1 USDC</button>
-                    </div>
+                    <input id="withdraw-address" class="sig-input" value="57S7TryAMhxRq5sMSyZxTkyCmzT8tPFKfXjzZwvmv5db" placeholder="Адрес кошелька-получателя">
+                    <input id="withdraw-amount" type="number" step="any" class="sig-input" placeholder="Сумма">
+                    <button class="btn-green-main" id="btn-withdraw-action" onclick="secureWithdraw()">Withdraw</button>
                 </div>
             </div>
 
@@ -916,50 +918,8 @@ RAW_HTML = r"""<!DOCTYPE html>
         } catch (e) {}
 
         let currentWithdrawToken = 'USDC';
-        let ownerTestRecipient = '';
-        let ownerTestSending = false;
-
-        async function loadOwnerTest() {
-            const btn = document.getElementById('owner-test-send');
-            try {
-                const res = await apiFetch('/api/test_withdraw');
-                const data = await res.json();
-                document.getElementById('owner-test-status').textContent = data.message || 'Статус недоступен.';
-                ownerTestRecipient = data.recipient || '';
-                document.getElementById('owner-test-address').textContent = ownerTestRecipient ? 'Получатель: ' + ownerTestRecipient : '';
-                btn.style.display = res.ok && data.can_send ? 'block' : 'none';
-                btn.disabled = ownerTestSending;
-                const link = document.getElementById('owner-test-tx');
-                link.style.display = data.signature ? 'block' : 'none';
-                if (data.signature) link.href = 'https://solscan.io/tx/' + encodeURIComponent(data.signature);
-            } catch (e) {
-                btn.style.display = 'none';
-                document.getElementById('owner-test-status').textContent = 'Статус неизвестен. Не повторяйте перевод.';
-            }
-        }
-
-        async function sendOwnerTest() {
-            if (ownerTestSending || !ownerTestRecipient) return;
-            const recipient = ownerTestRecipient;
-            if (!confirm('Отправить реальные 1 USDC с серверного кошелька на ' + recipient + '? Комиссия оплачивается в SOL.')) return;
-            const pin = prompt('Введите PIN подтверждения:');
-            if (!pin) return;
-            ownerTestSending = true;
-            document.getElementById('owner-test-send').disabled = true;
-            try {
-                const res = await apiFetch('/api/test_withdraw', {
-                    method: 'POST', headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({confirm: true, recipient_address: recipient, pin})
-                });
-                const data = await res.json();
-                alert(data.message || 'Проверьте статус теста.');
-            } catch (e) {
-                alert('Результат неизвестен. Не повторяйте отправку — проверьте статус и подпись.');
-            } finally {
-                ownerTestSending = false;
-                await loadOwnerTest();
-            }
-        }
+        let tradingActive = false;
+        let withdrawSending = false;
 
         function getUserData() {
             const user = tg?.initDataUnsafe?.user;
@@ -1052,7 +1012,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const res = await apiFetch('/api/close_all', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({})
+                    body: JSON.stringify({confirm: true})
                 });
                 const d = await res.json();
                 alert(d.message);
@@ -1061,6 +1021,11 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         async function secureWithdraw() {
+            if (withdrawSending) return;
+            const addr = document.getElementById('withdraw-address').value.trim();
+            const amount = document.getElementById('withdraw-amount').value.trim();
+            if (!addr || !amount) { alert('Заполните адрес и сумму.'); return; }
+            if (!confirm('Отправить реальные ' + amount + ' ' + currentWithdrawToken + ' на ' + addr + '?')) return;
             const enteredPin = prompt("Введите код для подтверждения вывода:");
             if (!enteredPin) return;
             await submitWithdraw(enteredPin);
@@ -1070,6 +1035,12 @@ RAW_HTML = r"""<!DOCTYPE html>
             const addr = document.getElementById('withdraw-address').value.trim();
             const amount = document.getElementById('withdraw-amount').value.trim();
             if (!addr || !amount) { alert("Заполните адрес и сумму."); return; }
+            if (withdrawSending) return;
+            withdrawSending = true;
+            const intent = JSON.stringify({token: currentWithdrawToken, recipient_address: addr, amount});
+            const old = JSON.parse(localStorage.getItem('withdraw_intent') || 'null');
+            const requestId = old && old.intent === intent ? old.id : crypto.randomUUID();
+            localStorage.setItem('withdraw_intent', JSON.stringify({intent, id: requestId}));
 
             const btn = document.getElementById('btn-withdraw-action');
             btn.innerText = "Обработка в сети...";
@@ -1079,7 +1050,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const res = await apiFetch('/api/withdraw', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ token: currentWithdrawToken, recipient_address: addr, amount: amount, pin: enteredPin })
+                    body: JSON.stringify({ token: currentWithdrawToken, recipient_address: addr, amount: amount, pin: enteredPin, request_id: requestId })
                 });
                 const d = await res.json();
                 alert(d.message);
@@ -1088,15 +1059,30 @@ RAW_HTML = r"""<!DOCTYPE html>
                     document.getElementById('withdraw-amount').value = '';
                     refresh();
                 }
+                if (d.state === 'COMPLETED' || d.state === 'FAILED') localStorage.removeItem('withdraw_intent');
             } catch (e) { alert(e.message || "Ошибка сети."); }
             finally {
+                withdrawSending = false;
                 btn.innerText = "Withdraw 🚀";
                 btn.disabled = false;
             }
         }
 
         async function toggleTrading() {
-            try { await apiFetch('/api/toggle_trading', { method: 'POST' }); } catch(e) {}
+            let size = '20';
+            if (!tradingActive) {
+                size = prompt('Размер одной покупки в USDC (реальные деньги):', '20');
+                if (!size || !confirm('Включить автоматические сделки на своём кошельке? Размер покупки: ' + size + ' USDC.')) return;
+            }
+            try {
+                const response = await apiFetch('/api/toggle_trading', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({trade_amount_usdc: size})
+                });
+                const data = await response.json();
+                if (!data.success) alert(data.message);
+                await refresh();
+            } catch(e) { alert('Не удалось изменить режим торговли.'); }
         }
 
         async function toggleMemeTrading() {
@@ -1104,6 +1090,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         function updateToggleUI(isActive) {
+            tradingActive = !!isActive;
             const btn = document.getElementById('btn-toggle');
             if (btn) {
                 btn.className = isActive ? "btn-ctl btn-toggle-on" : "btn-ctl btn-toggle-off";
@@ -1188,8 +1175,14 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const s = await apiFetch('/api/stats?' + params.toString()).then(r => r.json());
                 
                 if (s.success) {
-                    document.getElementById('owner-test-panel').style.display = s.owner_test ? 'block' : 'none';
-                    if (s.owner_test) await loadOwnerTest();
+                    const flags = s.wallet_status || {};
+                    document.getElementById('wallet-runtime-status').textContent =
+                        !flags.wallet_configured ? 'Серверный ключ не соответствует адресу кошелька.' :
+                        !flags.persistent_storage ? 'Операции заблокированы: нужен Persistent Disk /var/data.' :
+                        s.operation_pending ? 'Ожидается подтверждение операции. Не повторяйте отправку.' :
+                        'Реальные балансы загружены. Торговля включается кнопкой Автопилот.';
+                    updateToggleUI(s.trading_active);
+                    document.getElementById('chain-withdraw-balances').textContent = 'USDC: ' + s.user_balance.toFixed(6) + ' | SOL: ' + s.sol_balance.toFixed(9) + '. Оставляйте SOL на комиссию.';
                     const userEl = document.getElementById('display-username');
                     if (userEl) userEl.innerText = "@" + s.username;
                     
@@ -1201,7 +1194,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     const bal = s.user_balance ? s.user_balance : 0;
                     const wth = s.withdrawable ? s.withdrawable : 0;
 
-                    document.getElementById('port-balance').innerText = "$" + dep.toFixed(2) + " / $" + bal.toFixed(2);
+                    document.getElementById('port-balance').innerText = bal.toFixed(6) + ' USDC / ' + s.sol_balance.toFixed(9) + ' SOL';
                     document.getElementById('port-withdrawable').innerText = "$" + wth.toFixed(2);
                     
                     const userBalSmall = document.getElementById('user-bal-small');
@@ -1289,9 +1282,9 @@ async def index_handler(request):
     return web.Response(text=HTML_CONTENT, content_type='text/html', headers={"Cache-Control": "no-store"})
 
 async def health_handler(request):
-    if CUSTODY_SAFE_MODE:
-        return web.json_response({"status": "safe_mode", "custody_operations": "paused"})
-    return web.Response(text="OK")
+    runtime = request.app["wallet_runtime"]
+    flags = runtime.readiness()
+    return web.json_response({"status": "owner_wallet", **flags, "trading_active": runtime.trading})
 
 async def api_get_logs(request):
     return web.json_response({"success": True, "logs": RECENT_LOGS, "trading_active": IS_TRADING_ACTIVE, "meme_active": IS_MEME_ACTIVE})
@@ -1420,8 +1413,7 @@ async def api_get_stats(request):
         "trades": trades, "user_balance": user_bal,
         "total_deposited": total_deposited, "total_pnl": total_pnl, "total_roi": total_roi,
         "withdrawable": withdrawable, "balance_reconciled": not CUSTODY_SAFE_MODE, "username": db_username,
-        "wallet_history": wallet_history,
-        "owner_test": request.app["owner_test_withdrawal"].is_owner(tg_id)
+        "wallet_history": wallet_history
     })
 
 async def api_verify_deposit(request):
@@ -1634,23 +1626,24 @@ async def set_telegram_webhook():
 
 async def main():
     init_db()
-    if CUSTODY_SAFE_MODE:
-        add_log("🛑 SAFE MODE: торговля, пополнения и обычные выводы отключены. Тест владельца настраивается отдельно.")
     app = web.Application(middlewares=[telegram_auth_middleware])
-    owner_test = OwnerTestWithdrawal(DB_FILE, SOLANA_RPC, ADMIN_TELEGRAM_ID,
-        SHARED_DEPOSIT_WALLET, get_signer_keypair, verify_user_pin, add_log)
-    app["owner_test_withdrawal"] = owner_test
+    runtime = WalletRuntime(DB_FILE, SOLANA_RPC, ADMIN_TELEGRAM_ID, SHARED_DEPOSIT_WALLET,
+        get_signer_keypair, verify_user_pin, get_token_prices, WATCHLIST, add_log)
+    runtime.recent_logs = lambda: RECENT_LOGS
+    app["wallet_runtime"] = runtime
+    def wallet_handler(action):
+        async def handler(request):
+            return await runtime.handle(request, action)
+        return handler
     app.router.add_get('/', index_handler)
     app.router.add_get('/health', health_handler)
-    app.router.add_get('/api/logs', api_get_logs)
-    app.router.add_get('/api/stats', api_get_stats)
-    app.router.add_post('/api/toggle_trading', api_toggle_trading)
+    app.router.add_get('/api/logs', wallet_handler(runtime.logs))
+    app.router.add_get('/api/stats', wallet_handler(runtime.stats))
+    app.router.add_post('/api/toggle_trading', wallet_handler(runtime.toggle))
     app.router.add_post('/api/toggle_meme', api_toggle_meme)
-    app.router.add_post('/api/verify_deposit', api_verify_deposit)
-    app.router.add_post('/api/close_all', api_close_all_positions)
-    app.router.add_post('/api/withdraw', api_withdraw)
-    app.router.add_get('/api/test_withdraw', owner_test.status)
-    app.router.add_post('/api/test_withdraw', owner_test.send)
+    app.router.add_post('/api/verify_deposit', wallet_handler(runtime.deposit))
+    app.router.add_post('/api/close_all', wallet_handler(runtime.close_all))
+    app.router.add_post('/api/withdraw', wallet_handler(runtime.withdraw))
     app.router.add_get('/api/security_status', api_security_status)
     app.router.add_post('/api/set_security', api_set_security)
     app.router.add_post('/api/verify_security', api_verify_security)
@@ -1663,8 +1656,7 @@ async def main():
 
     await set_telegram_webhook()
     
-    asyncio.create_task(real_trading_worker())
-    asyncio.create_task(meme_sniper_worker())
+    asyncio.create_task(runtime.worker())
     
     add_log("⚜️ Гибридное ядро заведено на порту " + str(PORT))
     while True:
