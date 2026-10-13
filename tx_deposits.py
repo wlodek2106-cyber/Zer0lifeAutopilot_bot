@@ -35,8 +35,15 @@ def incoming_amounts(tx, wallet, sender):
             if info.get("destination") != str(associated(Pubkey.from_string(wallet), Pubkey.from_string(USDC))):
                 raise WalletError("USDC должен поступить на обычный USDC ATA общего кошелька.", 409)
             source = pre.get(info.get("source"), {})
+            authority = info.get("authority")
+            # Phantom can include the authority twice in account metas. RPC then
+            # names it multisigAuthority even for a single ordinary wallet signer.
+            # Accept only this exact case; real foreign/multi-signer authority fails.
+            if (authority is None and info.get("multisigAuthority") == sender
+                    and info.get("signers") == [sender]):
+                authority = sender
             if (source.get("owner") != sender or source.get("mint") != USDC
-                    or info.get("authority") != sender):
+                    or authority != sender):
                 raise WalletError("USDC отправлен не с вашего подтверждённого кошелька.", 403)
             if kind == "transferChecked" and (info.get("mint") != USDC
                     or info.get("tokenAmount", {}).get("decimals") != 6):

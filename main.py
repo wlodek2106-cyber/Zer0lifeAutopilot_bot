@@ -1362,7 +1362,10 @@ async def index_handler(request):
 async def health_handler(request):
     runtime = request.app["wallet_runtime"]
     flags = runtime.readiness()
-    return web.json_response({"status": "custody_beta", **flags, "trading_active": bool(runtime.ledger.active_users())})
+    return web.json_response({"status": "custody_beta", **flags,
+        "build_commit": os.getenv("RENDER_GIT_COMMIT", ""),
+        "deposit_parser_version": "phantom-authority-v1",
+        "trading_active": bool(runtime.ledger.active_users())})
 
 async def api_get_logs(request):
     return web.json_response({"success": True, "logs": RECENT_LOGS, "trading_active": IS_TRADING_ACTIVE, "meme_active": IS_MEME_ACTIVE})
