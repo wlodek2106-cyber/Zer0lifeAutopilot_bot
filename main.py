@@ -9,6 +9,11 @@ import json
 import base58
 import base64
 import hashlib
+import hmac
+import math
+import time
+from decimal import Decimal, InvalidOperation
+from urllib.parse import parse_qsl
 from solders.keypair import Keypair
 from solders.transaction import VersionedTransaction, Transaction
 from solders.pubkey import Pubkey
@@ -23,11 +28,18 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 PORT = int(os.getenv("PORT", 10000))
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://zer0lifeautopilot-bot.onrender.com").strip()
+ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "").strip()
+TELEGRAM_INIT_DATA_MAX_AGE_SECONDS = 86400
+PIN_HASH_ITERATIONS = 310000
+PIN_MAX_ATTEMPTS = 5
+PIN_LOCK_SECONDS = 900
+ADMIN_API_PATHS = {"/api/logs", "/api/toggle_trading", "/api/toggle_meme"}
+WITHDRAW_LOCKS = {}
 
 DB_DIR = "/var/data"
 DB_FILE = os.path.join(DB_DIR, "zer0life_users.db") if os.path.exists(DB_DIR) else "zer0life_users.db"
 
-SOLANA_RPC = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=b82ca0bf-cd65-4ca8-a3d0-4400661d9a93").strip()
+SOLANA_RPC = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com").strip()
 SHARED_DEPOSIT_WALLET = os.getenv("DEPOSIT_WALLET", "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L").strip()
 SPLASH_IMAGE_URL = "https://i.postimg.cc/52n94Pzg/57D47DDD-9BED-4D4B-AA69-2B59CAB400AD.png"
 
@@ -71,6 +83,108 @@ def add_log(msg: str):
         RECENT_LOGS.pop()
     logging.info(msg)
 
+class TelegramAuthError(Exception):
+    pass
+
+def verify_telegram_init_data(raw_init_data: str) -> dict:
+    if not TELEGRAM_TOKEN or not raw_init_data:
+        raise TelegramAuthError("Open this app from Telegram.")
+    try:
+        pairs = parse_qsl(raw_init_data, keep_blank_values=True)
+        fields = dict(pairs)
+        if len(fields) != len(pairs):
+            raise TelegramAuthError("Duplicate Telegram auth fields.")
+        received_hash = fields.pop("hash", "")
+        if not received_hash:
+            raise TelegramAuthError("Missing Telegram auth signature.")
+        auth_date = int(fields.get("auth_date", "0"))
+        now = int(time.time())
+        if auth_date <= 0 or auth_date > now + 60 or now - auth_date > TELEGRAM_INIT_DATA_MAX_AGE_SECONDS:
+            raise TelegramAuthError("Telegram session expired.")
+        check_string = "\n".join(f"{key}={value}" for key, value in sorted(fields.items()))
+        secret_key = hmac.new(b"WebAppData", TELEGRAM_TOKEN.encode("utf-8"), hashlib.sha256).digest()
+        expected_hash = hmac.new(secret_key, check_string.encode("utf-8"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(received_hash, expected_hash):
+            raise TelegramAuthError("Invalid Telegram auth signature.")
+        user = json.loads(fields.get("user", "{}"))
+        if not isinstance(user, dict) or int(user.get("id", 0)) <= 0:
+            raise TelegramAuthError("Telegram user is missing.")
+        return user
+    except TelegramAuthError:
+        raise
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise TelegramAuthError("Malformed Telegram auth data.") from exc
+
+@web.middleware
+async def telegram_auth_middleware(request, handler):
+    if not request.path.startswith("/api/"):
+        return await handler(request)
+    try:
+        telegram_user = verify_telegram_init_data(request.headers.get("X-Telegram-Init-Data", ""))
+    except TelegramAuthError as exc:
+        return web.json_response({"success": False, "message": str(exc)}, status=401)
+    request["telegram_user"] = telegram_user
+    if request.path in ADMIN_API_PATHS:
+        try:
+            admin_id = int(ADMIN_TELEGRAM_ID)
+        except (TypeError, ValueError):
+            return web.json_response({"success": False, "message": "ADMIN_TELEGRAM_ID is not configured."}, status=503)
+        if int(telegram_user["id"]) != admin_id:
+            return web.json_response({"success": False, "message": "Admin access required."}, status=403)
+    return await handler(request)
+
+def hash_pin(pin: str) -> str:
+    salt = os.urandom(16)
+    digest = hashlib.pbkdf2_hmac("sha256", pin.encode("utf-8"), salt, PIN_HASH_ITERATIONS)
+    return "pbkdf2_sha256$" + str(PIN_HASH_ITERATIONS) + "$" + salt.hex() + "$" + digest.hex()
+
+def verify_pin_hash(pin: str, stored_hash: str):
+    if stored_hash.startswith("pbkdf2_sha256$"):
+        try:
+            _, iterations, salt_hex, digest_hex = stored_hash.split("$", 3)
+            calculated = hashlib.pbkdf2_hmac("sha256", pin.encode("utf-8"), bytes.fromhex(salt_hex), int(iterations)).hex()
+            return hmac.compare_digest(calculated, digest_hex), False
+        except (ValueError, TypeError):
+            return False, False
+    legacy = hashlib.sha256(pin.encode("utf-8")).hexdigest()
+    return hmac.compare_digest(legacy, stored_hash), True
+
+def verify_user_pin(telegram_id: int, pin: str):
+    if not pin or len(pin) > 128:
+        return False, "invalid"
+    conn = sqlite3.connect(DB_FILE, timeout=10)
+    try:
+        c = conn.cursor()
+        c.execute("BEGIN IMMEDIATE")
+        c.execute("SELECT pin_hash, pin_attempts, pin_locked_until FROM user_security WHERE telegram_id = ?", (telegram_id,))
+        row = c.fetchone()
+        now = int(time.time())
+        if not row or not row[0]:
+            conn.commit()
+            return False, "not_set"
+        if int(row[2] or 0) > now:
+            conn.commit()
+            return False, "locked"
+        valid, legacy_hash = verify_pin_hash(pin, row[0])
+        if valid:
+            replacement = hash_pin(pin) if legacy_hash else row[0]
+            c.execute("UPDATE user_security SET pin_hash = ?, pin_attempts = 0, pin_locked_until = 0 WHERE telegram_id = ?", (replacement, telegram_id))
+            conn.commit()
+            return True, "ok"
+        previous_attempts = int(row[1] or 0)
+        if int(row[2] or 0) and int(row[2]) <= now:
+            previous_attempts = 0
+        attempts = previous_attempts + 1
+        locked_until = now + PIN_LOCK_SECONDS if attempts >= PIN_MAX_ATTEMPTS else 0
+        c.execute("UPDATE user_security SET pin_attempts = ?, pin_locked_until = ? WHERE telegram_id = ?", (attempts, locked_until, telegram_id))
+        conn.commit()
+        return False, "locked" if locked_until else "invalid"
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
 def get_signer_keypair():
     pk_env = os.getenv("SOLANA_PRIVATE_KEY", "").strip()
     if not pk_env:
@@ -93,7 +207,15 @@ def init_db():
     
     c.execute('''CREATE TABLE IF NOT EXISTS user_security (
         telegram_id INTEGER PRIMARY KEY, pin_hash TEXT, auth_type TEXT DEFAULT 'PIN',
-        biometric_enabled INTEGER DEFAULT 0)''')
+        biometric_enabled INTEGER DEFAULT 0, pin_attempts INTEGER DEFAULT 0,
+        pin_locked_until INTEGER DEFAULT 0)''')
+
+    c.execute("PRAGMA table_info(user_security)")
+    security_cols = [col[1] for col in c.fetchall()]
+    if "pin_attempts" not in security_cols:
+        c.execute("ALTER TABLE user_security ADD COLUMN pin_attempts INTEGER DEFAULT 0")
+    if "pin_locked_until" not in security_cols:
+        c.execute("ALTER TABLE user_security ADD COLUMN pin_locked_until INTEGER DEFAULT 0")
 
     c.execute("PRAGMA table_info(users)")
     u_cols = [col[1] for col in c.fetchall()]
@@ -285,9 +407,9 @@ async def execute_native_sol_transfer(session: aiohttp.ClientSession, signer: Ke
         add_log(f"⚠️ Ошибка формирования перевода SOL: {e}")
         return None
 
-async def execute_spl_usdc_transfer(session: aiohttp.ClientSession, signer: Keypair, recipient_addr: str, amount_ui: float) -> str:
+async def execute_spl_usdc_transfer(session: aiohttp.ClientSession, signer: Keypair, recipient_addr: str, amount_ui: Decimal) -> str:
     try:
-        raw_amount = int(amount_ui * 1_000_000)
+        raw_amount = int(amount_ui * Decimal(1_000_000))
         recipient_pubkey = Pubkey.from_string(recipient_addr)
         mint_pubkey = Pubkey.from_string(USDC_MINT)
         
@@ -325,7 +447,7 @@ async def execute_spl_usdc_transfer(session: aiohttp.ClientSession, signer: Keyp
             )
             instructions.append(create_ata_ix)
 
-        data_bytes = bytes([3]) + raw_amount.to_bytes(8, 'little') + bytes([6])
+        data_bytes = bytes([12]) + raw_amount.to_bytes(8, 'little') + bytes([6])
         transfer_ix = Instruction(
             program_id=Pubkey.from_string(TOKEN_PROGRAM_ID),
             accounts=[
@@ -807,65 +929,57 @@ RAW_HTML = r"""<!DOCTYPE html>
         let currentWithdrawToken = 'USDC';
 
         function getUserData() {
-            let id = 42882165;
-            let username = 'Guest';
-            try {
-                if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
-                    id = tg.initDataUnsafe.user.id || id;
-                    username = tg.initDataUnsafe.user.username || tg.initDataUnsafe.user.first_name || username;
-                }
-            } catch (e) {}
-            return { id: id, username: username };
+            const user = tg?.initDataUnsafe?.user;
+            if (!tg?.initData || !user?.id) return null;
+            return { id: Number(user.id), username: user.username || user.first_name || 'User' };
+        }
+
+        async function apiFetch(url, options = {}) {
+            if (!tg?.initData) throw new Error('Откройте приложение через Telegram.');
+            const headers = Object.assign({}, options.headers || {}, { 'X-Telegram-Init-Data': tg.initData });
+            return fetch(url, Object.assign({}, options, { headers }));
         }
 
         async function openTerminal() {
             const user = getUserData();
+            if (!user) { alert("Откройте приложение из Telegram."); return; }
             let savedNick = localStorage.getItem('user_custom_nick');
             if (!savedNick) {
                 const nicknameInput = prompt("Придумайте никнейм для вашего профиля в боте:", user.username);
                 savedNick = nicknameInput ? nicknameInput.trim() : user.username;
                 localStorage.setItem('user_custom_nick', savedNick);
             }
-
-            const choice = confirm("Выберите способ защиты аккаунта:\nOK — Face ID / Touch ID (Биометрия лица)\nОтмена — Цифровой Пин-код");
-            if (choice) {
-                if (bioManager && bioManager.isBiometricAvailable) {
-                    if (!bioManager.isAccessGranted) {
-                        bioManager.requestAccess({ reason: "Для защиты средств и вывода" }, async (granted) => {
-                            if (granted) {
-                                await fetch('/api/set_security', {
-                                    method: 'POST',
-                                    headers: {'Content-Type': 'application/json'},
-                                    body: JSON.stringify({ telegram_id: user.id, auth_type: 'BIOMETRIC', biometric_enabled: 1 })
-                                });
-                                alert("✅ Биометрия лица успешно настроена и сохранена на сервере!");
-                            }
-                            proceedToTerminal();
-                        });
-                    } else { proceedToTerminal(); }
-                } else {
-                    alert("⚠️ Биометрия недоступна. Создайте пин-код.");
-                    setupPasswordProtection(user.id);
-                }
-            } else {
-                setupPasswordProtection(user.id);
+            try {
+                const res = await apiFetch('/api/security_status');
+                const state = await res.json();
+                if (!res.ok || !state.success) throw new Error(state.message || 'Не удалось проверить защиту.');
+                if (!state.has_pin && !(await setupPasswordProtection())) return;
+                proceedToTerminal();
+            } catch (e) {
+                alert(e.message || "Не удалось проверить авторизацию. Переоткройте приложение через Telegram.");
             }
         }
 
-        async function setupPasswordProtection(userId) {
-            const pwd = prompt("Введите защитный пин-код (минимум 4 символа):");
-            if (pwd && pwd.length >= 4) {
-                const res = await fetch('/api/set_security', {
+        async function setupPasswordProtection() {
+            const pwd = prompt("Создайте код для подтверждения вывода (не менее 6 символов):");
+            if (!pwd || pwd.length < 6) {
+                alert("Код должен содержать не менее 6 символов.");
+                return false;
+            }
+            try {
+                const res = await apiFetch('/api/set_security', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ telegram_id: userId, auth_type: 'PIN', pin: pwd })
+                    body: JSON.stringify({ pin: pwd })
                 });
-                const d = await res.json();
-                alert(d.message);
-            } else {
-                alert("⚠️ Пин-код слишком короткий. Используется стандартная защита.");
+                const data = await res.json();
+                if (!res.ok || !data.success) throw new Error(data.message || 'Не удалось сохранить код.');
+                alert("Код вывода сохранён.");
+                return true;
+            } catch (e) {
+                alert(e.message || "Не удалось сохранить код.");
+                return false;
             }
-            proceedToTerminal();
         }
 
         function proceedToTerminal() {
@@ -902,10 +1016,10 @@ RAW_HTML = r"""<!DOCTYPE html>
             if (!confirm("Вы уверены, что хотите продать все открытые позиции?")) return;
             try {
                 const user = getUserData();
-                const res = await fetch('/api/close_all', {
+                const res = await apiFetch('/api/close_all', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ telegram_id: user.id })
+                    body: JSON.stringify({})
                 });
                 const d = await res.json();
                 alert(d.message);
@@ -914,34 +1028,12 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         async function secureWithdraw() {
-            const user = getUserData();
-            if (bioManager && bioManager.isBiometricAvailable && bioManager.isAccessGranted) {
-                bioManager.authenticate({ reason: "Подтвердите вывод средств" }, (success) => {
-                    if (success) {
-                        submitWithdraw();
-                    } else {
-                        alert("❌ Ошибка биометрии лица. Вывод отменен.");
-                    }
-                });
-            } else {
-                const enteredPin = prompt("Введите ваш защитный пин-код для подтверждения вывода:");
-                if (!enteredPin) return;
-
-                const res = await fetch('/api/verify_security', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ telegram_id: user.id, pin: enteredPin })
-                });
-                const d = await res.json();
-                if (d.success) {
-                    submitWithdraw();
-                } else {
-                    alert("❌ Неверный пин-код! Вывод заблокирован.");
-                }
-            }
+            const enteredPin = prompt("Введите код для подтверждения вывода:");
+            if (!enteredPin) return;
+            await submitWithdraw(enteredPin);
         }
 
-        async function submitWithdraw() {
+        async function submitWithdraw(enteredPin) {
             const addr = document.getElementById('withdraw-address').value.trim();
             const amount = document.getElementById('withdraw-amount').value.trim();
             if (!addr || !amount) { alert("Заполните адрес и сумму."); return; }
@@ -951,11 +1043,10 @@ RAW_HTML = r"""<!DOCTYPE html>
             btn.disabled = true;
 
             try {
-                const user = getUserData();
-                const res = await fetch('/api/withdraw', {
+                const res = await apiFetch('/api/withdraw', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ telegram_id: user.id, token: currentWithdrawToken, recipient_address: addr, amount: parseFloat(amount) })
+                    body: JSON.stringify({ token: currentWithdrawToken, recipient_address: addr, amount: amount, pin: enteredPin })
                 });
                 const d = await res.json();
                 alert(d.message);
@@ -964,7 +1055,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     document.getElementById('withdraw-amount').value = '';
                     refresh();
                 }
-            } catch (e) { alert("Ошибка сети."); }
+            } catch (e) { alert(e.message || "Ошибка сети."); }
             finally {
                 btn.innerText = "Withdraw 🚀";
                 btn.disabled = false;
@@ -972,11 +1063,11 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         async function toggleTrading() {
-            try { await fetch('/api/toggle_trading', { method: 'POST' }); } catch(e) {}
+            try { await apiFetch('/api/toggle_trading', { method: 'POST' }); } catch(e) {}
         }
 
         async function toggleMemeTrading() {
-            try { await fetch('/api/toggle_meme', { method: 'POST' }); } catch(e) {}
+            try { await apiFetch('/api/toggle_meme', { method: 'POST' }); } catch(e) {}
         }
 
         function updateToggleUI(isActive) {
@@ -1029,10 +1120,10 @@ RAW_HTML = r"""<!DOCTYPE html>
             try {
                 const user = getUserData();
                 const customNick = localStorage.getItem('user_custom_nick') || user.username;
-                const res = await fetch('/api/verify_deposit', {
+                const res = await apiFetch('/api/verify_deposit', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ telegram_id: user.id, username: customNick, tx_signature: sig })
+                    body: JSON.stringify({ username: customNick, tx_signature: sig })
                 });
                 const d = await res.json();
                 alert(d.message);
@@ -1049,7 +1140,7 @@ RAW_HTML = r"""<!DOCTYPE html>
 
         async function refresh() {
             try {
-                const l = await fetch('/api/logs').then(r => r.json());
+                const l = await apiFetch('/api/logs').then(r => r.json());
                 if (l.success) {
                     const logBox = document.getElementById('log-box');
                     if (logBox) logBox.innerText = l.logs.join('\n');
@@ -1058,8 +1149,10 @@ RAW_HTML = r"""<!DOCTYPE html>
                 }
 
                 const user = getUserData();
+                if (!user) return;
                 const customNick = localStorage.getItem('user_custom_nick') || user.username;
-                const s = await fetch(`/api/stats?telegram_id=${user.id}&username=${customNick}`).then(r => r.json());
+                const params = new URLSearchParams({ username: customNick });
+                const s = await apiFetch('/api/stats?' + params.toString()).then(r => r.json());
                 
                 if (s.success) {
                     const userEl = document.getElementById('display-username');
@@ -1178,55 +1271,52 @@ async def api_toggle_meme(request):
     add_log(f"🐸 Meme Sniper Mode: {'ВКЛ' if IS_MEME_ACTIVE else 'ВЫКЛ'}")
     return web.json_response({"success": True, "meme_active": IS_MEME_ACTIVE})
 
+async def api_security_status(request):
+    tg_id = int(request["telegram_user"]["id"])
+    conn = sqlite3.connect(DB_FILE)
+    try:
+        c = conn.cursor()
+        c.execute("SELECT pin_hash FROM user_security WHERE telegram_id = ?", (tg_id,))
+        row = c.fetchone()
+        return web.json_response({"success": True, "has_pin": bool(row and row[0] and row[0].startswith("pbkdf2_sha256$"))})
+    finally:
+        conn.close()
+
 async def api_set_security(request):
     try:
         body = await request.json()
-        tg_id = int(body.get("telegram_id", 0))
-        auth_type = body.get("auth_type", "PIN")
-        pin = body.get("pin", "")
-        biometric_enabled = int(body.get("biometric_enabled", 0))
-
-        pin_hash = hashlib.sha256(pin.encode()).hexdigest() if pin else ""
-
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("""INSERT INTO user_security (telegram_id, pin_hash, auth_type, biometric_enabled) 
-                     VALUES (?, ?, ?, ?) 
-                     ON CONFLICT(telegram_id) DO UPDATE SET pin_hash=excluded.pin_hash, auth_type=excluded.auth_type, biometric_enabled=excluded.biometric_enabled""",
-                  (tg_id, pin_hash, auth_type, biometric_enabled))
-        conn.commit()
-        conn.close()
-        add_log(f"🔒 Настройки безопасности сохранены для ID {tg_id} ({auth_type})")
-        return web.json_response({"success": True, "message": "✅ Настройки безопасности сохранены в базе данных!"})
-    except Exception as e:
-        return web.json_response({"success": False, "message": str(e)})
+        tg_id = int(request["telegram_user"]["id"])
+        pin = str(body.get("pin", ""))
+        if len(pin) < 6 or len(pin) > 128:
+            return web.json_response({"success": False, "message": "Код должен содержать от 6 до 128 символов."}, status=400)
+        pin_hash = hash_pin(pin)
+        conn = sqlite3.connect(DB_FILE, timeout=10)
+        try:
+            c = conn.cursor()
+            c.execute("""INSERT INTO user_security (telegram_id, pin_hash, auth_type, biometric_enabled, pin_attempts, pin_locked_until)
+                         VALUES (?, ?, 'PIN', 0, 0, 0)
+                         ON CONFLICT(telegram_id) DO UPDATE SET pin_hash=excluded.pin_hash, auth_type='PIN', biometric_enabled=0, pin_attempts=0, pin_locked_until=0""",
+                      (tg_id, pin_hash))
+            conn.commit()
+        finally:
+            conn.close()
+        add_log(f"🔒 PIN settings updated for Telegram user {tg_id}")
+        return web.json_response({"success": True, "message": "Код подтверждения сохранён."})
+    except Exception:
+        return web.json_response({"success": False, "message": "Не удалось сохранить код."}, status=500)
 
 async def api_verify_security(request):
     try:
         body = await request.json()
-        tg_id = int(body.get("telegram_id", 0))
-        pin = body.get("pin", "")
-        pin_hash = hashlib.sha256(pin.encode()).hexdigest()
-
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("SELECT pin_hash FROM user_security WHERE telegram_id = ?", (tg_id,))
-        row = c.fetchone()
-        conn.close()
-
-        if row and row[0] == pin_hash:
-            return web.json_response({"success": True})
-        return web.json_response({"success": False})
+        tg_id = int(request["telegram_user"]["id"])
+        valid, state = verify_user_pin(tg_id, str(body.get("pin", "")))
+        return web.json_response({"success": valid, "locked": state == "locked"}, status=200 if valid else 401)
     except Exception:
-        return web.json_response({"success": False})
+        return web.json_response({"success": False}, status=500)
 
 async def api_get_stats(request):
-    tg_id_str = request.query.get("telegram_id")
-    if not tg_id_str or not tg_id_str.isdigit():
-        return web.json_response({"success": False, "message": "Не передан telegram_id"})
-    
-    tg_id = int(tg_id_str)
-    username = request.query.get("username", "Unknown")
+    tg_id = int(request["telegram_user"]["id"])
+    username = request.query.get("username", request["telegram_user"].get("username", "User"))[:64]
 
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -1296,7 +1386,7 @@ async def api_verify_deposit(request):
     try:
         body = await request.json()
         tx = body.get("tx_signature", "").strip()
-        tg_id = int(body.get("telegram_id", 42882165))
+        tg_id = int(request["telegram_user"]["id"])
         username = body.get("username", "Unknown")
 
         if not tx or len(tx) < 60:
@@ -1329,7 +1419,7 @@ async def api_verify_deposit(request):
 async def api_close_all_positions(request):
     try:
         body = await request.json()
-        tg_id = int(body.get("telegram_id", 42882165))
+        tg_id = int(request["telegram_user"]["id"])
         signer = get_signer_keypair()
         if not signer:
             return web.json_response({"success": False, "message": "Ошибка ключа сервера."})
@@ -1366,16 +1456,30 @@ async def api_close_all_positions(request):
     except Exception as e:
         return web.json_response({"success": False, "message": f"Ошибка при закрытии позиций: {str(e)}"})
 
-async def api_withdraw(request):
+async def api_withdraw_impl(request):
     try:
         body = await request.json()
-        tg_id = int(body.get("telegram_id", 42882165))
-        token = body.get("token", "USDC")
-        recipient = body.get("recipient_address", "").strip()
-        amount = float(body.get("amount", 0.0))
-
-        if not recipient or len(recipient) < 30 or amount <= 0:
-            return web.json_response({"success": False, "message": "Проверьте правильность адреса и суммы."})
+        tg_id = int(request["telegram_user"]["id"])
+        token = str(body.get("token", "USDC")).upper()
+        recipient = str(body.get("recipient_address", "")).strip()
+        pin = str(body.get("pin", ""))
+        if token not in {"USDC", "SOL"}:
+            return web.json_response({"success": False, "message": "Поддерживаются только USDC и SOL."}, status=400)
+        try:
+            amount_decimal = Decimal(str(body.get("amount", "0")))
+            Pubkey.from_string(recipient)
+        except (InvalidOperation, ValueError):
+            return web.json_response({"success": False, "message": "Неверный адрес или сумма."}, status=400)
+        max_decimals = 6 if token == "USDC" else 9
+        if (not amount_decimal.is_finite() or amount_decimal <= 0 or
+                amount_decimal.normalize().as_tuple().exponent < -max_decimals):
+            return web.json_response({"success": False, "message": "Проверьте сумму и число знаков после запятой."}, status=400)
+        amount = float(amount_decimal)
+        pin_ok, pin_state = verify_user_pin(tg_id, pin)
+        if not pin_ok:
+            status = 423 if pin_state == "locked" else 401
+            message = "Слишком много попыток. Попробуйте через 15 минут." if pin_state == "locked" else "Неверный код подтверждения."
+            return web.json_response({"success": False, "message": message}, status=status)
 
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
@@ -1412,7 +1516,7 @@ async def api_withdraw(request):
                     return web.json_response({"success": False, "message": "Ошибка отправки SOL в сеть."})
                 tx_signature = sig
             elif token == "USDC":
-                sig = await execute_spl_usdc_transfer(session, signer, recipient, amount)
+                sig = await execute_spl_usdc_transfer(session, signer, recipient, amount_decimal)
                 if not sig:
                     conn.close()
                     return web.json_response({"success": False, "message": "Ошибка отправки USDC в сеть Solana."})
@@ -1429,7 +1533,14 @@ async def api_withdraw(request):
         add_log(f"📤 Вывод {amount} {token} на {recipient[:6]}... выполнен. Tx: {tx_signature[:10]}")
         return web.json_response({"success": True, "message": f"✅ Успешно! Вывод отправлен в сеть. Tx: {tx_signature[:10]}..."})
     except Exception as e:
-        return web.json_response({"success": False, "message": f"Ошибка вывода: {str(e)}"})
+        add_log(f"⚠️ Ошибка вывода: {type(e).__name__}")
+        return web.json_response({"success": False, "message": "Ошибка обработки вывода. Проверьте журнал сервера."}, status=500)
+
+async def api_withdraw(request):
+    telegram_id = int(request["telegram_user"]["id"])
+    lock = WITHDRAW_LOCKS.setdefault(telegram_id, asyncio.Lock())
+    async with lock:
+        return await api_withdraw_impl(request)
 
 async def telegram_webhook_handler(request):
     try:
@@ -1475,7 +1586,7 @@ async def set_telegram_webhook():
 
 async def main():
     init_db()
-    app = web.Application()
+    app = web.Application(middlewares=[telegram_auth_middleware])
     app.router.add_get('/', index_handler)
     app.router.add_get('/health', health_handler)
     app.router.add_get('/api/logs', api_get_logs)
@@ -1485,6 +1596,7 @@ async def main():
     app.router.add_post('/api/verify_deposit', api_verify_deposit)
     app.router.add_post('/api/close_all', api_close_all_positions)
     app.router.add_post('/api/withdraw', api_withdraw)
+    app.router.add_get('/api/security_status', api_security_status)
     app.router.add_post('/api/set_security', api_set_security)
     app.router.add_post('/api/verify_security', api_verify_security)
     app.router.add_post('/webhook', telegram_webhook_handler)
