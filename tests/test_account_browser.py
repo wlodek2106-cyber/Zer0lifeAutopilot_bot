@@ -52,6 +52,13 @@ class AccountBrowserTests(unittest.TestCase):
             await openTerminal();
             assert(document.getElementById('account-signup').style.display==='block','signup shown after launch');
             assert(document.getElementById('app').style.display==='none','no terminal before signup');
+            const field=document.getElementById('account-nickname'),box=field.getBoundingClientRect();
+            assert(document.elementFromPoint(box.x+box.width/2,box.y+box.height/2)===field,
+                'nickname field must be topmost and receive touch, not be behind splash');
+            const submit=document.getElementById('account-create'),submitBox=submit.getBoundingClientRect();
+            assert(document.elementFromPoint(submitBox.x+submitBox.width/2,submitBox.y+submitBox.height/2)===submit,
+                'create account button receives touch');
+            assert(!document.getElementById('launch-terminal').disabled,'launch state restored after loading');
             document.getElementById('account-nickname').value='TraderNew';
             document.getElementById('account-risk').checked=true;
             await createAccount();await refresh();
