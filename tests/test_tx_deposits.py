@@ -85,6 +85,25 @@ class TxDepositTests(unittest.IsolatedAsyncioTestCase):
         await self.claim()
         self.assertEqual(self.ledger.balance(101,USDC),1_000_000)
 
+    async def test_phantom_duplicate_authority_parsed_as_multisig_accepted(self):
+        self.tx = self.transaction(USDC)
+        info = self.tx["transaction"]["message"]["instructions"][0]["parsed"]["info"]
+        info["multisigAuthority"] = info.pop("authority")
+        info["signers"] = [self.address]
+        await self.claim()
+        self.assertEqual(self.ledger.balance(101,USDC),1_000_000)
+        self.assertEqual(self.ledger.balance(202,USDC),0)
+
+    async def test_foreign_or_additional_multisig_signer_not_accepted(self):
+        self.tx = self.transaction(USDC)
+        info = self.tx["transaction"]["message"]["instructions"][0]["parsed"]["info"]
+        info["multisigAuthority"] = info.pop("authority")
+        info["signers"] = [str(Keypair().pubkey())]
+        with self.assertRaises(WalletError): await self.claim()
+        info["signers"] = [self.address, str(Keypair().pubkey())]
+        with self.assertRaises(WalletError): await self.claim()
+        self.assertEqual(self.ledger.balance(101,USDC),0)
+
     async def test_copying_public_tx_not_enough(self):
         with self.assertRaises(WalletError): await self.claim(202)
         self.assertEqual(self.ledger.balance(202,SOL),0)
