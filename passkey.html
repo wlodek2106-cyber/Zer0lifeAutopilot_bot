@@ -1,0 +1,58 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer"><title>Zer0Life · Secure verification</title>
+<style>body{background:#080d15;color:#e5edf5;font:16px system-ui;max-width:480px;margin:36px auto;padding:24px}section{background:#121c28;border:1px solid #2b3c4b;padding:24px;border-radius:20px}button,input{box-sizing:border-box;width:100%;padding:15px;margin:10px 0;border-radius:12px;border:1px solid #385066;background:#18293a;color:white;font-size:16px}button{background:#16bc62;color:#03120b;font-weight:750}button:disabled{opacity:.4}p{line-height:1.5;overflow-wrap:anywhere}.muted{color:#9cabbc;font-size:14px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px}label{font-size:14px}</style>
+<section><h1>Secure verification</h1><p class="muted">Use Face ID, Touch ID or your device's verification method. Face photos never leave your device. This page does not send funds.</p>
+<p id="status">Open the verification link from your Telegram account.</p><p id="details"></p>
+<label for="pin">Your withdrawal confirmation code</label><input id="pin" type="password" autocomplete="off" maxlength="128">
+<button id="start">Verify with passkey</button><div id="backup" hidden><h2>Save your recovery codes</h2><p>Save these privately in a password manager. Each code can replace lost passkeys only together with your Telegram account and withdrawal code. Codes are shown once. Losing all passkeys and codes may lock withdrawals.</p><pre id="codes"></pre></div>
+<p class="muted">If passkeys are unavailable inside Telegram, return to the app, hold its verification link to copy it, and open that link in Safari or Chrome. The address bar here no longer contains the secret link. Never share the link, withdrawal code or recovery codes.</p></section>
+<script>
+const ticket=new URLSearchParams(location.hash.slice(1)).get('ticket');
+// Remove the capability from the visible address/history; retain it only in memory.
+history.replaceState(null,'',location.pathname);
+const statusBox=document.getElementById('status'),button=document.getElementById('start');
+let pending=null;
+const decode=s=>Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-s.length%4)%4)),c=>c.charCodeAt(0));
+const encode=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+function options(source){const o=JSON.parse(JSON.stringify(source));o.challenge=decode(o.challenge);if(o.user)o.user.id=decode(o.user.id);for(const k of ['allowCredentials','excludeCredentials'])if(o[k])o[k]=o[k].map(c=>({...c,id:decode(c.id)}));return o;}
+function credential(c){const response={};for(const name of ['clientDataJSON','attestationObject','authenticatorData','signature','userHandle'])if(c.response[name])response[name]=encode(c.response[name]);if(c.response.getTransports)response.transports=c.response.getTransports();return {id:c.id,rawId:encode(c.rawId),type:c.type,response,clientExtensionResults:c.getClientExtensionResults()};}
+async function post(path,body){const r=await fetch(path,{method:'POST',credentials:'omit',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await r.json();if(!r.ok||!data.success)throw Error(data.message||'Verification failed.');return data;}
+button.onclick=async()=>{
+ button.disabled=true;
+ const pin=document.getElementById('pin').value;
+ try{
+  if(!ticket)throw Error('This link has expired. Create a new link in Telegram.');
+  if(!window.PublicKeyCredential||!navigator.credentials)throw Error('Open a fresh Telegram verification link in Safari or Chrome.');
+  if(!pending){
+   pending=await post('/passkey/options',{ticket,pin});
+   const data=pending;
+   if(data.purpose==='withdraw'){
+   const i=data.intent,decimals=i.token==='SOL'?9:6,units=BigInt(i.raw),scale=10n**BigInt(decimals);
+   const fraction=(units%scale).toString().padStart(decimals,'0').replace(/0+$/,'');
+   const amount=(units/scale).toString()+(fraction?'.'+fraction:'');
+   document.getElementById('details').textContent='Withdrawal: '+amount+' '+i.token+' to '+i.recipient_address;
+   }
+   statusBox.textContent='Review the details, then tap below. Your device will ask you to verify.';
+   button.textContent=data.phase==='register'?'Create device passkey':data.purpose==='withdraw'?'Approve this withdrawal':'Confirm existing passkey';
+   button.disabled=false;
+   return;
+  }
+  let data=pending;
+  if(data.phase==='auth'||data.phase==='register'){
+   statusBox.textContent=data.phase==='register'?'Create your device passkey.':'Confirm with your existing passkey.';
+   const publicKey=options(data.options);
+   const response=data.phase==='register'?await navigator.credentials.create({publicKey}):await navigator.credentials.get({publicKey});
+   data=await post('/passkey/verify',{ticket,pin,credential:credential(response)});
+   pending=data;
+   if(data.phase==='register'){
+    statusBox.textContent='Existing passkey confirmed. Tap below to create an additional passkey.';
+    button.textContent='Create additional passkey';button.disabled=false;return;
+   }
+  }
+  document.getElementById('pin').value='';
+  statusBox.textContent=data.phase==='enrolled'?'Passkey registered. Return to Telegram.':'Withdrawal approved. Return to Telegram to submit it.';
+  if(data.recovery_codes?.length){document.getElementById('backup').hidden=false;document.getElementById('codes').textContent=data.recovery_codes.join('\n');}
+ }catch(e){statusBox.textContent=e.name==='NotAllowedError'?'Cancelled or unavailable. Try again, or open a new link in Safari.':e.message;button.disabled=false;}
+};
+if(ticket)statusBox.textContent='Enter your withdrawal code, then verify on your device.';
+</script></html>

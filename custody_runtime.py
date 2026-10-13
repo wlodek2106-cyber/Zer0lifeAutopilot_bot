@@ -241,6 +241,9 @@ class CustodyRuntime(WalletRuntime):
     async def handle(self, request, action):
         try:
             self.owner(request)
+            if (getattr(self, "accounts", None) and request.method == "POST" and action.__name__ in
+                    {"create_invoice","deposit","wallet_link","toggle","toggle_sniper","withdraw"}):
+                self.accounts.require(self.uid(request))
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=35)) as session:
                 if action.__name__ in {"create_invoice", "deposit", "toggle", "withdraw", "reserve_fees", "opening_balance"} and self.legacy_pending():
                     # Re-check finalized results BEFORE ready()/admit() rejects the request.
@@ -853,6 +856,8 @@ class CustodyRuntime(WalletRuntime):
             if self.pending():
                 raise WalletError("Кошелёк ожидает подтверждения. Ваши средства не списаны.", 409)
             await self.solvent(session)
+            if getattr(self, "accounts", None):
+                self.accounts.consume(uid, body)
             row = self.ledger.reserve(uid, request_id, "WITHDRAW", asset, raw, {}, str(recipient))
             try:
                 tx = await super().withdraw_transaction(session, self.ready(), token, recipient, raw, row["id"])
@@ -863,6 +868,8 @@ class CustodyRuntime(WalletRuntime):
 
     async def trade(self, session, uid, asset, output_asset, raw, kind, metadata, position_id=None):
         self.admit(uid)
+        if kind == "BUY" and getattr(self, "accounts", None):
+            self.accounts.require(uid)
         await self.reconcile(session)
         if self.pending():
             raise WalletError("Ожидается подтверждение предыдущей операции.", 409)

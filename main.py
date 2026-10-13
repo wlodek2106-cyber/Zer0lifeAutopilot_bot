@@ -25,6 +25,7 @@ from solders.hash import Hash
 from solders.instruction import Instruction, AccountMeta
 from custody_runtime import CustodyRuntime
 from english_text import english_json_middleware
+from account_security import AccountSecurity
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -794,6 +795,15 @@ RAW_HTML = r"""<!DOCTYPE html>
         <button class="start-btn" onclick="openTerminal()">Launch Terminal</button>
     </div>
 
+    <section id="account-signup" class="card" data-account-version="telegram-passkey-v1" style="display:none;position:fixed;inset:7vh 18px auto;z-index:150;max-width:460px;margin:auto">
+        <h2>Create your account</h2><p class="muted">Your verified Telegram account is your login. No email or password required.</p>
+        <label for="account-nickname">Nickname</label>
+        <input id="account-nickname" class="sig-input" autocomplete="nickname" minlength="3" maxlength="24" pattern="[A-Za-z0-9_]{3,24}" placeholder="Your nickname">
+        <p class="muted">3–24 letters, numbers or underscores. Your balance stays linked to your Telegram account, not this name.</p>
+        <label style="display:flex;gap:10px"><input id="account-risk" type="checkbox" style="width:auto">I understand trading can lose money and returns are not guaranteed.</label>
+        <button id="account-create" class="btn-green-main" onclick="createAccount()">Create account</button>
+        <p id="account-error" class="status-output" role="status"></p>
+    </section>
     <div id="app" data-ui-version="console-ai-v1" style="display: none;">
         <div id="tab-terminal" class="tab-panel active">
             <header class="page-heading"><div><p class="eyebrow">ZERØLIFE · Personal account</p><h1>Overview</h1></div></header>
@@ -971,6 +981,18 @@ RAW_HTML = r"""<!DOCTYPE html>
         </div>
         <div id="tab-settings" class="tab-panel">
             <header class="page-heading"><div><p class="eyebrow">Account preferences</p><h1>Settings</h1></div></header>
+            <div class="card" id="passkey-settings"><h3>Withdrawal protection</h3>
+                <p id="passkey-state" class="status-output">Passkey not checked.</p>
+                <button class="btn-copy" onclick="setupPasskey()">Set up / add passkey</button>
+                <button class="btn-copy" onclick="setupPasskey(true)">Recover using a saved code</button>
+                <p id="passkey-progress" class="status-output" role="status"></p>
+                <a id="passkey-browser-link" hidden target="_blank" rel="noopener noreferrer">Open verification · hold to copy link</a>
+                <details><summary>Face ID &amp; account recovery</summary>
+                    <p class="muted">Your device verifies you using Face ID, Touch ID or another system verification method. We verify the passkey signature, not a face photo. Face-only verification cannot be enforced on every device.</p>
+                    <p class="muted">Every withdrawal needs your code and a fresh passkey approval bound to its amount, token, recipient and request ID. Changing any field requires another approval.</p>
+                    <p class="muted">Save the one-time recovery codes displayed in the secure browser. Add a backup passkey before losing your device. Recovery requires your Telegram account, withdrawal code and an unused recovery code; it replaces the old passkeys. No PIN-only reset is available.</p>
+                </details>
+            </div>
             <div class="card"><h3 style="margin-top:0">Order sizes</h3>
                 <p class="section-note">Saving settings does not start trading.</p>
                 <label class="settings-label" for="settings-order">USDC per core order</label>
@@ -1188,24 +1210,89 @@ RAW_HTML = r"""<!DOCTYPE html>
             return fetch(url, Object.assign({}, options, { headers }));
         }
 
+        let accountState = null;
+        async function loadAccount() {
+            const response=await apiFetch('/api/account'),data=await response.json();
+            if(!response.ok||!data.success)throw Error(data.message||'Could not verify account.');
+            accountState=data;
+            document.getElementById('passkey-state').textContent=data.has_passkey?
+                'Enabled · '+data.passkey_count+' passkey(s) · '+data.recovery_codes_remaining+' recovery codes remaining.':
+                'Not configured. Set up a passkey before withdrawing.';
+            return data;
+        }
         async function openTerminal() {
             const user = getUserData();
             if (!user) { alert("Open this app from Telegram."); return; }
-            let savedNick = localStorage.getItem('user_custom_nick');
-            if (!savedNick) {
-                const nicknameInput = prompt("Choose your profile nickname:", user.username);
-                savedNick = nicknameInput ? nicknameInput.trim() : user.username;
-                localStorage.setItem('user_custom_nick', savedNick);
-            }
             try {
+                const profile=await loadAccount();
+                if(!profile.registered){
+                    document.getElementById('account-nickname').value=user.username.replace(/[^A-Za-z0-9_]/g,'').slice(0,24);
+                    document.getElementById('account-signup').style.display='block';
+                    return;
+                }
+                await finishAccount();
+            } catch(e){alert(e.message||'Could not verify account.');}
+        }
+        async function createAccount() {
+            const button=document.getElementById('account-create');button.disabled=true;
+            try{
+                const response=await apiFetch('/api/account/register',{method:'POST',headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({nickname:document.getElementById('account-nickname').value,
+                        accept_risk:document.getElementById('account-risk').checked})});
+                const data=await response.json();if(!response.ok||!data.success)throw Error(data.message||'Could not create account.');
+                accountState=data;document.getElementById('account-signup').style.display='none';
+                await finishAccount();
+            }catch(e){document.getElementById('account-error').textContent=e.message;document.getElementById('account-signup').style.display='block';}
+            finally{button.disabled=false;}
+        }
+        async function finishAccount(){
+            try{
                 const res = await apiFetch('/api/security_status');
                 const state = await res.json();
                 if (!res.ok || !state.success) throw new Error(state.message || 'Could not check account security.');
                 if (!state.has_pin && !(await setupPasswordProtection())) return;
                 proceedToTerminal();
+                if(!accountState?.has_passkey){
+                    gotoTab('settings',document.querySelectorAll('.nav-btn')[3]);
+                    document.getElementById('passkey-progress').textContent='Next: set up your device passkey for secure withdrawals.';
+                }
             } catch (e) {
                 alert(e.message || "Could not verify authorization. Reopen the app through Telegram.");
             }
+        }
+
+        async function passkeyTicket(body){
+            const response=await apiFetch('/api/account/passkey',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+            const data=await response.json();if(!response.ok||!data.success)throw Error(data.message||'Could not start verification.');
+            const link=document.getElementById('passkey-browser-link');link.href=data.url;link.hidden=false;
+            document.getElementById('passkey-progress').textContent='Complete verification in the browser, then return here. No funds are sent by the browser.';
+            if(tg?.openLink)tg.openLink(data.url);else window.open(data.url,'_blank','noopener,noreferrer');
+            return data.ticket;
+        }
+        async function waitPasskey(ticket,phase){
+            for(let i=0;i<100;i++){
+                await new Promise(resolve=>setTimeout(resolve,3000));
+                const response=await apiFetch('/api/account/passkey_status?ticket='+encodeURIComponent(ticket)),data=await response.json();
+                if(!response.ok||!data.success)throw Error(data.message||'Could not check verification.');
+                if(data.phase===phase&&(phase==='enrolled'||!data.expired))return;
+                if(data.used||data.expired)throw Error('Verification expired or was replaced. Start again.');
+            }
+            throw Error('Verification timed out. Start again when ready.');
+        }
+        let passkeySetupBusy=false;
+        async function setupPasskey(recover=false){
+            if(passkeySetupBusy)return;
+            const pin=prompt('Enter your withdrawal confirmation code:');if(!pin)return;
+            const recovery_code=recover?prompt('Enter one unused recovery code saved during passkey registration:'):null;
+            if(recover&&!recovery_code)return;
+            passkeySetupBusy=true;
+            try{
+                const ticket=await passkeyTicket({purpose:recover?'recover':'enroll',pin,recovery_code});
+                await waitPasskey(ticket,'enrolled');await loadAccount();
+                document.getElementById('passkey-progress').textContent='Passkey registered. Save the recovery codes shown in the browser.';
+                document.getElementById('passkey-browser-link').hidden=true;
+            }catch(e){document.getElementById('passkey-progress').textContent=e.message;}
+            finally{passkeySetupBusy=false;}
         }
 
         async function setupPasswordProtection() {
@@ -1287,12 +1374,13 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         async function submitWithdraw(enteredPin) {
+            const token = currentWithdrawToken;
             const addr = document.getElementById('withdraw-address').value.trim();
             const amount = document.getElementById('withdraw-amount').value.trim();
             if (!addr || !amount) { alert("Enter an address and amount."); return; }
             if (withdrawSending) return;
             withdrawSending = true;
-            const intent = JSON.stringify({token: currentWithdrawToken, recipient_address: addr, amount});
+            const intent = JSON.stringify({token, recipient_address: addr, amount});
             const old = JSON.parse(localStorage.getItem('withdraw_intent') || 'null');
             const requestId = old && old.intent === intent ? old.id : crypto.randomUUID();
             localStorage.setItem('withdraw_intent', JSON.stringify({intent, id: requestId}));
@@ -1302,10 +1390,13 @@ RAW_HTML = r"""<!DOCTYPE html>
             btn.disabled = true;
 
             try {
+                const ticket=await passkeyTicket({purpose:'withdraw',token,recipient_address:addr,
+                    amount,pin:enteredPin,request_id:requestId});
+                await waitPasskey(ticket,'approved');
                 const res = await apiFetch('/api/withdraw', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ token: currentWithdrawToken, recipient_address: addr, amount: amount, pin: enteredPin, request_id: requestId })
+                    body: JSON.stringify({ token, recipient_address: addr, amount: amount, pin: enteredPin, request_id: requestId, passkey_ticket:ticket })
                 });
                 const d = await res.json();
                 alert(d.message);
@@ -1429,7 +1520,7 @@ RAW_HTML = r"""<!DOCTYPE html>
 
                 const user = getUserData();
                 if (!user) return;
-                const customNick = localStorage.getItem('user_custom_nick') || user.username;
+                const customNick = accountState?.nickname || user.username;
                 const params = new URLSearchParams({ username: customNick });
                 const s = await apiFetch('/api/stats?' + params.toString()).then(r => r.json());
                 
@@ -1949,6 +2040,7 @@ async def main():
     runtime = CustodyRuntime(DB_FILE, SOLANA_RPC, ADMIN_TELEGRAM_ID, SHARED_DEPOSIT_WALLET,
         get_signer_keypair, verify_user_pin, get_token_prices, WATCHLIST, add_log, base_url=RENDER_URL)
     runtime.recent_logs = lambda: RECENT_LOGS
+    runtime.accounts = AccountSecurity(runtime.ledger, RENDER_URL, verify_user_pin, runtime.wallet)
     app["wallet_runtime"] = runtime
     def wallet_handler(action):
         async def handler(request):
@@ -1987,6 +2079,21 @@ async def main():
     app.router.add_post('/api/close_all', wallet_handler(runtime.close_all))
     app.router.add_post('/api/withdraw', wallet_handler(runtime.withdraw))
     app.router.add_get('/api/security_status', api_security_status)
+    app.router.add_get('/api/account', wallet_handler(runtime.accounts.status))
+    app.router.add_post('/api/account/register', wallet_handler(runtime.accounts.register))
+    app.router.add_post('/api/account/passkey', wallet_handler(runtime.accounts.create_ticket))
+    app.router.add_get('/api/account/passkey_status', wallet_handler(runtime.accounts.ticket_status))
+    passkey_html = Path(__file__).with_name("passkey.html").read_text(encoding="utf-8")
+    async def passkey_page(request):
+        return web.Response(text=passkey_html,content_type="text/html",headers={
+            "Cache-Control":"no-store","Referrer-Policy":"no-referrer","X-Content-Type-Options":"nosniff",
+            "Content-Security-Policy":"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; form-action 'none'; base-uri 'none'",
+            "Permissions-Policy":"camera=(), microphone=(), publickey-credentials-create=(self), publickey-credentials-get=(self)"})
+    async def passkey_browser_handler(request):
+        return await runtime.accounts.browser_handle(request)
+    app.router.add_get('/passkey', passkey_page)
+    app.router.add_post('/passkey/options', passkey_browser_handler)
+    app.router.add_post('/passkey/verify', passkey_browser_handler)
     app.router.add_post('/api/set_security', api_set_security)
     app.router.add_post('/api/verify_security', api_verify_security)
     app.router.add_post('/webhook', telegram_webhook_handler)
