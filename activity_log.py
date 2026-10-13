@@ -1,0 +1,118 @@
+"""Bounded diagnostic history, separate from financial bookkeeping and execution."""
+import json
+import math
+import time
+from datetime import datetime, timezone
+
+import ai_decisions
+
+
+def record(runtime, uid, snapshot, mode, code, message):
+    # Logging must never turn a failed observation into a financial retry or
+    # prevent an otherwise permitted risk exit.
+    try:
+        with runtime.ledger.db() as db:
+            inserted = db.execute("INSERT OR IGNORE INTO custody_activity_events VALUES(?,?,?,?,?,?)",
+                (uid, snapshot["id"], mode, code, str(message)[:600], int(time.time()))).rowcount
+            if inserted:
+                db.execute("""DELETE FROM custody_activity_events WHERE uid=? AND rowid NOT IN
+                    (SELECT rowid FROM custody_activity_events WHERE uid=?
+                     ORDER BY created_at DESC,rowid DESC LIMIT 200)""", (uid, uid))
+    except Exception:
+        # Do not print provider messages, request bodies, credentials or SQL values.
+        try:
+            runtime.log("Activity history write unavailable.")
+        except Exception:
+            pass
+
+
+def label(runtime, symbol):
+    if not symbol:
+        return ""
+    info = getattr(runtime, "watchlist", {}).get(symbol, {})
+    return str(info.get("label", symbol))[:60]
+
+
+def observe(runtime, uid, snapshot, mode):
+    decision = snapshot["decisions"][mode]
+    action = decision["action"]
+    asset = label(runtime, decision["symbol"])
+    stamp = datetime.fromtimestamp(snapshot["created_at"], timezone.utc).strftime("%H:%M:%S UTC")
+    message = f"{mode.upper()} AI {action} {asset} — analysis {stamp}. {decision['reason']}"
+    if action != "HOLD":
+        message += " Decision only; not a confirmed trade."
+    record(runtime, uid, snapshot, mode, "decision", message)
+
+
+STATES = {
+    "RESERVED": "funds reserved; no broadcast yet",
+    "PREPARED": "signed and saved; network outcome not yet confirmed; do not resend",
+    "SUBMITTED": "submitted; waiting for finalized network confirmation",
+    "UNKNOWN": "network outcome unknown; do not resend",
+    "COMPLETED": "finalized on Solana",
+    "FAILED": "failed; check the operation result, not an AI decision",
+}
+
+
+def report(runtime, uid):
+    """Read-only diagnostics. Never invokes AI, quotes, signing or sendTransaction."""
+    settings = runtime.ledger.settings(uid)
+    latest = runtime.ledger.ai_latest()
+    config = ai_decisions.configuration()
+    active = settings["trading"] or settings["sniper_trading"]
+    status = ("Core: " + ("ON" if settings["trading"] else "OFF") +
+              " · Meme Sniper: " + ("ON" if settings["sniper_trading"] else "OFF") + ". ")
+    if not active:
+        status += "Automatic trading is paused."
+    elif not config["configured"]:
+        status += "AI is not configured; no new AI orders."
+    elif getattr(runtime, "ai_task", None) is not None:
+        status += "AI analysis is running or awaiting collection."
+    elif latest:
+        remaining = max(0, math.ceil(latest["created_at"] + config["interval_seconds"] - time.time()))
+        status += (f"Next AI analysis due in about {remaining} seconds." if remaining else
+                   "Next AI analysis is due; waiting for the worker.")
+    else:
+        status += "Waiting for the first AI analysis and market data."
+    if active and getattr(runtime, "ai_activity_error", ""):
+        status += " " + runtime.ai_activity_error
+    if runtime.pending():
+        status += "A shared-vault operation is awaiting resolution; new sends may wait."
+    with runtime.ledger.db() as db:
+        events = [dict(r) for r in db.execute(
+            """SELECT analysis_id,created_at,message,mode,code FROM custody_activity_events WHERE uid=?
+               ORDER BY created_at DESC,rowid DESC LIMIT 50""", (uid,))]
+        operations = [dict(r) for r in db.execute(
+            """SELECT kind,state,created_at,signature FROM custody_operations WHERE uid=?
+               ORDER BY created_at DESC,rowid DESC LIMIT 15""", (uid,))]
+        attempted = {r[0] for r in db.execute(
+            "SELECT mode FROM custody_ai_attempts WHERE uid=? AND analysis_id=?",
+            (uid, latest["id"] if latest else ""))}
+    entries = [{**event, "category": "AI"} for event in events]
+    # A freshly upgraded or paused account can have a model result without a
+    # recorded worker event. Display it explicitly as a result, never an execution.
+    if latest:
+        decisions = json.loads(latest["decisions"])["decisions"]
+        for mode in ("main", "sniper"):
+            if not any(e["mode"] == mode and e["code"] == "decision" and
+                       e["analysis_id"] == latest["id"] for e in events):
+                decision = decisions[mode]
+                entries.append({"created_at": latest["created_at"], "category": "AI",
+                    "message": f"{mode.upper()} AI {decision['action']} {label(runtime, decision['symbol'])}"
+                    f" — {decision['reason']} Decision only; not proof of execution."})
+            if mode in attempted:
+                status += f" {mode.upper()}: this analysis was already claimed; it will not be resent."
+    entries += [{"created_at": op["created_at"], "category": "TRANSACTION",
+                 "message": f"{op['kind']}: {op['state']} — {STATES.get(op['state'], 'check operation status')}",
+                 "signature": op["signature"]} for op in operations]
+    entries.sort(key=lambda e: e["created_at"], reverse=True)
+    entries = entries[:65]
+    if not entries:
+        entries = [{"created_at": int(time.time()), "category": "STATUS",
+                    "message": "No financial transactions or AI decisions recorded yet."}]
+    logs = [status] + [
+        datetime.fromtimestamp(e["created_at"], timezone.utc).isoformat() +
+        " [" + e["category"] + "] " + e["message"] +
+        ("\nTx: " + e["signature"] if e.get("signature") else "") for e in entries]
+    return {"activity_status": status, "entries": entries, "logs": logs,
+            "activity_version": "decision-history-v1"}

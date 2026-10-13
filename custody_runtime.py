@@ -24,6 +24,7 @@ from legacy_retirement import prove_retirement, RECOVERY_RPC
 from tx_deposits import incoming_amounts
 from solders.signature import Signature
 import ai_decisions
+import activity_log
 from meme_discovery import MemeDiscovery
 
 WRAPPED_SOL = "So11111111111111111111111111111111111111112"
@@ -192,12 +193,16 @@ class CustodyRuntime(WalletRuntime):
                 self.ai_task.cancel()
                 self.ai_task = None
             self.last_error = "AI не подключён: нужен OPENAI_API_KEY на Render."
+            self.ai_activity_error = "AI is not configured."
             return None
         if self.ai_task and self.ai_task.done():
             try:
                 self.ai_task.result()
+                self.ai_activity_error = ""
             except Exception as exc:
                 self.last_error = str(exc) if isinstance(exc, (WalletError, ai_decisions.AIError, LedgerError)) else "AI анализ недоступен."
+                self.ai_activity_error = ("Last AI refresh failed. Displayed decisions may be from an earlier "
+                                          "analysis; inspect their timestamps.")
             self.ai_task = None
         latest = self.ledger.ai_latest()
         if latest and time.time() - latest["created_at"] < config["interval_seconds"]:
@@ -1073,10 +1078,7 @@ class CustodyRuntime(WalletRuntime):
 
     async def logs(self, request, session):
         uid = self.uid(request)
-        with self.ledger.db() as db:
-            rows = db.execute("SELECT kind,state,created_at FROM custody_operations WHERE uid=? ORDER BY created_at DESC LIMIT 15", (uid,))
-            logs = [r["kind"] + ": " + r["state"] for r in rows]
-        return web.json_response({"success": True, "logs": logs,
+        return web.json_response({"success": True, **activity_log.report(self, uid),
             "trading_active": bool(self.ledger.settings(uid)["trading"]),
             "sniper_active": bool(self.ledger.settings(uid)["sniper_trading"])})
 
@@ -1262,49 +1264,92 @@ class CustodyRuntime(WalletRuntime):
         # No provider output can select an amount, wallet, owner, or non-allowlisted mint.
         ai_decisions.validate_decisions(snapshot["decisions"], snapshot.get("universes", self.ai_universes()))
         if time.time() - snapshot["created_at"] > 120:
+            for mode, flag in (("main", "trading"), ("sniper", "sniper_trading")):
+                if settings[flag]:
+                    activity_log.observe(self, uid, snapshot, mode)
+                    activity_log.record(self, uid, snapshot, mode, "stale",
+                        "SKIPPED: AI decision is older than 120 seconds. Waiting for a fresh analysis.")
             return
         for mode, funding, flag, size_key, cap in [
                 ("main", USDC, "trading", "order_raw", 5),
                 ("sniper", SOL, "sniper_trading", "sniper_order_raw", 1)]:
             if not settings[flag]:
                 continue
+            activity_log.observe(self, uid, snapshot, mode)
+            def note(code, message):
+                activity_log.record(self, uid, snapshot, mode, code, message)
             decision = snapshot["decisions"][mode]
             symbol, action = decision["symbol"], decision["action"]
             held = [p for p in positions if p["funding_asset"] == funding]
             if action == "HOLD":
+                note("hold", "WAIT: AI chose HOLD. No transaction requested.")
                 continue
             original = snapshot["prices"].get(symbol, 0)
             price = prices.get(symbol, 0)
             if (not math.isfinite(original) or not math.isfinite(price)
                     or original <= 0 or price <= 0 or abs(price/original-1) > .01):
+                note("price", "SKIPPED: price data is missing/invalid or moved more than 1% since analysis.")
                 continue
             if funding == SOL:
                 old_sol, now_sol = snapshot["prices"].get("SOL", 0), prices.get("SOL", 0)
                 if (not math.isfinite(old_sol) or not math.isfinite(now_sol)
                         or old_sol <= 0 or now_sol <= 0):
+                    note("sol_price", "SKIPPED: valid SOL reference prices are unavailable.")
                     continue
                 relative_now, relative_old = price/now_sol, original/old_sol
                 if (not math.isfinite(relative_now) or not math.isfinite(relative_old)
                         or relative_now <= 0 or relative_old <= 0
                         or abs(relative_now/relative_old-1) > .01):
+                    note("relative_price", "SKIPPED: token/SOL price drift exceeds the 1% safety limit.")
                     continue
             if action == "SELL":
                 position = next((p for p in held if p["symbol"] == symbol), None)
                 if position and self.ledger.ai_claim(snapshot["id"], uid, mode):
-                    await self.trade(session, uid, position["asset"], funding, position["raw"], "SELL",
+                    await self.observed_ai_trade(uid, snapshot, mode, session, uid, position["asset"],
+                        funding, position["raw"], "SELL",
                         {"output_asset": funding, "ai_analysis": snapshot["id"]}, position["id"])
                     return
+                note("sell_skipped", "SKIPPED: no owned open position in this asset." if not position else
+                     "SKIPPED: this analysis was already claimed; no automatic retry.")
             elif (snapshot.get("samples", {}).get(symbol, 0) >= 5
                     and (funding != SOL or snapshot.get("samples", {}).get("SOL", 0) >= 5) and len(held) < cap
                     and not any(p["symbol"] == symbol for p in held)
                     and self.ledger.balance(uid, funding) >= settings[size_key]):
                 if mode == "sniper":
                     if getattr(self, "discovery", None) and not self.discovery.entry_allowed(symbol):
+                        note("candidate", "SKIPPED: candidate screening is stale or the asset is no longer eligible.")
                         continue
-                    await self.verify_sniper_mint(session, symbol)
+                    try:
+                        await self.verify_sniper_mint(session, symbol)
+                    except Exception:
+                        note("mint_check", "BLOCKED: on-chain mint verification did not succeed.")
+                        raise
                 if self.ledger.ai_claim(snapshot["id"], uid, mode):
                     watch = self.watchlist[symbol]
-                    await self.trade(session, uid, funding, asset_for_mint(watch["mint"]), settings[size_key], "BUY",
+                    await self.observed_ai_trade(uid, snapshot, mode, session, uid, funding,
+                        asset_for_mint(watch["mint"]), settings[size_key], "BUY",
                         {"symbol": symbol, "output_asset": asset_for_mint(watch["mint"]),
                          "decimals": watch["decimals"], "ai_analysis": snapshot["id"]})
                     return
+                note("already_claimed", "SKIPPED: this analysis was already claimed; no automatic retry.")
+            else:
+                if snapshot.get("samples", {}).get(symbol, 0) < 5 or (
+                        funding == SOL and snapshot.get("samples", {}).get("SOL", 0) < 5):
+                    note("warmup", "SKIPPED: fewer than five price samples; waiting for market-data warm-up.")
+                elif len(held) >= cap:
+                    note("position_limit", "SKIPPED: this mode's open-position limit has been reached.")
+                elif any(p["symbol"] == symbol for p in held):
+                    note("already_open", "SKIPPED: you already hold an open position in this asset.")
+                else:
+                    note("balance", "SKIPPED: your available balance is below the saved purchase size.")
+
+    async def observed_ai_trade(self, uid, snapshot, mode, *args):
+        activity_log.record(self, uid, snapshot, mode, "execution_check",
+            "EXECUTION CHECK: evaluating an AI order. This is not confirmation of a broadcast or completed trade.")
+        try:
+            return await self.trade(*args)
+        except Exception:
+            activity_log.record(self, uid, snapshot, mode, "execution_error",
+                "EXECUTION INTERRUPTED: a safety check or execution step failed. Check readiness and transaction "
+                "status below; do not resend an unknown transaction.")
+            raise

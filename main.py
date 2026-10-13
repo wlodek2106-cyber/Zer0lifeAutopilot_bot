@@ -889,7 +889,8 @@ RAW_HTML = r"""<!DOCTYPE html>
 
             <div class="card">
                 <div style="font-size: 12px; font-weight: 700; color: #94a3b8; margin-bottom: 6px;">ACTIVITY LOG</div>
-                <div id="log-box" class="log-console">Starting...</div>
+                <div style="font-size:11px;color:#94a3b8;margin-bottom:8px;">AI decisions are not confirmed trades · times in your timezone</div>
+                <div id="log-box" class="log-console" data-activity-version="decision-history-v1">Loading activity...</div>
             </div>
         </div>
 
@@ -1536,12 +1537,27 @@ RAW_HTML = r"""<!DOCTYPE html>
 
         async function refresh() {
             try {
-                const l = await apiFetch('/api/logs').then(r => r.json());
+                const l = await apiFetch('/api/logs').then(r => r.json()).catch(() => ({success:false}));
                 if (l.success) {
                     const logBox = document.getElementById('log-box');
-                    if (logBox) logBox.innerText = l.logs.join('\n');
+                    if (logBox) {
+                        const entries = Array.isArray(l.entries) ? l.entries : [];
+                        const lines = entries.map(e => {
+                            const stamp = new Date(e.created_at * 1000).toLocaleString();
+                            return stamp + ' [' + e.category + '] ' + e.message +
+                                (e.signature ? '\nTx: ' + e.signature : '');
+                        });
+                        logBox.textContent = lines.length ?
+                            [l.activity_status, ...lines].filter(Boolean).join('\n\n') :
+                            (Array.isArray(l.logs) && l.logs.length ? l.logs.join('\n') :
+                             'Waiting for activity. No completed trade is implied.');
+                        logBox.style.overflowWrap = 'anywhere';
+                    }
                     if (l.trading_active !== undefined) updateToggleUI(l.trading_active);
                     if (l.sniper_active !== undefined) updateMemeToggleUI(l.sniper_active);
+                } else {
+                    document.getElementById('log-box').textContent =
+                        'Activity log unavailable. Refresh or sign in again; no trade outcome is confirmed here.';
                 }
 
                 const user = getUserData();

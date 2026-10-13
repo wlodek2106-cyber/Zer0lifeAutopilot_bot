@@ -124,6 +124,12 @@ class CustodyLedger:
                 CREATE TABLE IF NOT EXISTS custody_ai_attempts (
                     analysis_id TEXT NOT NULL, uid INTEGER NOT NULL, mode TEXT NOT NULL,
                     PRIMARY KEY(analysis_id,uid,mode));
+                CREATE TABLE IF NOT EXISTS custody_activity_events (
+                    uid INTEGER NOT NULL, analysis_id TEXT NOT NULL, mode TEXT NOT NULL,
+                    code TEXT NOT NULL, message TEXT NOT NULL, created_at INTEGER NOT NULL,
+                    PRIMARY KEY(uid,analysis_id,mode,code));
+                CREATE INDEX IF NOT EXISTS custody_activity_by_user
+                    ON custody_activity_events(uid,created_at DESC);
             """)
             for table, additions in {
                 "custody_users": {

@@ -1,0 +1,261 @@
+"""Synthetic diagnostics only; no live AI, wallet, payment, signing or broadcast."""
+import ast
+import asyncio
+import json
+import re
+import shutil
+import sys
+import tempfile
+import time
+import unittest
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock, patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from solders.keypair import Keypair
+from solders.signature import Signature
+import activity_log
+from custody_ledger import CustodyLedger, SOL, USDC
+from custody_runtime import CustodyRuntime, WRAPPED_SOL
+from wallet_runtime import WalletError
+import test_account_browser as browser
+
+
+class ActivityTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.path = temp.name + "/db"
+        key = Keypair()
+        self.runtime = CustodyRuntime(self.path, "https://invalid.example", 101,
+            str(key.pubkey()), lambda: key, lambda uid, pin: (True, ""), AsyncMock(),
+            {"SOL": {"mint": WRAPPED_SOL, "decimals": 9},
+             "WIF": {"mint": str(Keypair().pubkey()), "decimals": 6}},
+            lambda msg: None, base_url="https://invalid.example")
+        self.ledger = self.runtime.ledger
+        for uid in (101, 202):
+            self.ledger.user(uid)
+            for currency in (USDC, SOL):
+                inv = self.ledger.invoice(uid, currency, 20_000_000)
+                self.ledger.credit_deposit(inv["id"], str(Signature.new_unique()),
+                                          currency, 20_000_000, int(time.time()))
+        self.ledger.seed_fees(20_000_000, 100_000_000)
+        self.ledger.settings(101, enabled=True, sniper_enabled=True)
+        self.runtime.trade = AsyncMock(return_value={})
+        self.runtime.rpc = AsyncMock()
+        self.runtime.verify_sniper_mint = AsyncMock()
+        p = patch.object(self.runtime.discovery, "entry_allowed", return_value=True)
+        p.start()
+        self.addCleanup(p.stop)
+        self.prices = {"SOL": 100., "WIF": 2.}
+        self.snapshot = {"id": "one", "created_at": int(time.time()),
+            "universes": {"main": ["SOL"], "sniper": ["WIF"]},
+            "prices": self.prices.copy(), "samples": {"SOL": 5, "WIF": 5},
+            "decisions": {
+                "main": {"action": "HOLD", "symbol": None, "reason": "No trend"},
+                "sniper": {"action": "SELL", "symbol": "WIF", "reason": "Weak momentum"}}}
+
+    async def apply(self, positions=None, prices=None):
+        await self.runtime.apply_ai_decision(None, 101, self.ledger.settings(101),
+            positions or [], self.prices if prices is None else prices, self.snapshot)
+
+    def entries(self, uid=101):
+        return activity_log.report(self.runtime, uid)["entries"]
+
+    def codes(self):
+        return {e.get("code") for e in self.entries()}
+
+    async def test_hold_and_sell_without_position_are_visible_and_deduplicated(self):
+        await self.apply()
+        before = self.entries()
+        await self.apply()
+        self.assertEqual(before, self.entries())
+        self.assertTrue({"decision", "hold", "sell_skipped"} <= self.codes())
+        self.assertIn("no owned open position", json.dumps(before))
+        self.runtime.trade.assert_not_awaited()
+        self.runtime.rpc.assert_not_awaited()
+        self.assertTrue(self.ledger.audit())
+
+    async def test_stale_decision_has_reason_and_cannot_execute(self):
+        self.snapshot["created_at"] -= 121
+        await self.apply()
+        self.assertIn("stale", self.codes())
+        self.runtime.trade.assert_not_awaited()
+
+    async def test_price_and_relative_sol_rejections_are_visible(self):
+        self.snapshot["decisions"]["main"] = {"action": "BUY", "symbol": "SOL", "reason": "Signal"}
+        await self.apply(prices={"SOL": 102., "WIF": 2.})
+        self.assertIn("price", self.codes())
+        self.snapshot["id"] = "two"
+        self.snapshot["decisions"]["main"]["action"] = "HOLD"
+        await self.apply(prices={"SOL": 102., "WIF": 2.})
+        self.assertIn("relative_price", self.codes())
+        self.runtime.trade.assert_not_awaited()
+
+    async def test_warmup_balance_duplicate_position_and_position_cap(self):
+        self.snapshot["decisions"]["main"] = {"action": "BUY", "symbol": "SOL", "reason": "Signal"}
+        self.snapshot["decisions"]["sniper"]["action"] = "HOLD"
+        self.snapshot["samples"]["SOL"] = 1
+        await self.apply()
+        self.assertIn("warmup", self.codes())
+        self.snapshot["samples"]["SOL"] = 5
+        self.snapshot["id"] = "two"
+        self.ledger.settings(101, raw=30_000_000)
+        await self.apply()
+        self.assertIn("balance", self.codes())
+        self.snapshot["id"] = "three"
+        await self.apply(positions=[{"funding_asset": USDC, "symbol": "SOL"}])
+        self.assertIn("already_open", self.codes())
+        self.snapshot["id"] = "four"
+        await self.apply(positions=[{"funding_asset": USDC, "symbol": "SOL"}] * 5)
+        self.assertIn("position_limit", self.codes())
+        self.runtime.trade.assert_not_awaited()
+
+    async def test_ineligible_candidate_and_failed_mint_check(self):
+        self.snapshot["decisions"]["sniper"]["action"] = "BUY"
+        self.runtime.discovery.entry_allowed.return_value = False
+        await self.apply()
+        self.assertIn("candidate", self.codes())
+        self.runtime.discovery.entry_allowed.return_value = True
+        self.runtime.verify_sniper_mint.side_effect = WalletError("unsafe")
+        with self.assertRaises(WalletError):
+            await self.apply()
+        self.assertIn("mint_check", self.codes())
+        self.runtime.trade.assert_not_awaited()
+
+    async def test_execution_check_is_not_a_completed_trade_and_claims_unchanged(self):
+        self.snapshot["decisions"]["main"] = {"action": "BUY", "symbol": "SOL", "reason": "Signal"}
+        await self.apply()
+        await self.apply()
+        self.assertEqual(self.runtime.trade.await_count, 1)
+        self.assertEqual(self.runtime.trade.await_args.args[2:6], (USDC, SOL, 1_000_000, "BUY"))
+        self.assertTrue({"execution_check", "already_claimed"} <= self.codes())
+        self.assertFalse(any(e["category"] == "TRANSACTION" for e in self.entries()))
+
+    async def test_failed_execution_preserves_exception_and_does_not_log_secrets(self):
+        self.snapshot["decisions"]["main"] = {"action": "BUY", "symbol": "SOL", "reason": "Signal"}
+        self.runtime.trade.side_effect = WalletError("SECRET_PROVIDER_DATA")
+        with self.assertRaises(WalletError):
+            await self.apply()
+        self.assertIn("execution_error", self.codes())
+        self.assertNotIn("SECRET_PROVIDER_DATA", json.dumps(self.entries()))
+        await self.apply()
+        self.assertEqual(self.runtime.trade.await_count, 1)
+
+    async def test_observation_failure_does_not_change_execution(self):
+        self.snapshot["decisions"]["main"] = {"action": "BUY", "symbol": "SOL", "reason": "Signal"}
+        original = self.ledger.db
+        self.runtime.log = Mock()
+        # Only activity writes fail, while claims/ledger reads still function.
+        def db():
+            import inspect
+            if any(frame.function == "record" and frame.filename.endswith("activity_log.py")
+                   for frame in inspect.stack()):
+                raise OSError("synthetic disk error")
+            return original()
+        with patch.object(self.ledger, "db", side_effect=db):
+            await self.apply()
+        self.runtime.trade.assert_awaited_once()
+        self.assertTrue(self.runtime.log.called)
+
+    async def test_report_is_user_scoped_read_only_and_never_blank(self):
+        balances = (self.ledger.balance(101, USDC), self.ledger.balance(202, SOL))
+        activity_log.record(self.runtime, 202, self.snapshot, "main", "private", "OTHER_USER_PRIVATE")
+        status = activity_log.report(self.runtime, 101)
+        self.assertTrue(status["logs"] and status["entries"])
+        self.assertNotIn("OTHER_USER_PRIVATE", json.dumps(status))
+        self.assertEqual(balances, (self.ledger.balance(101, USDC), self.ledger.balance(202, SOL)))
+        self.runtime.trade.assert_not_awaited()
+        self.runtime.rpc.assert_not_awaited()
+        self.assertTrue(self.ledger.settings(101)["trading"])
+
+    async def test_history_survives_restart_and_is_bounded_per_user(self):
+        for i in range(205):
+            activity_log.record(self.runtime, 101, {**self.snapshot, "id": str(i)}, "main", "decision", str(i))
+        activity_log.record(self.runtime, 202, self.snapshot, "main", "private", "private")
+        reopened = CustodyLedger(self.path)
+        with reopened.db() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM custody_activity_events WHERE uid=101").fetchone()[0], 200)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM custody_activity_events WHERE uid=202").fetchone()[0], 1)
+        self.assertTrue(reopened.audit())
+
+    async def test_latest_result_is_visible_without_implying_execution_or_paused_mode_start(self):
+        self.ledger.ai_record("one", self.snapshot)
+        self.ledger.settings(101, enabled=False, sniper_enabled=False)
+        result = activity_log.report(self.runtime, 101)
+        self.assertIn("paused", result["activity_status"])
+        self.assertIn("Decision only", json.dumps(result))
+        self.assertEqual(len(result["entries"]), 2)
+        self.assertFalse(self.ledger.settings(101)["trading"])
+        self.runtime.trade.assert_not_awaited()
+
+    async def test_provider_failure_status_is_safe_and_clears_on_success(self):
+        self.ledger.ai_record("one", self.snapshot)
+        future = asyncio.get_running_loop().create_future()
+        future.set_exception(WalletError("SECRET_PROVIDER_ERROR"))
+        self.runtime.ai_task = future
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "synthetic-not-a-real-key"}):
+            self.runtime.poll_ai(self.prices)
+            result = activity_log.report(self.runtime, 101)
+            self.assertIn("Last AI refresh failed", result["activity_status"])
+            self.assertNotIn("SECRET_PROVIDER_ERROR", json.dumps(result))
+            future = asyncio.get_running_loop().create_future()
+            future.set_result({})
+            self.runtime.ai_task = future
+            self.runtime.poll_ai(self.prices)
+            self.assertNotIn("refresh failed", activity_log.report(self.runtime, 101)["activity_status"])
+        self.runtime.trade.assert_not_awaited()
+
+    async def test_transaction_signature_and_pending_state_not_called_completed(self):
+        row = self.ledger.reserve(202, "foreign", "BUY", USDC, 1_000_000,
+            {"output_asset": SOL, "symbol": "PRIVATE202", "decimals": 9})
+        self.ledger.prepared(row["id"], str(Signature.new_unique()), "not-broadcast")
+        foreign = self.ledger.operation(row["id"])["signature"]
+        self.ledger.fail(row["id"], network_proven=True)
+        row = self.ledger.reserve(101, "own", "BUY", USDC, 1_000_000,
+            {"output_asset": SOL, "symbol": "SOL", "decimals": 9})
+        signature = str(Signature.new_unique())
+        self.ledger.prepared(row["id"], signature, "not-broadcast")
+        self.ledger.submitted(row["id"], True)
+        result = activity_log.report(self.runtime, 101)
+        text = json.dumps(result)
+        self.assertIn(signature, text)
+        self.assertNotIn(foreign, text)
+        self.assertIn("waiting for finalized", text)
+        self.assertNotIn("COMPLETED", text)
+        self.assertTrue(self.ledger.audit())
+
+
+@unittest.skipUnless(shutil.which("chromium"), "Chromium not installed")
+class ActivityBrowserTests(unittest.TestCase):
+    def test_mobile_empty_state_safe_text_local_time_and_transaction_lines(self):
+        source = ast.parse(Path(__file__).resolve().parents[1].joinpath("main.py").read_text())
+        page = next(ast.literal_eval(n.value) for n in source.body if isinstance(n, ast.Assign)
+                    and any(isinstance(t, ast.Name) and t.id == "RAW_HTML" for t in n.targets))
+        page = re.sub(r'<script src="[^"]+"></script>', '', page)
+        page = page.replace("</head>", """<script>
+        window.Telegram={WebApp:{initData:'fixture',initDataUnsafe:{user:{id:101}},expand(){},ready(){}}};
+        window.logFixture={success:true,logs:[]};
+        window.fetch=async(url)=>new Response(JSON.stringify(url==='/api/logs'?window.logFixture:
+            {success:true,user_balance:0,sol_balance:0,withdrawable:0,trades:[],wallet_history:[],
+             trading_settings:{},wallet_status:{}}));
+        </script></head>""")
+        browser.AccountBrowserTests().run_page(page, """
+            await refresh();
+            const box=document.getElementById('log-box');
+            assert(box.textContent.includes('Waiting for activity'),'empty state is not black');
+            window.logFixture={success:true,activity_status:'Core ON; waiting',
+              entries:[{created_at:1700000000,category:'AI',message:'<img src=x onerror=alert(1)> HOLD'},
+                       {created_at:1700000001,category:'TRANSACTION',message:'BUY: SUBMITTED',
+                        signature:'123456789ABCDEFGHIJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'}]};
+            await refresh();
+            assert(box.querySelector('img')===null,'AI text cannot inject HTML');
+            assert(box.textContent.includes('<img'),'AI text rendered literally');
+            assert(box.textContent.includes('Tx: 123'),'transaction signature shown');
+            assert(box.textContent.includes(new Date(1700000000*1000).toLocaleString()),'device-local timestamp');
+            assert(box.textContent.split('\\n').length>=4,'real line breaks, not literal slash-n');
+            assert(box.style.overflowWrap==='anywhere','long signatures wrap on mobile');
+            window.logFixture={success:false};
+            await refresh();
+            assert(box.textContent.includes('Activity log unavailable'),'API errors do not leave a blank screen');
+        """)
