@@ -282,6 +282,65 @@ class LedgerTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_personal_trade_size_saved_without_enabling_or_spending(self):
+        self.ledger.credit_deposit(self.ledger.invoice(101, USDC, 3_000_000)["id"],
+            str(Signature.new_unique()), USDC, 3_000_000, int(time.time()))
+        response = await self.service.save_trading_settings(Request(101, {"order_usdc": "2", "uid": 202}), None)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(self.ledger.settings(101)["order_raw"], 2_000_000)
+        self.assertEqual(self.ledger.settings(202)["order_raw"], 1_000_000)
+        self.assertFalse(self.ledger.settings(101)["trading"])
+        self.assertEqual(self.ledger.balance(101, USDC), 3_000_000)
+        self.assertFalse(any(method == "sendTransaction" for method, _ in self.calls))
+
+    async def test_trade_size_cannot_exceed_own_cash(self):
+        with self.assertRaises(legacy.WalletError):
+            await self.service.save_trading_settings(Request(101, {"order_usdc": "2"}), None)
+        self.assertFalse(self.ledger.settings(101)["trading"])
+
+    async def test_trade_size_cannot_change_while_running(self):
+        self.ledger.settings(101, enabled=True)
+        with self.assertRaises(legacy.WalletError):
+            await self.service.save_trading_settings(Request(101, {"order_usdc": "1"}), None)
+        self.assertEqual(self.ledger.settings(101)["order_raw"], 1_000_000)
+
+    async def test_readiness_does_not_start_trading(self):
+        self.ledger.credit_deposit(self.ledger.invoice(101, USDC, 2_000_000)["id"],
+            str(Signature.new_unique()), USDC, 2_000_000, int(time.time()))
+        self.service.trading_preflight = AsyncMock()
+        response = await self.service.trading_readiness(Request(), None)
+        self.assertEqual(response.status, 200)
+        self.service.trading_preflight.assert_awaited_once_with(101, None, 1_000_000)
+        self.assertFalse(self.ledger.settings(101)["trading"])
+        self.assertFalse(any(method == "sendTransaction" for method, _ in self.calls))
+
+    async def test_failed_preflight_leaves_autopilot_off(self):
+        self.ledger.credit_deposit(self.ledger.invoice(101, USDC, 2_000_000)["id"],
+            str(Signature.new_unique()), USDC, 2_000_000, int(time.time()))
+        self.service.trading_preflight = AsyncMock(side_effect=legacy.WalletError("Market unavailable", 503))
+        with self.assertRaises(legacy.WalletError):
+            await self.service.toggle(Request(101, {"trade_amount_usdc": "1"}), None)
+        self.assertFalse(self.ledger.settings(101)["trading"])
+
+    async def test_preflight_requires_market_prices_without_sending(self):
+        with self.assertRaisesRegex(legacy.WalletError, "котировок недоступен"):
+            await self.service.trading_preflight(101, None, 1_000_000)
+        self.assertFalse(self.ledger.settings(101)["trading"])
+        self.assertFalse(any(method == "sendTransaction" for method, _ in self.calls))
+
+    async def test_stats_shows_saved_size_and_tx_only_deposit(self):
+        sender = str(Keypair().pubkey())
+        self.ledger.link_wallet(self.ledger.wallet_challenge(101, "https://example.invalid"), sender)
+        with self.ledger.db() as db:
+            db.execute("UPDATE custody_tx_epoch SET started_at=?", (int(time.time()) - 100,))
+        self.ledger.credit_tx(101, str(Signature.new_unique()), sender, {USDC: 1_500_000},
+            int(time.time()), {USDC: 100_000_000, SOL: 50_000_000})
+        response = await self.service.stats(Request(), None)
+        data = json.loads(response.text)
+        self.assertEqual(data["total_deposited"], 1.5)
+        self.assertEqual(data["trading_settings"]["order_usdc"], 1)
+        self.assertEqual(data["wallet_history"][0]["amount"], "1.5 USDC")
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -417,6 +476,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 403)
 
     async def test_toggle_and_close_only_current_user(self):
+        self.service.trading_preflight = AsyncMock()
         invoice, sig, tx = self.payment(uid=202, raw=7_000_000)
         await self.service.apply_deposit(None, sig)
         await self.service.handle(Request(202, {"trade_amount_usdc": "1"}), self.service.toggle)
@@ -431,6 +491,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 409)
 
     async def test_resume_owned_positions_without_free_cash_does_not_borrow(self):
+        self.service.trading_preflight = AsyncMock()
         invoice, sig, tx = self.payment(uid=202, raw=1_000_000)
         await self.service.apply_deposit(None, sig)
         buy = self.ledger.reserve(202, str(uuid.uuid4()), "BUY", USDC, 1_000_000,

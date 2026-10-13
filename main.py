@@ -752,6 +752,29 @@ RAW_HTML = r"""<!DOCTYPE html>
         .nav-btn.active { color: #22c55e; }
         .tab-panel { display: none; height: 100vh; overflow-y: auto; padding: 16px; padding-bottom: 125px; }
         .tab-panel.active { display: block; }
+        :root { color-scheme: dark; }
+        body { background:#080d14; color:#e7edf5; }
+        #app .tab-panel { box-sizing:border-box; height:var(--tg-viewport-stable-height,100dvh); max-width:640px; margin:auto; padding:24px 20px 115px; }
+        #app .card { background:#101823!important; border:1px solid #223043!important; border-radius:20px; padding:20px; margin-bottom:16px; }
+        #app .banner-limit { background:#10221c!important; border:1px solid #214337!important; padding:14px; border-radius:16px; }
+        .page-heading { margin:0 0 22px; display:flex; justify-content:space-between; align-items:center; }
+        .page-heading h1 { margin:0;font-size:26px;font-weight:750;letter-spacing:-.7px; }
+        .eyebrow { color:#8798ae;font-size:12px;margin:0 0 6px; }
+        .section-note { color:#94a5bb;font-size:13px;line-height:1.65; }
+        .quick-actions { display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:18px 0; }
+        #app .stat-box { background:#0b111b;border:1px solid #1d2b3d;padding:16px;border-radius:14px; }
+        #app .stat-label { color:#8495ad;letter-spacing:.7px;font-size:10px; }
+        #app .stat-val { font-size:18px;line-height:1.5;overflow-wrap:anywhere; }
+        #app .btn-copy { background:#172334;border:1px solid #2a3a50;border-radius:13px; padding:14px;font-size:13px; }
+        #app .btn-green-main { background:#3bd19a;color:#061b12;font-weight:750;border-radius:14px; }
+        #app .btn-sell-all { background:transparent;color:#e49b9b;border:1px solid #694343;border-radius:12px;font-size:12px; }
+        .bottom-nav { box-sizing:border-box;background:#0c1420;border-color:#243247;gap:6px;padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px)); }
+        .nav-btn { flex:1;padding:10px 3px;border-radius:12px;font-size:11px; }
+        .nav-btn span { display:block;margin-bottom:4px;font-size:19px; }
+        .nav-btn.active { background:#163126;color:#66dfac; }
+        .settings-label { display:block;font-size:13px;color:#a7b6c9;margin:16px 0 8px; }
+        details summary { color:#b6c6da;font-size:13px;cursor:pointer;padding:10px 0; }
+        .status-output { white-space:pre-wrap;font-size:13px;color:#b2c4da;line-height:1.6; }
     </style>
 </head>
 <body>
@@ -761,8 +784,9 @@ RAW_HTML = r"""<!DOCTYPE html>
         <button class="start-btn" onclick="openTerminal()">Launch Terminal</button>
     </div>
 
-    <div id="app" style="display: none;">
+    <div id="app" data-ui-version="console-v1" style="display: none;">
         <div id="tab-terminal" class="tab-panel active">
+            <header class="page-heading"><div><p class="eyebrow">ZERØLIFE · Личный кабинет</p><h1>Обзор счёта</h1></div></header>
             <div class="banner-limit" style="border-color:#ef4444; background:#2a1014; margin-bottom:12px;">
                 <div style="color:#4ade80; font-size:13px; font-weight:800;">Ваш личный счёт — USDC / SOL</div>
                 <div id="wallet-runtime-status" style="color:#cbd5e1; font-size:11px; margin-top:4px;">Учитываются только ваши пополнения и подтверждённые сделки. Торговля может привести к убытку; прибыль не гарантируется.</div>
@@ -784,12 +808,12 @@ RAW_HTML = r"""<!DOCTYPE html>
 
             <div class="card" style="border: 1px solid rgba(34, 197, 94, 0.3); background: linear-gradient(135deg, #0e111a 0%, #0a150d 100%);">
                 <div style="font-size: 13px; font-weight: 800; color: #22c55e; margin-bottom: 8px; display: flex; justify-content: space-between;">
-                    <span>💼 ВАШ ДОСТУПНЫЙ БАЛАНС: USDC / SOL</span>
+                    <span>Доступные средства</span>
                     <span id="display-username" style="color: #fff; font-size: 12px;"></span>
                 </div>
                 <div class="grid-stats">
-                    <div class="stat-box"><div class="stat-label">USDC / SOL</div><div class="stat-val" id="port-balance" style="color: #fff;">$0.00</div></div>
-                    <div class="stat-box"><div class="stat-label">Доступно к выводу</div><div class="stat-val" id="port-withdrawable" style="color: #22c55e;">$0.00</div></div>
+                    <div class="stat-box"><div class="stat-label">USDC · доступны</div><div class="stat-val" id="port-balance" style="color: #fff;">Загрузка...</div></div>
+                    <div class="stat-box"><div class="stat-label">SOL · доступны</div><div class="stat-val" id="port-withdrawable" style="color: #22c55e;">0 SOL</div></div>
                 </div>
                 <div style="margin-top: 8px; display: flex; justify-content: space-between; align-items: center; background: #06080e; padding: 8px 12px; border-radius: 10px;">
                     <div style="font-size: 11px; color: #94a3b8;">Индивидуальный PnL:</div>
@@ -797,7 +821,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 </div>
             </div>
 
-            <div class="card" style="border: 1px solid rgba(234, 179, 8, 0.3); background: linear-gradient(135deg, #0e111a 0%, #15130a 100%);">
+            <div class="card" id="obsolete-meme-card" style="display:none;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <div>
                         <div style="font-size: 15px; font-weight: 800; color: #facc15;">🐸 Meme Sniper Mode</div>
@@ -816,13 +840,13 @@ RAW_HTML = r"""<!DOCTYPE html>
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div>
-                        <div style="font-size: 17px; font-weight: 800; color: #fff;">Топ-5 Ликвидных Активов</div>
-                        <div style="font-size: 11px; color: #64748b; margin-top: 2px;">SOL • JUP • RAY • WIF • PYTH</div>
+                        <div style="font-size: 17px; font-weight: 800; color: #fff;">Стратегия отката цены</div>
+                        <div id="strategy-assets" style="font-size: 11px; color: #64748b; margin-top: 2px;">Загрузка списка активов</div>
                     </div>
                     <div id="user-bal-small" style="font-size: 12px; color: #22c55e; font-family: monospace; font-weight: 700;">$0.00 USDC</div>
                 </div>
                 <div class="grid-stats">
-                    <div class="stat-box"><div class="stat-label">Размер слота</div><div class="stat-val">$20.00 USDC</div></div>
+                    <div class="stat-box"><div class="stat-label">Размер покупки</div><div class="stat-val" id="strategy-order-size">Загрузка...</div></div>
                     <div class="stat-box"><div class="stat-label">Slippage</div><div class="stat-val" style="color: #60a5fa;">0.40%</div></div>
                     <div class="stat-box"><div class="stat-label">Take Profit</div><div class="stat-val" style="color: #4ade80;">+3.50%</div></div>
                     <div class="stat-box"><div class="stat-label">Stop Loss</div><div class="stat-val" style="color: #f87171;">-2.00%</div></div>
@@ -839,7 +863,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div>
-                        <div style="font-size: 12px; color: #94a3b8; text-transform: uppercase;">Глобальный результат</div>
+                        <div style="font-size: 12px; color: #94a3b8; text-transform: uppercase;">Ваш результат закрытых сделок</div>
                         <div id="pnl-val" style="font-size: 26px; font-weight: 900; color: #4ade80; font-family: monospace; margin-top: 4px;">+$0.00 USDC</div>
                     </div>
                     <div style="text-align: right;">
@@ -906,12 +930,38 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <button class="btn-copy" onclick="importOwnOpeningBalance()">Перенести старый личный остаток</button>
             </div>
         </div>
+        <div id="tab-trading" class="tab-panel">
+            <header class="page-heading"><div><p class="eyebrow">Только ваш капитал</p><h1>Торговля</h1></div></header>
+            <div id="trading-controls"></div>
+            <p class="section-note">Сейчас доступен алгоритм по правилам. AI-модель принятия решений ещё не подключена — это меню не выдаёт его за AI.</p>
+            <div id="trading-strategy"></div>
+            <div class="card"><h3 style="margin-top:0">Перед запуском</h3>
+                <p class="section-note">Покупка при откате ≥0,3% от среднего последних котировок. До пяти позиций, одна операция кошелька за раз. После старта нужны минимум пять котировок; сделка появится только при сигнале.</p>
+                <p class="section-note">TP и SL — условия отправки, а не гарантированная цена исполнения. Комиссии и проскальзывание влияют на результат. Прибыль не гарантируется.</p>
+                <button class="btn-copy" onclick="checkTradingReadiness()">Проверить готовность без сделки</button>
+                <div id="trading-readiness" class="status-output">Автопилот включается только вами.</div>
+            </div>
+            <details><summary>Активность и управление позициями</summary><div id="trading-activity"></div></details>
+        </div>
+        <div id="tab-settings" class="tab-panel">
+            <header class="page-heading"><div><p class="eyebrow">Параметры вашего аккаунта</p><h1>Настройки</h1></div></header>
+            <div class="card"><h3 style="margin-top:0">Размер покупки</h3>
+                <p class="section-note">Для первого запуска рекомендуем 1 USDC на покупку. При пяти позициях это до 5 USDC вложенного капитала. Сохранение не включает торговлю.</p>
+                <label class="settings-label" for="settings-order">USDC на одну покупку</label>
+                <input id="settings-order" class="sig-input" type="number" min="0.000001" step="0.000001" value="1">
+                <button class="btn-green-main" onclick="saveTradingSettings()">Сохранить размер покупки</button>
+                <p id="settings-budget" class="section-note"></p>
+            </div>
+            <div class="card"><h3 style="margin-top:0">Диагностика</h3><p id="worker-status" class="status-output">Загрузка...</p></div>
+            <details id="operator-settings" style="display:none;"><summary>Настройки оператора · комиссии и миграция</summary><div id="settings-admin"></div></details>
+        </div>
     </div>
 
     <div id="nav" class="bottom-nav" style="display: none;">
-        <button class="nav-btn active" onclick="gotoTab('terminal', this)">⚡ Terminal</button>
-        <button class="nav-btn" onclick="gotoTab('stats', this)">📊 Stats</button>
-        <button class="nav-btn" onclick="gotoTab('deposit', this)">💼 Wallet</button>
+        <button class="nav-btn active" onclick="gotoTab('terminal', this)"><span>◈</span>Обзор</button>
+        <button class="nav-btn" onclick="gotoTab('trading', this)"><span>↗</span>Торговля</button>
+        <button class="nav-btn" onclick="gotoTab('deposit', this)"><span>⇄</span>Кошелёк</button>
+        <button class="nav-btn" onclick="gotoTab('settings', this)"><span>⚙</span>Настройки</button>
     </div>
 
     <script>
@@ -929,6 +979,40 @@ RAW_HTML = r"""<!DOCTYPE html>
 
         let currentWithdrawToken = 'USDC';
         let tradingActive = false;
+        let currentTradingSettings = {order_usdc:1};
+        let settingsOrderDirty=false;
+        document.getElementById('settings-order').addEventListener('input',()=>{settingsOrderDirty=true;});
+        document.getElementById('trading-controls').appendChild(document.querySelector('.control-bar'));
+        document.getElementById('trading-strategy').appendChild(document.getElementById('user-bal-small').closest('.card'));
+        document.getElementById('trading-activity').appendChild(document.querySelector('.btn-sell-all'));
+        document.getElementById('trading-activity').appendChild(document.getElementById('log-box').closest('.card'));
+        document.getElementById('settings-admin').appendChild(document.getElementById('admin-custody-panel'));
+        document.getElementById('obsolete-meme-card').remove();
+        const overviewActions = document.createElement('div');
+        overviewActions.className='quick-actions';
+        for (const [label,tab,index] of [['Пополнить / вывести','deposit',2],['Настроить торговлю','trading',1]]) {
+            const button=document.createElement('button');button.className='btn-copy';button.textContent=label;
+            button.onclick=()=>gotoTab(tab,document.querySelectorAll('.nav-btn')[index]);overviewActions.appendChild(button);
+        }
+        document.getElementById('tab-terminal').appendChild(overviewActions);
+        const resultsButton=document.createElement('button');
+        resultsButton.className='btn-copy';resultsButton.textContent='История и результаты сделок';
+        resultsButton.onclick=()=>gotoTab('stats',document.querySelectorAll('.nav-btn')[0]);
+        document.getElementById('tab-terminal').appendChild(resultsButton);
+        async function saveTradingSettings() {
+            try {
+                const response=await apiFetch('/api/trading_settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({order_usdc:document.getElementById('settings-order').value})});
+                const result=await response.json();if(!response.ok||!result.success)throw new Error(result.message);
+                settingsOrderDirty=false;alert(result.message);await refresh();
+            } catch(e) {alert(e.message);}
+        }
+        async function checkTradingReadiness() {
+            const output=document.getElementById('trading-readiness');output.textContent='Проверяем средства, комиссии и рыночные API…';
+            try {
+                const response=await apiFetch('/api/trading_readiness',{method:'POST'});
+                const result=await response.json();output.textContent=result.message||'Проверка не завершена.';
+            } catch(e) {output.textContent='Нет ответа сервера. Торговля этой проверкой не включается.';}
+        }
         let withdrawSending = false;
         async function linkDepositWallet() {
             try {
@@ -1149,7 +1233,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         async function toggleTrading() {
             let size = '1';
             if (!tradingActive) {
-                size = prompt('Размер одной покупки из вашего личного USDC-баланса:', '1');
+                size = String(currentTradingSettings.order_usdc || 1);
                 if (!size || !confirm('Включить торговлю только на своём счёте? Размер покупки: ' + size + ' USDC. Возможны убытки; прибыль не гарантируется.')) return;
             }
             try {
@@ -1259,7 +1343,15 @@ RAW_HTML = r"""<!DOCTYPE html>
                         s.operation_pending ? 'Ожидается подтверждение вашей операции. Не повторяйте отправку.' :
                         'Показан только ваш счёт. Торговля рискованна и включается вами вручную.';
                     document.getElementById('admin-custody-panel').style.display = s.is_admin ? 'block' : 'none';
+                    document.getElementById('operator-settings').style.display=s.is_admin?'block':'none';
                     updateToggleUI(s.trading_active);
+                    currentTradingSettings=s.trading_settings||{order_usdc:1};
+                    document.getElementById('strategy-order-size').textContent=currentTradingSettings.order_usdc.toFixed(2)+' USDC';
+                    document.getElementById('strategy-assets').textContent=(currentTradingSettings.assets||[]).join(' · ');
+                    const settingsInput=document.getElementById('settings-order');
+                    if(!settingsOrderDirty&&document.activeElement!==settingsInput)settingsInput.value=currentTradingSettings.order_usdc;
+                    document.getElementById('settings-budget').textContent='Сохранено: '+currentTradingSettings.order_usdc+' USDC. Максимум '+(currentTradingSettings.max_positions||5)+' позиций; покупки ограничены вашим доступным балансом.';
+                    document.getElementById('worker-status').textContent=s.worker_error?'Последняя ошибка воркера: '+s.worker_error:'Автопилот: '+(s.trading_active?'включён':'выключен')+'. Проверка готовности находится в разделе Торговля.';
                     document.getElementById('chain-withdraw-balances').textContent = 'Ваш доступный остаток: ' + s.user_balance.toFixed(6) + ' USDC | ' + s.sol_balance.toFixed(9) + ' SOL. Комиссии оплачивает резерв оператора.';
                     const userEl = document.getElementById('display-username');
                     if (userEl) userEl.innerText = "@" + s.username;
@@ -1272,8 +1364,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                     const bal = s.user_balance ? s.user_balance : 0;
                     const wth = s.withdrawable ? s.withdrawable : 0;
 
-                    document.getElementById('port-balance').innerText = bal.toFixed(6) + ' USDC / ' + s.sol_balance.toFixed(9) + ' SOL';
-                    document.getElementById('port-withdrawable').innerText = "$" + wth.toFixed(2);
+                    document.getElementById('port-balance').innerText = bal.toFixed(6) + ' USDC';
+                    document.getElementById('port-withdrawable').innerText = s.sol_balance.toFixed(6) + ' SOL';
                     
                     const userBalSmall = document.getElementById('user-bal-small');
                     if(userBalSmall) userBalSmall.innerText = "$" + bal.toFixed(2) + " USDC";
@@ -1758,6 +1850,8 @@ async def main():
     app.router.add_get('/api/logs', wallet_handler(runtime.logs))
     app.router.add_get('/api/stats', wallet_handler(runtime.stats))
     app.router.add_post('/api/toggle_trading', wallet_handler(runtime.toggle))
+    app.router.add_post('/api/trading_settings', wallet_handler(runtime.save_trading_settings))
+    app.router.add_post('/api/trading_readiness', wallet_handler(runtime.trading_readiness))
     app.router.add_post('/api/toggle_meme', api_toggle_meme)
     app.router.add_post('/api/verify_deposit', wallet_handler(runtime.deposit))
     app.router.add_post('/api/wallet_link', wallet_handler(runtime.wallet_link))
