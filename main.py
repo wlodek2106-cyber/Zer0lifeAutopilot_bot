@@ -29,6 +29,7 @@ SPLASH_IMAGE_URL = "https://i.postimg.cc/52n94Pzg/57D47DDD-9BED-4D4B-AA69-2B59CA
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 MIN_DEPOSIT_USDC = 50.0
 MAX_DEPOSIT_USDC = 10000.0
+MIN_BOT_BALANCE_USDC = 50.0  # Минимальный остаток для работы бота
 
 WATCHLIST = {
     "SOL":  {"mint": "So11111111111111111111111111111111111111112", "decimals": 9},
@@ -52,7 +53,7 @@ MEME_STOP_LOSS_PCT = 0.80      # Стоп-лосс на случай скама 
 
 IS_TRADING_ACTIVE = True       # Глобальный флаг автопилота Топ-5 (ВКЛ / ВЫКЛ)
 IS_MEME_ACTIVE = False         # Глобальный флаг Meme Sniper режима (ВКЛ / ВЫКЛ)
-RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v4.4 (Portfolio Tracker) инициализирован."]
+RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v4.5 (Portfolio Tracker) инициализирован."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -497,6 +498,14 @@ RAW_HTML = r"""<!DOCTYPE html>
         .btn-toggle-off { background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; }
         .btn-refresh { background: #151a27; border: 1px solid #232c42; color: #94a3b8; max-width: 110px; }
 
+        .btn-sell-all {
+            background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171;
+            width: 100%; padding: 14px; border-radius: 14px; font-weight: 800; font-size: 13px;
+            cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px;
+            margin-bottom: 12px; transition: transform 0.15s ease;
+        }
+        .btn-sell-all:active { transform: scale(0.97); }
+
         .order-card {
             background: #080a11; border: 1px solid #192033; border-radius: 14px;
             padding: 12px; margin-bottom: 8px; font-family: monospace; font-size: 12px;
@@ -555,12 +564,16 @@ RAW_HTML = r"""<!DOCTYPE html>
                 </button>
             </div>
 
+            <button class="btn-sell-all" onclick="closeAllPositions()">
+                <span>⚠️ Закрыть все позиции (Продать всё)</span>
+            </button>
+
             <!-- БЛОК ПОРТФЕЛЯ И БАЛАНСА -->
             <div class="card" style="border: 1px solid rgba(34, 197, 94, 0.3); background: linear-gradient(135deg, #0e111a 0%, #0a150d 100%);">
                 <div style="font-size: 13px; font-weight: 800; color: #22c55e; margin-bottom: 8px;">💼 РЕАЛЬНЫЙ БАЛАНС И ПОРТФЕЛЬ</div>
                 <div class="grid-stats">
-                    <div class="stat-box"><div class="stat-label">Пополнено всего</div><div class="stat-val" id="port-deposited" style="color: #60a5fa;">$0.00</div></div>
-                    <div class="stat-box"><div class="stat-label">Остаток в боте</div><div class="stat-val" id="port-balance" style="color: #fff;">$0.00</div></div>
+                    <div class="stat-box"><div class="stat-label">Баланс в боте</div><div class="stat-val" id="port-balance" style="color: #fff;">$0.00</div></div>
+                    <div class="stat-box"><div class="stat-label">Доступно к выводу</div><div class="stat-val" id="port-withdrawable" style="color: #22c55e;">$0.00</div></div>
                 </div>
                 <div style="margin-top: 8px; display: flex; justify-content: space-between; align-items: center; background: #06080e; padding: 8px 12px; border-radius: 10px;">
                     <div style="font-size: 11px; color: #94a3b8;">Чистая прибыль (PnL):</div>
@@ -730,6 +743,23 @@ RAW_HTML = r"""<!DOCTYPE html>
             document.getElementById('wtoken-sol').className = token === 'SOL' ? 'token-btn active' : 'token-btn';
         }
 
+        async function closeAllPositions() {
+            if(!confirm("Вы уверены, что хотите закрыть все открытые позиции?")) return;
+            try {
+                const tgId = tg?.initDataUnsafe?.user?.id || 42882165;
+                const res = await fetch('/api/close_all', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ telegram_id: tgId })
+                });
+                const d = await res.json();
+                alert(d.message);
+                refresh();
+            } catch(e) {
+                alert("Ошибка соединения.");
+            }
+        }
+
         async function submitWithdraw() {
             const addr = document.getElementById('withdraw-address').value.trim();
             const amount = document.getElementById('withdraw-amount').value.trim();
@@ -873,8 +903,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                     document.getElementById('closed-count').innerText = s.closed_count;
                     if(s.user_balance !== undefined) document.getElementById('user-bal').innerText = "$" + s.user_balance.toFixed(2) + " USDC";
 
-                    document.getElementById('port-deposited').innerText = "$" + (s.total_deposited || 0).toFixed(2);
                     document.getElementById('port-balance').innerText = "$" + (s.user_balance || 0).toFixed(2);
+                    document.getElementById('port-withdrawable').innerText = "$" + (s.withdrawable || 0).toFixed(2);
                     
                     const portPnlEl = document.getElementById('port-pnl');
                     const portPnlVal = s.total_pnl || 0;
@@ -989,11 +1019,15 @@ async def api_get_stats(request):
 
     total_pnl = user_bal - total_deposited
     total_roi = (total_pnl / total_deposited * 100) if total_deposited > 0 else 0.0
+    
+    # Расчет суммы доступной к выводу (все, что выше минимального лимита работы бота $50)
+    withdrawable = max(0.0, user_bal - MIN_BOT_BALANCE_USDC)
 
     return web.json_response({
         "success": True, "profit_usdc": tot_profit, "closed_count": closed_count,
         "trades": trades, "user_balance": user_bal,
-        "total_deposited": total_deposited, "total_pnl": total_pnl, "total_roi": total_roi
+        "total_deposited": total_deposited, "total_pnl": total_pnl, "total_roi": total_roi,
+        "withdrawable": withdrawable
     })
 
 async def api_verify_deposit(request):
@@ -1029,6 +1063,42 @@ async def api_verify_deposit(request):
     except Exception as e:
         return web.json_response({"success": False, "message": f"Ошибка сервера: {str(e)}"})
 
+async def api_close_all_positions(request):
+    try:
+        body = await request.json()
+        tg_id = int(body.get("telegram_id", 42882165))
+        signer = get_signer_keypair()
+        if not signer:
+            return web.json_response({"success": False, "message": "Ошибка ключа сервера."})
+
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT id, token_symbol, token_mint, buy_price, amount_tokens FROM trades WHERE sell_price = 0")
+        open_trades = c.fetchall()
+
+        if not open_trades:
+            conn.close()
+            return web.json_response({"success": True, "message": "Нет открытых позиций для закрытия."})
+
+        closed_count = 0
+        async with aiohttp.ClientSession() as session:
+            for trade in open_trades:
+                trade_id, sym, mint, buy_price, amount_tokens = trade
+                decimals = WATCHLIST.get(sym, {}).get("decimals", 6)
+                raw_amount = int(amount_tokens * (10 ** decimals))
+                
+                sell_sig = await execute_jupiter_swap(session, mint, USDC_MINT, raw_amount, signer)
+                if sell_sig:
+                    c.execute("UPDATE trades SET sell_price = buy_price, sell_tx = ? WHERE id = ?", (sell_sig, trade_id))
+                    closed_count += 1
+
+        conn.commit()
+        conn.close()
+        add_log(f"⚡ Закрыто вручную позиций: {closed_count}")
+        return web.json_response({"success": True, "message": f"✅ Закрыто позиций: {closed_count}. Баланс обновлен."})
+    except Exception as e:
+        return web.json_response({"success": False, "message": f"Ошибка при закрытии позиций: {str(e)}"})
+
 async def api_withdraw(request):
     try:
         body = await request.json()
@@ -1040,22 +1110,18 @@ async def api_withdraw(request):
         if not recipient or len(recipient) < 30 or amount <= 0:
             return web.json_response({"success": False, "message": "Проверьте правильность адреса и суммы вывода."})
 
-        signer = get_signer_keypair()
-        if not signer:
-            return web.json_response({"success": False, "message": "Ошибка кошелька сервера."})
-
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         c.execute("SELECT balance_usdc FROM users WHERE telegram_id = ?", (tg_id,))
         u_row = c.fetchone()
         user_bal = u_row[0] if u_row else 0.0
 
-        if token == "USDC" and user_bal < amount:
+        # Проверка ограничения: оставляем минимум $50 для работы бота
+        withdrawable = max(0.0, user_bal - MIN_BOT_BALANCE_USDC)
+        if token == "USDC" and amount > withdrawable:
             conn.close()
-            return web.json_response({"success": False, "message": f"Недостаточно USDC. Ваш баланс: ${user_bal:.2f}"})
+            return web.json_response({"success": False, "message": f"Нельзя вывести больше доступной суммы (${withdrawable:.2f}). Минимум ${MIN_BOT_BALANCE_USDC} должен оставаться для работы бота."})
 
-        # Логика отправки через Jupiter/Solana RPC может быть интегрирована здесь
-        # Пример: уменьшаем баланс и фиксируем запрос на вывод
         if token == "USDC":
             new_bal = user_bal - amount
             c.execute("UPDATE users SET balance_usdc = ? WHERE telegram_id = ?", (new_bal, tg_id))
@@ -1122,6 +1188,7 @@ async def main():
     app.router.add_post('/api/toggle_trading', api_toggle_trading)
     app.router.add_post('/api/toggle_meme', api_toggle_meme)
     app.router.add_post('/api/verify_deposit', api_verify_deposit)
+    app.router.add_post('/api/close_all', api_close_all_positions)
     app.router.add_post('/api/withdraw', api_withdraw)
     app.router.add_post('/webhook', telegram_webhook_handler)
 
