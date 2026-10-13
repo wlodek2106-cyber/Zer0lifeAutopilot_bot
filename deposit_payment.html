@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Пополнение счёта</title>
+<style>
+body{background:#090d14;color:#e2e8f0;font:16px system-ui;margin:0;padding:24px}
+main{max-width:560px;margin:auto}h1{font-size:24px}
+.box{background:#121b2a;border:1px solid #263449;border-radius:14px;padding:16px;margin:16px 0}
+button,a.button{display:block;background:#22c55e;color:#07130b;border:0;border-radius:10px;padding:14px;text-align:center;font:700 16px system-ui;width:100%;box-sizing:border-box;text-decoration:none;margin:12px 0}
+button:disabled{opacity:.45}code{overflow-wrap:anywhere;font-size:12px}p{line-height:1.5}.muted{color:#94a3b8;font-size:13px}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@solana/web3.js@1.98.4/lib/index.iife.min.js"
+ integrity="sha384-I45YF+S0YGWIolUyTksLk9TNtTqaDgZg8e6T1OoBoJvvFmphqYNIPZw3Kl0TkZNN" crossorigin="anonymous"></script>
+</head>
+<body><main>
+<h1>Пополнение личного счёта</h1>
+<p class="muted">Только Solana mainnet. Подпись выполняется в вашем кошельке: сайт не запрашивает seed-фразу или приватный ключ.</p>
+<div class="box"><strong id="amount">Загрузка...</strong>
+<p>Общий адрес: <code id="address"></code></p>
+<p>Ваш платёжный Memo: <code id="memo"></code></p></div>
+<p class="muted">Memo включается в транзакцию автоматически. Без него перевод нельзя автоматически зачислить вашему аккаунту.</p>
+<a id="phantom" class="button">Открыть в Phantom</a>
+<button id="pay" disabled>Подключить кошелёк и оплатить</button>
+<p id="status" role="status"></p>
+<a id="transaction" target="_blank" rel="noopener noreferrer" style="display:none;color:#60a5fa">Открыть транзакцию</a>
+<p class="muted">После подтверждения вернитесь в Telegram. Обновится только счёт, которому принадлежит этот платёжный запрос.</p>
+</main>
+<script>
+const invoiceId = location.pathname.split('/').filter(Boolean).pop();
+const api = '/deposit/' + encodeURIComponent(invoiceId);
+let invoice = null, submitting = false, signature = localStorage.getItem('deposit-signature:' + invoiceId);
+let paymentLocked = localStorage.getItem('deposit-lock:' + invoiceId) === 'true';
+const status = document.getElementById('status'), pay = document.getElementById('pay');
+const provider = () => window.phantom?.solana || window.solana || window.solflare;
+const phantom = document.getElementById('phantom');
+phantom.href = 'https://phantom.com/ul/browse/' + encodeURIComponent(location.href) + '?ref=' + encodeURIComponent(location.origin);
+async function refresh() {
+    try {
+        const response = await fetch(api + '/status', {cache:'no-store'});
+        invoice = await response.json();
+        if (!response.ok || !invoice.success) throw new Error(invoice.message || 'Запрос недоступен.');
+        document.getElementById('amount').textContent = invoice.amount + ' ' + invoice.token;
+        document.getElementById('address').textContent = invoice.deposit_wallet;
+        document.getElementById('memo').textContent = invoice.memo;
+        const credited = invoice.state === 'CREDITED';
+        pay.disabled = credited || submitting || paymentLocked || !!signature || invoice.expires_at * 1000 < Date.now();
+        if (credited) status.textContent = 'Пополнение подтверждено и зачислено вашему аккаунту.';
+        else if (signature) status.textContent = 'Отправлено. Ожидается финализация — повторять оплату не нужно.';
+        else if (paymentLocked) status.textContent = 'Результат отправки неизвестен. Не платите повторно; проверьте историю кошелька и счёт в Telegram.';
+        else if (!provider()) status.textContent = 'Откройте эту страницу в браузере вашего Solana-кошелька, например Phantom.';
+        else status.textContent = 'Проверьте сумму и подтвердите перевод в кошельке.';
+        if (provider()?.isPhantom) phantom.style.display = 'none';
+    } catch(e) { pay.disabled = true; status.textContent = e.message; }
+}
+pay.onclick = async () => {
+    if (submitting || paymentLocked || signature || !invoice) return;
+    const wallet = provider();
+    if (!wallet || !window.solanaWeb3) { status.textContent = 'Откройте страницу внутри совместимого Solana-кошелька.'; return; }
+    submitting = true; pay.disabled = true;
+    try {
+        const connected = await wallet.connect();
+        const sender = (connected.publicKey || wallet.publicKey).toString();
+        const response = await fetch(api + '/transaction', {
+            method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sender})
+        });
+        const prepared = await response.json();
+        if (!response.ok || !prepared.success) throw new Error(prepared.message || 'Не удалось создать перевод.');
+        const tx = solanaWeb3.Transaction.from(Uint8Array.from(atob(prepared.transaction), c=>c.charCodeAt(0)));
+        if (!confirm('Пополнить свой счёт на ' + prepared.amount + ' ' + prepared.token + '? Комиссия оплачивается вашим кошельком.')) return;
+        localStorage.setItem('deposit-lock:' + invoiceId, 'true');
+        paymentLocked = true;
+        const result = await wallet.signAndSendTransaction(tx);
+        signature = typeof result === 'string' ? result : result.signature;
+        if (!signature) throw new Error('Кошелёк не вернул подпись. Не повторяйте оплату, проверьте историю кошелька.');
+        localStorage.setItem('deposit-signature:' + invoiceId, signature);
+        const link = document.getElementById('transaction');
+        link.href = 'https://solscan.io/tx/' + encodeURIComponent(signature); link.style.display = 'inline';
+        await confirmPayment();
+    } catch(e) {
+        if (e.code === 4001) {
+            paymentLocked = false;
+            localStorage.removeItem('deposit-lock:' + invoiceId);
+        }
+        status.textContent = e.message || 'Результат неизвестен. Проверьте историю кошелька, не повторяйте перевод.';
+    } finally { submitting = false; await refresh(); }
+};
+async function confirmPayment() {
+    if (!signature || invoice?.state === 'CREDITED') return;
+    try {
+        await fetch(api + '/confirm', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({signature})});
+    } catch(e) { /* Scanner will process the persisted invoice even if the browser closes. */ }
+}
+refresh();
+setInterval(async()=>{await confirmPayment(); await refresh();}, 5000);
+</script>
+</body></html>
