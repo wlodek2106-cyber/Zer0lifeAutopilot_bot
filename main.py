@@ -24,6 +24,7 @@ from solders.message import Message
 from solders.hash import Hash
 from solders.instruction import Instruction, AccountMeta
 from custody_runtime import CustodyRuntime
+from english_text import english_json_middleware
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -681,7 +682,7 @@ async def meme_sniper_worker():
 
 # --- ИНТЕРФЕЙС HTML СО СТРОГОЙ ЗАЩИТОЙ ---
 RAW_HTML = r"""<!DOCTYPE html>
-<html lang="ru">
+<html lang="en" data-ui-language="en" data-copy-version="clean-english-v1">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
@@ -795,37 +796,37 @@ RAW_HTML = r"""<!DOCTYPE html>
 
     <div id="app" data-ui-version="console-ai-v1" style="display: none;">
         <div id="tab-terminal" class="tab-panel active">
-            <header class="page-heading"><div><p class="eyebrow">ZERØLIFE · Личный кабинет</p><h1>Обзор счёта</h1></div></header>
+            <header class="page-heading"><div><p class="eyebrow">ZERØLIFE · Personal account</p><h1>Overview</h1></div></header>
             <div class="banner-limit" style="border-color:#ef4444; background:#2a1014; margin-bottom:12px;">
-                <div style="color:#4ade80; font-size:13px; font-weight:800;">Ваш личный счёт — USDC / SOL</div>
-                <div id="wallet-runtime-status" style="color:#cbd5e1; font-size:11px; margin-top:4px;">Учитываются только ваши пополнения и подтверждённые сделки. Торговля может привести к убытку; прибыль не гарантируется.</div>
+                <div style="color:#4ade80; font-size:13px; font-weight:800;">Your account · USDC / SOL</div>
+                <div id="wallet-runtime-status" style="color:#cbd5e1; font-size:11px; margin-top:4px;">Personal funds. Trading carries risk.</div>
             </div>
             <div class="control-bar">
                 <button id="btn-toggle" class="btn-ctl btn-toggle-off" onclick="toggleTrading()">
                     <span id="toggle-dot">●</span>
-                    <span id="toggle-text">Автопилот: ВЫКЛ</span>
+                    <span id="toggle-text">Autopilot: OFF</span>
                 </button>
                 <button id="btn-refresh-top" class="btn-ctl btn-refresh" onclick="manualRefresh()">
                     <span id="refresh-icon">🔄</span>
-                    <span>Обновить</span>
+                    <span>Refresh</span>
                 </button>
             </div>
 
             <button class="btn-sell-all" onclick="closeAllPositions()">
-                <span>⚠️ Экстренно закрыть все позиции</span>
+                <span>⚠️ Close all my positions</span>
             </button>
 
             <div class="card" style="border: 1px solid rgba(34, 197, 94, 0.3); background: linear-gradient(135deg, #0e111a 0%, #0a150d 100%);">
                 <div style="font-size: 13px; font-weight: 800; color: #22c55e; margin-bottom: 8px; display: flex; justify-content: space-between;">
-                    <span>Доступные средства</span>
+                    <span>Available funds</span>
                     <span id="display-username" style="color: #fff; font-size: 12px;"></span>
                 </div>
                 <div class="grid-stats">
-                    <div class="stat-box"><div class="stat-label">USDC · доступны</div><div class="stat-val" id="port-balance" style="color: #fff;">Загрузка...</div></div>
-                    <div class="stat-box"><div class="stat-label">SOL · доступны</div><div class="stat-val" id="port-withdrawable" style="color: #22c55e;">0 SOL</div></div>
+                    <div class="stat-box"><div class="stat-label">USDC · available</div><div class="stat-val" id="port-balance" style="color: #fff;">Loading...</div></div>
+                    <div class="stat-box"><div class="stat-label">SOL · available</div><div class="stat-val" id="port-withdrawable" style="color: #22c55e;">0 SOL</div></div>
                 </div>
                 <div style="margin-top: 8px; display: flex; justify-content: space-between; align-items: center; background: #06080e; padding: 8px 12px; border-radius: 10px;">
-                    <div style="font-size: 11px; color: #94a3b8;">Индивидуальный PnL:</div>
+                    <div style="font-size: 11px; color: #94a3b8;">Your realized PnL:</div>
                     <div id="port-pnl" style="font-size: 13px; font-weight: 900; font-family: monospace; color: #4ade80;">+$0.00 (0.0%)</div>
                 </div>
             </div>
@@ -834,32 +835,31 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <div>
                         <div style="font-size: 17px; font-weight: 800; color: #fff;">Meme Sniper · SOL</div>
-                        <div class="section-note">Второй режим связки · покупки мемкоинов за SOL</div>
+                        <div class="section-note">Memecoin trades funded in SOL</div>
                     </div>
                     <button id="btn-meme-toggle" class="btn-ctl btn-toggle-off" style="padding: 8px 12px; font-size: 11px;" disabled onclick="toggleMemeTrading()">
-                        <span id="meme-toggle-text">НЕ ПОДКЛЮЧЁН</span>
+                        <span id="meme-toggle-text">NOT CONNECTED</span>
                     </button>
                 </div>
                 <div class="grid-stats">
-                    <div class="stat-box"><div class="stat-label">Ваш доступный SOL</div><div class="stat-val" id="sniper-sol-balance">Загрузка...</div></div>
-                    <div class="stat-box"><div class="stat-label">Размер покупки</div><div class="stat-val" id="sniper-order-size">Загрузка...</div></div>
+                    <div class="stat-box"><div class="stat-label">Available SOL</div><div class="stat-val" id="sniper-sol-balance">Loading...</div></div>
+                    <div class="stat-box"><div class="stat-label">Order size</div><div class="stat-val" id="sniper-order-size">Loading...</div></div>
                 </div>
-                <p class="section-note">Основной режим использует ваш USDC, Meme Sniper — ваш SOL. Средства других пользователей и резерв комиссий не являются торговым капиталом. Автоматическая конвертация и распределение прибыли между режимами пока не настроены.</p>
-                <p class="section-note">Первая версия: один разрешённый мемкоин WIF, одна SOL-позиция. Mint проверяется на отсутствие mint/freeze authority. Это не гарантирует прибыль или отсутствие других рыночных рисков. Поиск новых листингов пока не подключён.</p>
-                <p id="sniper-pnl" class="section-note">Результат SOL-позиций: загрузка...</p>
+                <p class="section-note">WIF only · 1 position max</p>
+                <p id="sniper-pnl" class="section-note">Realized SOL PnL: loading...</p>
             </div>
 
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div>
-                        <div style="font-size: 17px; font-weight: 800; color: #fff;">Основной режим · USDC</div>
-                        <div class="section-note">AI выбирает BUY / SELL / HOLD</div>
-                        <div id="strategy-assets" style="font-size: 11px; color: #64748b; margin-top: 2px;">Загрузка списка активов</div>
+                        <div style="font-size: 17px; font-weight: 800; color: #fff;">Core strategy · USDC</div>
+                        <div class="section-note">AI · BUY / SELL / HOLD</div>
+                        <div id="strategy-assets" style="font-size: 11px; color: #64748b; margin-top: 2px;">Loading assets...</div>
                     </div>
                     <div id="user-bal-small" style="font-size: 12px; color: #22c55e; font-family: monospace; font-weight: 700;">$0.00 USDC</div>
                 </div>
                 <div class="grid-stats">
-                    <div class="stat-box"><div class="stat-label">Размер покупки</div><div class="stat-val" id="strategy-order-size">Загрузка...</div></div>
+                    <div class="stat-box"><div class="stat-label">Order size</div><div class="stat-val" id="strategy-order-size">Loading...</div></div>
                     <div class="stat-box"><div class="stat-label">Slippage</div><div class="stat-val" style="color: #60a5fa;">0.40%</div></div>
                     <div class="stat-box"><div class="stat-label">Take Profit</div><div class="stat-val" style="color: #4ade80;">+3.50%</div></div>
                     <div class="stat-box"><div class="stat-label">Stop Loss</div><div class="stat-val" style="color: #f87171;">-2.00%</div></div>
@@ -867,8 +867,8 @@ RAW_HTML = r"""<!DOCTYPE html>
             </div>
 
             <div class="card">
-                <div style="font-size: 12px; font-weight: 700; color: #94a3b8; margin-bottom: 6px;">ЖУРНАЛ СКАНИРОВАНИЯ</div>
-                <div id="log-box" class="log-console">Запуск ядра...</div>
+                <div style="font-size: 12px; font-weight: 700; color: #94a3b8; margin-bottom: 6px;">ACTIVITY LOG</div>
+                <div id="log-box" class="log-console">Starting...</div>
             </div>
         </div>
 
@@ -876,19 +876,19 @@ RAW_HTML = r"""<!DOCTYPE html>
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div>
-                        <div style="font-size: 12px; color: #94a3b8; text-transform: uppercase;">Ваш результат закрытых сделок</div>
+                        <div style="font-size: 12px; color: #94a3b8; text-transform: uppercase;">Your realized returns</div>
                         <div id="pnl-val" style="font-size: 26px; font-weight: 900; color: #4ade80; font-family: monospace; margin-top: 4px;">+$0.00 USDC</div>
                     </div>
                     <div style="text-align: right;">
-                        <div style="font-size: 11px; color: #94a3b8;">Закрыто ордеров</div>
+                        <div style="font-size: 11px; color: #94a3b8;">Closed trades</div>
                         <div id="closed-count" style="font-size: 18px; font-weight: 800; color: #fff; font-family: monospace;">0</div>
                     </div>
                 </div>
             </div>
 
             <div class="card">
-                <div style="font-size: 13px; font-weight: 800; color: #f8fafc; margin-bottom: 12px;">ЖУРНАЛ СДЕЛОК (Ваши ордера)</div>
-                <div id="history-box" style="color: #64748b; font-size: 11px; text-align: center; padding: 20px;">Ордера загружаются...</div>
+                <div style="font-size: 13px; font-weight: 800; color: #f8fafc; margin-bottom: 12px;">YOUR TRADES</div>
+                <div id="history-box" style="color: #64748b; font-size: 11px; text-align: center; padding: 20px;">Loading trades...</div>
             </div>
         </div>
 
@@ -906,94 +906,98 @@ RAW_HTML = r"""<!DOCTYPE html>
 
                 <div id="section-deposit">
                     <div class="banner-limit">
-                        <div style="color:#4ade80; font-weight:800;">Пополнение USDC или SOL — сеть Solana</div>
-                        <div style="font-size:11px; margin-top:6px;">Обычный перевод на общий адрес, затем проверка по Tx. Чтобы чужой Tx не зачислили другому аккаунту, подтвердите свой кошелёк один раз.</div>
+                        <div style="color:#4ade80; font-weight:800;">USDC / SOL · Solana mainnet</div>
+                        <div style="font-size:11px; margin-top:6px;">Verify your wallet once. Send funds, then paste the transaction signature. No Memo required.</div>
                     </div>
-                    <button class="btn-copy" onclick="linkDepositWallet()">Подтвердить свой кошелёк один раз</button>
+                    <button class="btn-copy" onclick="linkDepositWallet()">Verify your wallet</button>
                     <div id="deposit-invoice-details">
                         <div class="address-box" id="wallet-text">__DEPOSIT_WALLET__</div>
-                        <button class="btn-copy" onclick="copyWallet()">Копировать общий адрес</button>
+                        <button class="btn-copy" onclick="copyWallet()">Copy deposit address</button>
                     </div>
-                    <input id="dep-signature" class="sig-input" placeholder="Подпись входящего перевода — необязательно">
-                    <button class="btn-verify" id="btn-verify-action" onclick="verifyOnchainDeposit()">Проверить перевод USDC / SOL</button>
+                    <input id="dep-signature" class="sig-input" placeholder="Transaction signature or Solscan link">
+                    <button class="btn-verify" id="btn-verify-action" onclick="verifyOnchainDeposit()">Verify deposit</button>
                 </div>
 
                 <div id="section-withdraw" style="display: none;">
-                    <div id="chain-withdraw-balances" style="font-size:12px; margin-bottom:8px;">Баланс загружается...</div>
+                    <div id="chain-withdraw-balances" style="font-size:12px; margin-bottom:8px;">Loading balance...</div>
                     <div class="token-selector">
                         <button class="token-btn active" id="wtoken-usdc" onclick="selectWithdrawToken('USDC')">USDC</button>
                         <button class="token-btn" id="wtoken-sol" onclick="selectWithdrawToken('SOL')">Solana (SOL)</button>
                     </div>
-                    <input id="withdraw-address" class="sig-input" placeholder="Ваш адрес кошелька-получателя">
-                    <input id="withdraw-amount" type="number" step="any" class="sig-input" placeholder="Сумма">
+                    <input id="withdraw-address" class="sig-input" placeholder="Recipient wallet address">
+                    <input id="withdraw-amount" type="number" step="any" class="sig-input" placeholder="Amount">
                     <button class="btn-green-main" id="btn-withdraw-action" onclick="secureWithdraw()">Withdraw</button>
                 </div>
             </div>
 
             <div class="card" style="background: #0b0d14; border-color: #1c2333;">
-                <div style="font-size: 13px; font-weight: 800; color: #fff; margin-bottom: 12px;">История Транзакций</div>
-                <div id="wallet-history-box" style="font-size: 11px; color: #64748b; text-align: center;">Транзакции отсутствуют...</div>
+                <div style="font-size: 13px; font-weight: 800; color: #fff; margin-bottom: 12px;">Transactions</div>
+                <div id="wallet-history-box" style="font-size: 11px; color: #64748b; text-align: center;">No transactions yet.</div>
             </div>
             <div id="admin-custody-panel" data-fee-ui-version="inline-reserve-v1" class="card" style="display:none;">
-                <div style="font-weight:800;">Настройка администратора перед публичным открытием</div>
-                <div style="font-size:11px;margin-top:8px;">Комиссии оплачиваются из отдельного резерва оператора. Чужие балансы не используются.</div>
-                <button class="btn-copy" onclick="checkLegacyOperations()">Проверить старые операции</button>
+                <div style="font-weight:800;">Operator tools</div>
+                <div style="font-size:11px;margin-top:8px;">Fees are paid from a separate operator reserve.</div>
+                <button class="btn-copy" onclick="checkLegacyOperations()">Check legacy operations</button>
                 <div id="legacy-operation-details" style="font-size:12px;overflow-wrap:anywhere;white-space:pre-wrap;margin-top:8px;"></div>
-                <h3>Резерв комиссий · SOL</h3>
-                <div id="fee-status" class="status-output">Резерв ещё не проверен.</div>
-                <p class="muted">Личный SOL-баланс и резерв комиссий — разные счета. Выделение уменьшает ваш доступный остаток; перевода в сеть не происходит. Чужие средства не используются.</p>
-                <label for="fee-amount">Сумма своих SOL для резерва</label>
+                <h3>Fee reserve · SOL</h3>
+                <div id="fee-status" class="status-output">Reserve not checked yet.</div>
+                <p class="muted">Allocation reduces your available SOL balance. No on-chain transfer. Only your funds may be allocated.</p>
+                <label for="fee-amount">Your SOL to allocate</label>
                 <input id="fee-amount" class="sig-input" type="text" inputmode="decimal" value="0.01" autocomplete="off">
-                <label style="display:flex;gap:10px;align-items:flex-start;font-size:12px;"><input id="fee-confirm" type="checkbox" style="width:auto;flex:0 0 auto;">Подтверждаю: это мои SOL, а не средства клиентов.</label>
-                <button id="fee-submit" class="btn-copy" onclick="setupFeeReserve()">Выделить собственные SOL на комиссии</button>
+                <label style="display:flex;gap:10px;align-items:flex-start;font-size:12px;"><input id="fee-confirm" type="checkbox" style="width:auto;flex:0 0 auto;">I confirm these SOL belong to me, not to customers.</label>
+                <button id="fee-submit" class="btn-copy" onclick="setupFeeReserve()">Allocate my SOL to fees</button>
                 <div id="fee-result" class="status-output" role="status"></div>
-                <button class="btn-copy" onclick="importOwnOpeningBalance()">Перенести старый личный остаток</button>
+                <button class="btn-copy" onclick="importOwnOpeningBalance()">Import my legacy balance</button>
             </div>
         </div>
         <div id="tab-trading" class="tab-panel">
-            <header class="page-heading"><div><p class="eyebrow">Только ваш капитал</p><h1>Торговля</h1></div></header>
+            <header class="page-heading"><div><p class="eyebrow">Your capital only</p><h1>Trading</h1></div></header>
             <div id="trading-controls"></div>
-            <div class="card"><h3 style="margin-top:0">AI-агент</h3>
-                <p id="ai-status" class="status-output">Проверка подключения модели...</p>
-                <button class="btn-copy" onclick="previewAI()">Проверить AI без сделки</button>
+            <div class="card"><h3 style="margin-top:0">AI activity</h3>
+                <p id="ai-status" class="status-output">Checking AI status...</p>
+                <button class="btn-copy" onclick="previewAI()">Check AI · no trade</button>
                 <p id="ai-decisions" class="status-output"></p>
             </div>
             <div id="trading-strategy"></div>
             <div id="trading-sniper"></div>
-            <div class="card"><h3 style="margin-top:0">Перед запуском</h3>
-                <p class="section-note">После вашего запуска AI принимает решения автономно. Сервер ограничивает покупки личным балансом, разрешёнными активами и вашим размером покупки. До пяти USDC-позиций и одной SOL-позиции; одна операция общего кошелька за раз. Новые входы требуют пяти котировок, свежего AI-решения и стабильной цены.</p>
-                <p class="section-note">Защита TP/SL проверяется примерно каждые 20 секунд независимо от доступности AI. При ошибке модели новые AI-сделки не отправляются. После перезапуска сервиса оба режима останавливаются и требуют ручного повторного включения.</p>
-                <p class="section-note">TP и SL — условия отправки, а не гарантированная цена исполнения. Комиссии и проскальзывание влияют на результат. Прибыль не гарантируется.</p>
-                <button class="btn-copy" onclick="checkTradingReadiness()">Проверить готовность без сделки</button>
-                <div id="trading-readiness" class="status-output">Автопилот включается только вами.</div>
+            <div class="card">
+                <button class="btn-copy" onclick="checkTradingReadiness()">Check readiness · no trade</button>
+                <div id="trading-readiness" class="status-output">Trading involves risk. No guaranteed returns.</div>
             </div>
-            <details><summary>Активность и управление позициями</summary><div id="trading-activity"></div></details>
+            <details><summary>Logs &amp; position controls</summary><div id="trading-activity"></div></details>
         </div>
         <div id="tab-settings" class="tab-panel">
-            <header class="page-heading"><div><p class="eyebrow">Параметры вашего аккаунта</p><h1>Настройки</h1></div></header>
-            <div class="card"><h3 style="margin-top:0">Размер покупки</h3>
-                <p class="section-note">Для первого запуска рекомендуем 1 USDC на покупку. При пяти позициях это до 5 USDC вложенного капитала. Сохранение не включает торговлю.</p>
-                <label class="settings-label" for="settings-order">USDC на одну покупку</label>
+            <header class="page-heading"><div><p class="eyebrow">Account preferences</p><h1>Settings</h1></div></header>
+            <div class="card"><h3 style="margin-top:0">Order sizes</h3>
+                <p class="section-note">Saving settings does not start trading.</p>
+                <label class="settings-label" for="settings-order">USDC per core order</label>
                 <input id="settings-order" class="sig-input" type="number" min="0.000001" step="0.000001" value="1">
-                <label class="settings-label" for="settings-sniper-order">SOL на покупку снайпера · рекомендуем начать с 0,005</label>
+                <label class="settings-label" for="settings-sniper-order">SOL per sniper order</label>
                 <input id="settings-sniper-order" class="sig-input" type="number" min="0.000000001" step="0.000000001" value="0.005">
-                <button class="btn-green-main" onclick="saveTradingSettings()">Сохранить размеры покупок</button>
+                <button class="btn-green-main" onclick="saveTradingSettings()">Save order sizes</button>
                 <p id="settings-budget" class="section-note"></p>
             </div>
-            <div class="card"><h3 style="margin-top:0">Диагностика</h3><p id="worker-status" class="status-output">Загрузка...</p></div>
-            <div class="card"><h3 style="margin-top:0">Подключение модели</h3>
-                <p class="section-note">Оператор добавляет OPENAI_API_KEY только в Environment на Render. Не вводите ключ в чат или в поля приложения. OPENAI_MODEL по умолчанию gpt-4.1-mini.</p>
-                <p class="section-note">По умолчанию анализ раз в 15 минут, максимум 96 API-запросов в сутки на весь сервис — не на каждого пользователя. OpenAI API оплачивается отдельно оператором. Модели отправляются только рыночные цены, без ключей, Telegram ID и личных балансов.</p>
-            </div>
-            <details id="operator-settings" style="display:none;"><summary>Настройки оператора · комиссии и миграция</summary><div id="settings-admin"></div></details>
+            <details id="strategy-help"><summary>Strategy limits &amp; risks</summary>
+                <p class="section-note">Core trades use your USDC; sniper trades use your SOL. Other users' funds and the operator fee reserve are never your trading capital. Automatic conversion or profit allocation between strategies is not implemented.</p>
+                <p class="section-note">Core: SOL, JUP, RAY, PYTH; up to 5 positions. Sniper v1: WIF only; up to 1 position. New-listing discovery is not connected. Standard SPL mint and authority checks do not guarantee token safety.</p>
+                <p class="section-note">AI makes decisions after you enable a mode. Orders require personal funds, permitted assets, at least 5 price samples, a fresh decision and stable pricing. Only one shared-wallet operation can be pending at a time.</p>
+                <p class="section-note">TP/SL are checked approximately every 20 seconds independently of AI availability. Model failures stop new AI orders. After a server restart both modes pause and need manual reactivation.</p>
+                <p class="section-note">TP/SL are execution conditions, not guaranteed fill prices. Fees, slippage and liquidity affect results. You can lose money; returns are not guaranteed.</p>
+            </details>
+            <details><summary>Diagnostics</summary><p id="worker-status" class="status-output">Loading...</p></details>
+            <details><summary>AI connection &amp; costs</summary>
+                <p class="section-note">Set OPENAI_API_KEY only in Render Environment. Never enter secrets in chat or app fields. OPENAI_MODEL defaults to gpt-4.1-mini.</p>
+                <p class="section-note">Default: one analysis every 15 minutes, up to 96 attempted API calls per UTC day across the service, including failed calls. OpenAI API billing is separate and paid by the operator. Only market prices are sent to the model, not keys, Telegram identities or personal balances.</p>
+            </details>
+            <details id="operator-settings" style="display:none;"><summary>Operator tools · fees &amp; migration</summary><div id="settings-admin"></div></details>
         </div>
     </div>
 
     <div id="nav" class="bottom-nav" style="display: none;">
-        <button class="nav-btn active" onclick="gotoTab('terminal', this)"><span>◈</span>Обзор</button>
-        <button class="nav-btn" onclick="gotoTab('trading', this)"><span>↗</span>Торговля</button>
-        <button class="nav-btn" onclick="gotoTab('deposit', this)"><span>⇄</span>Кошелёк</button>
-        <button class="nav-btn" onclick="gotoTab('settings', this)"><span>⚙</span>Настройки</button>
+        <button class="nav-btn active" onclick="gotoTab('terminal', this)"><span>◈</span>Overview</button>
+        <button class="nav-btn" onclick="gotoTab('trading', this)"><span>↗</span>Trading</button>
+        <button class="nav-btn" onclick="gotoTab('deposit', this)"><span>⇄</span>Wallet</button>
+        <button class="nav-btn" onclick="gotoTab('settings', this)"><span>⚙</span>Settings</button>
     </div>
 
     <script>
@@ -1025,13 +1029,13 @@ RAW_HTML = r"""<!DOCTYPE html>
         document.getElementById('trading-sniper').appendChild(document.getElementById('meme-sniper-card'));
         const overviewActions = document.createElement('div');
         overviewActions.className='quick-actions';
-        for (const [label,tab,index] of [['Пополнить / вывести','deposit',2],['Настроить торговлю','trading',1]]) {
+        for (const [label,tab,index] of [['Deposit / withdraw','deposit',2],['Trading dashboard','trading',1]]) {
             const button=document.createElement('button');button.className='btn-copy';button.textContent=label;
             button.onclick=()=>gotoTab(tab,document.querySelectorAll('.nav-btn')[index]);overviewActions.appendChild(button);
         }
         document.getElementById('tab-terminal').appendChild(overviewActions);
         const resultsButton=document.createElement('button');
-        resultsButton.className='btn-copy';resultsButton.textContent='История и результаты сделок';
+        resultsButton.className='btn-copy';resultsButton.textContent='Trade history & results';
         resultsButton.onclick=()=>gotoTab('stats',document.querySelectorAll('.nav-btn')[0]);
         document.getElementById('tab-terminal').appendChild(resultsButton);
         async function saveTradingSettings() {
@@ -1042,14 +1046,14 @@ RAW_HTML = r"""<!DOCTYPE html>
             } catch(e) {alert(e.message);}
         }
         async function checkTradingReadiness() {
-            const output=document.getElementById('trading-readiness');output.textContent='Проверяем средства, комиссии и рыночные API…';
+            const output=document.getElementById('trading-readiness');output.textContent='Checking funds, fees and market APIs…';
             try {
                 const response=await apiFetch('/api/trading_readiness',{method:'POST'});
-                const result=await response.json();output.textContent=result.message||'Проверка не завершена.';
-            } catch(e) {output.textContent='Нет ответа сервера. Торговля этой проверкой не включается.';}
+                const result=await response.json();output.textContent=result.message||'Check incomplete.';
+            } catch(e) {output.textContent='Server did not respond. This check does not start trading.';}
         }
         async function previewAI() {
-            const box=document.getElementById('ai-decisions');box.textContent='Ожидаем ответ модели… Сделки не отправляются.';
+            const box=document.getElementById('ai-decisions');box.textContent='Waiting for AI… No trades are sent.';
             try {
                 const response=await apiFetch('/api/ai_preview',{method:'POST'});
                 const result=await response.json();
@@ -1064,45 +1068,45 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const response = await apiFetch('/api/wallet_link', {method:'POST'});
                 const result = await response.json();
                 if (!response.ok || !result.success) throw new Error(result.message);
-                if (result.address) { alert('Ваш подтверждённый кошелёк: ' + result.address); return; }
+                if (result.address) { alert('Your verified wallet: ' + result.address); return; }
                 if (tg?.openLink) tg.openLink(result.url); else window.open(result.url, '_blank', 'noopener');
-            } catch(e) { alert(e.message || 'Не удалось открыть подтверждение.'); }
+            } catch(e) { alert(e.message || 'Could not open wallet verification.'); }
         }
         async function checkLegacyOperations() {
             const box = document.getElementById('legacy-operation-details');
-            box.textContent = 'Проверяю сеть, без отправки денег…';
+            box.textContent = 'Checking the network. No funds are sent…';
             try {
                 const response = await apiFetch('/api/admin/status');
                 const result = await response.json();
-                if (!response.ok || !result.success) throw new Error(result.message || 'Проверка недоступна.');
+                if (!response.ok || !result.success) throw new Error(result.message || 'Check unavailable.');
                 const lines = [];
                 if (result.legacy_check_error) lines.push(result.legacy_check_error);
                 if (result.balance_check_error) lines.push(result.balance_check_error);
-                if (result.unassigned_usdc !== undefined) lines.push('Старые нераспределённые монеты: ' + result.unassigned_usdc + ' USDC; ' + result.unassigned_sol + ' SOL. Это не личный баланс нового учёта.');
+                if (result.unassigned_usdc !== undefined) lines.push('Unassigned legacy funds: ' + result.unassigned_usdc + ' USDC; ' + result.unassigned_sol + ' SOL. Not part of the new personal account balance.');
                 const operations = result.legacy_operations || [];
-                if (!operations.length && !result.legacy_check_error) lines.push('Незавершённых старых операций нет.');
-                operations.forEach(op => lines.push('Старая операция: ' + op.kind + ' / ' + op.state + '\nПодпись: ' + op.signature + '\nДата: ' + op.timestamp));
-                (result.retired_legacy_operations || []).forEach(op => lines.push('Архив: ' + op.kind + ' / ' + op.state + '\nПодпись: ' + op.signature + '\nИсход не подтверждён, возврата/повторной отправки не было.'));
-                if (operations.length) lines.push('Исход пока неизвестен: запись сохранена, повторной отправки не было. Не удаляйте её вручную.');
+                if (!operations.length && !result.legacy_check_error) lines.push('No pending legacy operations.');
+                operations.forEach(op => lines.push('Legacy operation: ' + op.kind + ' / ' + op.state + '\nSignature: ' + op.signature + '\nDate: ' + op.timestamp));
+                (result.retired_legacy_operations || []).forEach(op => lines.push('Archived: ' + op.kind + ' / ' + op.state + '\nSignature: ' + op.signature + '\nOutcome unconfirmed. No refund or repeat broadcast.'));
+                if (operations.length) lines.push('Outcome unknown. Record preserved; no repeat broadcast. Do not delete it manually.');
                 box.textContent = lines.join('\n\n');
                 operations.forEach(op => {
                     const a = document.createElement('a');
                     a.href = 'https://solscan.io/tx/' + encodeURIComponent(op.signature);
-                    a.textContent = '\nОткрыть старую транзакцию в Solscan';
+                    a.textContent = '\nView legacy transaction on Solscan';
                     a.target = '_blank'; a.rel = 'noopener noreferrer';
                     box.appendChild(a);
                     const button = document.createElement('button');
                     button.className = 'btn-copy';
-                    button.textContent = 'Проверить истечение и архивировать эту запись';
+                    button.textContent = 'Check expiry and archive this record';
                     button.onclick = () => retireLegacyOperation(op.signature);
                     box.appendChild(button);
                 });
                 await refresh();
-            } catch(e) { box.textContent = e.message || 'Не удалось проверить старые операции.'; }
+            } catch(e) { box.textContent = e.message || 'Could not check legacy operations.'; }
         }
         async function retireLegacyOperation(signature) {
-            if (!confirm('Только для старой личной операции. Сервер сначала проверит отсутствие транзакции, истечение blockhash и историю nonce. Если доказательств нет, ничего не изменится. Запись сохраняется как неподтверждённая; это не возврат денег и не успешная сделка. Продолжить?')) return;
-            const pin = prompt('Введите ваш PIN подтверждения:');
+            if (!confirm('For a legacy personal operation only. The server checks transaction absence, blockhash expiry and nonce history. Without evidence nothing changes. The record stays unconfirmed; this is not a refund or a successful trade. Continue?')) return;
+            const pin = prompt('Enter your confirmation PIN:');
             if (!pin) return;
             await adminLedgerAction('/api/admin/retire_legacy', {signature, pin, confirm_archive_unknown:true});
             await checkLegacyOperations();
@@ -1110,41 +1114,41 @@ RAW_HTML = r"""<!DOCTYPE html>
         function renderFeeStatus(fees) {
             if(!fees)return;
             document.getElementById('fee-status').textContent=
-                'В резерве: '+fees.reserve_sol+' SOL\nМинимум для запуска: '+fees.minimum_sol+
-                ' SOL\nВаш доступный остаток: '+fees.own_available_sol+' SOL\n'+
-                (fees.sufficient?'Резерв достаточен для проверки запуска.':'Резерв недостаточен.');
+                'Reserve: '+fees.reserve_sol+' SOL\nRequired minimum: '+fees.minimum_sol+
+                ' SOL\nYour available balance: '+fees.own_available_sol+' SOL\n'+
+                (fees.sufficient?'Reserve sufficient for readiness checks.':'Reserve insufficient.');
         }
         async function setupFeeReserve() {
             const resultBox=document.getElementById('fee-result');
             const button=document.getElementById('fee-submit');
             const raw=document.getElementById('fee-amount').value.trim();
             if(!/^\d+([.,]\d{1,9})?$/.test(raw)||Number(raw.replace(',','.'))<=0){
-                resultBox.textContent='Укажите положительную сумму SOL, например 0.01 или 0,01.';return;
+                resultBox.textContent='Enter a positive SOL amount, e.g. 0.01 or 0,01.';return;
             }
             if(!document.getElementById('fee-confirm').checked){
-                resultBox.textContent='Сначала подтвердите, что это ваши SOL, а не средства клиентов.';return;
+                resultBox.textContent='Confirm these are your SOL, not customer funds.';return;
             }
             if(button.disabled)return;
-            button.disabled=true;resultBox.textContent='Проверяю и выделяю ваши SOL…';
+            button.disabled=true;resultBox.textContent='Checking and allocating your SOL…';
             try{
                 const response=await apiFetch('/api/admin/fee_reserve',{method:'POST',headers:{'Content-Type':'application/json'},
                     body:JSON.stringify({amount_sol:raw.replace(',','.'),confirm_own_unassigned:true})});
                 const result=await response.json();
-                if(!response.ok||!result.success)throw new Error(result.message||'Выделение не подтверждено.');
+                if(!response.ok||!result.success)throw new Error(result.message||'Allocation not confirmed.');
                 renderFeeStatus(result.operator_fees);
                 document.getElementById('fee-confirm').checked=false;
-                resultBox.textContent=result.message+'\nРезерв после выделения: '+result.operator_fees.reserve_sol+' SOL.';
+                resultBox.textContent=result.message+'\nReserve after allocation: '+result.operator_fees.reserve_sol+' SOL.';
                 await refresh();
             }catch(e){
-                resultBox.textContent=(e.message||'Ответ сервера не получен.')+
-                    '\nНе повторяйте вслепую: нажмите «Обновить» и проверьте значение резерва.';
+                resultBox.textContent=(e.message||'No response from server.')+
+                    '\nDo not retry blindly. Refresh and check the actual reserve.';
             }finally{button.disabled=false;}
         }
         async function importOwnOpeningBalance() {
-            const token = prompt('Актив для переноса старого личного остатка: USDC или SOL', 'USDC');
+            const token = prompt('Asset to import from your legacy funds: USDC or SOL', 'USDC');
             if (!token) return;
-            const amount = prompt('Точная сумма ваших старых собственных средств (не виртуальный баланс):');
-            if (!amount || !confirm('В этой сумме нет чужих средств? Перенос доступен только до публичного открытия и один раз для каждого актива.')) return;
+            const amount = prompt('Exact amount of your own legacy funds (not a virtual balance):');
+            if (!amount || !confirm('Confirm this amount contains no other users’ funds. Import is allowed only before public opening, once per asset.')) return;
             await adminLedgerAction('/api/admin/opening_balance', {token, amount, confirm_own_unassigned:true});
         }
         async function adminLedgerAction(url, body) {
@@ -1153,7 +1157,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const result = await response.json();
                 alert(result.message);
                 await refresh();
-            } catch(e) { alert('Не удалось изменить учёт. Проверьте состояние, не повторяйте вслепую.'); }
+            } catch(e) { alert('Could not update the ledger. Check current state; do not retry blindly.'); }
         }
 
         function getUserData() {
@@ -1163,35 +1167,35 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         async function apiFetch(url, options = {}) {
-            if (!tg?.initData) throw new Error('Откройте приложение через Telegram.');
+            if (!tg?.initData) throw new Error('Open this app through Telegram.');
             const headers = Object.assign({}, options.headers || {}, { 'X-Telegram-Init-Data': tg.initData });
             return fetch(url, Object.assign({}, options, { headers }));
         }
 
         async function openTerminal() {
             const user = getUserData();
-            if (!user) { alert("Откройте приложение из Telegram."); return; }
+            if (!user) { alert("Open this app from Telegram."); return; }
             let savedNick = localStorage.getItem('user_custom_nick');
             if (!savedNick) {
-                const nicknameInput = prompt("Придумайте никнейм для вашего профиля в боте:", user.username);
+                const nicknameInput = prompt("Choose your profile nickname:", user.username);
                 savedNick = nicknameInput ? nicknameInput.trim() : user.username;
                 localStorage.setItem('user_custom_nick', savedNick);
             }
             try {
                 const res = await apiFetch('/api/security_status');
                 const state = await res.json();
-                if (!res.ok || !state.success) throw new Error(state.message || 'Не удалось проверить защиту.');
+                if (!res.ok || !state.success) throw new Error(state.message || 'Could not check account security.');
                 if (!state.has_pin && !(await setupPasswordProtection())) return;
                 proceedToTerminal();
             } catch (e) {
-                alert(e.message || "Не удалось проверить авторизацию. Переоткройте приложение через Telegram.");
+                alert(e.message || "Could not verify authorization. Reopen the app through Telegram.");
             }
         }
 
         async function setupPasswordProtection() {
-            const pwd = prompt("Создайте код для подтверждения вывода (не менее 6 символов):");
+            const pwd = prompt("Create a withdrawal confirmation code (at least 6 characters):");
             if (!pwd || pwd.length < 6) {
-                alert("Код должен содержать не менее 6 символов.");
+                alert("The code must contain at least 6 characters.");
                 return false;
             }
             try {
@@ -1201,11 +1205,11 @@ RAW_HTML = r"""<!DOCTYPE html>
                     body: JSON.stringify({ pin: pwd })
                 });
                 const data = await res.json();
-                if (!res.ok || !data.success) throw new Error(data.message || 'Не удалось сохранить код.');
-                alert("Код вывода сохранён.");
+                if (!res.ok || !data.success) throw new Error(data.message || 'Could not save your code.');
+                alert("Withdrawal code saved.");
                 return true;
             } catch (e) {
-                alert(e.message || "Не удалось сохранить код.");
+                alert(e.message || "Could not save your code.");
                 return false;
             }
         }
@@ -1241,7 +1245,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         async function closeAllPositions() {
-            if (!confirm("Вы уверены, что хотите продать все открытые позиции?")) return;
+            if (!confirm("Sell all your open positions?")) return;
             try {
                 const user = getUserData();
                 const res = await apiFetch('/api/close_all', {
@@ -1252,16 +1256,16 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const d = await res.json();
                 alert(d.message);
                 refresh();
-            } catch (e) { alert("Ошибка соединения."); }
+            } catch (e) { alert("Connection error."); }
         }
 
         async function secureWithdraw() {
             if (withdrawSending) return;
             const addr = document.getElementById('withdraw-address').value.trim();
             const amount = document.getElementById('withdraw-amount').value.trim();
-            if (!addr || !amount) { alert('Заполните адрес и сумму.'); return; }
-            if (!confirm('Отправить реальные ' + amount + ' ' + currentWithdrawToken + ' на ' + addr + '?')) return;
-            const enteredPin = prompt("Введите код для подтверждения вывода:");
+            if (!addr || !amount) { alert('Enter an address and amount.'); return; }
+            if (!confirm('Send real funds: ' + amount + ' ' + currentWithdrawToken + ' to ' + addr + '?')) return;
+            const enteredPin = prompt("Enter your withdrawal confirmation code:");
             if (!enteredPin) return;
             await submitWithdraw(enteredPin);
         }
@@ -1269,7 +1273,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         async function submitWithdraw(enteredPin) {
             const addr = document.getElementById('withdraw-address').value.trim();
             const amount = document.getElementById('withdraw-amount').value.trim();
-            if (!addr || !amount) { alert("Заполните адрес и сумму."); return; }
+            if (!addr || !amount) { alert("Enter an address and amount."); return; }
             if (withdrawSending) return;
             withdrawSending = true;
             const intent = JSON.stringify({token: currentWithdrawToken, recipient_address: addr, amount});
@@ -1278,7 +1282,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             localStorage.setItem('withdraw_intent', JSON.stringify({intent, id: requestId}));
 
             const btn = document.getElementById('btn-withdraw-action');
-            btn.innerText = "Обработка в сети...";
+            btn.innerText = "Processing on-chain...";
             btn.disabled = true;
 
             try {
@@ -1295,7 +1299,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     refresh();
                 }
                 if (d.state === 'COMPLETED' || d.state === 'FAILED') localStorage.removeItem('withdraw_intent');
-            } catch (e) { alert(e.message || "Ошибка сети."); }
+            } catch (e) { alert(e.message || "Network error."); }
             finally {
                 withdrawSending = false;
                 btn.innerText = "Withdraw 🚀";
@@ -1307,7 +1311,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             let size = '1';
             if (!tradingActive) {
                 size = String(currentTradingSettings.order_usdc || 1);
-                if (!size || !confirm('Включить торговлю только на своём счёте? Размер покупки: ' + size + ' USDC. Возможны убытки; прибыль не гарантируется.')) return;
+                if (!size || !confirm('Start trading on your own account? Order size: ' + size + ' USDC. You can lose money; returns are not guaranteed.')) return;
             }
             try {
                 const response = await apiFetch('/api/toggle_trading', {
@@ -1317,15 +1321,15 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const data = await response.json();
                 if (!data.success) alert(data.message);
                 await refresh();
-            } catch(e) { alert('Не удалось изменить режим торговли.'); }
+            } catch(e) { alert('Could not change the trading mode.'); }
         }
 
         async function toggleMemeTrading() {
-            if(!sniperActive&&!confirm('Включить автономный AI-снайпер на вашем SOL? Возможны убытки; размер покупки задан в Настройках.'))return;
+            if(!sniperActive&&!confirm('Start autonomous AI sniper with your SOL? You can lose money. Order size is set in Settings.'))return;
             try {
                 const response=await apiFetch('/api/toggle_sniper',{method:'POST'});
                 const result=await response.json();if(!result.success)alert(result.message);await refresh();
-            }catch(e){alert('Режим снайпера не изменён: нет ответа сервера.');}
+            }catch(e){alert('Sniper mode unchanged: no server response.');}
         }
 
         function updateToggleUI(isActive) {
@@ -1333,7 +1337,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             const btn = document.getElementById('btn-toggle');
             if (btn) {
                 btn.className = isActive ? "btn-ctl btn-toggle-on" : "btn-ctl btn-toggle-off";
-                document.getElementById('toggle-text').innerText = isActive ? "Автопилот: ВКЛ" : "Автопилот: ВЫКЛ";
+                document.getElementById('toggle-text').innerText = isActive ? "Autopilot: ON" : "Autopilot: OFF";
             }
         }
 
@@ -1343,7 +1347,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 btn.className = isActive ? "btn-ctl btn-toggle-on" : "btn-ctl btn-toggle-off";
                 sniperActive=!!isActive;
                 btn.disabled = !aiConfigured;
-                document.getElementById('meme-toggle-text').innerText = !aiConfigured?"НЕ ПОДКЛЮЧЁН":isActive?"AI: ВКЛ":"AI: ВЫКЛ";
+                document.getElementById('meme-toggle-text').innerText = !aiConfigured?"NOT CONNECTED":isActive?"AI: ON":"AI: OFF";
             }
         }
 
@@ -1367,15 +1371,15 @@ RAW_HTML = r"""<!DOCTYPE html>
 
         function copyWallet() {
             const addr = document.getElementById('wallet-text').innerText;
-            navigator.clipboard.writeText(addr).then(() => alert("Адрес скопирован!"));
+            navigator.clipboard.writeText(addr).then(() => alert("Address copied."));
         }
 
         async function verifyOnchainDeposit() {
             const sig = document.getElementById('dep-signature').value.trim();
-            if (!sig) { alert("Вставьте Signature транзакции."); return; }
+            if (!sig) { alert("Paste the transaction signature."); return; }
 
             const btn = document.getElementById('btn-verify-action');
-            btn.innerText = "Верификация...";
+            btn.innerText = "Verifying...";
             btn.disabled = true;
 
             try {
@@ -1390,9 +1394,9 @@ RAW_HTML = r"""<!DOCTYPE html>
                     document.getElementById('dep-signature').value = "";
                     refresh();
                 }
-            } catch (e) { alert("Ошибка соединения."); }
+            } catch (e) { alert("Connection error."); }
             finally {
-                btn.innerText = "Проверить перевод USDC / SOL";
+                btn.innerText = "Verify deposit";
                 btn.disabled = false;
             }
         }
@@ -1416,11 +1420,11 @@ RAW_HTML = r"""<!DOCTYPE html>
                 if (s.success) {
                     const flags = s.wallet_status || {};
                     document.getElementById('wallet-runtime-status').textContent =
-                        !flags.wallet_configured ? 'Серверный ключ не соответствует адресу кошелька.' :
-                        !flags.persistent_storage ? 'Операции заблокированы: нужен Persistent Disk /var/data.' :
-                        !flags.finance_allowed ? 'Публичный приём средств ещё закрыт. Ваш личный счёт создан.' :
-                        s.operation_pending ? 'Ожидается подтверждение вашей операции. Не повторяйте отправку.' :
-                        'Показан только ваш счёт. Торговля рискованна и включается вами вручную.';
+                        !flags.wallet_configured ? 'Server key does not match the wallet address.' :
+                        !flags.persistent_storage ? 'Operations blocked: Persistent Disk /var/data required.' :
+                        !flags.finance_allowed ? 'Public deposits are not open yet.' :
+                        s.operation_pending ? 'Your operation is pending. Do not resend.' :
+                        'Personal funds. Trading carries risk.';
                     document.getElementById('admin-custody-panel').style.display = s.is_admin ? 'block' : 'none';
                     if(s.is_admin)renderFeeStatus(s.operator_fees);
                     document.getElementById('operator-settings').style.display=s.is_admin?'block':'none';
@@ -1430,21 +1434,21 @@ RAW_HTML = r"""<!DOCTYPE html>
                     aiConfigured=!!ai.configured;
                     updateMemeToggleUI(s.sniper_active);
                     document.getElementById('ai-status').textContent=aiConfigured?
-                        'Ключ настроен · '+ai.model+' · анализ раз в '+Math.round(ai.interval_seconds/60)+' мин. Подключение проверяется кнопкой ниже.':
-                        'AI не подключён: оператору нужен OPENAI_API_KEY в Environment на Render.';
-                    if(ai.last_decisions)document.getElementById('ai-decisions').textContent='Последний анализ: '+new Date(ai.last_analyzed_at*1000).toLocaleString()+'\n'+Object.entries(ai.last_decisions).map(([mode,d])=>(mode==='main'?'USDC':'SOL')+': '+d.action+' '+(d.symbol||'')+' — '+d.reason).join('\n');
+                        ai.model+' · '+Math.round(ai.interval_seconds/60)+' min interval'+(ai.last_analyzed_at?' · analyzed':' · connection unverified'):
+                        'AI not connected. Operator setup required.';
+                    if(ai.last_decisions)document.getElementById('ai-decisions').textContent='Last analysis: '+new Date(ai.last_analyzed_at*1000).toLocaleString('en-GB')+'\n'+Object.entries(ai.last_decisions).map(([mode,d])=>(mode==='main'?'USDC':'SOL')+': '+d.action+' '+(d.symbol||'')+' — '+d.reason).join('\n');
                     const sniper=s.sniper_settings||{order_sol:.005};
                     document.getElementById('sniper-order-size').textContent=sniper.order_sol+' SOL';
                     const sniperInput=document.getElementById('settings-sniper-order');
                     if(!settingsOrderDirty&&document.activeElement!==sniperInput)sniperInput.value=sniper.order_sol;
-                    document.getElementById('sniper-pnl').textContent='Подтверждённый результат закрытых SOL-позиций: '+Number(s.profit_sol||0).toFixed(9)+' SOL';
+                    document.getElementById('sniper-pnl').textContent='Realized PnL: '+Number(s.profit_sol||0).toFixed(9)+' SOL';
                     document.getElementById('strategy-order-size').textContent=currentTradingSettings.order_usdc.toFixed(2)+' USDC';
-                    document.getElementById('strategy-assets').textContent=(currentTradingSettings.assets||[]).join(' · ');
+                    document.getElementById('strategy-assets').textContent=(currentTradingSettings.assets||[]).filter(symbol=>!(ai.sniper_assets||['WIF']).includes(symbol)).join(' · ');
                     const settingsInput=document.getElementById('settings-order');
                     if(!settingsOrderDirty&&document.activeElement!==settingsInput)settingsInput.value=currentTradingSettings.order_usdc;
-                    document.getElementById('settings-budget').textContent='Сохранено: '+currentTradingSettings.order_usdc+' USDC. Максимум '+(currentTradingSettings.max_positions||5)+' позиций; покупки ограничены вашим доступным балансом.';
-                    document.getElementById('worker-status').textContent=s.worker_error?'Последняя ошибка воркера: '+s.worker_error:'Автопилот: '+(s.trading_active?'включён':'выключен')+'. Проверка готовности находится в разделе Торговля.';
-                    document.getElementById('chain-withdraw-balances').textContent = 'Ваш доступный остаток: ' + s.user_balance.toFixed(6) + ' USDC | ' + s.sol_balance.toFixed(9) + ' SOL. Комиссии оплачивает резерв оператора.';
+                    document.getElementById('settings-budget').textContent='Saved: '+currentTradingSettings.order_usdc+' USDC · up to '+(currentTradingSettings.max_positions||5)+' positions, limited by available funds.';
+                    document.getElementById('worker-status').textContent=s.worker_error?'Last worker error: '+s.worker_error:'Autopilot: '+(s.trading_active?'ON':'OFF')+'. Readiness check is in Trading.';
+                    document.getElementById('chain-withdraw-balances').textContent = 'Available: ' + s.user_balance.toFixed(6) + ' USDC | ' + s.sol_balance.toFixed(9) + ' SOL. Fees paid by operator reserve.';
                     const userEl = document.getElementById('display-username');
                     if (userEl) userEl.innerText = "@" + s.username;
                     
@@ -1493,7 +1497,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                             `;
                         }).join('');
                     } else {
-                        document.getElementById('wallet-history-box').innerHTML = "Нет транзакций";
+                        document.getElementById('wallet-history-box').innerHTML = "No transactions";
                     }
 
                     if (s.trades && s.trades.length > 0) {
@@ -1507,24 +1511,24 @@ RAW_HTML = r"""<!DOCTYPE html>
                                     <div class="order-top">
                                         <div style="font-weight: 800; color: #fff; font-size: 13px;">${t.token_symbol} / ${t.funding_currency||'USDC'}</div>
                                         <div class="order-badge ${isClosed ? 'badge-closed' : 'badge-open'}">
-                                            ${isClosed ? 'ЗАКРЫТА' : 'В РЫНКЕ'}
+                                            ${isClosed ? 'CLOSED' : 'OPEN'}
                                         </div>
                                     </div>
                                     <div class="order-grid">
-                                        <div>Вход: <span style="color: #fff;">${t.buy_price.toPrecision(4)} ${t.funding_currency||'USDC'}</span></div>
-                                        <div>Выход: <span style="color: #fff;">${isClosed ? t.sell_price.toPrecision(4)+' '+(t.funding_currency||'USDC') : 'Ожидание'}</span></div>
-                                        <div>Объем: <span style="color: #fff;">${t.amount_tokens.toFixed(3)}</span></div>
-                                        <div>Время: <span style="color: #fff;">${t.timestamp}</span></div>
+                                        <div>Entry: <span style="color: #fff;">${t.buy_price.toPrecision(4)} ${t.funding_currency||'USDC'}</span></div>
+                                        <div>Exit: <span style="color: #fff;">${isClosed ? t.sell_price.toPrecision(4)+' '+(t.funding_currency||'USDC') : 'Pending'}</span></div>
+                                        <div>Quantity: <span style="color: #fff;">${t.amount_tokens.toFixed(3)}</span></div>
+                                        <div>Time: <span style="color: #fff;">${t.timestamp}</span></div>
                                     </div>
                                     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px; padding-top: 6px; border-top: 1px solid #141b2a;">
-                                        <div style="font-size: 11px; color: #64748b;">Результат:</div>
+                                        <div style="font-size: 11px; color: #64748b;">Result:</div>
                                         <div style="font-weight: 800; font-size: 13px; color: ${isClosed ? pnlColor : '#60a5fa'};">
-                                            ${isClosed ? (Number(t.profit_units??t.profit_usdc).toFixed(t.funding_currency==='SOL'?9:2)+' '+(t.funding_currency||'USDC')+' ('+t.profit_pct.toFixed(2)+'%)') : 'Открытая позиция'}
+                                            ${isClosed ? (Number(t.profit_units??t.profit_usdc).toFixed(t.funding_currency==='SOL'?9:2)+' '+(t.funding_currency||'USDC')+' ('+t.profit_pct.toFixed(2)+'%)') : 'Open position'}
                                         </div>
                                     </div>
                                     <div class="order-tx-row">
-                                        ${t.buy_tx ? '<a class="tx-link" href="https://solscan.io/tx/' + t.buy_tx + '" target="_blank">↗ Покупка (Tx)</a>' : ''}
-                                        ${t.sell_tx ? '<a class="tx-link" style="color: #4ade80;" href="https://solscan.io/tx/' + t.sell_tx + '" target="_blank">↗ Продажа (Tx)</a>' : ''}
+                                        ${t.buy_tx ? '<a class="tx-link" href="https://solscan.io/tx/' + t.buy_tx + '" target="_blank">↗ Buy transaction</a>' : ''}
+                                        ${t.sell_tx ? '<a class="tx-link" style="color: #4ade80;" href="https://solscan.io/tx/' + t.sell_tx + '" target="_blank">↗ Sell transaction</a>' : ''}
                                     </div>
                                 </div>
                             `;
@@ -1892,7 +1896,7 @@ async def telegram_webhook_handler(request):
                 send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
                 payload = {
                     "chat_id": chat_id,
-                    "text": "👋 Терминал **ZERØLIFE Multi-Asset & Meme Sniper** готов.",
+                    "text": "👋 Your **ZERØLIFE Multi-Asset & Meme Sniper** terminal is ready.",
                     "parse_mode": "Markdown", "reply_markup": keyboard
                 }
                 async with aiohttp.ClientSession() as session:
@@ -1918,7 +1922,7 @@ async def set_telegram_webhook():
 
 async def main():
     init_db()
-    app = web.Application(middlewares=[telegram_auth_middleware])
+    app = web.Application(middlewares=[english_json_middleware, telegram_auth_middleware])
     runtime = CustodyRuntime(DB_FILE, SOLANA_RPC, ADMIN_TELEGRAM_ID, SHARED_DEPOSIT_WALLET,
         get_signer_keypair, verify_user_pin, get_token_prices, WATCHLIST, add_log, base_url=RENDER_URL)
     runtime.recent_logs = lambda: RECENT_LOGS

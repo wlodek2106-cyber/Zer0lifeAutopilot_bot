@@ -68,7 +68,7 @@ async def analyze(session, market, universes):
                 "Main uses USDC; sniper uses SOL. Consider token/SOL relative changes for sniper. "
                 "Never invent prices, guarantees, wallet commands, transfer destinations or order sizes. "
                 "Prefer HOLD when data is missing, insufficient, flat or ambiguous. "
-                "These are short snapshots, not a complete predictive model. Explain briefly in Russian. "
+                "These are short snapshots, not a complete predictive model. Explain briefly in English. "
                 "Only the independent risk controller may execute any decision.")},
             {"role": "user", "content": json.dumps({
                 "prices_usd_recent_samples": market, "permitted_symbols": universes,

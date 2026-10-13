@@ -1,9 +1,9 @@
-<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Подтверждение кошелька</title>
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Verify your wallet</title>
 <style>body{background:#090c11;color:#fff;font:16px system-ui;max-width:540px;margin:40px auto;padding:24px}button,a{display:block;background:#21c869;color:#07120b;padding:16px;border:0;border-radius:12px;margin:20px 0;font:inherit;text-decoration:none}pre{white-space:pre-wrap;overflow-wrap:anywhere;color:#b6c7bf}</style>
-<h2>Подтвердить свой кошелёк один раз</h2>
-<p>Это подпись сообщения, не перевод. Деньги не списываются. Seed-фраза и приватный ключ не нужны.</p>
-<a id="open">Открыть в Phantom</a><pre id="message"></pre><button id="sign" disabled>Подтвердить владение кошельком</button><p id="status"></p>
+<h2>Verify your wallet</h2>
+<p>Sign a message, not a transfer. No funds are spent. Never share your seed phrase or private key.</p>
+<a id="open">Open in Phantom</a><pre id="message"></pre><button id="sign" disabled>Verify wallet ownership</button><p id="status"></p>
 <script>
 const endpoint = location.pathname;
 const button = document.getElementById('sign'), status = document.getElementById('status');
@@ -17,7 +17,7 @@ async function load() {
   if (!response.ok || !challenge.success) throw new Error(challenge.message);
   document.getElementById('message').textContent = challenge.message;
   button.disabled = challenge.linked || !provider();
-  status.textContent = challenge.linked ? 'Кошелёк подтверждён. Вернитесь в Telegram, переведите средства обычным способом и вставьте Tx.' : 'Подпишите показанное сообщение в своём кошельке.';
+  status.textContent = challenge.linked ? 'Wallet verified. Return to Telegram, send funds normally and paste the transaction signature.' : 'Sign the displayed message in your wallet.';
   if (provider()) document.getElementById('open').style.display = 'none';
  } catch(e) {status.textContent = e.message;}
 }
@@ -32,7 +32,7 @@ button.onclick = async () => {
   const result = await response.json();
   if (!response.ok || !result.success) throw new Error(result.message);
   status.textContent = result.message;
- } catch(e) {status.textContent = e.message || 'Подтверждение отменено.'; button.disabled=false;}
+ } catch(e) {status.textContent = e.message || 'Verification cancelled.'; button.disabled=false;}
 };
 load();
 </script></html>
