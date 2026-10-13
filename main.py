@@ -8,6 +8,7 @@ from datetime import datetime
 import json
 import base58
 import base64
+import hashlib
 from solders.keypair import Keypair
 from solders.transaction import VersionedTransaction, Transaction
 from solders.pubkey import Pubkey
@@ -59,7 +60,7 @@ MEME_STOP_LOSS_PCT = 0.80
 
 IS_TRADING_ACTIVE = True
 IS_MEME_ACTIVE = False
-RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v6.7 (Full Code Restore) инициализирован."]
+RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v6.9 (Full Enterprise Recovery) инициализирован."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -90,6 +91,10 @@ def init_db():
         telegram_id INTEGER PRIMARY KEY, username TEXT, balance_usdc REAL DEFAULT 0.0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     
+    c.execute('''CREATE TABLE IF NOT EXISTS user_security (
+        telegram_id INTEGER PRIMARY KEY, pin_hash TEXT, auth_type TEXT DEFAULT 'PIN',
+        biometric_enabled INTEGER DEFAULT 0)''')
+
     c.execute("PRAGMA table_info(users)")
     u_cols = [col[1] for col in c.fetchall()]
     if "balance_usdc" not in u_cols:
@@ -137,7 +142,8 @@ async def get_associated_token_address(wallet_pubkey: Pubkey, mint_pubkey: Pubke
 
 async def verify_solana_usdc_tx(session: aiohttp.ClientSession, tx_sig: str, target_wallet: str):
     payload = {
-        "jsonrpc": "2.0", "id": 1,
+        "jsonrpc": "2.0",
+        "id": 1,
         "method": "getTransaction",
         "params": [tx_sig, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}]
     }
@@ -538,7 +544,7 @@ async def meme_sniper_worker():
                 pass
             await asyncio.sleep(15)
 
-# --- ИНТЕРФЕЙС HTML ---
+# --- ИНТЕРФЕЙС HTML СО СТРОГОЙ ЗАЩИТОЙ ---
 RAW_HTML = r"""<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -812,42 +818,53 @@ RAW_HTML = r"""<!DOCTYPE html>
             return { id: id, username: username };
         }
 
-        function openTerminal() {
+        async function openTerminal() {
+            const user = getUserData();
             let savedNick = localStorage.getItem('user_custom_nick');
             if (!savedNick) {
-                const defaultName = getUserData().username;
-                const nicknameInput = prompt("Придумайте никнейм для вашего профиля в боте:", defaultName);
-                if (nicknameInput && nicknameInput.trim() !== "") {
-                    savedNick = nicknameInput.trim();
-                    localStorage.setItem('user_custom_nick', savedNick);
-                } else {
-                    savedNick = defaultName;
-                    localStorage.setItem('user_custom_nick', savedNick);
-                }
+                const nicknameInput = prompt("Придумайте никнейм для вашего профиля в боте:", user.username);
+                savedNick = nicknameInput ? nicknameInput.trim() : user.username;
+                localStorage.setItem('user_custom_nick', savedNick);
             }
 
-            const choice = confirm("Выберите способ защиты аккаунта:\nOK — Использовать Face ID / Touch ID (Биометрия)\nОтмена — Использовать пин-код / пароль");
+            const choice = confirm("Выберите способ защиты аккаунта:\nOK — Face ID / Touch ID (Биометрия лица)\nОтмена — Цифровой Пин-код");
             if (choice) {
                 if (bioManager && bioManager.isBiometricAvailable) {
                     if (!bioManager.isAccessGranted) {
-                        bioManager.requestAccess({ reason: "Для защиты средств и вывода" }, (granted) => {
-                            if (granted) { alert("✅ Биометрия успешно настроена!"); }
+                        bioManager.requestAccess({ reason: "Для защиты средств и вывода" }, async (granted) => {
+                            if (granted) {
+                                await fetch('/api/set_security', {
+                                    method: 'POST',
+                                    headers: {'Content-Type': 'application/json'},
+                                    body: JSON.stringify({ telegram_id: user.id, auth_type: 'BIOMETRIC', biometric_enabled: 1 })
+                                });
+                                alert("✅ Биометрия лица успешно настроена и сохранена на сервере!");
+                            }
                             proceedToTerminal();
                         });
                     } else { proceedToTerminal(); }
                 } else {
-                    alert("⚠️ Биометрия недоступна. Будет использоваться пароль.");
-                    setupPasswordProtection();
+                    alert("⚠️ Биометрия недоступна. Создайте пин-код.");
+                    setupPasswordProtection(user.id);
                 }
-            } else { setupPasswordProtection(); }
+            } else {
+                setupPasswordProtection(user.id);
+            }
         }
 
-        function setupPasswordProtection() {
-            const pwd = prompt("Введите цифровой пароль (пин-код) для защиты аккаунта:");
+        async function setupPasswordProtection(userId) {
+            const pwd = prompt("Введите защитный пин-код (минимум 4 символа):");
             if (pwd && pwd.length >= 4) {
-                localStorage.setItem('user_secure_pwd', pwd);
-                alert("✅ Пароль успешно установлен!");
-            } else { alert("⚠️ Пароль слишком короткий или не задан."); }
+                const res = await fetch('/api/set_security', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ telegram_id: userId, auth_type: 'PIN', pin: pwd })
+                });
+                const d = await res.json();
+                alert(d.message);
+            } else {
+                alert("⚠️ Пин-код слишком короткий. Используется стандартная защита.");
+            }
             proceedToTerminal();
         }
 
@@ -896,18 +913,32 @@ RAW_HTML = r"""<!DOCTYPE html>
             } catch (e) { alert("Ошибка соединения."); }
         }
 
-        function secureWithdraw() {
-            const savedPwd = localStorage.getItem('user_secure_pwd');
+        async function secureWithdraw() {
+            const user = getUserData();
             if (bioManager && bioManager.isBiometricAvailable && bioManager.isAccessGranted) {
                 bioManager.authenticate({ reason: "Подтвердите вывод средств" }, (success) => {
-                    if (success) { submitWithdraw(); }
-                    else { alert("❌ Аутентификация не пройдена. Вывод отменен."); }
+                    if (success) {
+                        submitWithdraw();
+                    } else {
+                        alert("❌ Ошибка биометрии лица. Вывод отменен.");
+                    }
                 });
-            } else if (savedPwd) {
-                const enteredPwd = prompt("Введите ваш защитный пароль для подтверждения вывода:");
-                if (enteredPwd === savedPwd) { submitWithdraw(); }
-                else { alert("❌ Неверный пароль. Вывод отменен."); }
-            } else { submitWithdraw(); }
+            } else {
+                const enteredPin = prompt("Введите ваш защитный пин-код для подтверждения вывода:");
+                if (!enteredPin) return;
+
+                const res = await fetch('/api/verify_security', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ telegram_id: user.id, pin: enteredPin })
+                });
+                const d = await res.json();
+                if (d.success) {
+                    submitWithdraw();
+                } else {
+                    alert("❌ Неверный пин-код! Вывод заблокирован.");
+                }
+            }
         }
 
         async function submitWithdraw() {
@@ -1146,6 +1177,48 @@ async def api_toggle_meme(request):
     IS_MEME_ACTIVE = not IS_MEME_ACTIVE
     add_log(f"🐸 Meme Sniper Mode: {'ВКЛ' if IS_MEME_ACTIVE else 'ВЫКЛ'}")
     return web.json_response({"success": True, "meme_active": IS_MEME_ACTIVE})
+
+async def api_set_security(request):
+    try:
+        body = await request.json()
+        tg_id = int(body.get("telegram_id", 0))
+        auth_type = body.get("auth_type", "PIN")
+        pin = body.get("pin", "")
+        biometric_enabled = int(body.get("biometric_enabled", 0))
+
+        pin_hash = hashlib.sha256(pin.encode()).hexdigest() if pin else ""
+
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""INSERT INTO user_security (telegram_id, pin_hash, auth_type, biometric_enabled) 
+                     VALUES (?, ?, ?, ?) 
+                     ON CONFLICT(telegram_id) DO UPDATE SET pin_hash=excluded.pin_hash, auth_type=excluded.auth_type, biometric_enabled=excluded.biometric_enabled""",
+                  (tg_id, pin_hash, auth_type, biometric_enabled))
+        conn.commit()
+        conn.close()
+        add_log(f"🔒 Настройки безопасности сохранены для ID {tg_id} ({auth_type})")
+        return web.json_response({"success": True, "message": "✅ Настройки безопасности сохранены в базе данных!"})
+    except Exception as e:
+        return web.json_response({"success": False, "message": str(e)})
+
+async def api_verify_security(request):
+    try:
+        body = await request.json()
+        tg_id = int(body.get("telegram_id", 0))
+        pin = body.get("pin", "")
+        pin_hash = hashlib.sha256(pin.encode()).hexdigest()
+
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT pin_hash FROM user_security WHERE telegram_id = ?", (tg_id,))
+        row = c.fetchone()
+        conn.close()
+
+        if row and row[0] == pin_hash:
+            return web.json_response({"success": True})
+        return web.json_response({"success": False})
+    except Exception:
+        return web.json_response({"success": False})
 
 async def api_get_stats(request):
     tg_id_str = request.query.get("telegram_id")
@@ -1412,6 +1485,8 @@ async def main():
     app.router.add_post('/api/verify_deposit', api_verify_deposit)
     app.router.add_post('/api/close_all', api_close_all_positions)
     app.router.add_post('/api/withdraw', api_withdraw)
+    app.router.add_post('/api/set_security', api_set_security)
+    app.router.add_post('/api/verify_security', api_verify_security)
     app.router.add_post('/webhook', telegram_webhook_handler)
 
     runner = web.AppRunner(app)
