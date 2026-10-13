@@ -754,6 +754,8 @@ class CustodyRuntime(WalletRuntime):
                 "SELECT * FROM custody_operations WHERE uid=? ORDER BY created_at DESC LIMIT 20", (uid,))]
             invoices = [dict(r) for r in db.execute(
                 "SELECT * FROM custody_invoices WHERE uid=? AND state='CREDITED' ORDER BY created_at DESC LIMIT 20", (uid,))]
+            tx_deposits = [dict(r) for r in db.execute(
+                "SELECT * FROM custody_tx_deposits WHERE uid=? ORDER BY block_time DESC", (uid,))]
         trades, history = [], []
         for p in positions:
             qty = p["raw"] / 10**p["decimals"]
@@ -775,6 +777,12 @@ class CustodyRuntime(WalletRuntime):
             history.append({"type": "DEPOSIT", "amount": display_raw(inv["raw"], 6 if inv["asset"] == USDC else 9) +
                 (" USDC" if inv["asset"] == USDC else " SOL"), "tx": inv["signature"],
                 "time": datetime.fromtimestamp(inv["created_at"], timezone.utc).isoformat(), "status": "VERIFIED"})
+        for receipt in tx_deposits:
+            for asset, raw in json.loads(receipt["amounts"]).items():
+                history.append({"type": "DEPOSIT", "amount": display_raw(raw, 6 if asset == USDC else 9) +
+                    (" USDC" if asset == USDC else " SOL"), "tx": receipt["signature"],
+                    "time": datetime.fromtimestamp(receipt["block_time"], timezone.utc).isoformat(), "status": "VERIFIED"})
+        history.sort(key=lambda row: row["time"], reverse=True)
         history.sort(key=lambda r: r["time"], reverse=True)
         user_usdc, user_sol = self.ledger.balance(uid, USDC) / 1e6, self.ledger.balance(uid, SOL) / 1e9
         profit = sum(t["profit_usdc"] for t in trades)
@@ -782,13 +790,70 @@ class CustodyRuntime(WalletRuntime):
         own_pending = [r for r in operations if r["state"] in ("RESERVED", "PREPARED", "SUBMITTED", "UNKNOWN")]
         return web.json_response({"success": True, "username": request["telegram_user"].get("username", "user"),
             "user_balance": user_usdc, "sol_balance": user_sol, "withdrawable": user_usdc,
-            "withdrawable_sol": user_sol, "total_deposited": sum(i["raw"] for i in invoices if i["asset"] == USDC)/1e6,
+            "withdrawable_sol": user_sol, "total_deposited": (sum(i["raw"] for i in invoices if i["asset"] == USDC)
+                + sum(json.loads(r["amounts"]).get(USDC, 0) for r in tx_deposits))/1e6,
             "total_pnl": profit, "profit_usdc": profit, "total_roi": 0,
             "closed_count": sum(p["state"] == "CLOSED" for p in positions), "trades": trades,
             "wallet_history": history[:20], "wallet_status": {**self.readiness(),
                 "finance_allowed": self.public_enabled or uid in self.beta_users},
             "operation_pending": bool(own_pending), "ledger_audited": True,
-            "trading_active": bool(settings["trading"]), "is_admin": uid == self.owner_id})
+            "trading_active": bool(settings["trading"]), "is_admin": uid == self.owner_id,
+            "trading_settings": {"order_usdc": settings["order_raw"]/1e6,
+                "max_positions": 5, "take_profit_pct": 3.5, "stop_loss_pct": 2,
+                "slippage_pct": .4, "entry_dip_pct": .3, "poll_seconds": 20,
+                "assets": list(self.watchlist), "warmup_samples": 5},
+            "worker_error": self.last_error if uid == self.owner_id else None})
+
+    async def save_trading_settings(self, request, session):
+        uid = self.uid(request)
+        self.admit(uid)
+        body = await request.json()
+        raw = amount_raw(body.get("order_usdc", "1"), 6)
+        async with self.lock:
+            if self.ledger.settings(uid)["trading"] or self.pending():
+                raise WalletError("Остановите автопилот и дождитесь подтверждения операций перед изменением размера покупки.", 409)
+            if raw > self.ledger.balance(uid, USDC):
+                raise WalletError("Размер покупки превышает ваш доступный USDC-баланс.", 409)
+            self.ledger.settings(uid, raw=raw)
+        return web.json_response({"success": True, "message": "Размер покупки сохранён. Автопилот не включён.",
+                                 "order_usdc": raw/1e6})
+
+    async def trading_preflight(self, uid, session, raw):
+        self.admit(uid)
+        await self.reconcile(session)
+        if self.pending():
+            raise WalletError("Сначала дождитесь подтверждения предыдущей операции.", 409)
+        await self.solvent(session)
+        if await self.rpc(session, "getGenesisHash") != GENESIS:
+            raise WalletError("Для торговли требуется Solana mainnet.", 409)
+        with self.ledger.db() as db:
+            fee = db.execute("SELECT raw FROM custody_accounts WHERE account='treasury' AND asset=?", (SOL,)).fetchone()
+        if not fee or fee["raw"] < FEE_CAP:
+            raise WalletError("Не хватает отдельного операторского резерва SOL. Пополните его в Настройках; пользовательские SOL автоматически не расходуются.", 409)
+        prices = await self.prices_fn(session)
+        if not any(prices.get(symbol, 0) > 0 for symbol in self.watchlist):
+            raise WalletError("Источник котировок недоступен. Автопилот не запущен.", 503)
+        headers = {"Accept": "application/json"}
+        if os.getenv("JUPITER_API_KEY"):
+            headers["x-api-key"] = os.environ["JUPITER_API_KEY"]
+        async with session.get("https://api.jup.ag/swap/v1/quote", params={
+            "inputMint": USDC, "outputMint": WRAPPED_SOL, "amount": raw, "slippageBps": 40},
+                headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
+            if response.status != 200:
+                raise WalletError("Jupiter не вернул котировку. Проверьте доступ к API; автопилот не запущен.", 503)
+            quote = await response.json()
+        if (quote.get("inputMint") != USDC or quote.get("outputMint") != WRAPPED_SOL
+                or int(quote.get("inAmount", 0)) != raw or int(quote.get("outAmount", 0)) <= 0):
+            raise WalletError("Jupiter вернул некорректную котировку. Автопилот не запущен.", 503)
+
+    async def trading_readiness(self, request, session):
+        uid = self.uid(request)
+        raw = self.ledger.settings(uid)["order_raw"]
+        if raw > self.ledger.balance(uid, USDC) and not self.ledger.positions(uid, "OPEN"):
+            raise WalletError("Недостаточно личных USDC для выбранного размера покупки.", 409)
+        await self.trading_preflight(uid, session, raw)
+        return web.json_response({"success": True, "message": "Проверены mainnet, покрытие средств, резерв SOL, цены и котировка Jupiter. Подписи и отправки сделок не было.",
+            "order_usdc": raw/1e6, "trading_active": bool(self.ledger.settings(uid)["trading"])})
 
     async def logs(self, request, session):
         uid = self.uid(request)
@@ -809,6 +874,7 @@ class CustodyRuntime(WalletRuntime):
             raw = amount_raw(body.get("trade_amount_usdc", "1"), 6)
             if raw > self.ledger.balance(uid, USDC) and not self.ledger.positions(uid, "OPEN"):
                 raise WalletError("Размер покупки превышает ваш собственный доступный USDC-баланс.", 409)
+            await self.trading_preflight(uid, session, raw)
             self.ledger.settings(uid, enabled=True, raw=raw)
         return web.json_response({"success": True, "trading_active": bool(self.ledger.settings(uid)["trading"])})
 
