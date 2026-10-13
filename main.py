@@ -1,4 +1,5 @@
 import asyncio
+import math
 import aiohttp
 from aiohttp import web
 import sqlite3
@@ -310,6 +311,7 @@ async def verify_solana_usdc_tx(session: aiohttp.ClientSession, tx_sig: str, tar
 
 async def get_token_prices(session: aiohttp.ClientSession) -> dict:
     prices = {}
+    liquidity_seen = {}
     mints_str = ",".join([v["mint"] for v in WATCHLIST.values()])
     url = f"https://api.dexscreener.com/latest/dex/tokens/{mints_str}"
     try:
@@ -321,10 +323,17 @@ async def get_token_prices(session: aiohttp.ClientSession) -> dict:
                 for pair in pairs:
                     base_token = pair.get("baseToken", {}).get("address")
                     price_usd = pair.get("priceUsd")
-                    if base_token and price_usd:
+                    liquidity = float(pair.get("liquidity", {}).get("usd", 0) or 0)
+                    volume = float(pair.get("volume", {}).get("h24", 0) or 0)
+                    if (pair.get("chainId") == "solana" and base_token and price_usd
+                            and math.isfinite(liquidity) and liquidity >= 100000
+                            and math.isfinite(volume) and volume >= 10000):
                         for sym, info in WATCHLIST.items():
-                            if info["mint"] == base_token and sym not in prices:
-                                prices[sym] = float(price_usd)
+                            price = float(price_usd)
+                            if (info["mint"] == base_token and math.isfinite(price) and price > 0
+                                    and liquidity > liquidity_seen.get(sym, 0)):
+                                prices[sym] = price
+                                liquidity_seen[sym] = liquidity
     except Exception:
         pass
     return prices
@@ -784,7 +793,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         <button class="start-btn" onclick="openTerminal()">Launch Terminal</button>
     </div>
 
-    <div id="app" data-ui-version="console-v2" style="display: none;">
+    <div id="app" data-ui-version="console-ai-v1" style="display: none;">
         <div id="tab-terminal" class="tab-panel active">
             <header class="page-heading"><div><p class="eyebrow">ZERØLIFE · Личный кабинет</p><h1>Обзор счёта</h1></div></header>
             <div class="banner-limit" style="border-color:#ef4444; background:#2a1014; margin-bottom:12px;">
@@ -827,23 +836,24 @@ RAW_HTML = r"""<!DOCTYPE html>
                         <div style="font-size: 17px; font-weight: 800; color: #fff;">Meme Sniper · SOL</div>
                         <div class="section-note">Второй режим связки · покупки мемкоинов за SOL</div>
                     </div>
-                    <button id="btn-meme-toggle" class="btn-ctl btn-toggle-off" style="padding: 8px 12px; font-size: 11px;" disabled>
+                    <button id="btn-meme-toggle" class="btn-ctl btn-toggle-off" style="padding: 8px 12px; font-size: 11px;" disabled onclick="toggleMemeTrading()">
                         <span id="meme-toggle-text">НЕ ПОДКЛЮЧЁН</span>
                     </button>
                 </div>
                 <div class="grid-stats">
                     <div class="stat-box"><div class="stat-label">Ваш доступный SOL</div><div class="stat-val" id="sniper-sol-balance">Загрузка...</div></div>
-                    <div class="stat-box"><div class="stat-label">Размер покупки</div><div class="stat-val" style="color:#94a5bb;">Не настроен</div></div>
+                    <div class="stat-box"><div class="stat-label">Размер покупки</div><div class="stat-val" id="sniper-order-size">Загрузка...</div></div>
                 </div>
                 <p class="section-note">Основной режим использует ваш USDC, Meme Sniper — ваш SOL. Средства других пользователей и резерв комиссий не являются торговым капиталом. Автоматическая конвертация и распределение прибыли между режимами пока не настроены.</p>
-                <p class="section-note">Раздел восстановлен. Запуск снайпера заблокирован до подключения персонального учёта SOL-позиций и движка принятия решений. Фиксированные обещания дохода удалены.</p>
+                <p class="section-note">Первая версия: один разрешённый мемкоин WIF, одна SOL-позиция. Mint проверяется на отсутствие mint/freeze authority. Это не гарантирует прибыль или отсутствие других рыночных рисков. Поиск новых листингов пока не подключён.</p>
+                <p id="sniper-pnl" class="section-note">Результат SOL-позиций: загрузка...</p>
             </div>
 
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div>
                         <div style="font-size: 17px; font-weight: 800; color: #fff;">Основной режим · USDC</div>
-                        <div class="section-note">Текущий алгоритм: откат цены</div>
+                        <div class="section-note">AI выбирает BUY / SELL / HOLD</div>
                         <div id="strategy-assets" style="font-size: 11px; color: #64748b; margin-top: 2px;">Загрузка списка активов</div>
                     </div>
                     <div id="user-bal-small" style="font-size: 12px; color: #22c55e; font-family: monospace; font-weight: 700;">$0.00 USDC</div>
@@ -936,11 +946,16 @@ RAW_HTML = r"""<!DOCTYPE html>
         <div id="tab-trading" class="tab-panel">
             <header class="page-heading"><div><p class="eyebrow">Только ваш капитал</p><h1>Торговля</h1></div></header>
             <div id="trading-controls"></div>
-            <p class="section-note">Сейчас доступен алгоритм по правилам. AI-модель принятия решений ещё не подключена — это меню не выдаёт его за AI.</p>
+            <div class="card"><h3 style="margin-top:0">AI-агент</h3>
+                <p id="ai-status" class="status-output">Проверка подключения модели...</p>
+                <button class="btn-copy" onclick="previewAI()">Проверить AI без сделки</button>
+                <p id="ai-decisions" class="status-output"></p>
+            </div>
             <div id="trading-strategy"></div>
             <div id="trading-sniper"></div>
             <div class="card"><h3 style="margin-top:0">Перед запуском</h3>
-                <p class="section-note">Покупка при откате ≥0,3% от среднего последних котировок. До пяти позиций, одна операция кошелька за раз. После старта нужны минимум пять котировок; сделка появится только при сигнале.</p>
+                <p class="section-note">После вашего запуска AI принимает решения автономно. Сервер ограничивает покупки личным балансом, разрешёнными активами и вашим размером покупки. До пяти USDC-позиций и одной SOL-позиции; одна операция общего кошелька за раз. Новые входы требуют пяти котировок, свежего AI-решения и стабильной цены.</p>
+                <p class="section-note">Защита TP/SL проверяется примерно каждые 20 секунд независимо от доступности AI. При ошибке модели новые AI-сделки не отправляются. После перезапуска сервиса оба режима останавливаются и требуют ручного повторного включения.</p>
                 <p class="section-note">TP и SL — условия отправки, а не гарантированная цена исполнения. Комиссии и проскальзывание влияют на результат. Прибыль не гарантируется.</p>
                 <button class="btn-copy" onclick="checkTradingReadiness()">Проверить готовность без сделки</button>
                 <div id="trading-readiness" class="status-output">Автопилот включается только вами.</div>
@@ -953,10 +968,16 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <p class="section-note">Для первого запуска рекомендуем 1 USDC на покупку. При пяти позициях это до 5 USDC вложенного капитала. Сохранение не включает торговлю.</p>
                 <label class="settings-label" for="settings-order">USDC на одну покупку</label>
                 <input id="settings-order" class="sig-input" type="number" min="0.000001" step="0.000001" value="1">
-                <button class="btn-green-main" onclick="saveTradingSettings()">Сохранить размер покупки</button>
+                <label class="settings-label" for="settings-sniper-order">SOL на покупку снайпера · рекомендуем начать с 0,005</label>
+                <input id="settings-sniper-order" class="sig-input" type="number" min="0.000000001" step="0.000000001" value="0.005">
+                <button class="btn-green-main" onclick="saveTradingSettings()">Сохранить размеры покупок</button>
                 <p id="settings-budget" class="section-note"></p>
             </div>
             <div class="card"><h3 style="margin-top:0">Диагностика</h3><p id="worker-status" class="status-output">Загрузка...</p></div>
+            <div class="card"><h3 style="margin-top:0">Подключение модели</h3>
+                <p class="section-note">Оператор добавляет OPENAI_API_KEY только в Environment на Render. Не вводите ключ в чат или в поля приложения. OPENAI_MODEL по умолчанию gpt-4.1-mini.</p>
+                <p class="section-note">По умолчанию анализ раз в 15 минут, максимум 96 API-запросов в сутки на весь сервис — не на каждого пользователя. OpenAI API оплачивается отдельно оператором. Модели отправляются только рыночные цены, без ключей, Telegram ID и личных балансов.</p>
+            </div>
             <details id="operator-settings" style="display:none;"><summary>Настройки оператора · комиссии и миграция</summary><div id="settings-admin"></div></details>
         </div>
     </div>
@@ -985,7 +1006,10 @@ RAW_HTML = r"""<!DOCTYPE html>
         let tradingActive = false;
         let currentTradingSettings = {order_usdc:1};
         let settingsOrderDirty=false;
+        let aiConfigured=false;
+        let sniperActive=false;
         document.getElementById('settings-order').addEventListener('input',()=>{settingsOrderDirty=true;});
+        document.getElementById('settings-sniper-order').addEventListener('input',()=>{settingsOrderDirty=true;});
         document.getElementById('trading-controls').appendChild(document.querySelector('.control-bar'));
         document.getElementById('trading-strategy').appendChild(document.getElementById('user-bal-small').closest('.card'));
         document.getElementById('trading-activity').appendChild(document.querySelector('.btn-sell-all'));
@@ -1005,7 +1029,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         document.getElementById('tab-terminal').appendChild(resultsButton);
         async function saveTradingSettings() {
             try {
-                const response=await apiFetch('/api/trading_settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({order_usdc:document.getElementById('settings-order').value})});
+                const response=await apiFetch('/api/trading_settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({order_usdc:document.getElementById('settings-order').value,order_sol:document.getElementById('settings-sniper-order').value})});
                 const result=await response.json();if(!response.ok||!result.success)throw new Error(result.message);
                 settingsOrderDirty=false;alert(result.message);await refresh();
             } catch(e) {alert(e.message);}
@@ -1016,6 +1040,16 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const response=await apiFetch('/api/trading_readiness',{method:'POST'});
                 const result=await response.json();output.textContent=result.message||'Проверка не завершена.';
             } catch(e) {output.textContent='Нет ответа сервера. Торговля этой проверкой не включается.';}
+        }
+        async function previewAI() {
+            const box=document.getElementById('ai-decisions');box.textContent='Ожидаем ответ модели… Сделки не отправляются.';
+            try {
+                const response=await apiFetch('/api/ai_preview',{method:'POST'});
+                const result=await response.json();
+                if(!response.ok||!result.success)throw new Error(result.message);
+                box.textContent=Object.entries(result.decisions).map(([mode,d])=>(mode==='main'?'USDC':'SOL')+': '+d.action+' '+(d.symbol||'')+' — '+d.reason).join('\n');
+                await refresh();
+            } catch(e) {box.textContent=e.message;}
         }
         let withdrawSending = false;
         async function linkDepositWallet() {
@@ -1252,7 +1286,11 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         async function toggleMemeTrading() {
-            try { await apiFetch('/api/toggle_meme', { method: 'POST' }); } catch(e) {}
+            if(!sniperActive&&!confirm('Включить автономный AI-снайпер на вашем SOL? Возможны убытки; размер покупки задан в Настройках.'))return;
+            try {
+                const response=await apiFetch('/api/toggle_sniper',{method:'POST'});
+                const result=await response.json();if(!result.success)alert(result.message);await refresh();
+            }catch(e){alert('Режим снайпера не изменён: нет ответа сервера.');}
         }
 
         function updateToggleUI(isActive) {
@@ -1268,9 +1306,9 @@ RAW_HTML = r"""<!DOCTYPE html>
             const btn = document.getElementById('btn-meme-toggle');
             if (btn) {
                 btn.className = isActive ? "btn-ctl btn-toggle-on" : "btn-ctl btn-toggle-off";
-                btn.disabled = true;
-                btn.className = "btn-ctl btn-toggle-off";
-                document.getElementById('meme-toggle-text').innerText = "НЕ ПОДКЛЮЧЁН";
+                sniperActive=!!isActive;
+                btn.disabled = !aiConfigured;
+                document.getElementById('meme-toggle-text').innerText = !aiConfigured?"НЕ ПОДКЛЮЧЁН":isActive?"AI: ВКЛ":"AI: ВЫКЛ";
             }
         }
 
@@ -1331,7 +1369,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     const logBox = document.getElementById('log-box');
                     if (logBox) logBox.innerText = l.logs.join('\n');
                     if (l.trading_active !== undefined) updateToggleUI(l.trading_active);
-                    if (l.meme_active !== undefined) updateMemeToggleUI(l.meme_active);
+                    if (l.sniper_active !== undefined) updateMemeToggleUI(l.sniper_active);
                 }
 
                 const user = getUserData();
@@ -1352,6 +1390,18 @@ RAW_HTML = r"""<!DOCTYPE html>
                     document.getElementById('operator-settings').style.display=s.is_admin?'block':'none';
                     updateToggleUI(s.trading_active);
                     currentTradingSettings=s.trading_settings||{order_usdc:1};
+                    const ai=s.ai_status||{};
+                    aiConfigured=!!ai.configured;
+                    updateMemeToggleUI(s.sniper_active);
+                    document.getElementById('ai-status').textContent=aiConfigured?
+                        'Ключ настроен · '+ai.model+' · анализ раз в '+Math.round(ai.interval_seconds/60)+' мин. Подключение проверяется кнопкой ниже.':
+                        'AI не подключён: оператору нужен OPENAI_API_KEY в Environment на Render.';
+                    if(ai.last_decisions)document.getElementById('ai-decisions').textContent='Последний анализ: '+new Date(ai.last_analyzed_at*1000).toLocaleString()+'\n'+Object.entries(ai.last_decisions).map(([mode,d])=>(mode==='main'?'USDC':'SOL')+': '+d.action+' '+(d.symbol||'')+' — '+d.reason).join('\n');
+                    const sniper=s.sniper_settings||{order_sol:.005};
+                    document.getElementById('sniper-order-size').textContent=sniper.order_sol+' SOL';
+                    const sniperInput=document.getElementById('settings-sniper-order');
+                    if(!settingsOrderDirty&&document.activeElement!==sniperInput)sniperInput.value=sniper.order_sol;
+                    document.getElementById('sniper-pnl').textContent='Подтверждённый результат закрытых SOL-позиций: '+Number(s.profit_sol||0).toFixed(9)+' SOL';
                     document.getElementById('strategy-order-size').textContent=currentTradingSettings.order_usdc.toFixed(2)+' USDC';
                     document.getElementById('strategy-assets').textContent=(currentTradingSettings.assets||[]).join(' · ');
                     const settingsInput=document.getElementById('settings-order');
@@ -1413,27 +1463,27 @@ RAW_HTML = r"""<!DOCTYPE html>
                     if (s.trades && s.trades.length > 0) {
                         document.getElementById('history-box').innerHTML = s.trades.map(t => {
                             const isClosed = t.status === 'CLOSED';
-                            const pnlColor = t.profit_usdc >= 0 ? '#4ade80' : '#f87171';
-                            const tPnlSign = t.profit_usdc >= 0 ? '+' : '';
+                            const pnlColor = Number(t.profit_units??t.profit_usdc) >= 0 ? '#4ade80' : '#f87171';
+                            const tPnlSign = Number(t.profit_units??t.profit_usdc) >= 0 ? '+' : '';
 
                             return `
                                 <div class="order-card">
                                     <div class="order-top">
-                                        <div style="font-weight: 800; color: #fff; font-size: 13px;">${t.token_symbol} / USDC</div>
+                                        <div style="font-weight: 800; color: #fff; font-size: 13px;">${t.token_symbol} / ${t.funding_currency||'USDC'}</div>
                                         <div class="order-badge ${isClosed ? 'badge-closed' : 'badge-open'}">
                                             ${isClosed ? 'ЗАКРЫТА' : 'В РЫНКЕ'}
                                         </div>
                                     </div>
                                     <div class="order-grid">
-                                        <div>Вход: <span style="color: #fff;">$${t.buy_price.toFixed(3)}</span></div>
-                                        <div>Выход: <span style="color: #fff;">${isClosed ? '$' + t.sell_price.toFixed(3) : 'Ожидание'}</span></div>
+                                        <div>Вход: <span style="color: #fff;">${t.buy_price.toPrecision(4)} ${t.funding_currency||'USDC'}</span></div>
+                                        <div>Выход: <span style="color: #fff;">${isClosed ? t.sell_price.toPrecision(4)+' '+(t.funding_currency||'USDC') : 'Ожидание'}</span></div>
                                         <div>Объем: <span style="color: #fff;">${t.amount_tokens.toFixed(3)}</span></div>
                                         <div>Время: <span style="color: #fff;">${t.timestamp}</span></div>
                                     </div>
                                     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px; padding-top: 6px; border-top: 1px solid #141b2a;">
                                         <div style="font-size: 11px; color: #64748b;">Результат:</div>
                                         <div style="font-weight: 800; font-size: 13px; color: ${isClosed ? pnlColor : '#60a5fa'};">
-                                            ${isClosed ? (tPnlSign + '$' + t.profit_usdc.toFixed(2) + ' (' + tPnlSign + t.profit_pct.toFixed(2) + '%)') : 'Открытая позиция'}
+                                            ${isClosed ? (Number(t.profit_units??t.profit_usdc).toFixed(t.funding_currency==='SOL'?9:2)+' '+(t.funding_currency||'USDC')+' ('+t.profit_pct.toFixed(2)+'%)') : 'Открытая позиция'}
                                         </div>
                                     </div>
                                     <div class="order-tx-row">
@@ -1464,6 +1514,7 @@ async def health_handler(request):
     return web.json_response({"status": "custody_beta", **flags,
         "build_commit": os.getenv("RENDER_GIT_COMMIT", ""),
         "deposit_parser_version": "phantom-authority-v1",
+        "ai_configured": bool(os.getenv("OPENAI_API_KEY")),
         "trading_active": bool(runtime.ledger.active_users())})
 
 async def api_get_logs(request):
@@ -1859,6 +1910,8 @@ async def main():
     app.router.add_post('/api/toggle_trading', wallet_handler(runtime.toggle))
     app.router.add_post('/api/trading_settings', wallet_handler(runtime.save_trading_settings))
     app.router.add_post('/api/trading_readiness', wallet_handler(runtime.trading_readiness))
+    app.router.add_post('/api/ai_preview', wallet_handler(runtime.ai_preview))
+    app.router.add_post('/api/toggle_sniper', wallet_handler(runtime.toggle_sniper))
     app.router.add_post('/api/toggle_meme', api_toggle_meme)
     app.router.add_post('/api/verify_deposit', wallet_handler(runtime.deposit))
     app.router.add_post('/api/wallet_link', wallet_handler(runtime.wallet_link))

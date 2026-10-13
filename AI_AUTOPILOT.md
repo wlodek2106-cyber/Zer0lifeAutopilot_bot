@@ -1,0 +1,84 @@
+# AI autopilot v1 — USDC main mode and SOL companion
+
+## Scope and limitations
+
+This is a callable OpenAI adapter plus independent custodial execution controller,
+not a promise of profitable trading. No live model call, live trade, or withdrawal
+has been validated by the automated tests.
+
+Main mode selects SOL/JUP/RAY/PYTH using personal USDC, up to five positions.
+SOL sniper v1 selects only allowlisted WIF, up to one position. It is not yet a
+new-listing discovery engine. SOL proceeds return to the same user's SOL balance.
+There is no automatic cross-mode profit conversion or allocation.
+
+Both flags are off on restart. The owner/user starts each mode in the authenticated
+Telegram application after configuration and readiness checks. The agent must not
+activate trading or submit transactions during deployment verification.
+
+## Render configuration
+
+Set `OPENAI_API_KEY` directly in the Render service's Environment screen.
+Never paste it into chat, screenshots, GitHub, or this application's input fields.
+OpenAI API billing is separate and belongs to the operator.
+
+Optional variables:
+
+- `OPENAI_MODEL`: defaults to `gpt-4.1-mini`; provider access must be checked live.
+- `AI_INTERVAL_SECONDS`: defaults to 900; minimum 300.
+- `AI_MAX_CALLS_PER_DAY`: defaults to 96; hard maximum 288.
+
+The quota counts attempts (including failed calls), is persisted, applies service-wide,
+and resets at UTC midnight. Results are shared across users and both modes.
+This is a call-count cap, not a dollar-denominated spending limit; set a budget in
+the provider account as well.
+
+Use Trading → “Проверить AI без сделки” to test the actual configured key/model.
+It sends only numeric market history and the permitted symbol list. No Telegram
+identity, personal balance, wallet address or signing material is sent to OpenAI.
+It does not construct, sign or submit a swap.
+
+Then test readiness, allocate operator SOL fee reserve if needed, save personal
+purchase sizes, and start modes manually. Defaults: 1 USDC and 0.005 SOL.
+First analysis can HOLD while prices warm up; AI refresh interval is 15 minutes.
+
+## Execution guards
+
+- Strict structured response and server-side BUY/SELL/HOLD and symbol validation.
+- AI cannot choose an owner, destination, amount, API credentials or transaction.
+- Purchases require at least five samples at analysis time, a decision no more than
+  120 seconds old, no more than 1% subsequent price movement (SOL-relative for
+  sniper), enough personal available capital, and the position-count limit.
+- One attempted action per analysis/user/mode; failure never creates a blind retry.
+- One global pending transaction; actual quote bounds, complete account simulation,
+  finalized receipts and immutable double-entry accounting remain authoritative.
+- Native sniper mint must be standard Tokenkeg, initialized, expected decimals,
+  and without mint/freeze authority. These checks do not prove economic safety.
+- Market snapshots choose the deepest observed Solana pool with liquidity at least
+  USD 100,000 and 24-hour volume at least USD 10,000. These figures are reported by
+  DexScreener, not independently audited, and do not guarantee execution liquidity.
+- AI HTTP requests run separately from the position-management loop. Failed,
+  unavailable or malformed AI output produces no new AI order. TP/SL (3.5% / 2%)
+  and requested liquidation remain deterministic protections, not guaranteed fills.
+- Jupiter slippage bound stays 40 bps. Fees/rent come from operator treasury.
+
+## Ledger migration
+
+Adds sniper settings and funding-asset/raw-cost/raw-proceeds columns, and backs up
+an existing pre-AI database to `.pre-ai.bak` with mode 0600. Existing USDC costs
+and balances are unchanged. All native amounts are lamports, never USDC units.
+For SOL positions the required legacy `cost_usdc` column contains a compatibility
+sentinel 1 and `proceeds_usdc` is NULL. Neither is used in native accounting, exits,
+profit computation or UI; `funding_asset`, `cost_raw`, `proceeds_raw` are authoritative.
+Do not use old reporting code that assumes every position is funded in USDC.
+
+The upgrade is additive and restart-paused. Before deployment, stop both modes and
+resolve/close positions as appropriate: paused modes do not monitor open positions.
+Keep the database backup and immutable records; never delete unknown operations.
+
+## Verification
+
+Tests use temporary databases, mocked HTTP/model responses, synthetic simulation
+accounts, and Chromium with mocked Telegram/API. Live public read-only checks can
+verify the WIF mint and a Jupiter SOL→WIF quote but cannot prove a real swap or
+profit. Production model access and account-specific readiness require checks in
+the authenticated app after the operator enters the key.

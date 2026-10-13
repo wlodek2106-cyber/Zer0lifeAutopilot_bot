@@ -36,6 +36,15 @@ class CustodyLedger:
             source = sqlite3.connect(path, timeout=15)
             try:
                 migrated = source.execute("SELECT name FROM sqlite_master WHERE name='custody_accounts'").fetchone()
+                if migrated and not any(row[1] == "funding_asset" for row in source.execute("PRAGMA table_info(custody_positions)")):
+                    ai_backup = path + ".pre-ai.bak"
+                    if not os.path.exists(ai_backup):
+                        target = sqlite3.connect(ai_backup)
+                        try:
+                            source.backup(target)
+                        finally:
+                            target.close()
+                        os.chmod(ai_backup, 0o600)
                 backup_path = path + ".pre-custody.bak"
                 if not migrated and not os.path.exists(backup_path):
                     target = sqlite3.connect(backup_path)
@@ -108,7 +117,27 @@ class CustodyLedger:
                     address TEXT PRIMARY KEY, newest_signature TEXT NOT NULL,
                     boundary_signature TEXT, before_signature TEXT NOT NULL,
                     cutoff INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS custody_ai_calls (
+                    id TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS custody_ai_analyses (
+                    id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, decisions TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS custody_ai_attempts (
+                    analysis_id TEXT NOT NULL, uid INTEGER NOT NULL, mode TEXT NOT NULL,
+                    PRIMARY KEY(analysis_id,uid,mode));
             """)
+            for table, additions in {
+                "custody_users": {
+                    "sniper_trading": "INTEGER NOT NULL DEFAULT 0",
+                    "sniper_order_raw": "INTEGER NOT NULL DEFAULT 5000000"},
+                "custody_positions": {
+                    "funding_asset": "TEXT NOT NULL DEFAULT '" + USDC + "'",
+                    "cost_raw": "INTEGER", "proceeds_raw": "INTEGER"},
+            }.items():
+                columns = {row[1] for row in db.execute("PRAGMA table_info(" + table + ")")}
+                for name, definition in additions.items():
+                    if name not in columns:
+                        db.execute("ALTER TABLE " + table + " ADD COLUMN " + name + " " + definition)
+            db.execute("UPDATE custody_positions SET cost_raw=cost_usdc,proceeds_raw=proceeds_usdc WHERE cost_raw IS NULL")
 
     @contextmanager
     def db(self):
@@ -349,8 +378,13 @@ class CustodyLedger:
                                       (position_id, uid)).fetchone()
                 if not position or position["asset"] != asset or position["raw"] != raw:
                     raise LedgerError("Позиция не принадлежит пользователю или недоступна.")
+                if metadata.get("output_asset") != position["funding_asset"]:
+                    raise LedgerError("Продажа должна возвращать средства в валюту этой позиции.")
                 source = position_account(position_id)
                 db.execute("UPDATE custody_positions SET state='RESERVED' WHERE id=?", (position_id,))
+            elif kind == "BUY":
+                if asset not in (USDC, SOL) or metadata.get("output_asset") in (None, asset):
+                    raise LedgerError("Недопустимая валюта покупки.")
             self.post(db, "reserve:" + oid, "reserve owner funds and operator fees", [
                 (source, asset, -raw), (reserve_account(oid), asset, raw),
                 ("treasury", SOL, -FEE_CAP), (reserve_account(oid), SOL, FEE_CAP)])
@@ -417,15 +451,17 @@ class CustodyLedger:
             self.post(db, "complete:" + oid, "finalized blockchain effects", lines)
             if row["kind"] == "BUY":
                 db.execute("""INSERT INTO custody_positions
-                    (id,uid,asset,symbol,decimals,raw,cost_usdc,state,buy_tx,created_at)
-                    VALUES(?,?,?,?,?,?,?,'OPEN',?,?)""",
+                    (id,uid,asset,symbol,decimals,raw,cost_usdc,state,buy_tx,created_at,funding_asset,cost_raw)
+                    VALUES(?,?,?,?,?,?,?,'OPEN',?,?,?,?)""",
                     (oid, row["uid"], info["output_asset"], info["symbol"], info["decimals"],
-                     received, spent, row["signature"], int(time.time())))
+                     received, spent if row["asset"] == USDC else 1,
+                     row["signature"], int(time.time()), row["asset"], spent))
             elif row["kind"] == "SELL":
                 if spent != row["raw"]:
                     raise LedgerError("Частичная продажа требует отдельного разбора.")
-                db.execute("""UPDATE custody_positions SET state='CLOSED',sell_tx=?,proceeds_usdc=?
-                    WHERE id=? AND uid=?""", (row["signature"], received, row["position_id"], row["uid"]))
+                db.execute("""UPDATE custody_positions SET state='CLOSED',sell_tx=?,proceeds_usdc=?,proceeds_raw=?
+                    WHERE id=? AND uid=?""", (row["signature"], received if info["output_asset"] == USDC else None,
+                    received, row["position_id"], row["uid"]))
             db.execute("UPDATE custody_operations SET state='COMPLETED' WHERE id=?", (oid,))
 
     def positions(self, uid, state=None):
@@ -435,7 +471,7 @@ class CustodyLedger:
                 (uid, state) if state else (uid,))
             return [dict(r) for r in rows]
 
-    def settings(self, uid, enabled=None, raw=None, close=None):
+    def settings(self, uid, enabled=None, raw=None, close=None, sniper_enabled=None, sniper_raw=None):
         with self.db() as db:
             if enabled is not None:
                 db.execute("UPDATE custody_users SET trading=?,close_requested=0 WHERE uid=?", (int(enabled), uid))
@@ -443,20 +479,52 @@ class CustodyLedger:
                 db.execute("UPDATE custody_users SET order_raw=? WHERE uid=?", (raw, uid))
             if close is not None:
                 db.execute("UPDATE custody_users SET close_requested=? WHERE uid=?", (int(close), uid))
+            if sniper_enabled is not None:
+                db.execute("UPDATE custody_users SET sniper_trading=? WHERE uid=?", (int(sniper_enabled), uid))
+            if sniper_raw is not None:
+                db.execute("UPDATE custody_users SET sniper_order_raw=? WHERE uid=?", (sniper_raw, uid))
             row = db.execute("SELECT * FROM custody_users WHERE uid=?", (uid,)).fetchone()
             return dict(row) if row else None
 
     def active_users(self):
         with self.db() as db:
-            return [dict(r) for r in db.execute("SELECT * FROM custody_users WHERE trading=1 OR close_requested=1")]
+            return [dict(r) for r in db.execute("SELECT * FROM custody_users WHERE trading=1 OR sniper_trading=1 OR close_requested=1")]
 
     def restart_pause(self):
         with self.db() as db:
-            db.execute("UPDATE custody_users SET trading=0,close_requested=0")
+            db.execute("UPDATE custody_users SET trading=0,sniper_trading=0,close_requested=0")
             # RESERVED has never been broadcast, by contract; PREPARED is ambiguous.
             unsent = [r[0] for r in db.execute("SELECT id FROM custody_operations WHERE state='RESERVED'")]
         for oid in unsent:
             self.fail(oid)
+
+    def ai_latest(self):
+        with self.db() as db:
+            row = db.execute("SELECT * FROM custody_ai_analyses ORDER BY created_at DESC,rowid DESC LIMIT 1").fetchone()
+            return dict(row) if row else None
+
+    def ai_allow_call(self, interval, daily_limit):
+        now = int(time.time())
+        with self.db() as db:
+            latest = db.execute("SELECT MAX(created_at) FROM custody_ai_calls").fetchone()[0]
+            count = db.execute("SELECT COUNT(*) FROM custody_ai_calls WHERE created_at>=?", (now - now % 86400,)).fetchone()[0]
+            if count >= daily_limit:
+                raise LedgerError("Дневной лимит обращений к AI исчерпан. Новые входы остановлены.")
+            if latest is not None and now - latest < interval:
+                raise LedgerError("AI ожидает следующего интервала анализа. Новые входы пока остановлены.")
+            aid = str(uuid.uuid4())
+            db.execute("INSERT INTO custody_ai_calls VALUES(?,?)", (aid, now))
+            return aid
+
+    def ai_record(self, aid, decisions):
+        with self.db() as db:
+            db.execute("INSERT INTO custody_ai_analyses VALUES(?,?,?)", (aid, int(time.time()), json.dumps(decisions)))
+
+    def ai_claim(self, aid, uid, mode):
+        if mode not in ("main", "sniper"):
+            raise LedgerError("Неизвестный режим AI.")
+        with self.db() as db:
+            return bool(db.execute("INSERT OR IGNORE INTO custody_ai_attempts VALUES(?,?,?)", (aid, uid, mode)).rowcount)
 
     def audit(self):
         with self.db() as db:

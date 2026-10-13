@@ -1,0 +1,252 @@
+import copy
+import asyncio
+import json
+import os
+import tempfile
+import time
+import unittest
+from unittest.mock import AsyncMock, patch
+
+from solders.keypair import Keypair
+from solders.signature import Signature
+
+import ai_decisions
+from custody_ledger import CustodyLedger, LedgerError, SOL, USDC
+from custody_runtime import CustodyRuntime, WRAPPED_SOL
+from wallet_runtime import WalletError
+
+
+class AILedgerTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.ledger = CustodyLedger(self.tmp.name + "/db")
+        for uid in (101, 202):
+            self.ledger.user(uid)
+        self.ledger.seed_fees(20_000_000, 100_000_000)
+        for uid, asset, raw in [(101, USDC, 10_000_000), (101, SOL, 20_000_000), (202, SOL, 30_000_000)]:
+            invoice = self.ledger.invoice(uid, asset, raw)
+            self.ledger.credit_deposit(invoice["id"], str(Signature.new_unique()), asset, raw, int(time.time()))
+        self.mint = str(Keypair().pubkey())
+
+    def buy(self):
+        row = self.ledger.reserve(101, "native-buy", "BUY", SOL, 5_000_000,
+            {"output_asset": self.mint, "symbol": "WIF", "decimals": 6})
+        self.ledger.prepared(row["id"], str(Signature.new_unique()), "test-wire-not-broadcast")
+        self.ledger.finalize(row["id"], 5_000_000, 2000, 40_000_000)
+        return self.ledger.positions(101, "OPEN")[0]
+
+    def test_native_round_trip_preserves_units_and_other_users(self):
+        position = self.buy()
+        self.assertEqual(position["funding_asset"], SOL)
+        self.assertEqual(position["cost_raw"], 5_000_000)
+        self.assertEqual(self.ledger.balance(101, SOL), 15_000_000)
+        self.assertEqual(self.ledger.balance(101, USDC), 10_000_000)
+        row = self.ledger.reserve(101, "native-sell", "SELL", self.mint, position["raw"],
+            {"output_asset": SOL}, position_id=position["id"])
+        self.ledger.prepared(row["id"], str(Signature.new_unique()), "test-wire-not-broadcast")
+        self.ledger.finalize(row["id"], position["raw"], 3000, 6_000_000)
+        closed = self.ledger.positions(101, "CLOSED")[0]
+        self.assertEqual(closed["proceeds_raw"], 6_000_000)
+        self.assertIsNone(closed["proceeds_usdc"])
+        self.assertEqual(self.ledger.balance(101, SOL), 21_000_000)
+        self.assertEqual(self.ledger.balance(202, SOL), 30_000_000)
+        self.assertEqual(self.ledger.balance(101, USDC), 10_000_000)
+        self.assertTrue(self.ledger.audit())
+
+    def test_native_position_cannot_be_sold_to_usdc_or_by_other_user(self):
+        position = self.buy()
+        for uid, currency in [(101, USDC), (202, SOL)]:
+            with self.assertRaises(LedgerError):
+                self.ledger.reserve(uid, "bad-sell", "SELL", self.mint, position["raw"],
+                    {"output_asset": currency}, position_id=position["id"])
+        self.assertEqual(self.ledger.positions(101)[0]["state"], "OPEN")
+        self.assertTrue(self.ledger.audit())
+
+    def test_ai_quota_and_cooldown_are_persistent(self):
+        with patch("custody_ledger.time.time", return_value=100000):
+            self.ledger.ai_allow_call(900, 2)
+            with self.assertRaises(LedgerError):
+                self.ledger.ai_allow_call(900, 2)
+        with patch("custody_ledger.time.time", return_value=101000):
+            reopened = CustodyLedger(self.tmp.name + "/db")
+            reopened.ai_allow_call(900, 2)
+        with patch("custody_ledger.time.time", return_value=102000):
+            with self.assertRaises(LedgerError):
+                reopened.ai_allow_call(900, 2)
+
+    def test_decision_claim_once_per_user_and_mode(self):
+        self.assertTrue(self.ledger.ai_claim("analysis", 101, "main"))
+        self.assertFalse(self.ledger.ai_claim("analysis", 101, "main"))
+        self.assertTrue(self.ledger.ai_claim("analysis", 202, "main"))
+        self.assertTrue(self.ledger.ai_claim("analysis", 101, "sniper"))
+
+    def test_restart_disables_both_modes_preserving_funds(self):
+        self.ledger.settings(101, enabled=True, sniper_enabled=True)
+        self.ledger.restart_pause()
+        self.assertFalse(self.ledger.settings(101)["trading"])
+        self.assertFalse(self.ledger.settings(101)["sniper_trading"])
+        self.assertEqual(self.ledger.balance(101, SOL), 20_000_000)
+        self.assertTrue(self.ledger.audit())
+
+    def test_old_schema_upgrade_preserves_usdc_positions_and_backup(self):
+        row = self.ledger.reserve(101, "old-buy", "BUY", USDC, 1_000_000,
+            {"output_asset": self.mint, "symbol": "WIF", "decimals": 6})
+        self.ledger.prepared(row["id"], str(Signature.new_unique()), "test")
+        self.ledger.finalize(row["id"], 1_000_000, 1000, 40_000_000)
+        with self.ledger.db() as db:
+            for name in ("funding_asset", "cost_raw", "proceeds_raw"):
+                db.execute("ALTER TABLE custody_positions DROP COLUMN " + name)
+        upgraded = CustodyLedger(self.tmp.name + "/db")
+        position = upgraded.positions(101)[0]
+        self.assertEqual(position["funding_asset"], USDC)
+        self.assertEqual(position["cost_raw"], 1_000_000)
+        self.assertEqual(upgraded.balance(101, USDC), 9_000_000)
+        self.assertTrue(os.path.isfile(self.tmp.name + "/db.pre-ai.bak"))
+        self.assertTrue(upgraded.audit())
+
+
+class AIControllerTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        signer = Keypair()
+        self.mint = str(Keypair().pubkey())
+        self.service = CustodyRuntime(self.tmp.name + "/db", "https://invalid.example",
+            101, str(signer.pubkey()), lambda: signer, lambda uid, pin: (True, ""),
+            AsyncMock(return_value={}), {"SOL": {"mint": WRAPPED_SOL, "decimals": 9},
+            "WIF": {"mint": self.mint, "decimals": 6}}, lambda msg: None, base_url="https://invalid.example")
+        self.service.ledger.user(101)
+        self.service.ledger.seed_fees(20_000_000, 100_000_000)
+        for currency in (USDC, SOL):
+            inv = self.service.ledger.invoice(101, currency, 20_000_000)
+            self.service.ledger.credit_deposit(inv["id"], str(Signature.new_unique()), currency, 20_000_000, int(time.time()))
+        self.service.trade = AsyncMock()
+        self.service.verify_sniper_mint = AsyncMock()
+        self.service.ledger.settings(101, enabled=True, sniper_enabled=True)
+        self.prices = {"SOL": 100, "WIF": 2}
+        self.snapshot = {"id": "test-analysis", "created_at": int(time.time()),
+            "prices": self.prices.copy(), "samples": {"SOL": 5, "WIF": 5},
+            "decisions": {"main": {"action": "BUY", "symbol": "SOL", "reason": "signal"},
+                          "sniper": {"action": "HOLD", "symbol": None, "reason": "wait"}}}
+
+    async def apply(self, snapshot=None, prices=None, positions=None):
+        await self.service.apply_ai_decision(None, 101, self.service.ledger.settings(101),
+            positions or [], prices or self.prices, snapshot or self.snapshot)
+
+    async def test_main_uses_saved_usdc_only_and_once(self):
+        await self.apply()
+        self.assertEqual(self.service.trade.await_args.args[2:6], (USDC, SOL, 1_000_000, "BUY"))
+        await self.apply()
+        self.assertEqual(self.service.trade.await_count, 1)
+
+    async def test_sniper_uses_saved_sol_not_usdc(self):
+        self.snapshot["decisions"]["main"] = {"action": "HOLD", "symbol": None, "reason": "wait"}
+        self.snapshot["decisions"]["sniper"] = {"action": "BUY", "symbol": "WIF", "reason": "signal"}
+        await self.apply()
+        self.service.verify_sniper_mint.assert_awaited_once_with(None, "WIF")
+        self.assertEqual(self.service.trade.await_args.args[2:6], (SOL, self.mint, 5_000_000, "BUY"))
+
+    async def test_no_buy_for_stale_drifting_nan_or_unwarmed_data(self):
+        for case in ("stale", "drift", "nan", "warmup"):
+            snapshot = copy.deepcopy(self.snapshot)
+            prices = self.prices.copy()
+            if case == "stale": snapshot["created_at"] -= 180
+            if case == "drift": prices["SOL"] = 105
+            if case == "nan": prices["SOL"] = float("nan")
+            if case == "warmup": snapshot["samples"]["SOL"] = 1
+            await self.apply(snapshot, prices)
+        self.service.trade.assert_not_awaited()
+
+    async def test_hold_no_trade_and_sell_without_position_no_trade(self):
+        self.snapshot["decisions"]["main"] = {"action": "HOLD", "symbol": None, "reason": "wait"}
+        await self.apply()
+        self.snapshot["decisions"]["main"] = {"action": "SELL", "symbol": "SOL", "reason": "signal"}
+        await self.apply()
+        self.service.trade.assert_not_awaited()
+
+    async def test_native_cap_is_one_position(self):
+        self.snapshot["decisions"]["main"] = {"action": "HOLD", "symbol": None, "reason": "wait"}
+        self.snapshot["decisions"]["sniper"] = {"action": "BUY", "symbol": "WIF", "reason": "signal"}
+        await self.apply(positions=[{"funding_asset": SOL, "symbol": "WIF"}])
+        self.service.trade.assert_not_awaited()
+
+    async def test_missing_model_key_never_falls_back_to_rules(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(WalletError):
+                await self.service.ai_snapshot(None, self.prices)
+            self.assertIsNone(self.service.poll_ai(self.prices))
+        self.service.trade.assert_not_awaited()
+
+    async def test_invalid_model_commands_fail_closed(self):
+        for edit in [{"action": "WITHDRAW"}, {"amount": 1000}, {"symbol": "UNKNOWN"}, {"wallet": "foreign"}]:
+            value = copy.deepcopy(self.snapshot["decisions"])
+            value["main"].update(edit)
+            with self.assertRaises(ai_decisions.AIError):
+                ai_decisions.validate_decisions(value, self.service.ai_universes())
+
+    async def test_ai_http_payload_has_market_data_no_identity_or_wallet(self):
+        outer = self
+        class Response:
+            status = 200
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): pass
+            async def json(self):
+                return {"choices": [{"finish_reason": "stop", "message": {
+                    "content": json.dumps(outer.snapshot["decisions"])}}]}
+        class Session:
+            def post(self, url, **kwargs):
+                outer.payload = kwargs["json"]
+                return Response()
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-not-real"}):
+            await ai_decisions.analyze(Session(), {"SOL": [100]*5, "WIF": [2]*5}, self.service.ai_universes())
+        content = json.dumps(self.payload)
+        self.assertNotIn(self.service.wallet, content)
+        self.assertNotIn("telegram", content.lower())
+        self.assertNotIn("test-key-not-real", content)
+        self.assertFalse(self.payload["store"])
+
+    async def test_model_failure_does_not_consume_user_funds(self):
+        before = self.service.ledger.balance(101, SOL)
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-not-real"}), patch(
+                "ai_decisions.analyze", AsyncMock(side_effect=ai_decisions.AIError("unavailable"))):
+            with self.assertRaises(WalletError):
+                await self.service.ai_snapshot(None, self.prices)
+        self.assertEqual(self.service.ledger.balance(101, SOL), before)
+        self.service.trade.assert_not_awaited()
+
+    async def test_sol_risk_exit_uses_sol_relative_price_not_usdc(self):
+        position = {"symbol": "WIF", "funding_asset": SOL, "cost_raw": 5_000_000,
+                    "raw": 250_000, "decimals": 6}
+        self.assertFalse(self.service.exit_triggered(position, {"WIF": 2, "SOL": 100}))
+        self.assertTrue(self.service.exit_triggered(position, {"WIF": 2.08, "SOL": 100}))
+        self.assertTrue(self.service.exit_triggered(position, {"WIF": 1.94, "SOL": 100}))
+
+    async def test_native_realized_profit_is_sol_not_fabricated_usdc(self):
+        ledger = self.service.ledger
+        buy = ledger.reserve(101, "buy", "BUY", SOL, 5_000_000,
+            {"output_asset": self.mint, "symbol": "WIF", "decimals": 6})
+        ledger.prepared(buy["id"], str(Signature.new_unique()), "test-not-sent")
+        ledger.finalize(buy["id"], 5_000_000, 1000, 2_600_000)
+        position = ledger.positions(101, "OPEN")[0]
+        sell = ledger.reserve(101, "sell", "SELL", self.mint, position["raw"],
+            {"output_asset": SOL}, position_id=position["id"])
+        ledger.prepared(sell["id"], str(Signature.new_unique()), "test-not-sent")
+        ledger.finalize(sell["id"], position["raw"], 1000, 6_000_000)
+        self.service.reconcile = AsyncMock()
+        response = await self.service.stats({"telegram_user": {"id": 101, "username": "test"}}, None)
+        data = json.loads(response.text)
+        self.assertEqual(data["profit_sol"], .001)
+        self.assertEqual(data["profit_usdc"], 0)
+        self.assertEqual(data["trades"][0]["funding_currency"], "SOL")
+
+    async def test_slow_model_does_not_block_risk_polling(self):
+        async def slow(prices):
+            await asyncio.sleep(30)
+        self.service.background_ai = slow
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-not-real"}):
+            self.assertIsNone(self.service.poll_ai(self.prices))
+            self.assertIsNotNone(self.service.ai_task)
+            self.assertFalse(self.service.ai_task.done())
+        self.service.ai_task.cancel()
+        await asyncio.gather(self.service.ai_task, return_exceptions=True)
