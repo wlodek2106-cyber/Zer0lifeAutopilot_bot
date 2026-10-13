@@ -52,7 +52,7 @@ MEME_STOP_LOSS_PCT = 0.80      # Стоп-лосс на случай скама 
 
 IS_TRADING_ACTIVE = True       # Глобальный флаг автопилота Топ-5 (ВКЛ / ВЫКЛ)
 IS_MEME_ACTIVE = False         # Глобальный флаг Meme Sniper режима (ВКЛ / ВЫКЛ)
-RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v4.3 инициализирован."]
+RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v4.4 (Portfolio Tracker) инициализирован."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -187,27 +187,6 @@ async def get_token_prices(session: aiohttp.ClientSession) -> dict:
     except Exception as e:
         add_log(f"⚠️ Ошибка запроса цен: {str(e)[:40]}")
     return prices
-
-async def get_wallet_usdc_balance(session: aiohttp.ClientSession, wallet_pubkey: str) -> float:
-    payload = {
-        "jsonrpc": "2.0", "id": 1,
-        "method": "getTokenAccountsByOwner",
-        "params": [
-            wallet_pubkey,
-            {"mint": USDC_MINT},
-            {"encoding": "jsonParsed"}
-        ]
-    }
-    try:
-        async with session.post(SOLANA_RPC, json=payload, timeout=6) as resp:
-            data = await resp.json()
-            accounts = data.get("result", {}).get("value", [])
-            if accounts:
-                info = accounts[0]["account"]["data"]["parsed"]["info"]["tokenAmount"]
-                return float(info.get("uiAmount", 0.0) or 0.0)
-    except Exception:
-        pass
-    return 0.0
 
 async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, output_mint: str, amount_raw: int, signer: Keypair, slippage_bps: int = MAX_SLIPPAGE_BPS, priority_fee: int = 25000) -> str:
     try:
@@ -356,7 +335,7 @@ async def real_trading_worker():
             await asyncio.sleep(20)
 
 
-# --- ВОРКЕР 2: ПАРАЛЛЕЛЬНЫЙ (Meme Sniper Mode с реальной фиксацией цен) ---
+# --- ВОРКЕР 2: ПАРАЛЛЕЛЬНЫЙ (Meme Sniper Mode) ---
 async def meme_sniper_worker():
     global IS_MEME_ACTIVE
     signer = get_signer_keypair()
@@ -561,6 +540,19 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <span id="refresh-icon">🔄</span>
                     <span>Обновить</span>
                 </button>
+            </div>
+
+            <!-- БЛОК ПОРТФЕЛЯ И БАЛАНСА -->
+            <div class="card" style="border: 1px solid rgba(34, 197, 94, 0.3); background: linear-gradient(135deg, #0e111a 0%, #0a150d 100%);">
+                <div style="font-size: 13px; font-weight: 800; color: #22c55e; margin-bottom: 8px;">💼 РЕАЛЬНЫЙ БАЛАНС И ПОРТФЕЛЬ</div>
+                <div class="grid-stats">
+                    <div class="stat-box"><div class="stat-label">Пополнено всего</div><div class="stat-val" id="port-deposited" style="color: #60a5fa;">$0.00</div></div>
+                    <div class="stat-box"><div class="stat-label">Остаток в боте</div><div class="stat-val" id="port-balance" style="color: #fff;">$0.00</div></div>
+                </div>
+                <div style="margin-top: 8px; display: flex; justify-content: space-between; align-items: center; background: #06080e; padding: 8px 12px; border-radius: 10px;">
+                    <div style="font-size: 11px; color: #94a3b8;">Чистая прибыль (PnL):</div>
+                    <div id="port-pnl" style="font-size: 13px; font-weight: 900; font-family: monospace; color: #4ade80;">+$0.00 (0.0%)</div>
+                </div>
             </div>
 
             <!-- БЛОК MEME SNIPER РЕЖИМА -->
@@ -796,11 +788,22 @@ RAW_HTML = r"""<!DOCTYPE html>
                     document.getElementById('closed-count').innerText = s.closed_count;
                     if(s.user_balance !== undefined) document.getElementById('user-bal').innerText = "$" + s.user_balance.toFixed(2) + " USDC";
 
+                    // Обновление нового блока реального портфеля
+                    document.getElementById('port-deposited').innerText = "$" + (s.total_deposited || 0).toFixed(2);
+                    document.getElementById('port-balance').innerText = "$" + (s.user_balance || 0).toFixed(2);
+                    
+                    const portPnlEl = document.getElementById('port-pnl');
+                    const portPnlVal = s.total_pnl || 0;
+                    const portRoiVal = s.total_roi || 0;
+                    const pnlSign = portPnlVal >= 0 ? "+" : "";
+                    portPnlEl.innerText = `${pnlSign}$${portPnlVal.toFixed(2)} (${pnlSign}${portRoiVal.toFixed(1)}%)`;
+                    portPnlEl.style.color = portPnlVal >= 0 ? '#4ade80' : '#f87171';
+
                     if(s.trades && s.trades.length > 0) {
                         document.getElementById('history-box').innerHTML = s.trades.map(t => {
                             const isClosed = t.status === 'CLOSED';
                             const pnlColor = t.profit_usdc >= 0 ? '#4ade80' : '#f87171';
-                            const pnlSign = t.profit_usdc >= 0 ? '+' : '';
+                            const tPnlSign = t.profit_usdc >= 0 ? '+' : '';
 
                             return `
                                 <div class="order-card">
@@ -819,7 +822,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                                     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px; padding-top: 6px; border-top: 1px solid #141b2a;">
                                         <div style="font-size: 11px; color: #64748b;">Результат:</div>
                                         <div style="font-weight: 800; font-size: 13px; color: ${isClosed ? pnlColor : '#60a5fa'};">
-                                            ${isClosed ? `${pnlSign}$${t.profit_usdc.toFixed(2)} (${pnlSign}${t.profit_pct.toFixed(2)}%)` : 'Открытая позиция'}
+                                            ${isClosed ? `${tPnlSign}$${t.profit_usdc.toFixed(2)} (${tPnlSign}${t.profit_pct.toFixed(2)}%)` : 'Открытая позиция'}
                                         </div>
                                     </div>
                                     <div class="order-tx-row">
@@ -893,11 +896,21 @@ async def api_get_stats(request):
     c.execute("SELECT balance_usdc FROM users WHERE telegram_id = ?", (tg_id,))
     u_row = c.fetchone()
     user_bal = u_row[0] if u_row else 0.0
+
+    # Считаем сумму всех верифицированных депозитов пользователя
+    c.execute("SELECT SUM(amount_usdc) FROM deposits WHERE telegram_id = ? AND status = 'VERIFIED'", (tg_id,))
+    dep_row = c.fetchone()
+    total_deposited = dep_row[0] if dep_row and dep_row[0] else 0.0
+
     conn.close()
+
+    total_pnl = user_bal - total_deposited
+    total_roi = (total_pnl / total_deposited * 100) if total_deposited > 0 else 0.0
 
     return web.json_response({
         "success": True, "profit_usdc": tot_profit, "closed_count": closed_count,
-        "trades": trades, "user_balance": user_bal
+        "trades": trades, "user_balance": user_bal,
+        "total_deposited": total_deposited, "total_pnl": total_pnl, "total_roi": total_roi
     })
 
 async def api_verify_deposit(request):
@@ -929,7 +942,7 @@ async def api_verify_deposit(request):
         conn.close()
 
         add_log(f"📥 Зачислен депозит: +${amount_usdc} USDC ({tx[:10]}...)")
-        return web.json_package if hasattr(web, 'json_package') else web.json_response({"success": True, "message": f"✅ Успешно! Зачислено ${amount_usdc} USDC."})
+        return web.json_response({"success": True, "message": f"✅ Успешно! Зачислено ${amount_usdc} USDC."})
     except Exception as e:
         return web.json_response({"success": False, "message": f"Ошибка сервера: {str(e)}"})
 
@@ -955,7 +968,7 @@ async def telegram_webhook_handler(request):
                 send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
                 payload = {
                     "chat_id": chat_id,
-                    "text": "👋 Терминал **ZERØLIFE Multi-Asset & Meme Sniper** готов.\nДоступен частичный вывод 50% позиции в USDC при достижении 0.5 SOL.",
+                    "text": "👋 Терминал **ZERØLIFE Multi-Asset & Meme Sniper** готов.\nДоступен блок реального баланса, пополнений и общей доходности.",
                     "parse_mode": "Markdown", "reply_markup": keyboard
                 }
                 async with aiohttp.ClientSession() as session:
