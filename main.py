@@ -53,7 +53,7 @@ MEME_STOP_LOSS_PCT = 0.80      # Стоп-лосс на случай скама 
 
 IS_TRADING_ACTIVE = True       # Глобальный флаг автопилота Топ-5 (ВКЛ / ВЫКЛ)
 IS_MEME_ACTIVE = False         # Глобальный флаг Meme Sniper режима (ВКЛ / ВЫКЛ)
-RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v5.5 (Fixed Biometrics) инициализирован."]
+RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v5.6 (Restored UI) инициализирован."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -567,6 +567,40 @@ RAW_HTML = r"""<!DOCTYPE html>
                 </div>
             </div>
 
+            <!-- БЛОК MEME SNIPER РЕЖИМА (ВОССТАНОВЛЕН) -->
+            <div class="card" style="border: 1px solid rgba(234, 179, 8, 0.3); background: linear-gradient(135deg, #0e111a 0%, #15130a 100%);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <div>
+                        <div style="font-size: 15px; font-weight: 800; color: #facc15;">🐸 Meme Sniper Mode</div>
+                        <div style="font-size: 10px; color: #94a3b8; margin-top: 2px;">0.1 SOL → 0.5 SOL (50% в USDC) → 1 SOL</div>
+                    </div>
+                    <button id="btn-meme-toggle" class="btn-ctl btn-toggle-off" style="padding: 8px 12px; font-size: 11px;" onclick="toggleMemeTrading()">
+                        <span id="meme-toggle-text">ВЫКЛ</span>
+                    </button>
+                </div>
+                <div class="grid-stats">
+                    <div class="stat-box"><div class="stat-label">Слот снайпера</div><div class="stat-val" style="color: #facc15;">0.1 SOL</div></div>
+                    <div class="stat-box"><div class="stat-label">Цель фиксации</div><div class="stat-val" style="color: #4ade80;">0.5 SOL (USDC) + 1 SOL</div></div>
+                </div>
+            </div>
+
+            <!-- БЛОК ТОП-5 АКТИВОВ (ВОССТАНОВЛЕН) -->
+            <div class="card">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <div style="font-size: 17px; font-weight: 800; color: #fff;">Топ-5 Ликвидных Активов</div>
+                        <div style="font-size: 11px; color: #64748b; margin-top: 2px;">SOL • JUP • RAY • WIF • PYTH</div>
+                    </div>
+                    <div id="user-bal-small" style="font-size: 12px; color: #22c55e; font-family: monospace; font-weight: 700;">$0.00 USDC</div>
+                </div>
+                <div class="grid-stats">
+                    <div class="stat-box"><div class="stat-label">Размер слота</div><div class="stat-val">$20.00 USDC</div></div>
+                    <div class="stat-box"><div class="stat-label">Slippage</div><div class="stat-val" style="color: #60a5fa;">0.40%</div></div>
+                    <div class="stat-box"><div class="stat-label">Take Profit</div><div class="stat-val" style="color: #4ade80;">+3.50%</div></div>
+                    <div class="stat-box"><div class="stat-label">Stop Loss</div><div class="stat-val" style="color: #f87171;">-2.00%</div></div>
+                </div>
+            </div>
+
             <div class="card">
                 <div style="font-size: 12px; font-weight: 700; color: #94a3b8; margin-bottom: 6px;">ЖУРНАЛ СКАНИРОВАНИЯ</div>
                 <div id="log-box" class="log-console">Запуск ядра...</div>
@@ -669,7 +703,13 @@ RAW_HTML = r"""<!DOCTYPE html>
             }
         } catch (e) {}
 
-        let bioManager = window.Telegram?.WebApp?.BiometricManager || null;
+        let bioManager = null;
+        try {
+            bioManager = window.Telegram?.WebApp?.BiometricManager;
+            if (bioManager) {
+                bioManager.init();
+            }
+        } catch (e) {}
 
         let currentWithdrawToken = 'USDC';
 
@@ -685,12 +725,19 @@ RAW_HTML = r"""<!DOCTYPE html>
             return { id: id, username: username };
         }
 
-        // Вход в терминал без блокировок
+        // БЕЗОПАСНЫЙ ВХОД: без блокирующих запросов, 100% открывает приложение
         function openTerminal() {
-            document.getElementById('splash-screen').style.display = 'none';
-            document.getElementById('app').style.display = 'block';
-            document.getElementById('nav').style.display = 'flex';
-            refresh();
+            try {
+                const splash = document.getElementById('splash-screen');
+                const app = document.getElementById('app');
+                const nav = document.getElementById('nav');
+                if (splash) splash.style.display = 'none';
+                if (app) app.style.display = 'block';
+                if (nav) nav.style.display = 'flex';
+                refresh();
+            } catch (e) {
+                console.error("Ошибка при открытии терминала", e);
+            }
         }
 
         function gotoTab(id, btn) {
@@ -733,52 +780,34 @@ RAW_HTML = r"""<!DOCTYPE html>
             }
         }
 
-        // БЕЗОПАСНЫЙ ВЫВОД С БИОМЕТРИЕЙ
+        // БИОМЕТРИЯ ПРИ ВЫВОДЕ
         function secureWithdraw() {
-            if (!bioManager) {
-                // Платформа не поддерживает API
-                submitWithdraw();
-                return;
-            }
-
-            // Инициализируем, если еще не было
-            if (!bioManager.isInited) {
-                bioManager.init(() => {
-                    checkAndAuthenticate();
-                });
-            } else {
-                checkAndAuthenticate();
-            }
-        }
-
-        function checkAndAuthenticate() {
-            if (!bioManager.isBiometricAvailable) {
-                // Если Touch ID / Face ID выключен или не поддерживается
-                submitWithdraw();
-                return;
-            }
-
-            if (!bioManager.isAccessGranted) {
-                bioManager.requestAccess({ reason: "Для подтверждения вывода средств" }, (granted) => {
-                    if (granted) {
-                        executeScan();
-                    } else {
-                        alert("⚠️ Для безопасного вывода необходимо разрешить биометрию.");
-                    }
-                });
-            } else {
-                executeScan();
-            }
-        }
-
-        function executeScan() {
-            bioManager.authenticate({ reason: "Сканирование для вывода средств" }, (success) => {
-                if (success) {
+            try {
+                if (!bioManager || !bioManager.isBiometricAvailable) {
                     submitWithdraw();
-                } else {
-                    alert("❌ Аутентификация не пройдена. Вывод отменен.");
+                    return;
                 }
-            });
+
+                if (bioManager.isAccessGranted) {
+                    bioManager.authenticate({ reason: "Подтвердите транзакцию вывода" }, (success) => {
+                        if (success) {
+                            submitWithdraw();
+                        } else {
+                            alert("❌ Аутентификация не пройдена. Вывод отменен.");
+                        }
+                    });
+                } else {
+                    bioManager.requestAccess({ reason: "Для подтверждения вывода средств" }, (granted) => {
+                        if (granted) {
+                            secureWithdraw(); 
+                        } else {
+                            alert("⚠️ Для безопасного вывода необходимо разрешить биометрию.");
+                        }
+                    });
+                }
+            } catch (e) {
+                submitWithdraw(); 
+            }
         }
 
         async function submitWithdraw() {
@@ -825,6 +854,14 @@ RAW_HTML = r"""<!DOCTYPE html>
             if (btn) {
                 btn.className = isActive ? "btn-ctl btn-toggle-on" : "btn-ctl btn-toggle-off";
                 document.getElementById('toggle-text').innerText = isActive ? "Автопилот: ВКЛ" : "Автопилот: ВЫКЛ";
+            }
+        }
+
+        function updateMemeToggleUI(isActive) {
+            const btn = document.getElementById('btn-meme-toggle');
+            if (btn) {
+                btn.className = isActive ? "btn-ctl btn-toggle-on" : "btn-ctl btn-toggle-off";
+                document.getElementById('meme-toggle-text').innerText = isActive ? "ВКЛ (0.1 SOL)" : "ВЫКЛ";
             }
         }
 
@@ -890,6 +927,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     const logBox = document.getElementById('log-box');
                     if (logBox) logBox.innerText = l.logs.join('\n');
                     if (l.trading_active !== undefined) updateToggleUI(l.trading_active);
+                    if (l.meme_active !== undefined) updateMemeToggleUI(l.meme_active);
                 }
 
                 const user = getUserData();
@@ -909,6 +947,9 @@ RAW_HTML = r"""<!DOCTYPE html>
 
                     document.getElementById('port-balance').innerText = "$" + dep.toFixed(2) + " / $" + bal.toFixed(2);
                     document.getElementById('port-withdrawable').innerText = "$" + wth.toFixed(2);
+                    
+                    const userBalSmall = document.getElementById('user-bal-small');
+                    if(userBalSmall) userBalSmall.innerText = "$" + bal.toFixed(2) + " USDC";
                     
                     const portPnlEl = document.getElementById('port-pnl');
                     const portPnlVal = s.total_pnl ? s.total_pnl : 0;
