@@ -14,6 +14,7 @@ from solders.pubkey import Pubkey
 from solders.system_program import transfer, TransferParams
 from solders.message import Message
 from solders.hash import Hash
+from solders.instruction import Instruction, AccountMeta
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -29,8 +30,10 @@ SOLANA_RPC = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-ke
 SHARED_DEPOSIT_WALLET = os.getenv("DEPOSIT_WALLET", "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L").strip()
 SPLASH_IMAGE_URL = "https://i.postimg.cc/52n94Pzg/57D47DDD-9BED-4D4B-AA69-2B59CAB400AD.png"
 
-# Токен USDC и параметры торговли
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+ASSOCIATED_TOKEN_PROGRAM_ID = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+
 MIN_DEPOSIT_USDC = 50.0
 MAX_DEPOSIT_USDC = 10000.0
 MIN_BOT_BALANCE_USDC = 50.0
@@ -49,7 +52,6 @@ TP_PCT = 0.035
 SL_PCT = 0.020
 MAX_SLIPPAGE_BPS = 40
 
-# --- ПАРАМЕТРЫ MEME SNIPER РЕЖИМА ---
 MEME_ALLOCATION_SOL = 0.1
 MEME_TARGET_MULTIPLIER = 10.0
 MEME_HALF_MULTIPLIER = 5.0
@@ -57,7 +59,7 @@ MEME_STOP_LOSS_PCT = 0.80
 
 IS_TRADING_ACTIVE = True
 IS_MEME_ACTIVE = False
-RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v6.5 (Jupiter API Withdrawals) инициализирован."]
+RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v6.7 (Full Code Restore) инициализирован."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -126,10 +128,16 @@ def init_db():
     conn.commit()
     conn.close()
 
+async def get_associated_token_address(wallet_pubkey: Pubkey, mint_pubkey: Pubkey) -> Pubkey:
+    assoc, _ = Pubkey.find_program_address(
+        [bytes(wallet_pubkey), bytes(Pubkey.from_string(TOKEN_PROGRAM_ID)), bytes(mint_pubkey)],
+        Pubkey.from_string(ASSOCIATED_TOKEN_PROGRAM_ID)
+    )
+    return assoc
+
 async def verify_solana_usdc_tx(session: aiohttp.ClientSession, tx_sig: str, target_wallet: str):
     payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
+        "jsonrpc": "2.0", "id": 1,
         "method": "getTransaction",
         "params": [tx_sig, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}]
     }
@@ -273,53 +281,74 @@ async def execute_native_sol_transfer(session: aiohttp.ClientSession, signer: Ke
 
 async def execute_spl_usdc_transfer(session: aiohttp.ClientSession, signer: Keypair, recipient_addr: str, amount_ui: float) -> str:
     try:
-        user_pubkey = str(signer.pubkey())
         raw_amount = int(amount_ui * 1_000_000)
-        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+        recipient_pubkey = Pubkey.from_string(recipient_addr)
+        mint_pubkey = Pubkey.from_string(USDC_MINT)
         
-        quote_url = f"https://api.jup.ag/swap/v1/quote?inputMint={USDC_MINT}&outputMint=So11111111111111111111111111111111111111112&amount={raw_amount}&slippageBps=100"
-        async with session.get(quote_url, headers=headers, timeout=aiohttp.ClientTimeout(total=6)) as resp:
-            if resp.status != 200:
-                return None
-            quote_data = await resp.json()
+        sender_ata = await get_associated_token_address(signer.pubkey(), mint_pubkey)
+        recipient_ata = await get_associated_token_address(recipient_pubkey, mint_pubkey)
 
-        payload = {
-            "quoteResponse": quote_data,
-            "userPublicKey": user_pubkey,
-            "wrapAndUnwrapSol": True,
-            "prioritizationFeeLamports": 50000,
-            "destinationWallet": recipient_addr
+        payload_acc = {
+            "jsonrpc": "2.0", "id": 1,
+            "method": "getAccountInfo",
+            "params": [str(recipient_ata), {"encoding": "jsonParsed"}]
         }
-        
-        async with session.post("https://api.jup.ag/swap/v1/swap", headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=7)) as resp:
-            if resp.status != 200:
-                return None
-            res = await resp.json()
-            swap_b64 = res.get("swapTransaction")
+        async with session.post(SOLANA_RPC, json=payload_acc) as resp:
+            acc_data = await resp.json()
+            needs_creation = acc_data.get("result", {}).get("value") is None
 
-        if not swap_b64:
-            return None
+        payload_bh = {"jsonrpc": "2.0", "id": 1, "method": "getLatestBlockhash", "params": [{"commitment": "finalized"}]}
+        async with session.post(SOLANA_RPC, json=payload_bh) as resp:
+            bh_data = await resp.json()
+            blockhash_str = bh_data["result"]["value"]["blockhash"]
+        blockhash = Hash.from_string(blockhash_str)
 
-        raw_bytes = base64.b64decode(swap_b64)
-        tx = VersionedTransaction.from_bytes(raw_bytes)
-        signed_tx = VersionedTransaction(tx.message, [signer])
-        signed_b64 = base64.b64encode(bytes(signed_tx)).decode("utf-8")
+        instructions = []
+        if needs_creation:
+            create_ata_ix = Instruction(
+                program_id=Pubkey.from_string(ASSOCIATED_TOKEN_PROGRAM_ID),
+                accounts=[
+                    AccountMeta(signer.pubkey(), is_signer=True, is_writable=True),
+                    AccountMeta(recipient_ata, is_signer=False, is_writable=True),
+                    AccountMeta(recipient_pubkey, is_signer=False, is_writable=False),
+                    AccountMeta(mint_pubkey, is_signer=False, is_writable=False),
+                    AccountMeta(Pubkey.from_string("11111111111111111111111111111111"), is_signer=False, is_writable=False),
+                    AccountMeta(Pubkey.from_string(TOKEN_PROGRAM_ID), is_signer=False, is_writable=False),
+                ],
+                data=bytes([1])
+            )
+            instructions.append(create_ata_ix)
 
-        rpc_payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "sendTransaction",
-            "params": [signed_b64, {"skipPreflight": False, "encoding": "base64"}]
+        data_bytes = bytes([3]) + raw_amount.to_bytes(8, 'little') + bytes([6])
+        transfer_ix = Instruction(
+            program_id=Pubkey.from_string(TOKEN_PROGRAM_ID),
+            accounts=[
+                AccountMeta(sender_ata, is_signer=False, is_writable=True),
+                AccountMeta(mint_pubkey, is_signer=False, is_writable=False),
+                AccountMeta(recipient_ata, is_signer=False, is_writable=True),
+                AccountMeta(signer.pubkey(), is_signer=True, is_writable=False),
+            ],
+            data=data_bytes
+        )
+        instructions.append(transfer_ix)
+
+        msg = Message.new_with_blockhash(instructions, signer.pubkey(), blockhash)
+        tx = Transaction([signer], msg, blockhash)
+        tx_b64 = base64.b64encode(bytes(tx)).decode('utf-8')
+
+        send_payload = {
+            "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
+            "params": [tx_b64, {"encoding": "base64", "skipPreflight": False}]
         }
-        async with session.post(SOLANA_RPC, json=rpc_payload, timeout=aiohttp.ClientTimeout(total=8)) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                sig = data.get("result")
-                if sig:
-                    return str(sig)
+        async with session.post(SOLANA_RPC, json=send_payload) as resp:
+            send_data = await resp.json()
+            if "error" in send_data:
+                add_log(f"⚠️ Ошибка RPC USDC transfer: {send_data['error']}")
+                return None
+            return send_data.get("result")
     except Exception as e:
-        add_log(f"⚠️ Ошибка в execute_spl_usdc_transfer: {e}")
-    return None
+        add_log(f"⚠️ Исключение при отправке USDC: {e}")
+        return None
 
 # --- ВОРКЕР 1: ОСНОВНОЙ (Топ-5 Ликвидных Активов) ---
 async def real_trading_worker():
@@ -1401,3 +1430,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
