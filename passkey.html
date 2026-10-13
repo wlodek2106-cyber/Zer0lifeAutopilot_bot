@@ -33,7 +33,7 @@ button.onclick=async()=>{
    document.getElementById('details').textContent='Withdrawal: '+amount+' '+i.token+' to '+i.recipient_address;
    }
    statusBox.textContent='Review the details, then tap below. Your device will ask you to verify.';
-   button.textContent=data.phase==='register'?'Create device passkey':data.purpose==='withdraw'?'Approve this withdrawal':'Confirm existing passkey';
+   button.textContent=data.phase==='register'?'Create device passkey':data.purpose==='withdraw'?'Approve this withdrawal':data.purpose==='login'?'Approve browser sign-in':'Confirm existing passkey';
    button.disabled=false;
    return;
   }
@@ -50,7 +50,7 @@ button.onclick=async()=>{
    }
   }
   document.getElementById('pin').value='';
-  statusBox.textContent=data.phase==='enrolled'?'Passkey registered. Return to Telegram.':'Withdrawal approved. Return to Telegram to submit it.';
+  statusBox.textContent=data.phase==='enrolled'?'Passkey registered. Return to your account.':data.purpose==='login'?'Sign-in approved. Return to the web terminal tab.':'Withdrawal approved. Return to your account to submit it.';
   if(data.recovery_codes?.length){document.getElementById('backup').hidden=false;document.getElementById('codes').textContent=data.recovery_codes.join('\n');}
  }catch(e){statusBox.textContent=e.name==='NotAllowedError'?'Cancelled or unavailable. Try again, or open a new link in Safari.':e.message;button.disabled=false;}
 };

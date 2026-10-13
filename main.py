@@ -26,6 +26,8 @@ from solders.instruction import Instruction, AccountMeta
 from custody_runtime import CustodyRuntime
 from english_text import english_json_middleware
 from account_security import AccountSecurity
+from web_access import WebAccess
+from wallet_runtime import WalletError
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -127,9 +129,15 @@ async def telegram_auth_middleware(request, handler):
     if not request.path.startswith("/api/"):
         return await handler(request)
     try:
-        telegram_user = verify_telegram_init_data(request.headers.get("X-Telegram-Init-Data", ""))
-    except TelegramAuthError as exc:
-        return web.json_response({"success": False, "message": str(exc)}, status=401)
+        access = getattr(request.app.get("wallet_runtime"), "web_access", None)
+        if access and not request.headers.get("X-Telegram-Init-Data") and request.cookies.get("__Host-zrl-session"):
+            telegram_user = access.authenticate(request)
+            request["auth_method"] = "web"
+        else:
+            telegram_user = verify_telegram_init_data(request.headers.get("X-Telegram-Init-Data", ""))
+            request["auth_method"] = "telegram"
+    except (TelegramAuthError, WalletError) as exc:
+        return web.json_response({"success": False, "message": str(exc)}, status=getattr(exc, "status", 401))
     request["telegram_user"] = telegram_user
     if request.path in ADMIN_API_PATHS:
         try:
@@ -923,6 +931,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                         <div style="font-size:11px; margin-top:6px;">Verify your wallet once. Send funds, then paste the transaction signature. No Memo required.</div>
                     </div>
                     <button class="btn-copy" onclick="linkDepositWallet()">Verify your wallet</button>
+                    <a id="wallet-verification-link" hidden target="_blank" rel="noopener noreferrer">Open wallet verification · hold to copy link</a>
                     <div id="deposit-invoice-details">
                         <div class="address-box" id="wallet-text">__DEPOSIT_WALLET__</div>
                         <button class="btn-copy" onclick="copyWallet()">Copy deposit address</button>
@@ -1057,6 +1066,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         overviewActions.className='quick-actions';
         for (const [label,tab,index] of [['Deposit / withdraw','deposit',2],['Trading dashboard','trading',1]]) {
             const button=document.createElement('button');button.className='btn-copy';button.textContent=label;
+            button.dataset.targetTab=tab;
             button.onclick=()=>gotoTab(tab,document.querySelectorAll('.nav-btn')[index]);overviewActions.appendChild(button);
         }
         document.getElementById('tab-terminal').appendChild(overviewActions);
@@ -1107,6 +1117,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const result = await response.json();
                 if (!response.ok || !result.success) throw new Error(result.message);
                 if (result.address) { alert('Your verified wallet: ' + result.address); return; }
+                const link=document.getElementById('wallet-verification-link');
+                link.href=result.url;link.hidden=false;
                 if (tg?.openLink) tg.openLink(result.url); else window.open(result.url, '_blank', 'noopener');
             } catch(e) { alert(e.message || 'Could not open wallet verification.'); }
         }
@@ -1199,12 +1211,18 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         function getUserData() {
+            if(window.ZRL_WEB)return window.webSession?.user||null;
             const user = tg?.initDataUnsafe?.user;
             if (!tg?.initData || !user?.id) return null;
             return { id: Number(user.id), username: user.username || user.first_name || 'User' };
         }
 
         async function apiFetch(url, options = {}) {
+            if(window.ZRL_WEB){
+                if(!window.webSession?.user)throw Error('Sign in to the web terminal.');
+                return fetch(url,{...options,credentials:'same-origin',
+                    headers:{...(options.headers||{}),'X-ZRL-CSRF':window.webSession.csrf}});
+            }
             if (!tg?.initData) throw new Error('Open this app through Telegram.');
             const headers = Object.assign({}, options.headers || {}, { 'X-Telegram-Init-Data': tg.initData });
             return fetch(url, Object.assign({}, options, { headers }));
@@ -1221,6 +1239,9 @@ RAW_HTML = r"""<!DOCTYPE html>
             return data;
         }
         async function openTerminal() {
+            if(window.ZRL_WEB&&!window.webSession?.user){
+                document.getElementById('web-login').hidden=false;return;
+            }
             const user = getUserData();
             if (!user) { alert("Open this app from Telegram."); return; }
             const launch=document.getElementById('launch-terminal');
@@ -1447,6 +1468,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             tradingActive = !!isActive;
             const btn = document.getElementById('btn-toggle');
             if (btn) {
+                if(window.ZRL_WEB)btn.disabled=!window.webAccessActive;
                 btn.className = isActive ? "btn-ctl btn-toggle-on" : "btn-ctl btn-toggle-off";
                 document.getElementById('toggle-text').innerText = isActive ? "Autopilot: ON" : "Autopilot: OFF";
             }
@@ -1508,7 +1530,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             } catch (e) { alert("Connection error."); }
             finally {
                 btn.innerText = "Verify deposit";
-                btn.disabled = false;
+                btn.disabled = window.ZRL_WEB ? !window.webAccessActive : false;
             }
         }
 
@@ -1529,6 +1551,11 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const s = await apiFetch('/api/stats?' + params.toString()).then(r => r.json());
                 
                 if (s.success) {
+                    if(!window.ZRL_WEB&&!s.is_admin){
+                        document.querySelectorAll('.nav-btn')[1].style.display='none';
+                        document.querySelectorAll('[data-target-tab="trading"]').forEach(b=>b.style.display='none');
+                        document.getElementById('tab-trading').style.display='none';
+                    }
                     const flags = s.wallet_status || {};
                     document.getElementById('wallet-runtime-status').textContent =
                         !flags.wallet_configured ? 'Server key does not match the wallet address.' :
@@ -1664,7 +1691,14 @@ RAW_HTML = r"""<!DOCTYPE html>
 HTML_CONTENT = RAW_HTML.replace("__SPLASH_URL__", SPLASH_IMAGE_URL).replace("__DEPOSIT_WALLET__", SHARED_DEPOSIT_WALLET)
 
 async def index_handler(request):
-    return web.Response(text=HTML_CONTENT, content_type='text/html', headers={"Cache-Control": "no-store"})
+    page = HTML_CONTENT
+    if request.path == "/terminal":
+        panel = Path(__file__).with_name("web_login.html").read_text(encoding="utf-8")
+        page = page.replace("</head>", "<script>window.ZRL_WEB=true;</script></head>")
+        page = page.replace("</body>", panel + '<script src="/web-terminal.js"></script></body>')
+    return web.Response(text=page, content_type='text/html', headers={"Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "frame-ancestors 'none'; object-src 'none'; base-uri 'none'"})
 
 async def health_handler(request):
     runtime = request.app["wallet_runtime"]
@@ -1673,6 +1707,7 @@ async def health_handler(request):
         "build_commit": os.getenv("RENDER_GIT_COMMIT", ""),
         "deposit_parser_version": "phantom-authority-v1",
         "ai_configured": bool(os.getenv("OPENAI_API_KEY")),
+        "web_terminal_version": "sol-access-v1",
         "trading_active": bool(runtime.ledger.active_users())})
 
 async def api_get_logs(request):
@@ -2045,6 +2080,7 @@ async def main():
         get_signer_keypair, verify_user_pin, get_token_prices, WATCHLIST, add_log, base_url=RENDER_URL)
     runtime.recent_logs = lambda: RECENT_LOGS
     runtime.accounts = AccountSecurity(runtime.ledger, RENDER_URL, verify_user_pin, runtime.wallet)
+    runtime.web_access = WebAccess(runtime)
     app["wallet_runtime"] = runtime
     def wallet_handler(action):
         async def handler(request):
@@ -2063,6 +2099,18 @@ async def main():
             "Content-Security-Policy": "frame-ancestors 'none'; object-src 'none'; base-uri 'none'",
             "X-Content-Type-Options": "nosniff"})
     app.router.add_get('/', index_handler)
+    app.router.add_get('/terminal', index_handler)
+    async def web_script(request):
+        return web.Response(text=Path(__file__).with_name("web_terminal.js").read_text(encoding="utf-8"),
+                            content_type="application/javascript", headers={"Cache-Control":"no-store"})
+    app.router.add_get('/web-terminal.js', web_script)
+    app.router.add_get('/web-auth/me', runtime.web_access.public)
+    app.router.add_post('/web-auth/start', runtime.web_access.public)
+    app.router.add_post('/web-auth/finish', runtime.web_access.public)
+    app.router.add_post('/web-auth/logout', runtime.web_access.public)
+    app.router.add_get('/api/subscription', wallet_handler(runtime.web_access.status))
+    app.router.add_post('/api/subscription/order', wallet_handler(runtime.web_access.order))
+    app.router.add_post('/api/subscription/verify', wallet_handler(runtime.web_access.verify))
     app.router.add_get('/health', health_handler)
     app.router.add_get('/api/logs', wallet_handler(runtime.logs))
     app.router.add_get('/api/stats', wallet_handler(runtime.stats))
@@ -2125,6 +2173,15 @@ async def main():
     runtime.poll_discovery()
     asyncio.create_task(runtime.worker())
     await set_telegram_webhook()
+    if TELEGRAM_TOKEN:
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                async with session.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getMe") as response:
+                    details = await response.json()
+                    if details.get("ok"):
+                        runtime.web_access.bot_username = details["result"]["username"]
+        except Exception:
+            add_log("Web sign-in: Telegram registration link temporarily unavailable.")
     
     add_log("⚜️ Гибридное ядро заведено на порту " + str(PORT))
     while True:
