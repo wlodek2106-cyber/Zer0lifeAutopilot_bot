@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Пополнение счёта</title>
+<title>Account deposit</title>
 <style>
 body{background:#090d14;color:#e2e8f0;font:16px system-ui;margin:0;padding:24px}
 main{max-width:560px;margin:auto}h1{font-size:24px}
@@ -14,17 +14,17 @@ button:disabled{opacity:.45}code{overflow-wrap:anywhere;font-size:12px}p{line-he
  integrity="sha384-I45YF+S0YGWIolUyTksLk9TNtTqaDgZg8e6T1OoBoJvvFmphqYNIPZw3Kl0TkZNN" crossorigin="anonymous"></script>
 </head>
 <body><main>
-<h1>Пополнение личного счёта</h1>
-<p class="muted">Только Solana mainnet. Подпись выполняется в вашем кошельке: сайт не запрашивает seed-фразу или приватный ключ.</p>
-<div class="box"><strong id="amount">Загрузка...</strong>
-<p>Общий адрес: <code id="address"></code></p>
+<h1>Personal account deposit</h1>
+<p class="muted">Solana mainnet only. Sign in your wallet. Never share your seed phrase or private key.</p>
+<div class="box"><strong id="amount">Loading...</strong>
+<p>Shared address: <code id="address"></code></p>
 <p><code id="memo"></code></p></div>
-<p class="muted">Эта старая страница больше не отправляет платежи. Вернитесь в Wallet: обычный перевод и проверка Tx.</p>
-<a id="phantom" class="button">Открыть в Phantom</a>
-<button id="pay" disabled>Подключить кошелёк и оплатить</button>
+<p class="muted">This legacy page no longer sends payments. Return to Wallet: send normally and verify the transaction.</p>
+<a id="phantom" class="button">Open in Phantom</a>
+<button id="pay" disabled>Connect wallet and pay</button>
 <p id="status" role="status"></p>
-<a id="transaction" target="_blank" rel="noopener noreferrer" style="display:none;color:#60a5fa">Открыть транзакцию</a>
-<p class="muted">После подтверждения вернитесь в Telegram. Обновится только счёт, которому принадлежит этот платёжный запрос.</p>
+<a id="transaction" target="_blank" rel="noopener noreferrer" style="display:none;color:#60a5fa">View transaction</a>
+<p class="muted">Return to Telegram after confirmation. Only the account that owns this request will be credited.</p>
 </main>
 <script>
 const invoiceId = location.pathname.split('/').filter(Boolean).pop();
@@ -39,24 +39,24 @@ async function refresh() {
     try {
         const response = await fetch(api + '/status', {cache:'no-store'});
         invoice = await response.json();
-        if (!response.ok || !invoice.success) throw new Error(invoice.message || 'Запрос недоступен.');
+        if (!response.ok || !invoice.success) throw new Error(invoice.message || 'Request unavailable.');
         document.getElementById('amount').textContent = invoice.amount + ' ' + invoice.token;
         document.getElementById('address').textContent = invoice.deposit_wallet;
-        document.getElementById('memo').textContent = 'Обычный перевод. Подтвердите кошелёк в Telegram и проверьте Tx.';
+        document.getElementById('memo').textContent = 'Send normally. Verify your wallet and transaction in Telegram.';
         const credited = invoice.state === 'CREDITED';
         pay.disabled = true;
-        if (credited) status.textContent = 'Пополнение подтверждено и зачислено вашему аккаунту.';
-        else if (signature) status.textContent = 'Отправлено. Ожидается финализация — повторять оплату не нужно.';
-        else if (paymentLocked) status.textContent = 'Результат отправки неизвестен. Не платите повторно; проверьте историю кошелька и счёт в Telegram.';
-        else if (!provider()) status.textContent = 'Откройте эту страницу в браузере вашего Solana-кошелька, например Phantom.';
-        else status.textContent = 'Старая страница отключена. Используйте обычный перевод и проверку Tx в Telegram.';
+        if (credited) status.textContent = 'Deposit confirmed and credited to your account.';
+        else if (signature) status.textContent = 'Sent. Awaiting finalization; do not pay again.';
+        else if (paymentLocked) status.textContent = 'Broadcast outcome unknown. Do not pay again; check wallet history and your Telegram account.';
+        else if (!provider()) status.textContent = 'Open this page in your Solana wallet browser, e.g. Phantom.';
+        else status.textContent = 'Legacy page disabled. Send normally and verify the transaction in Telegram.';
         if (provider()?.isPhantom) phantom.style.display = 'none';
     } catch(e) { pay.disabled = true; status.textContent = e.message; }
 }
 pay.onclick = async () => {
     if (submitting || paymentLocked || signature || !invoice) return;
     const wallet = provider();
-    if (!wallet || !window.solanaWeb3) { status.textContent = 'Откройте страницу внутри совместимого Solana-кошелька.'; return; }
+    if (!wallet || !window.solanaWeb3) { status.textContent = 'Open this page inside a compatible Solana wallet.'; return; }
     submitting = true; pay.disabled = true;
     try {
         const connected = await wallet.connect();
@@ -65,14 +65,14 @@ pay.onclick = async () => {
             method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sender})
         });
         const prepared = await response.json();
-        if (!response.ok || !prepared.success) throw new Error(prepared.message || 'Не удалось создать перевод.');
+        if (!response.ok || !prepared.success) throw new Error(prepared.message || 'Could not prepare the transfer.');
         const tx = solanaWeb3.Transaction.from(Uint8Array.from(atob(prepared.transaction), c=>c.charCodeAt(0)));
-        if (!confirm('Пополнить свой счёт на ' + prepared.amount + ' ' + prepared.token + '? Комиссия оплачивается вашим кошельком.')) return;
+        if (!confirm('Deposit ' + prepared.amount + ' ' + prepared.token + ' to your account? Fees are paid by your wallet.')) return;
         localStorage.setItem('deposit-lock:' + invoiceId, 'true');
         paymentLocked = true;
         const result = await wallet.signAndSendTransaction(tx);
         signature = typeof result === 'string' ? result : result.signature;
-        if (!signature) throw new Error('Кошелёк не вернул подпись. Не повторяйте оплату, проверьте историю кошелька.');
+        if (!signature) throw new Error('Wallet returned no signature. Do not pay again; check wallet history.');
         localStorage.setItem('deposit-signature:' + invoiceId, signature);
         const link = document.getElementById('transaction');
         link.href = 'https://solscan.io/tx/' + encodeURIComponent(signature); link.style.display = 'inline';
@@ -82,7 +82,7 @@ pay.onclick = async () => {
             paymentLocked = false;
             localStorage.removeItem('deposit-lock:' + invoiceId);
         }
-        status.textContent = e.message || 'Результат неизвестен. Проверьте историю кошелька, не повторяйте перевод.';
+        status.textContent = e.message || 'Outcome unknown. Check wallet history; do not repeat the transfer.';
     } finally { submitting = false; await refresh(); }
 };
 async function confirmPayment() {

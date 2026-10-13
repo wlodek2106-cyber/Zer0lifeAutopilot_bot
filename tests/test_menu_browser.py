@@ -39,7 +39,7 @@ class MenuBrowserTests(unittest.TestCase):
             if(url==='/api/admin/fee_reserve'){
                 window.feePosts.push(JSON.parse(options.body));
                 fixture.operator_fees={reserve_sol:'0.01',minimum_sol:'0.005',own_available_sol:'0.154009149',sufficient:true};
-                return new Response(JSON.stringify({success:true,message:'Выделено',operator_fees:fixture.operator_fees}),
+                return new Response(JSON.stringify({success:true,message:'Allocated',operator_fees:fixture.operator_fees}),
                     {status:200,headers:{'Content-Type':'application/json'}});
             }
             return new Response(JSON.stringify(fixture),{status:200,headers:{'Content-Type':'application/json'}});
@@ -56,13 +56,13 @@ class MenuBrowserTests(unittest.TestCase):
                 assert(document.getElementById('meme-sniper-card').closest('.tab-panel').id==='tab-trading','SOL sniper in Trading, not Overview');
                 assert(document.getElementById('sniper-sol-balance').textContent==='0.164009 SOL','sniper shows personal SOL');
                 assert(document.getElementById('btn-meme-toggle').disabled,'unconnected sniper cannot trade');
-                assert(document.getElementById('meme-toggle-text').textContent==='НЕ ПОДКЛЮЧЁН','honest sniper status');
+                assert(document.getElementById('meme-toggle-text').textContent==='NOT CONNECTED','honest sniper status');
                 assert(document.getElementById('btn-toggle').closest('.tab-panel').id==='tab-trading','controls in Trading');
                 assert(document.getElementById('admin-custody-panel').closest('.tab-panel').id==='tab-settings','admin in Settings');
                 assert(document.getElementById('port-balance').textContent==='34.037005 USDC','personal USDC value');
                 assert(document.getElementById('port-withdrawable').textContent==='0.164009 SOL','separate SOL value');
                 assert(document.getElementById('strategy-order-size').textContent==='1.00 USDC','server size not legacy $20');
-                assert(document.getElementById('fee-status').textContent.includes('В резерве: 0 SOL'),'shows actual empty reserve');
+                assert(document.getElementById('fee-status').textContent.includes('Reserve: 0 SOL'),'shows actual empty reserve');
                 assert(window.feePosts.length===0,'no automatic fee allocation');
                 document.getElementById('fee-amount').value='0,01';
                 await setupFeeReserve();
@@ -71,8 +71,25 @@ class MenuBrowserTests(unittest.TestCase):
                 await setupFeeReserve();
                 assert(window.feePosts.length===1,'one explicitly requested allocation');
                 assert(window.feePosts[0].amount_sol==='0.01','mobile comma normalized');
-                assert(document.getElementById('fee-status').textContent.includes('В резерве: 0.01 SOL'),'actual post-allocation reserve visible');
+                assert(document.getElementById('fee-status').textContent.includes('Reserve: 0.01 SOL'),'actual post-allocation reserve visible');
                 assert(!document.getElementById('fee-confirm').checked,'confirmation cleared after success');
+                const copy=document.body.cloneNode(true);
+                copy.querySelectorAll('script,style').forEach(el=>el.remove());
+                assert(!/[А-Яа-яЁё]/.test(copy.textContent),'all UI text in English');
+                assert(document.getElementById('strategy-help').closest('.tab-panel').id==='tab-settings','long strategy text in Settings');
+                assert(!document.getElementById('strategy-help').open,'strategy help collapsed by default');
+                assert(document.getElementById('meme-sniper-card').querySelectorAll('p.section-note').length===2,'compact sniper card');
+                fixture.ai_status={configured:true,model:'gpt-4.1-mini',interval_seconds:900,
+                    last_analyzed_at:1791925101,sniper_assets:['WIF'],
+                    last_decisions:{main:{action:'HOLD',symbol:null,reason:'No significant signal.'},
+                                    sniper:{action:'HOLD',symbol:null,reason:'Insufficient WIF samples.'}}};
+                fixture.trading_active=true;fixture.sniper_active=true;
+                fixture.trading_settings.assets=['SOL','JUP','RAY','WIF','PYTH'];
+                await refresh();
+                assert(document.getElementById('toggle-text').textContent==='Autopilot: ON','enabled core status in English');
+                assert(document.getElementById('meme-toggle-text').textContent==='AI: ON','enabled sniper status in English');
+                assert(!document.getElementById('strategy-assets').textContent.includes('WIF'),'core asset list excludes sniper-only WIF');
+                assert(document.getElementById('ai-decisions').textContent.includes('No significant signal.'),'English model explanation');
                 const tabs=['terminal','trading','deposit','settings'];
                 for(let i=0;i<tabs.length;i++){
                     gotoTab(tabs[i],document.querySelectorAll('.nav-btn')[i]);
