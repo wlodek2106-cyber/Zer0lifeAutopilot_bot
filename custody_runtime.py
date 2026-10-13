@@ -69,7 +69,14 @@ class CustodyRuntime(WalletRuntime):
         self.ready()
 
     def readiness(self):
-        return {**super().readiness(), "public_custody_enabled": self.public_enabled}
+        return {**super().readiness(), "public_custody_enabled": self.public_enabled,
+                "legacy_operation_pending": bool(self.legacy_pending())}
+
+    def legacy_pending(self):
+        with self.ledger.db() as db:
+            exists = db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='wallet_operations'").fetchone()
+            return [dict(row) for row in db.execute(
+                "SELECT * FROM wallet_operations WHERE state IN ('PREPARED','SUBMITTED','UNKNOWN')")] if exists else []
 
     def ready(self):
         signer = super().ready()
@@ -77,13 +84,17 @@ class CustodyRuntime(WalletRuntime):
         with self.ledger.db() as db:
             exists = db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='wallet_operations'").fetchone()
             if exists and db.execute("SELECT id FROM wallet_operations WHERE state IN ('PREPARED','SUBMITTED','UNKNOWN') LIMIT 1").fetchone():
-                raise WalletError("Сначала нужно подтвердить исход старой операции личного режима.")
+                raise WalletError("Старая операция ещё не подтверждена. Wallet → «Проверить старые операции» покажет её подпись и результат проверки. Повторно отправлять деньги не нужно.", 409)
         return signer
 
     async def handle(self, request, action):
         try:
             self.owner(request)
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=35)) as session:
+                if action.__name__ in {"create_invoice", "deposit", "toggle", "withdraw", "reserve_fees", "opening_balance"} and self.legacy_pending():
+                    # Re-check finalized results BEFORE ready()/admit() rejects the request.
+                    # Unknown results remain blocked; never resend or guess failure.
+                    await self.reconcile(session)
                 return await action(request, session)
         except (WalletError, LedgerError) as exc:
             return web.json_response({"success": False, "message": str(exc)},
@@ -331,12 +342,22 @@ class CustodyRuntime(WalletRuntime):
     async def admin_status(self, request, session):
         if self.uid(request) != self.owner_id:
             raise WalletError("Только администратор.", 403)
-        await self.reconcile(session)
-        backing = await self.solvent(session)
+        payload = {"success": True, "legacy_check_error": None, "balance_check_error": None}
+        try:
+            await self.reconcile(session)
+        except Exception as exc:
+            payload["legacy_check_error"] = str(exc) if isinstance(exc, WalletError) else "Не удалось проверить старую операцию: " + type(exc).__name__
+        payload["legacy_operations"] = [{key: row.get(key) for key in ("id", "signature", "kind", "state", "timestamp")}
+                                        for row in self.legacy_pending()]
+        try:
+            backing = await self.solvent(session)
+        except Exception as exc:
+            payload["balance_check_error"] = str(exc) if isinstance(exc, (WalletError, LedgerError)) else "Не удалось проверить покрытие: " + type(exc).__name__
+            return web.json_response(payload)
         liabilities = self.ledger.liabilities()
         with self.ledger.db() as db:
             fee = db.execute("SELECT raw FROM custody_accounts WHERE account='treasury' AND asset=?", (SOL,)).fetchone()
-        return web.json_response({"success": True,
+        return web.json_response({**payload,
             "unassigned_usdc": display_raw(backing[USDC]["raw"] - liabilities.get(USDC, 0), 6),
             "unassigned_sol": display_raw(backing[SOL]["raw"] - liabilities.get(SOL, 0), 9),
             "fee_reserve_sol": display_raw(fee["raw"] if fee else 0, 9)})

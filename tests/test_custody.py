@@ -481,6 +481,41 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.service.legacy_runtime.operation("old-operation")["state"], "FAILED")
         self.assertEqual(self.service.ready(), self.signer)
 
+    async def test_financial_handler_reconciles_finalized_old_result_before_guard(self):
+        self.service.legacy_runtime.reserve("old-operation", "old-signature", "WITHDRAW", {})
+        self.status = {"confirmationStatus": "finalized", "err": "failed"}
+        response = await self.service.handle(Request(101, {"token": "USDC", "amount": "1"}), self.service.create_invoice)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(self.service.legacy_runtime.operation("old-operation")["state"], "FAILED")
+        self.assertFalse(self.service.readiness()["legacy_operation_pending"])
+
+    async def test_unknown_legacy_result_still_blocks_invoice_and_keeps_record(self):
+        self.service.legacy_runtime.reserve("old-operation", "old-signature", "WITHDRAW", {})
+        response = await self.service.handle(Request(101, {"token": "USDC", "amount": "1"}), self.service.create_invoice)
+        self.assertEqual(response.status, 409)
+        self.assertEqual(self.service.legacy_runtime.operation("old-operation")["state"], "PREPARED")
+        self.assertFalse(any(method == "sendTransaction" for method, _ in self.calls))
+
+    async def test_owner_diagnostics_show_old_signature_without_spending(self):
+        self.service.legacy_runtime.reserve("old-operation", "old-signature", "WITHDRAW", {})
+        response = await self.service.admin_status(Request(101), None)
+        result = json.loads(response.text)
+        self.assertEqual(result["legacy_operations"][0]["signature"], "old-signature")
+        self.assertEqual(self.service.legacy_runtime.operation("old-operation")["state"], "PREPARED")
+        self.assertFalse(any(method == "sendTransaction" for method, _ in self.calls))
+        with self.assertRaises(legacy.WalletError) as error:
+            await self.service.admin_status(Request(202), None)
+        self.assertEqual(error.exception.status, 403)
+
+    async def test_owner_diagnostics_survive_rpc_failure_keep_unknown(self):
+        self.service.legacy_runtime.reserve("old-operation", "old-signature", "WITHDRAW", {})
+        self.service.rpc = AsyncMock(side_effect=legacy.WalletError("Solana RPC недоступен."))
+        result = json.loads((await self.service.admin_status(Request(101), None)).text)
+        self.assertTrue(result["success"])
+        self.assertIn("RPC", result["legacy_check_error"])
+        self.assertIn("RPC", result["balance_check_error"])
+        self.assertEqual(result["legacy_operations"][0]["state"], "PREPARED")
+
     async def test_scan_paginates_across_cycles_without_losing_old_payments(self):
         self.ledger.invoice(101, SOL, 1_000_000)
         now = int(time.time())

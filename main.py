@@ -905,6 +905,8 @@ RAW_HTML = r"""<!DOCTYPE html>
             <div id="admin-custody-panel" class="card" style="display:none;">
                 <div style="font-weight:800;">Настройка администратора перед публичным открытием</div>
                 <div style="font-size:11px;margin-top:8px;">Комиссии оплачиваются из отдельного резерва оператора. Чужие балансы не используются.</div>
+                <button class="btn-copy" onclick="checkLegacyOperations()">Проверить старые операции</button>
+                <div id="legacy-operation-details" style="font-size:12px;overflow-wrap:anywhere;white-space:pre-wrap;margin-top:8px;"></div>
                 <button class="btn-copy" onclick="setupFeeReserve()">Выделить собственные SOL на комиссии</button>
                 <button class="btn-copy" onclick="importOwnOpeningBalance()">Перенести старый личный остаток</button>
             </div>
@@ -956,6 +958,32 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
         function copyDepositMemo() {
             navigator.clipboard.writeText(document.getElementById('deposit-memo').textContent);
+        }
+        async function checkLegacyOperations() {
+            const box = document.getElementById('legacy-operation-details');
+            box.textContent = 'Проверяю сеть, без отправки денег…';
+            try {
+                const response = await apiFetch('/api/admin/status');
+                const result = await response.json();
+                if (!response.ok || !result.success) throw new Error(result.message || 'Проверка недоступна.');
+                const lines = [];
+                if (result.legacy_check_error) lines.push(result.legacy_check_error);
+                if (result.balance_check_error) lines.push(result.balance_check_error);
+                if (result.unassigned_usdc !== undefined) lines.push('Старые нераспределённые монеты: ' + result.unassigned_usdc + ' USDC; ' + result.unassigned_sol + ' SOL. Это не личный баланс нового учёта.');
+                const operations = result.legacy_operations || [];
+                if (!operations.length && !result.legacy_check_error) lines.push('Незавершённых старых операций нет.');
+                operations.forEach(op => lines.push('Старая операция: ' + op.kind + ' / ' + op.state + '\\nПодпись: ' + op.signature + '\\nДата: ' + op.timestamp));
+                if (operations.length) lines.push('Исход пока неизвестен: запись сохранена, повторной отправки не было. Не удаляйте её вручную.');
+                box.textContent = lines.join('\\n\\n');
+                operations.forEach(op => {
+                    const a = document.createElement('a');
+                    a.href = 'https://solscan.io/tx/' + encodeURIComponent(op.signature);
+                    a.textContent = '\\nОткрыть старую транзакцию в Solscan';
+                    a.target = '_blank'; a.rel = 'noopener noreferrer';
+                    box.appendChild(a);
+                });
+                await refresh();
+            } catch(e) { box.textContent = e.message || 'Не удалось проверить старые операции.'; }
         }
         async function setupFeeReserve() {
             const amount = prompt('Сколько своих SOL выделить на комиссии? Сначала используется ваш личный SOL-баланс, затем только ваши нераспределённые монеты.', '0.01');
@@ -1700,11 +1728,14 @@ async def set_telegram_webhook():
     webhook_url = f"{RENDER_URL.rstrip('/')}/webhook"
     set_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook"
     secret = hmac.new(TELEGRAM_TOKEN.encode(), b"zerolife-webhook-v1", hashlib.sha256).hexdigest()
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
         try:
-            await session.post(set_url, json={"url": webhook_url, "secret_token": secret})
+            async with session.post(set_url, json={"url": webhook_url, "secret_token": secret}) as response:
+                result = await response.json()
+                if response.status != 200 or not result.get("ok"):
+                    add_log("Telegram webhook: настройка не подтверждена.")
         except Exception:
-            pass
+            add_log("Telegram webhook: сервис недоступен, сверка операций продолжает работать.")
 
 async def main():
     init_db()
@@ -1756,9 +1787,8 @@ async def main():
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
 
-    await set_telegram_webhook()
-    
     asyncio.create_task(runtime.worker())
+    await set_telegram_webhook()
     
     add_log("⚜️ Гибридное ядро заведено на порту " + str(PORT))
     while True:
