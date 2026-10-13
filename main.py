@@ -53,7 +53,7 @@ MEME_STOP_LOSS_PCT = 0.80      # Стоп-лосс на случай скама 
 
 IS_TRADING_ACTIVE = True       # Глобальный флаг автопилота Топ-5 (ВКЛ / ВЫКЛ)
 IS_MEME_ACTIVE = False         # Глобальный флаг Meme Sniper режима (ВКЛ / ВЫКЛ)
-RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v5.2 (Biometrics, Individual Accs, Sell All) инициализирован."]
+RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v5.3 (Active) инициализирован."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -335,7 +335,7 @@ async def real_trading_worker():
                         add_log(f"💎 Успешно куплен {sym}! Tx: {buy_sig[:12]}...")
                         cooldown_until = now_ts + 30
 
-            except Exception as e:
+            except Exception:
                 pass
 
             await asyncio.sleep(20)
@@ -438,7 +438,7 @@ async def meme_sniper_worker():
 
                     await asyncio.sleep(15)
 
-            except Exception as e:
+            except Exception:
                 await asyncio.sleep(10)
 
 
@@ -530,7 +530,6 @@ RAW_HTML = r"""<!DOCTYPE html>
     <div id="splash-screen">
         <div class="brand-title">ZERØLIFE</div>
         <div class="brand-run">MULTI-ASSET</div>
-        <!-- Кнопка входа вызывает функцию с запросом биометрии -->
         <button class="start-btn" onclick="openTerminal()">Launch Terminal</button>
     </div>
 
@@ -647,7 +646,6 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <div style="font-size: 12px; color: #94a3b8; margin-bottom: 6px;">Amount:</div>
                     <input id="withdraw-amount" type="number" step="any" class="sig-input" placeholder="0.00">
 
-                    <!-- Кнопка вызывает безопасный вывод с биометрией -->
                     <button class="btn-green-main" id="btn-withdraw-action" onclick="secureWithdraw()">Withdraw 🚀</button>
                 </div>
             </div>
@@ -663,17 +661,22 @@ RAW_HTML = r"""<!DOCTYPE html>
 
     <script>
         const tg = window.Telegram?.WebApp;
-        if(tg) tg.expand();
+        if (tg) {
+            tg.expand();
+            tg.ready();
+        }
 
-        // Инициализация менеджера биометрии
+        let isBioReady = false;
         const bioManager = window.Telegram?.WebApp?.BiometricManager;
+
         if (bioManager) {
-            bioManager.init();
+            bioManager.init(() => {
+                isBioReady = true;
+            });
         }
 
         let currentWithdrawToken = 'USDC';
 
-        // Получаем ИНДИВИДУАЛЬНЫЕ данные пользователя
         function getUserData() {
             const initDataUnsafe = tg?.initDataUnsafe || {};
             const user = initDataUnsafe.user || {};
@@ -683,29 +686,37 @@ RAW_HTML = r"""<!DOCTYPE html>
             };
         }
 
-        // Обновленная функция входа: запрашиваем доступ к Face ID, если он есть, но еще не выдан
         function openTerminal() {
-            if (bioManager && bioManager.isBiometricAvailable && !bioManager.isAccessGranted) {
-                bioManager.requestAccess({ reason: "Для защиты ваших средств при выводе" }, (granted) => {
+            try {
+                if (isBioReady && bioManager && bioManager.isBiometricAvailable && !bioManager.isAccessGranted) {
+                    bioManager.requestAccess({ reason: "Для защиты ваших средств при выводе" }, () => {
+                        proceedToTerminal();
+                    });
+                    setTimeout(proceedToTerminal, 1000);
+                } else {
                     proceedToTerminal();
-                });
-            } else {
+                }
+            } catch (err) {
                 proceedToTerminal();
             }
         }
 
         function proceedToTerminal() {
-            document.getElementById('splash-screen').style.display = 'none';
-            document.getElementById('app').style.display = 'block';
-            document.getElementById('nav').style.display = 'flex';
+            const splash = document.getElementById('splash-screen');
+            const app = document.getElementById('app');
+            const nav = document.getElementById('nav');
+            if (splash) splash.style.display = 'none';
+            if (app) app.style.display = 'block';
+            if (nav) nav.style.display = 'flex';
             refresh();
         }
 
         function gotoTab(id, btn) {
             document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
             document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-            document.getElementById('tab-' + id).classList.add('active');
-            if(btn) btn.classList.add('active');
+            const target = document.getElementById('tab-' + id);
+            if (target) target.classList.add('active');
+            if (btn) btn.classList.add('active');
         }
 
         function switchWalletTab(tab) {
@@ -724,7 +735,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         async function closeAllPositions() {
-            if(!confirm("Вы уверены, что хотите продать все открытые позиции?")) return;
+            if (!confirm("Вы уверены, что хотите продать все открытые позиции?")) return;
             try {
                 const user = getUserData();
                 const res = await fetch('/api/close_all', {
@@ -735,38 +746,40 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const d = await res.json();
                 alert(d.message);
                 refresh();
-            } catch(e) {
+            } catch (e) {
                 alert("Ошибка соединения.");
             }
         }
 
-        // Защищенный вывод средств через Face ID / Touch ID
         function secureWithdraw() {
-            // Если на устройстве биометрии нет (например, ПК)
-            if (!bioManager || !bioManager.isBiometricAvailable) {
+            if (!isBioReady || !bioManager || !bioManager.isBiometricAvailable) {
                 submitWithdraw();
                 return;
             }
 
-            // Если доступ разрешен - сканируем
             if (bioManager.isAccessGranted) {
                 bioManager.authenticate({ reason: "Подтвердите транзакцию вывода" }, (success) => {
                     if (success) {
-                        submitWithdraw(); // Успешно - переходим к выводу
+                        submitWithdraw();
                     } else {
                         alert("❌ Аутентификация не пройдена. Вывод отменен.");
                     }
                 });
             } else {
-                alert("⚠️ Для безопасного вывода необходимо разрешить доступ к Face ID / Touch ID в настройках Telegram.");
+                bioManager.requestAccess({ reason: "Для подтверждения вывода средств" }, (granted) => {
+                    if (granted) {
+                        secureWithdraw();
+                    } else {
+                        alert("⚠️ Для вывода необходимо разрешить биометрию.");
+                    }
+                });
             }
         }
 
-        // Оригинальная логика отправки на сервер
         async function submitWithdraw() {
             const addr = document.getElementById('withdraw-address').value.trim();
             const amount = document.getElementById('withdraw-amount').value.trim();
-            if(!addr || !amount) { alert("Заполните адрес и сумму."); return; }
+            if (!addr || !amount) { alert("Заполните адрес и сумму."); return; }
 
             const btn = document.getElementById('btn-withdraw-action');
             btn.innerText = "Обработка...";
@@ -781,12 +794,12 @@ RAW_HTML = r"""<!DOCTYPE html>
                 });
                 const d = await res.json();
                 alert(d.message);
-                if(d.success) {
+                if (d.success) {
                     document.getElementById('withdraw-address').value = '';
                     document.getElementById('withdraw-amount').value = '';
                     refresh();
                 }
-            } catch(e) {
+            } catch (e) {
                 alert("Ошибка сети.");
             } finally {
                 btn.innerText = "Withdraw 🚀";
@@ -804,17 +817,26 @@ RAW_HTML = r"""<!DOCTYPE html>
 
         function updateToggleUI(isActive) {
             const btn = document.getElementById('btn-toggle');
-            btn.className = isActive ? "btn-ctl btn-toggle-on" : "btn-ctl btn-toggle-off";
-            document.getElementById('toggle-text').innerText = isActive ? "Автопилот: ВКЛ" : "Автопилот: ВЫКЛ";
+            if (btn) {
+                btn.className = isActive ? "btn-ctl btn-toggle-on" : "btn-ctl btn-toggle-off";
+                document.getElementById('toggle-text').innerText = isActive ? "Автопилот: ВКЛ" : "Автопилот: ВЫКЛ";
+            }
         }
 
         async function manualRefresh() {
             const icon = document.getElementById('refresh-icon');
-            icon.style.display = "inline-block";
-            icon.style.transform = "rotate(360deg)";
-            icon.style.transition = "transform 0.5s ease";
+            if (icon) {
+                icon.style.display = "inline-block";
+                icon.style.transform = "rotate(360deg)";
+                icon.style.transition = "transform 0.5s ease";
+            }
             await refresh();
-            setTimeout(() => { icon.style.transform = "rotate(0deg)"; icon.style.transition = "none"; }, 500);
+            setTimeout(() => { 
+                if (icon) {
+                    icon.style.transform = "rotate(0deg)"; 
+                    icon.style.transition = "none"; 
+                }
+            }, 500);
         }
 
         function toggleDepositDetails() {
@@ -829,7 +851,7 @@ RAW_HTML = r"""<!DOCTYPE html>
 
         async function verifyOnchainDeposit() {
             const sig = document.getElementById('dep-signature').value.trim();
-            if(!sig) { alert("Вставьте Signature транзакции."); return; }
+            if (!sig) { alert("Вставьте Signature транзакции."); return; }
 
             const btn = document.getElementById('btn-verify-action');
             btn.innerText = "Верификация...";
@@ -844,11 +866,11 @@ RAW_HTML = r"""<!DOCTYPE html>
                 });
                 const d = await res.json();
                 alert(d.message);
-                if(d.success) {
+                if (d.success) {
                     document.getElementById('dep-signature').value = "";
                     refresh();
                 }
-            } catch(e) {
+            } catch (e) {
                 alert("Ошибка соединения.");
             } finally {
                 btn.innerText = "Verify & Credit USDC 🔄";
@@ -859,23 +881,23 @@ RAW_HTML = r"""<!DOCTYPE html>
         async function refresh() {
             try {
                 const l = await fetch('/api/logs').then(r => r.json());
-                if(l.success) {
-                    document.getElementById('log-box').innerText = l.logs.join('\n');
-                    if(l.trading_active !== undefined) updateToggleUI(l.trading_active);
+                if (l.success) {
+                    const logBox = document.getElementById('log-box');
+                    if (logBox) logBox.innerText = l.logs.join('\n');
+                    if (l.trading_active !== undefined) updateToggleUI(l.trading_active);
                 }
 
-                // ПЕРЕДАЕМ ИНДИВИДУАЛЬНЫЕ ДАННЫЕ НА СЕРВЕР
                 const user = getUserData();
                 const s = await fetch(`/api/stats?telegram_id=${user.id}&username=${user.username}`).then(r => r.json());
                 
-                if(s.success) {
-                    document.getElementById('display-username').innerText = "@" + s.username;
+                if (s.success) {
+                    const userEl = document.getElementById('display-username');
+                    if (userEl) userEl.innerText = "@" + s.username;
                     
                     const p = s.profit_usdc;
                     document.getElementById('pnl-val').innerText = (p >= 0 ? "+$" : "-$") + Math.abs(p).toFixed(2) + " USDC";
                     document.getElementById('closed-count').innerText = s.closed_count;
                     
-                    // Обновляем ИНДИВИДУАЛЬНЫЕ балансы
                     document.getElementById('port-balance').innerText = "$" + (s.total_deposited \vert{}\vert{} 0).toFixed(2) + " / $" + (s.user_balance || 0).toFixed(2);
                     document.getElementById('port-withdrawable').innerText = "$" + (s.withdrawable || 0).toFixed(2);
                     
@@ -886,7 +908,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     portPnlEl.innerText = `${pnlSign}$${portPnlVal.toFixed(2)} (${pnlSign}${portRoiVal.toFixed(1)}%)`;
                     portPnlEl.style.color = portPnlVal >= 0 ? '#4ade80' : '#f87171';
 
-                    if(s.trades && s.trades.length > 0) {
+                    if (s.trades && s.trades.length > 0) {
                         document.getElementById('history-box').innerHTML = s.trades.map(t => {
                             const isClosed = t.status === 'CLOSED';
                             const pnlColor = t.profit_usdc >= 0 ? '#4ade80' : '#f87171';
@@ -953,7 +975,6 @@ async def api_toggle_meme(request):
     return web.json_response({"success": True, "meme_active": IS_MEME_ACTIVE})
 
 async def api_get_stats(request):
-    # Получаем Индивидуальный Telegram ID
     tg_id_str = request.query.get("telegram_id")
     if not tg_id_str or not tg_id_str.isdigit():
         return web.json_response({"success": False, "message": "Не передан telegram_id"})
@@ -964,11 +985,9 @@ async def api_get_stats(request):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     
-    # Создаем аккаунт пользователя при первом входе, если его нет
     c.execute("INSERT OR IGNORE INTO users (telegram_id, username, balance_usdc) VALUES (?, ?, 0.0)", (tg_id, username))
     conn.commit()
 
-    # Запрашиваем историю торгов (пока что оставляем глобальную историю, чтобы было видно работу бота)
     c.execute("""SELECT id, token_symbol, buy_price, amount_tokens, sell_price, profit_usdc, buy_tx, sell_tx, timestamp 
                  FROM trades ORDER BY id DESC LIMIT 25""")
     rows = c.fetchall()
@@ -993,13 +1012,11 @@ async def api_get_stats(request):
             "status": "CLOSED" if is_closed else "OPEN"
         })
 
-    # Получаем ИНДИВИДУАЛЬНЫЙ баланс пользователя
     c.execute("SELECT balance_usdc, username FROM users WHERE telegram_id = ?", (tg_id,))
     u_row = c.fetchone()
     user_bal = u_row[0] if u_row else 0.0
     db_username = u_row[1] if u_row else username
 
-    # Получаем ИНДИВИДУАЛЬНУЮ сумму депозитов пользователя
     c.execute("SELECT SUM(amount_usdc) FROM deposits WHERE telegram_id = ? AND status = 'VERIFIED'", (tg_id,))
     dep_row = c.fetchone()
     total_deposited = dep_row[0] if dep_row and dep_row[0] else 0.0
@@ -1009,7 +1026,6 @@ async def api_get_stats(request):
     total_pnl = user_bal - total_deposited
     total_roi = (total_pnl / total_deposited * 100) if total_deposited > 0 else 0.0
     
-    # Доступная сумма к выводу (выше минимального несгораемого баланса $50)
     withdrawable = max(0.0, user_bal - MIN_BOT_BALANCE_USDC)
 
     return web.json_response({
@@ -1042,9 +1058,7 @@ async def api_verify_deposit(request):
             conn.close()
             return web.json_response({"success": False, "message": f"Отказ: {msg}"})
 
-        # Привязываем депозит к ИНДИВИДУАЛЬНОМУ пользователю
         c.execute("INSERT INTO deposits (telegram_id, tx_signature, amount_usdc, status) VALUES (?, ?, ?, 'VERIFIED')", (tg_id, tx, amount_usdc))
-        # Начисляем USDC на ИНДИВИДУАЛЬНЫЙ баланс
         c.execute("UPDATE users SET balance_usdc = balance_usdc + ? WHERE telegram_id = ?", (amount_usdc, tg_id))
         conn.commit()
         conn.close()
@@ -1080,7 +1094,6 @@ async def api_close_all_positions(request):
                 
                 sell_sig = await execute_jupiter_swap(session, mint, USDC_MINT, raw_amount, signer)
                 if sell_sig:
-                    # Устанавливаем цену выхода и PnL (для упрощения при экстренной продаже ставим sell_price = buy_price или запрашиваем реальную)
                     c.execute("UPDATE trades SET sell_price = buy_price, sell_tx = ? WHERE id = ?", (sell_sig, trade_id))
                     closed_count += 1
 
@@ -1105,23 +1118,19 @@ async def api_withdraw(request):
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         
-        # Получаем ИНДИВИДУАЛЬНЫЙ баланс пользователя
         c.execute("SELECT balance_usdc FROM users WHERE telegram_id = ?", (tg_id,))
         u_row = c.fetchone()
         user_bal = u_row[0] if u_row else 0.0
 
-        # Высчитываем, сколько можно вывести (с учетом несгораемых $50)
         withdrawable = max(0.0, user_bal - MIN_BOT_BALANCE_USDC)
         if token == "USDC" and amount > withdrawable:
             conn.close()
             return web.json_response({"success": False, "message": f"Сумма превышает доступную (${withdrawable:.2f}). Бот оставляет $50 на балансе для обеспечения торговли."})
 
         if token == "USDC":
-            # Вычитаем из ИНДИВИДУАЛЬНОГО баланса пользователя
             new_bal = user_bal - amount
             c.execute("UPDATE users SET balance_usdc = ? WHERE telegram_id = ?", (new_bal, tg_id))
         
-        # Записываем запрос на вывод индивидуально
         c.execute("""INSERT INTO withdrawals (telegram_id, token, amount, recipient_address, tx_signature, status)
                      VALUES (?, ?, ?, ?, ?, 'PENDING')""", (tg_id, token, amount, recipient, "SIMULATED_TX"))
         conn.commit()
@@ -1160,7 +1169,7 @@ async def telegram_webhook_handler(request):
                 async with aiohttp.ClientSession() as session:
                     await session.post(send_url, json=payload)
         return web.Response(text="OK")
-    except Exception as e:
+    except Exception:
         return web.Response(text="Error", status=500)
 
 async def set_telegram_webhook():
