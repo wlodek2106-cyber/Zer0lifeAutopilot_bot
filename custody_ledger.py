@@ -53,6 +53,16 @@ class CustodyLedger:
                     trading INTEGER NOT NULL DEFAULT 0, close_requested INTEGER NOT NULL DEFAULT 0,
                     order_raw INTEGER NOT NULL DEFAULT 1000000,
                     created_at INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS custody_wallet_links (
+                    uid INTEGER PRIMARY KEY, address TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS custody_wallet_proofs (
+                    nonce TEXT PRIMARY KEY, uid INTEGER NOT NULL, message TEXT NOT NULL,
+                    expires_at INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS custody_tx_deposits (
+                    signature TEXT PRIMARY KEY, uid INTEGER NOT NULL, sender TEXT NOT NULL,
+                    amounts TEXT NOT NULL, block_time INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS custody_tx_epoch (
+                    id INTEGER PRIMARY KEY CHECK(id=1), started_at INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS custody_accounts (
                     account TEXT NOT NULL, asset TEXT NOT NULL, raw INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY(account,asset), CHECK(raw>=0 OR account='external'));
@@ -178,6 +188,82 @@ class CustodyLedger:
             row = db.execute("SELECT * FROM custody_invoices WHERE id=?", (iid,)).fetchone()
             return dict(row) if row else None
 
+    def wallet_address(self, uid):
+        with self.db() as db:
+            row = db.execute("SELECT address FROM custody_wallet_links WHERE uid=?", (uid,)).fetchone()
+            return row["address"] if row else None
+
+    def tx_epoch(self):
+        with self.db() as db:
+            earliest = db.execute("SELECT MIN(created_at) FROM custody_users").fetchone()[0]
+            db.execute("INSERT OR IGNORE INTO custody_tx_epoch VALUES(1,?)", (earliest or int(time.time()),))
+            return db.execute("SELECT started_at FROM custody_tx_epoch WHERE id=1").fetchone()[0]
+
+    def wallet_challenge(self, uid, origin):
+        nonce = secrets.token_urlsafe(24)
+        message = f"Zer0life wallet ownership only — NO TRANSFER\nOrigin: {origin}\nTelegram account: {uid}\nNonce: {nonce}"
+        with self.db() as db:
+            db.execute("DELETE FROM custody_wallet_proofs WHERE expires_at<?", (int(time.time()),))
+            db.execute("DELETE FROM custody_wallet_proofs WHERE uid=? AND used=0", (uid,))
+            db.execute("INSERT INTO custody_wallet_proofs(nonce,uid,message,expires_at) VALUES(?,?,?,?)",
+                       (nonce, uid, message, int(time.time()) + 600))
+        return nonce
+
+    def wallet_proof(self, nonce):
+        with self.db() as db:
+            row = db.execute("SELECT * FROM custody_wallet_proofs WHERE nonce=?", (nonce,)).fetchone()
+            return dict(row) if row else None
+
+    def link_wallet(self, nonce, address):
+        with self.db() as db:
+            proof = db.execute("SELECT * FROM custody_wallet_proofs WHERE nonce=?", (nonce,)).fetchone()
+            if not proof or proof["used"] or proof["expires_at"] < int(time.time()):
+                raise LedgerError("Подтверждение истекло или уже использовано.")
+            rows = db.execute("SELECT * FROM custody_wallet_links WHERE uid=? OR address=?",
+                              (proof["uid"], address)).fetchall()
+            if any(row["uid"] != proof["uid"] or row["address"] != address for row in rows):
+                raise LedgerError("Кошелёк уже закреплён за другим аккаунтом либо у вас уже есть подтверждённый кошелёк.")
+            db.execute("INSERT OR IGNORE INTO custody_wallet_links VALUES(?,?,?)",
+                       (proof["uid"], address, int(time.time())))
+            db.execute("UPDATE custody_wallet_proofs SET used=1 WHERE nonce=?", (nonce,))
+
+    def credit_tx(self, uid, signature, sender, amounts, block_time, backing):
+        with self.db() as db:
+            link = db.execute("SELECT address FROM custody_wallet_links WHERE uid=?", (uid,)).fetchone()
+            if not link or link["address"] != sender:
+                raise LedgerError("Сначала подтвердите свой кошелёк.")
+            previous = db.execute("SELECT * FROM custody_tx_deposits WHERE signature=?", (signature,)).fetchone()
+            if previous:
+                if previous["uid"] != uid:
+                    raise LedgerError("Tx уже зачислена другому аккаунту.")
+                return False
+            if db.execute("SELECT id FROM custody_journals WHERE id=?", ("deposit:" + signature,)).fetchone():
+                raise LedgerError("Tx уже учтена.")
+            epoch = db.execute("SELECT started_at FROM custody_tx_epoch WHERE id=1").fetchone()
+            if not epoch or block_time < epoch["started_at"]:
+                raise LedgerError("Эта Tx предшествует созданию раздельного custody-учёта. Старые деньги повторно не зачисляются; не отправляйте их повторно.")
+            lines = []
+            for asset, raw in amounts.items():
+                if asset not in (SOL, USDC) or type(raw) is not int or not 0 < raw <= 2**63 - 1:
+                    raise LedgerError("Неверный актив или сумма.")
+                imported = db.execute("""SELECT MAX(j.created_at) FROM custody_journals j
+                    JOIN custody_entries e ON e.journal=j.id
+                    WHERE e.account='external' AND e.asset=? AND e.delta<0
+                    AND (j.id LIKE 'opening:%' OR j.id LIKE 'fees:%')""", (asset,)).fetchone()[0]
+                if imported is not None and block_time <= imported:
+                    raise LedgerError("Tx предшествует переносу старых нераспределённых средств. Нельзя повторно зачислить уже перенесённые монеты; требуется сверка старого учёта.")
+                total = db.execute("SELECT COALESCE(SUM(raw),0) FROM custody_accounts WHERE asset=? AND account!='external'",
+                                   (asset,)).fetchone()[0]
+                if total + raw > backing.get(asset, 0):
+                    raise LedgerError("Недостаточно фактического покрытия для зачисления.")
+                lines.extend([("external", asset, -raw), (available(uid), asset, raw)])
+            if not lines:
+                raise LedgerError("Нет поступления.")
+            self.post(db, "deposit:" + signature, "verified sender Tx deposit", lines)
+            db.execute("INSERT INTO custody_tx_deposits VALUES(?,?,?,?,?)",
+                       (signature, uid, sender, json.dumps(amounts), block_time))
+            return True
+
     def credit_deposit(self, iid, signature, asset, raw, block_time):
         with self.db() as db:
             invoice = db.execute("SELECT * FROM custody_invoices WHERE id=?", (iid,)).fetchone()
@@ -191,6 +277,8 @@ class CustodyLedger:
                 raise LedgerError("Этот платёжный запрос уже оплачен.")
             if db.execute("SELECT id FROM custody_invoices WHERE signature=?", (signature,)).fetchone():
                 raise LedgerError("Транзакция уже использована.")
+            if db.execute("SELECT signature FROM custody_tx_deposits WHERE signature=?", (signature,)).fetchone():
+                raise LedgerError("Tx уже учтена новым способом.")
             self.post(db, "deposit:" + signature, "confirmed deposit", [
                 ("external", asset, -raw), (available(invoice["uid"]), asset, raw)])
             db.execute("UPDATE custody_invoices SET signature=?,state='CREDITED' WHERE id=?", (signature, iid))
