@@ -24,6 +24,7 @@ from legacy_retirement import prove_retirement, RECOVERY_RPC
 from tx_deposits import incoming_amounts
 from solders.signature import Signature
 import ai_decisions
+from meme_discovery import MemeDiscovery
 
 WRAPPED_SOL = "So11111111111111111111111111111111111111112"
 
@@ -64,10 +65,71 @@ class CustodyRuntime(WalletRuntime):
         self.ai_lock = asyncio.Lock()
         self.ai_task = None
         self.sniper_symbols = [symbol for symbol in ("WIF",) if symbol in self.watchlist]
+        self.watchlist = {symbol: dict(info) for symbol, info in self.watchlist.items()}
+        self.main_symbols = [s for s in self.watchlist if s not in self.sniper_symbols]
+        self.discovery = MemeDiscovery(self.ledger, self.rpc,
+            [self.watchlist[s]["mint"] for s in self.main_symbols],
+            {s: self.watchlist[s] for s in self.sniper_symbols})
+        self.discovery_task = None
+        self.discovery_due = 0
+        self.discovery_started = 0
+        self.history_seen = {}
+        self.restore_catalog()
+
+    def restore_catalog(self):
+        for row in self.discovery.assets():
+            metrics = json.loads(row["metrics"])
+            self.watchlist[row["code"]] = {"mint": row["mint"], "decimals": row["decimals"],
+                                           "label": metrics["symbol"]}
+            self.history.setdefault(row["code"], [])
+
+    def held_sniper_symbols(self):
+        with self.ledger.db() as db:
+            return [row[0] for row in db.execute(
+                "SELECT DISTINCT symbol FROM custody_positions WHERE state='OPEN' AND funding_asset=?", (SOL,))]
+
+    async def background_discovery(self):
+        try:
+            async with aiohttp.ClientSession() as session:
+                await self.discovery.scan(session)
+            self.restore_catalog()
+        except Exception:
+            self.discovery.fail()
+        finally:
+            self.discovery_due = time.time() + 900
+
+    def poll_discovery(self):
+        if self.discovery_task and self.discovery_task.done():
+            self.discovery_task = None
+        if self.discovery_task is None and time.time() >= self.discovery_due:
+            self.discovery_started = time.time()
+            self.discovery_task = asyncio.create_task(self.background_discovery())
+
+    async def scan_candidates(self, request, session):
+        self.admit(self.uid(request))
+        if time.time()-self.discovery_started >= 60:
+            self.discovery_due = 0
+        self.poll_discovery()
+        return web.json_response({"success": True, "message":
+            "Candidate scan running. Refresh shortly. No trade is submitted." if self.discovery_task else
+            "Recent scan available; manual refresh has a 60-second cooldown. No trade is submitted.",
+                                  "discovery": self.discovery.report})
+
+    async def current_prices(self, session):
+        prices = await self.prices_fn(session)
+        if getattr(self, "discovery", None):
+            try:
+                prices.update(await self.discovery.prices(session, self.held_sniper_symbols()))
+            except Exception:
+                self.discovery.fail()
+        return prices
 
     def ai_universes(self):
-        return {"main": [s for s in self.watchlist if s not in self.sniper_symbols],
-                "sniper": self.sniper_symbols}
+        discovery = getattr(self, "discovery", None)
+        return {"main": getattr(self, "main_symbols", [s for s in self.watchlist if s not in self.sniper_symbols]),
+                "sniper": list(dict.fromkeys(
+                    [row["code"] for row in discovery.candidates()] + sorted(self.held_sniper_symbols())[:32]
+                )) if discovery else self.sniper_symbols}
 
     async def ai_snapshot(self, session, prices):
         config = ai_decisions.configuration()
@@ -77,18 +139,26 @@ class CustodyRuntime(WalletRuntime):
             latest = self.ledger.ai_latest()
             if latest and time.time() - latest["created_at"] < config["interval_seconds"]:
                 record = json.loads(latest["decisions"])
-                ai_decisions.validate_decisions(record["decisions"], self.ai_universes())
+                ai_decisions.validate_decisions(record["decisions"], record.get("universes", self.ai_universes()))
                 return {**latest, **record}
-            market = {symbol: (self.history[symbol] or [prices[symbol]])[-90:]
-                      for symbol in self.watchlist if prices.get(symbol, 0) > 0}
+            universes = self.ai_universes()
+            wanted = set(universes["main"] + universes["sniper"]) | {"SOL"}
+            market = {symbol: ((self.history.get(symbol) if
+                      time.time()-getattr(self, "history_seen", {}).get(symbol, 0) <= 90 else None)
+                      or [prices[symbol]])[-30:]
+                      for symbol in wanted if prices.get(symbol, 0) > 0}
+            screening = {row["code"]: {key: row[key] for key in (
+                "liquidity_usd", "volume_24h_usd", "transactions_24h", "age_hours",
+                "change_m5_pct", "change_h1_pct")} for row in self.discovery.candidates()
+                } if getattr(self, "discovery", None) else {}
             try:
                 aid = self.ledger.ai_allow_call(config["interval_seconds"], config["max_calls_per_day"])
-                decisions = await ai_decisions.analyze(session, market, self.ai_universes())
+                decisions = await ai_decisions.analyze(session, market, universes, screening)
             except (ai_decisions.AIError, LedgerError) as exc:
                 raise WalletError(str(exc), 503) from None
             except (aiohttp.ClientError, asyncio.TimeoutError):
                 raise WalletError("Нет безопасного ответа AI API. Новые входы остановлены.", 503) from None
-            record = {"decisions": decisions, "prices": {s: h[-1] for s, h in market.items()},
+            record = {"decisions": decisions, "universes": universes, "prices": {s: h[-1] for s, h in market.items()},
                       "samples": {s: len(h) for s, h in market.items()}}
             self.ledger.ai_record(aid, record)
             return {"id": aid, "created_at": int(time.time()), **record}
@@ -97,12 +167,15 @@ class CustodyRuntime(WalletRuntime):
         latest = self.ledger.ai_latest()
         return {**ai_decisions.configuration(), "last_analyzed_at": latest["created_at"] if latest else None,
                 "last_decisions": json.loads(latest["decisions"])["decisions"] if latest else None,
-                "sniper_assets": self.sniper_symbols}
+                "sniper_assets": self.ai_universes()["sniper"],
+                "asset_labels": {s: info.get("label", s) + (" · "+info["mint"][:4]+"…"+info["mint"][-4:]
+                                 if s.startswith("M_") else "") for s, info in self.watchlist.items()},
+                "discovery": self.discovery.report if getattr(self, "discovery", None) else None}
 
     async def ai_preview(self, request, session):
         uid = self.uid(request)
         self.admit(uid)
-        prices = await self.prices_fn(session)
+        prices = await self.current_prices(session)
         snapshot = await self.ai_snapshot(session, prices)
         return web.json_response({"success": True, "message": "AI ответил. Анализ не подписывает и не отправляет сделки.",
             "decisions": snapshot["decisions"], "created_at": snapshot["created_at"]})
@@ -848,7 +921,7 @@ class CustodyRuntime(WalletRuntime):
             scale = 1e9 if native else 1e6
             cost = p["cost_raw"] / scale
             profit = ((p["proceeds_raw"] or 0) - p["cost_raw"]) / scale if p["state"] == "CLOSED" else 0
-            trades.append({"token_symbol": p["symbol"], "symbol": p["symbol"],
+            trades.append({"token_symbol": self.watchlist.get(p["symbol"], {}).get("label", p["symbol"]), "symbol": p["symbol"],
                 "token_mint": WRAPPED_SOL if p["asset"] == SOL else p["asset"],
                 "amount_tokens": qty, "buy_price": cost / qty,
                 "sell_price": (p["proceeds_raw"] or 0) / scale / qty if p["state"] == "CLOSED" else 0,
@@ -894,7 +967,7 @@ class CustodyRuntime(WalletRuntime):
             "trading_settings": {"order_usdc": settings["order_raw"]/1e6,
                 "max_positions": 5, "take_profit_pct": 3.5, "stop_loss_pct": 2,
                 "slippage_pct": .4, "entry_dip_pct": .3, "poll_seconds": 20,
-                "assets": list(self.watchlist), "warmup_samples": 5},
+                "assets": self.ai_universes()["main"], "warmup_samples": 5},
             "worker_error": self.last_error if uid == self.owner_id else None})
 
     async def save_trading_settings(self, request, session):
@@ -963,13 +1036,14 @@ class CustodyRuntime(WalletRuntime):
             if settings["sniper_trading"]:
                 self.ledger.settings(uid, sniper_enabled=False)
             else:
-                if not self.sniper_symbols:
-                    raise WalletError("Нет разрешённых мемкоинов для снайпера.", 409)
+                symbols = self.ai_universes()["sniper"]
+                if not symbols:
+                    raise WalletError("No verified shortlist yet. Use Scan candidates, then retry.", 409)
                 if settings["sniper_order_raw"] > self.ledger.balance(uid, SOL) and not any(
                         p["funding_asset"] == SOL for p in self.ledger.positions(uid, "OPEN")):
                     raise WalletError("Недостаточно ваших SOL для снайпера.", 409)
-                mint = self.watchlist[self.sniper_symbols[0]]["mint"]
-                await self.verify_sniper_mint(session, self.sniper_symbols[0])
+                mint = self.watchlist[symbols[0]]["mint"]
+                await self.verify_sniper_mint(session, symbols[0])
                 await self.trading_preflight(uid, session, settings["sniper_order_raw"], SOL, mint)
                 self.ledger.settings(uid, sniper_enabled=True)
         return web.json_response({"success": True, "sniper_active": bool(self.ledger.settings(uid)["sniper_trading"])})
@@ -1085,10 +1159,17 @@ class CustodyRuntime(WalletRuntime):
                     await self.scan_deposits(session)
                     users = self.ledger.active_users()
                     if users:
-                        prices = await self.prices_fn(session)
+                        self.poll_discovery()
+                        prices = await self.current_prices(session)
+                        for symbol in self.history:
+                            if symbol not in prices:
+                                self.history[symbol] = []
                         for symbol, price in prices.items():
                             if symbol in self.history and price > 0:
+                                if time.time()-self.history_seen.get(symbol, 0) > 90:
+                                    self.history[symbol] = []
                                 self.history[symbol] = (self.history[symbol] + [price])[-90:]
+                                self.history_seen[symbol] = time.time()
                         snapshot = self.poll_ai(prices) if any(
                             user["trading"] or user["sniper_trading"] for user in users) else None
                         for settings in users:
@@ -1124,6 +1205,8 @@ class CustodyRuntime(WalletRuntime):
             if not math.isfinite(prices.get("SOL", 0)) or prices.get("SOL", 0) <= 0:
                 return False
             price /= prices["SOL"]
+            if not math.isfinite(price) or price <= 0:
+                return False
         entry = position["cost_raw"] / (1e9 if native else 1e6) / (position["raw"]/10**position["decimals"])
         change = price / entry - 1
         return change >= .035 or change <= -.020
@@ -1145,7 +1228,7 @@ class CustodyRuntime(WalletRuntime):
 
     async def apply_ai_decision(self, session, uid, settings, positions, prices, snapshot):
         # No provider output can select an amount, wallet, owner, or non-allowlisted mint.
-        ai_decisions.validate_decisions(snapshot["decisions"], self.ai_universes())
+        ai_decisions.validate_decisions(snapshot["decisions"], snapshot.get("universes", self.ai_universes()))
         if time.time() - snapshot["created_at"] > 120:
             return
         for mode, funding, flag, size_key, cap in [
@@ -1166,7 +1249,12 @@ class CustodyRuntime(WalletRuntime):
             if funding == SOL:
                 old_sol, now_sol = snapshot["prices"].get("SOL", 0), prices.get("SOL", 0)
                 if (not math.isfinite(old_sol) or not math.isfinite(now_sol)
-                        or old_sol <= 0 or now_sol <= 0 or abs((price/now_sol)/(original/old_sol)-1) > .01):
+                        or old_sol <= 0 or now_sol <= 0):
+                    continue
+                relative_now, relative_old = price/now_sol, original/old_sol
+                if (not math.isfinite(relative_now) or not math.isfinite(relative_old)
+                        or relative_now <= 0 or relative_old <= 0
+                        or abs(relative_now/relative_old-1) > .01):
                     continue
             if action == "SELL":
                 position = next((p for p in held if p["symbol"] == symbol), None)
@@ -1179,6 +1267,8 @@ class CustodyRuntime(WalletRuntime):
                     and not any(p["symbol"] == symbol for p in held)
                     and self.ledger.balance(uid, funding) >= settings[size_key]):
                 if mode == "sniper":
+                    if getattr(self, "discovery", None) and not self.discovery.entry_allowed(symbol):
+                        continue
                     await self.verify_sniper_mint(session, symbol)
                 if self.ledger.ai_claim(snapshot["id"], uid, mode):
                     watch = self.watchlist[symbol]

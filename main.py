@@ -314,13 +314,13 @@ async def get_token_prices(session: aiohttp.ClientSession) -> dict:
     prices = {}
     liquidity_seen = {}
     mints_str = ",".join([v["mint"] for v in WATCHLIST.values()])
-    url = f"https://api.dexscreener.com/latest/dex/tokens/{mints_str}"
+    url = f"https://api.dexscreener.com/tokens/v1/solana/{mints_str}"
     try:
         headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
         async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as resp:
             if resp.status == 200:
                 data = await resp.json()
-                pairs = data.get("pairs", [])
+                pairs = data if isinstance(data, list) else []
                 for pair in pairs:
                     base_token = pair.get("baseToken", {}).get("address")
                     price_usd = pair.get("priceUsd")
@@ -682,7 +682,7 @@ async def meme_sniper_worker():
 
 # --- ИНТЕРФЕЙС HTML СО СТРОГОЙ ЗАЩИТОЙ ---
 RAW_HTML = r"""<!DOCTYPE html>
-<html lang="en" data-ui-language="en" data-copy-version="clean-english-v1">
+<html lang="en" data-ui-language="en" data-copy-version="clean-english-v1" data-discovery-version="bounded-solana-v1">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
@@ -845,7 +845,10 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <div class="stat-box"><div class="stat-label">Available SOL</div><div class="stat-val" id="sniper-sol-balance">Loading...</div></div>
                     <div class="stat-box"><div class="stat-label">Order size</div><div class="stat-val" id="sniper-order-size">Loading...</div></div>
                 </div>
-                <p class="section-note">WIF only · 1 position max</p>
+                <p class="section-note">Screened Solana candidates · 1 position max</p>
+                <div id="discovery-status" class="section-note">Candidate scan pending.</div>
+                <button class="action-btn" id="scan-candidates" onclick="scanCandidates()">Scan candidates</button>
+                <details><summary>Candidate shortlist</summary><div id="candidate-list" class="section-note" style="white-space:pre-line">No verified shortlist yet.</div></details>
                 <p id="sniper-pnl" class="section-note">Realized SOL PnL: loading...</p>
             </div>
 
@@ -979,7 +982,8 @@ RAW_HTML = r"""<!DOCTYPE html>
             </div>
             <details id="strategy-help"><summary>Strategy limits &amp; risks</summary>
                 <p class="section-note">Core trades use your USDC; sniper trades use your SOL. Other users' funds and the operator fee reserve are never your trading capital. Automatic conversion or profit allocation between strategies is not implemented.</p>
-                <p class="section-note">Core: SOL, JUP, RAY, PYTH; up to 5 positions. Sniper v1: WIF only; up to 1 position. New-listing discovery is not connected. Standard SPL mint and authority checks do not guarantee token safety.</p>
+                <p class="section-note">Core: SOL, JUP, RAY, PYTH; up to 5 positions. Sniper: up to 1 SOL-funded position. Every 15 minutes a bounded DexScreener profiles/search scan checks up to 90 Solana mints, screens up to 20 and sends at most 8 current candidates plus held assets to AI. This is not every project or a profit forecast; profiles alone do not establish meme status.</p>
+                <p class="section-note">Sniper entry filters: approved DEX, at least $100k pool liquidity and 24h volume, 200 daily trades, pool age 24h+, extreme-pump exclusion, standard SPL mint with no mint/freeze authority. Fresh eligibility is required for every buy. Scores rank liquidity/activity, not expected profit. Holder concentration, LP locks and every contract/market risk are not fully checked. Standard mint checks do not guarantee token safety.</p>
                 <p class="section-note">AI makes decisions after you enable a mode. Orders require personal funds, permitted assets, at least 5 price samples, a fresh decision and stable pricing. Only one shared-wallet operation can be pending at a time.</p>
                 <p class="section-note">TP/SL are checked approximately every 20 seconds independently of AI availability. Model failures stop new AI orders. After a server restart both modes pause and need manual reactivation.</p>
                 <p class="section-note">TP/SL are execution conditions, not guaranteed fill prices. Fees, slippage and liquidity affect results. You can lose money; returns are not guaranteed.</p>
@@ -1063,6 +1067,18 @@ RAW_HTML = r"""<!DOCTYPE html>
             } catch(e) {box.textContent=e.message;}
         }
         let withdrawSending = false;
+        async function scanCandidates() {
+            const button=document.getElementById('scan-candidates');
+            button.disabled=true;
+            try {
+                const response=await apiFetch('/api/meme_scan',{method:'POST'});
+                const data=await response.json();
+                if(!response.ok||!data.success)throw new Error(data.message||'Scan unavailable.');
+                document.getElementById('discovery-status').textContent=data.message;
+            }catch(e){document.getElementById('discovery-status').textContent=e.message||'Scan unavailable.';}
+            finally{button.disabled=false;}
+        }
+
         async function linkDepositWallet() {
             try {
                 const response = await apiFetch('/api/wallet_link', {method:'POST'});
@@ -1436,7 +1452,14 @@ RAW_HTML = r"""<!DOCTYPE html>
                     document.getElementById('ai-status').textContent=aiConfigured?
                         ai.model+' · '+Math.round(ai.interval_seconds/60)+' min interval'+(ai.last_analyzed_at?' · analyzed':' · connection unverified'):
                         'AI not connected. Operator setup required.';
-                    if(ai.last_decisions)document.getElementById('ai-decisions').textContent='Last analysis: '+new Date(ai.last_analyzed_at*1000).toLocaleString('en-GB')+'\n'+Object.entries(ai.last_decisions).map(([mode,d])=>(mode==='main'?'USDC':'SOL')+': '+d.action+' '+(d.symbol||'')+' — '+d.reason).join('\n');
+                    if(ai.last_decisions)document.getElementById('ai-decisions').textContent='Last analysis: '+new Date(ai.last_analyzed_at*1000).toLocaleString('en-GB')+'\n'+Object.entries(ai.last_decisions).map(([mode,d])=>(mode==='main'?'USDC':'SOL')+': '+d.action+' '+((ai.asset_labels||{})[d.symbol]||d.symbol||'')+' — '+d.reason).join('\n');
+                    const discovery=ai.discovery||{};
+                    document.getElementById('discovery-status').textContent=discovery.entry_paused?discovery.message:
+                        discovery.checked_at?(discovery.eligible||0)+' screened · '+(discovery.scanned||0)+' scanned · refreshed '+new Date(discovery.checked_at*1000).toLocaleTimeString('en-GB'):discovery.message||'Candidate scan pending.';
+                    document.getElementById('candidate-list').textContent=(ai.sniper_assets||[]).map(code=>{
+                        const row=(discovery.candidates||[]).find(item=>item.code===code);
+                        return ((ai.asset_labels||{})[code]||code)+(row?' · liquidity $'+Math.round(row.liquidity_usd).toLocaleString('en-US'):' · held asset');
+                    }).join('\n')||'No verified shortlist yet.';
                     const sniper=s.sniper_settings||{order_sol:.005};
                     document.getElementById('sniper-order-size').textContent=sniper.order_sol+' SOL';
                     const sniperInput=document.getElementById('settings-sniper-order');
@@ -1952,6 +1975,7 @@ async def main():
     app.router.add_post('/api/trading_readiness', wallet_handler(runtime.trading_readiness))
     app.router.add_post('/api/ai_preview', wallet_handler(runtime.ai_preview))
     app.router.add_post('/api/toggle_sniper', wallet_handler(runtime.toggle_sniper))
+    app.router.add_post('/api/meme_scan', wallet_handler(runtime.scan_candidates))
     app.router.add_post('/api/toggle_meme', api_toggle_meme)
     app.router.add_post('/api/verify_deposit', wallet_handler(runtime.deposit))
     app.router.add_post('/api/wallet_link', wallet_handler(runtime.wallet_link))
@@ -1987,6 +2011,7 @@ async def main():
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
 
+    runtime.poll_discovery()
     asyncio.create_task(runtime.worker())
     await set_telegram_webhook()
     

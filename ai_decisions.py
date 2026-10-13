@@ -35,7 +35,7 @@ def validate_decisions(value, universes):
     return value
 
 
-async def analyze(session, market, universes):
+async def analyze(session, market, universes, screening=None):
     config = configuration()
     if not config["configured"]:
         raise AIError("Добавьте OPENAI_API_KEY в Environment сервиса Render.")
@@ -69,10 +69,12 @@ async def analyze(session, market, universes):
                 "Never invent prices, guarantees, wallet commands, transfer destinations or order sizes. "
                 "Prefer HOLD when data is missing, insufficient, flat or ambiguous. "
                 "These are short snapshots, not a complete predictive model. Explain briefly in English. "
+                "Screening scores reflect liquidity/activity, not expected profit. "
+                "They do not establish that a project is safe or truly a meme. "
                 "Only the independent risk controller may execute any decision.")},
             {"role": "user", "content": json.dumps({
                 "prices_usd_recent_samples": market, "permitted_symbols": universes,
-                "sample_interval_seconds": 20,
+                "sample_interval_seconds": 20, "sniper_screening_numeric": screening or {},
                 "main_funding": "USDC", "sniper_funding": "SOL"})},
         ],
     }

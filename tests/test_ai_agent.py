@@ -123,6 +123,13 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
             self.service.ledger.credit_deposit(inv["id"], str(Signature.new_unique()), currency, 20_000_000, int(time.time()))
         self.service.trade = AsyncMock()
         self.service.verify_sniper_mint = AsyncMock()
+        self.service.discovery.blocked = False
+        with self.service.ledger.db() as db:
+            db.execute("INSERT INTO custody_meme_assets VALUES(?,?,?,?,?)", (
+                "WIF", self.mint, 6, json.dumps({"symbol":"WIF","code":"WIF",
+                "eligible":True,"score":20,"liquidity_usd":200000,"volume_24h_usd":200000,
+                "transactions_24h":1000,"age_hours":48,"change_m5_pct":1,"change_h1_pct":2}),
+                int(time.time())))
         self.service.ledger.settings(101, enabled=True, sniper_enabled=True)
         self.prices = {"SOL": 100, "WIF": 2}
         self.snapshot = {"id": "test-analysis", "created_at": int(time.time()),
@@ -146,6 +153,59 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.apply()
         self.service.verify_sniper_mint.assert_awaited_once_with(None, "WIF")
         self.assertEqual(self.service.trade.await_args.args[2:6], (SOL, self.mint, 5_000_000, "BUY"))
+
+    def new_candidate(self):
+        mint = str(Keypair().pubkey())
+        code = "M_test_verified"
+        with self.service.ledger.db() as db:
+            row = db.execute("SELECT metrics FROM custody_meme_assets WHERE code='WIF'").fetchone()
+            metrics = {**json.loads(row["metrics"]), "code":code, "symbol":"CAT"}
+            db.execute("INSERT INTO custody_meme_assets VALUES(?,?,?,?,?)", (
+                code, mint, 6, json.dumps(metrics), int(time.time())))
+        self.service.restore_catalog()
+        return code, mint
+
+    async def test_discovered_asset_uses_native_capital_and_cannot_leak_into_core(self):
+        code, mint = self.new_candidate()
+        self.assertNotIn(code,self.service.ai_universes()["main"])
+        self.assertIn(code,self.service.ai_universes()["sniper"])
+        self.snapshot["decisions"]={"main":{"action":"HOLD","symbol":None,"reason":"wait"},
+                                   "sniper":{"action":"BUY","symbol":code,"reason":"signal"}}
+        self.snapshot["universes"]=self.service.ai_universes()
+        self.snapshot["prices"][code]=.01
+        self.snapshot["samples"][code]=5
+        await self.apply(prices={**self.prices,code:.01})
+        self.assertEqual(self.service.trade.await_args.args[2:6],(SOL,mint,5_000_000,"BUY"))
+        self.service.verify_sniper_mint.assert_awaited_once_with(None,code)
+
+    async def test_cached_candidate_buy_is_blocked_if_scan_fails(self):
+        code,mint=self.new_candidate()
+        self.snapshot["decisions"]={"main":{"action":"HOLD","symbol":None,"reason":"wait"},
+                                   "sniper":{"action":"BUY","symbol":code,"reason":"signal"}}
+        self.snapshot["universes"]=self.service.ai_universes()
+        self.snapshot["prices"][code]=.01
+        self.snapshot["samples"][code]=5
+        self.service.discovery.fail()
+        await self.apply(prices={**self.prices,code:.01})
+        self.service.trade.assert_not_awaited()
+        self.service.verify_sniper_mint.assert_not_awaited()
+
+    async def test_removed_candidate_position_can_still_exit_and_other_users_are_untouched(self):
+        code,mint=self.new_candidate()
+        row=self.service.ledger.reserve(101,"dynamic-buy","BUY",SOL,5_000_000,
+            {"output_asset":mint,"symbol":code,"decimals":6})
+        self.service.ledger.prepared(row["id"],str(Signature.new_unique()),"not-broadcast")
+        self.service.ledger.finalize(row["id"],5_000_000,1000,50_000_000)
+        positions=self.service.ledger.positions(101,"OPEN")
+        self.service.discovery.fail()
+        self.assertIn(code,self.service.ai_universes()["sniper"])
+        self.snapshot["decisions"]={"main":{"action":"HOLD","symbol":None,"reason":"wait"},
+                                   "sniper":{"action":"SELL","symbol":code,"reason":"exit"}}
+        self.snapshot["universes"]=self.service.ai_universes()
+        self.snapshot["prices"][code]=.01
+        await self.apply(prices={**self.prices,code:.01},positions=positions)
+        self.assertEqual(self.service.trade.await_args.args[2:6],(mint,SOL,50_000_000,"SELL"))
+        self.assertTrue(self.service.ledger.audit())
 
     async def test_no_buy_for_stale_drifting_nan_or_unwarmed_data(self):
         for case in ("stale", "drift", "nan", "warmup"):
