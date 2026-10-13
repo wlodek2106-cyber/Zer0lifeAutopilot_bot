@@ -14,6 +14,7 @@ from solders.pubkey import Pubkey
 from solders.system_program import transfer, TransferParams
 from solders.message import Message
 from solders.hash import Hash
+from solders.instruction import Instruction, AccountMeta
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -31,9 +32,12 @@ SPLASH_IMAGE_URL = "https://i.postimg.cc/52n94Pzg/57D47DDD-9BED-4D4B-AA69-2B59CA
 
 # Токен USDC и параметры торговли
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+ASSOCIATED_TOKEN_PROGRAM_ID = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+
 MIN_DEPOSIT_USDC = 50.0
 MAX_DEPOSIT_USDC = 10000.0
-MIN_BOT_BALANCE_USDC = 50.0  # Минимальный остаток для работы бота
+MIN_BOT_BALANCE_USDC = 50.0
 
 WATCHLIST = {
     "SOL":  {"mint": "So11111111111111111111111111111111111111112", "decimals": 9},
@@ -45,19 +49,19 @@ WATCHLIST = {
 
 TRADE_AMOUNT_USDC = 20.0
 TRADE_AMOUNT_RAW = int(TRADE_AMOUNT_USDC * 1_000_000)
-TP_PCT = 0.035          # +3.5%
-SL_PCT = 0.020          # -2.0%
-MAX_SLIPPAGE_BPS = 40   # 0.40%
+TP_PCT = 0.035
+SL_PCT = 0.020
+MAX_SLIPPAGE_BPS = 40
 
 # --- ПАРАМЕТРЫ MEME SNIPER РЕЖИМА ---
 MEME_ALLOCATION_SOL = 0.1
-MEME_TARGET_MULTIPLIER = 10.0  # Итоговая цель х10 (1.0 SOL)
-MEME_HALF_MULTIPLIER = 5.0     # Промежуточная цель х5 (0.5 SOL) для частичного вывода в USDC
-MEME_STOP_LOSS_PCT = 0.80      # Стоп-лосс на случай скама (-80%)
+MEME_TARGET_MULTIPLIER = 10.0
+MEME_HALF_MULTIPLIER = 5.0
+MEME_STOP_LOSS_PCT = 0.80
 
-IS_TRADING_ACTIVE = True       # Глобальный флаг автопилота Топ-5 (ВКЛ / ВЫКЛ)
-IS_MEME_ACTIVE = False         # Глобальный флаг Meme Sniper режима (ВКЛ / ВЫКЛ)
-RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v6.2 (Secure Pass & Bio) инициализирован."]
+IS_TRADING_ACTIVE = True
+IS_MEME_ACTIVE = False
+RECENT_LOGS = ["⚜️ Multi-Asset & Meme Sniper Engine v6.4 (Full Recovery) инициализирован."]
 
 def add_log(msg: str):
     global RECENT_LOGS
@@ -125,6 +129,13 @@ def init_db():
 
     conn.commit()
     conn.close()
+
+async def get_associated_token_address(wallet_pubkey: Pubkey, mint_pubkey: Pubkey) -> Pubkey:
+    assoc, _ = Pubkey.find_program_address(
+        [bytes(wallet_pubkey), bytes(Pubkey.from_string(TOKEN_PROGRAM_ID)), bytes(mint_pubkey)],
+        Pubkey.from_string(ASSOCIATED_TOKEN_PROGRAM_ID)
+    )
+    return assoc
 
 async def verify_solana_usdc_tx(session: aiohttp.ClientSession, tx_sig: str, target_wallet: str):
     payload = {
@@ -271,6 +282,77 @@ async def execute_native_sol_transfer(session: aiohttp.ClientSession, signer: Ke
         add_log(f"⚠️ Ошибка формирования перевода SOL: {e}")
         return None
 
+async def execute_spl_usdc_transfer(session: aiohttp.ClientSession, signer: Keypair, recipient_addr: str, amount_ui: float) -> str:
+    try:
+        raw_amount = int(amount_ui * 1_000_000)
+        recipient_pubkey = Pubkey.from_string(recipient_addr)
+        mint_pubkey = Pubkey.from_string(USDC_MINT)
+        
+        sender_ata = await get_associated_token_address(signer.pubkey(), mint_pubkey)
+        recipient_ata = await get_associated_token_address(recipient_pubkey, mint_pubkey)
+
+        payload_acc = {
+            "jsonrpc": "2.0", "id": 1,
+            "method": "getAccountInfo",
+            "params": [str(recipient_ata), {"encoding": "jsonParsed"}]
+        }
+        async with session.post(SOLANA_RPC, json=payload_acc) as resp:
+            acc_data = await resp.json()
+            needs_creation = acc_data.get("result", {}).get("value") is None
+
+        payload_bh = {"jsonrpc": "2.0", "id": 1, "method": "getLatestBlockhash", "params": [{"commitment": "finalized"}]}
+        async with session.post(SOLANA_RPC, json=payload_bh) as resp:
+            bh_data = await resp.json()
+            blockhash_str = bh_data["result"]["value"]["blockhash"]
+        blockhash = Hash.from_string(blockhash_str)
+
+        instructions = []
+        if needs_creation:
+            create_ata_ix = Instruction(
+                program_id=Pubkey.from_string(ASSOCIATED_TOKEN_PROGRAM_ID),
+                accounts=[
+                    AccountMeta(signer.pubkey(), is_signer=True, is_writable=True),
+                    AccountMeta(recipient_ata, is_signer=False, is_writable=True),
+                    AccountMeta(recipient_pubkey, is_signer=False, is_writable=False),
+                    AccountMeta(mint_pubkey, is_signer=False, is_writable=False),
+                    AccountMeta(Pubkey.from_string("11111111111111111111111111111111"), is_signer=False, is_writable=False),
+                    AccountMeta(Pubkey.from_string(TOKEN_PROGRAM_ID), is_signer=False, is_writable=False),
+                ],
+                data=bytes([1])
+            )
+            instructions.append(create_ata_ix)
+
+        data_bytes = bytes([3]) + raw_amount.to_bytes(8, 'little') + bytes([6])
+        transfer_ix = Instruction(
+            program_id=Pubkey.from_string(TOKEN_PROGRAM_ID),
+            accounts=[
+                AccountMeta(sender_ata, is_signer=False, is_writable=True),
+                AccountMeta(mint_pubkey, is_signer=False, is_writable=False),
+                AccountMeta(recipient_ata, is_signer=False, is_writable=True),
+                AccountMeta(signer.pubkey(), is_signer=True, is_writable=False),
+            ],
+            data=data_bytes
+        )
+        instructions.append(transfer_ix)
+
+        msg = Message.new_with_blockhash(instructions, signer.pubkey(), blockhash)
+        tx = Transaction([signer], msg, blockhash)
+        tx_b64 = base64.b64encode(bytes(tx)).decode('utf-8')
+
+        send_payload = {
+            "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
+            "params": [tx_b64, {"encoding": "base64", "skipPreflight": False}]
+        }
+        async with session.post(SOLANA_RPC, json=send_payload) as resp:
+            send_data = await resp.json()
+            if "error" in send_data:
+                add_log(f"⚠️ Ошибка RPC USDC transfer: {send_data['error']}")
+                return None
+            return send_data.get("result")
+    except Exception as e:
+        add_log(f"⚠️ Исключение при отправке USDC: {e}")
+        return None
+
 # --- ВОРКЕР 1: ОСНОВНОЙ (Топ-5 Ликвидных Активов) ---
 async def real_trading_worker():
     global IS_TRADING_ACTIVE
@@ -367,7 +449,6 @@ async def real_trading_worker():
                 pass
             await asyncio.sleep(20)
 
-
 # --- ВОРКЕР 2: ПАРАЛЛЕЛЬНЫЙ (Meme Sniper Mode) ---
 async def meme_sniper_worker():
     global IS_MEME_ACTIVE
@@ -460,8 +541,7 @@ async def meme_sniper_worker():
                 pass
             await asyncio.sleep(15)
 
-
-# --- ИНТЕРФЕЙС ---
+# --- ИНТЕРФЕЙС HTML ---
 RAW_HTML = r"""<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -553,7 +633,6 @@ RAW_HTML = r"""<!DOCTYPE html>
     </div>
 
     <div id="app" style="display: none;">
-        <!-- TAB 1: TERMINAL -->
         <div id="tab-terminal" class="tab-panel active">
             <div class="control-bar">
                 <button id="btn-toggle" class="btn-ctl btn-toggle-on" onclick="toggleTrading()">
@@ -570,7 +649,6 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <span>⚠️ Экстренно закрыть все позиции</span>
             </button>
 
-            <!-- БЛОК ИНДИВИДУАЛЬНОГО ПОРТФЕЛЯ -->
             <div class="card" style="border: 1px solid rgba(34, 197, 94, 0.3); background: linear-gradient(135deg, #0e111a 0%, #0a150d 100%);">
                 <div style="font-size: 13px; font-weight: 800; color: #22c55e; margin-bottom: 8px; display: flex; justify-content: space-between;">
                     <span>💼 ВАШ ЛИЧНЫЙ БАЛАНС</span>
@@ -586,7 +664,6 @@ RAW_HTML = r"""<!DOCTYPE html>
                 </div>
             </div>
 
-            <!-- БЛОК MEME SNIPER РЕЖИМА -->
             <div class="card" style="border: 1px solid rgba(234, 179, 8, 0.3); background: linear-gradient(135deg, #0e111a 0%, #15130a 100%);">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <div>
@@ -603,7 +680,6 @@ RAW_HTML = r"""<!DOCTYPE html>
                 </div>
             </div>
 
-            <!-- БЛОК ТОП-5 АКТИВОВ -->
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div>
@@ -626,7 +702,6 @@ RAW_HTML = r"""<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- TAB 2: STATS -->
         <div id="tab-stats" class="tab-panel">
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -647,7 +722,6 @@ RAW_HTML = r"""<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- TAB 3: WALLET -->
         <div id="tab-deposit" class="tab-panel">
             <div class="deposit-modal">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
@@ -660,7 +734,6 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <button class="wallet-tab" id="wtab-withdraw" onclick="switchWalletTab('withdraw')">Withdraw</button>
                 </div>
 
-                <!-- СЕКЦИЯ ДЕПОЗИТА -->
                 <div id="section-deposit">
                     <div class="banner-limit">
                         <div style="color: #22c55e; font-size: 13px; font-weight: 700;">Deposit from $50 to $10,000 USDC per transaction</div>
@@ -685,7 +758,6 @@ RAW_HTML = r"""<!DOCTYPE html>
                     </div>
                 </div>
 
-                <!-- СЕКЦИЯ ВЫВОДА -->
                 <div id="section-withdraw" style="display: none;">
                     <div style="font-size: 12px; color: #94a3b8; margin-bottom: 8px;">Select Token to Withdraw:</div>
                     <div class="token-selector">
@@ -703,7 +775,6 @@ RAW_HTML = r"""<!DOCTYPE html>
                 </div>
             </div>
 
-            <!-- ИСТОРИЯ КОШЕЛЬКА -->
             <div class="card" style="background: #0b0d14; border-color: #1c2333;">
                 <div style="font-size: 13px; font-weight: 800; color: #fff; margin-bottom: 12px;">История Транзакций</div>
                 <div id="wallet-history-box" style="font-size: 11px; color: #64748b; text-align: center;">Транзакции отсутствуют...</div>
@@ -711,7 +782,6 @@ RAW_HTML = r"""<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- МЕНЮ -->
     <div id="nav" class="bottom-nav" style="display: none;">
         <button class="nav-btn active" onclick="gotoTab('terminal', this)">⚡ Terminal</button>
         <button class="nav-btn" onclick="gotoTab('stats', this)">📊 Stats</button>
@@ -722,18 +792,13 @@ RAW_HTML = r"""<!DOCTYPE html>
         let tg;
         try {
             tg = window.Telegram?.WebApp;
-            if (tg) {
-                tg.expand();
-                tg.ready();
-            }
+            if (tg) { tg.expand(); tg.ready(); }
         } catch (e) {}
 
         let bioManager = null;
         try {
             bioManager = window.Telegram?.WebApp?.BiometricManager;
-            if (bioManager) {
-                bioManager.init();
-            }
+            if (bioManager) { bioManager.init(); }
         } catch (e) {}
 
         let currentWithdrawToken = 'USDC';
@@ -750,7 +815,6 @@ RAW_HTML = r"""<!DOCTYPE html>
             return { id: id, username: username };
         }
 
-        // Экран настройки безопасности при входе в терминал
         function openTerminal() {
             let savedNick = localStorage.getItem('user_custom_nick');
             if (!savedNick) {
@@ -766,26 +830,19 @@ RAW_HTML = r"""<!DOCTYPE html>
             }
 
             const choice = confirm("Выберите способ защиты аккаунта:\nOK — Использовать Face ID / Touch ID (Биометрия)\nОтмена — Использовать пин-код / пароль");
-            
             if (choice) {
                 if (bioManager && bioManager.isBiometricAvailable) {
                     if (!bioManager.isAccessGranted) {
                         bioManager.requestAccess({ reason: "Для защиты средств и вывода" }, (granted) => {
-                            if (granted) {
-                                alert("✅ Биометрия успешно настроена!");
-                            }
+                            if (granted) { alert("✅ Биометрия успешно настроена!"); }
                             proceedToTerminal();
                         });
-                    } else {
-                        proceedToTerminal();
-                    }
+                    } else { proceedToTerminal(); }
                 } else {
-                    alert("⚠️ Биометрия на вашем устройстве недоступна. Будет использоваться пароль.");
+                    alert("⚠️ Биометрия недоступна. Будет использоваться пароль.");
                     setupPasswordProtection();
                 }
-            } else {
-                setupPasswordProtection();
-            }
+            } else { setupPasswordProtection(); }
         }
 
         function setupPasswordProtection() {
@@ -793,9 +850,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             if (pwd && pwd.length >= 4) {
                 localStorage.setItem('user_secure_pwd', pwd);
                 alert("✅ Пароль успешно установлен!");
-            } else {
-                alert("⚠️ Пароль слишком короткий или не задан.");
-            }
+            } else { alert("⚠️ Пароль слишком короткий или не задан."); }
             proceedToTerminal();
         }
 
@@ -841,33 +896,21 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const d = await res.json();
                 alert(d.message);
                 refresh();
-            } catch (e) {
-                alert("Ошибка соединения.");
-            }
+            } catch (e) { alert("Ошибка соединения."); }
         }
 
-        // ЗАЩИТА ВЫВОДА ДЕНЕГ (Биометрия или Пароль)
         function secureWithdraw() {
             const savedPwd = localStorage.getItem('user_secure_pwd');
-
             if (bioManager && bioManager.isBiometricAvailable && bioManager.isAccessGranted) {
                 bioManager.authenticate({ reason: "Подтвердите вывод средств" }, (success) => {
-                    if (success) {
-                        submitWithdraw();
-                    } else {
-                        alert("❌ Аутентификация не пройдена. Вывод отменен.");
-                    }
+                    if (success) { submitWithdraw(); }
+                    else { alert("❌ Аутентификация не пройдена. Вывод отменен."); }
                 });
             } else if (savedPwd) {
                 const enteredPwd = prompt("Введите ваш защитный пароль для подтверждения вывода:");
-                if (enteredPwd === savedPwd) {
-                    submitWithdraw();
-                } else {
-                    alert("❌ Неверный пароль. Вывод отменен.");
-                }
-            } else {
-                submitWithdraw();
-            }
+                if (enteredPwd === savedPwd) { submitWithdraw(); }
+                else { alert("❌ Неверный пароль. Вывод отменен."); }
+            } else { submitWithdraw(); }
         }
 
         async function submitWithdraw() {
@@ -876,7 +919,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             if (!addr || !amount) { alert("Заполните адрес и сумму."); return; }
 
             const btn = document.getElementById('btn-withdraw-action');
-            btn.innerText = "Обработка...";
+            btn.innerText = "Обработка в сети...";
             btn.disabled = true;
 
             try {
@@ -893,9 +936,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                     document.getElementById('withdraw-amount').value = '';
                     refresh();
                 }
-            } catch (e) {
-                alert("Ошибка сети.");
-            } finally {
+            } catch (e) { alert("Ошибка сети."); }
+            finally {
                 btn.innerText = "Withdraw 🚀";
                 btn.disabled = false;
             }
@@ -934,10 +976,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             }
             await refresh();
             setTimeout(() => { 
-                if (icon) {
-                    icon.style.transform = "rotate(0deg)"; 
-                    icon.style.transition = "none"; 
-                }
+                if (icon) { icon.style.transform = "rotate(0deg)"; icon.style.transition = "none"; }
             }, 500);
         }
 
@@ -973,9 +1012,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                     document.getElementById('dep-signature').value = "";
                     refresh();
                 }
-            } catch (e) {
-                alert("Ошибка соединения.");
-            } finally {
+            } catch (e) { alert("Ошибка соединения."); }
+            finally {
                 btn.innerText = "Verify & Credit USDC 🔄";
                 btn.disabled = false;
             }
@@ -1025,9 +1063,9 @@ RAW_HTML = r"""<!DOCTYPE html>
                             const isDep = h.type === 'DEPOSIT';
                             const color = isDep ? '#4ade80' : '#f87171';
                             const sign = isDep ? '+' : '-';
-                            const txLink = (h.tx && h.tx !== 'SIMULATED_TX' && h.tx.length > 20 && !h.tx.startsWith('USDC_')) 
+                            const txLink = (h.tx && h.tx !== 'SIMULATED_TX' && h.tx.length > 20) 
                                 ? `<a href="https://solscan.io/tx/${h.tx}" target="_blank" style="color: #60a5fa; text-decoration: none; font-size: 11px;">Tx ↗</a>` 
-                                : `<span style="color: #64748b; font-size: 10px;">Обработка</span>`;
+                                : `<span style="color: #64748b; font-size: 10px;">${h.status}</span>`;
                             
                             return `
                                 <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #1c2333; text-align: left;">
@@ -1174,7 +1212,6 @@ async def api_get_stats(request):
 
     total_pnl = tot_profit
     total_roi = (total_pnl / total_deposited * 100) if total_deposited > 0 else 0.0
-    
     withdrawable = max(0.0, user_bal - MIN_BOT_BALANCE_USDC)
 
     return web.json_response({
@@ -1283,29 +1320,33 @@ async def api_withdraw(request):
                 sol_price = prices.get("SOL", 0)
                 if sol_price <= 0:
                     conn.close()
-                    return web.json_response({"success": False, "message": "Не удалось получить текущий курс SOL. Попробуйте позже."})
+                    return web.json_response({"success": False, "message": "Не удалось получить текущий курс SOL."})
                 usdc_deduction = amount * sol_price
 
         withdrawable = max(0.0, user_bal - MIN_BOT_BALANCE_USDC)
         if usdc_deduction > withdrawable:
             conn.close()
-            return web.json_response({"success": False, "message": f"Сумма превышает доступную. Эквивалент: ${usdc_deduction:.2f}, Доступно: ${withdrawable:.2f}."})
+            return web.json_response({"success": False, "message": f"Сумма превышает доступную. Доступно: ${withdrawable:.2f}."})
 
         signer = get_signer_keypair()
         if not signer:
             conn.close()
             return web.json_response({"success": False, "message": "Внутренняя ошибка: серверный кошелек недоступен."})
 
-        tx_signature = "PENDING"
+        tx_signature = None
         async with aiohttp.ClientSession() as session:
             if token == "SOL":
                 sig = await execute_native_sol_transfer(session, signer, recipient, amount)
                 if not sig:
                     conn.close()
-                    return web.json_response({"success": False, "message": "Ошибка отправки транзакции в сеть Solana. Средства не списаны."})
+                    return web.json_response({"success": False, "message": "Ошибка отправки SOL в сеть."})
                 tx_signature = sig
             elif token == "USDC":
-                tx_signature = f"USDC_{int(datetime.now().timestamp())}"
+                sig = await execute_spl_usdc_transfer(session, signer, recipient, amount)
+                if not sig:
+                    conn.close()
+                    return web.json_response({"success": False, "message": "Ошибка отправки USDC в сеть Solana."})
+                tx_signature = sig
 
         new_bal = user_bal - usdc_deduction
         c.execute("UPDATE users SET balance_usdc = ? WHERE telegram_id = ?", (new_bal, tg_id))
@@ -1315,8 +1356,8 @@ async def api_withdraw(request):
         conn.commit()
         conn.close()
 
-        add_log(f"📤 Вывод {amount} {token} (списано ${usdc_deduction:.2f}) на {recipient[:6]}... выполнен. Tx: {tx_signature[:10]}")
-        return web.json_response({"success": True, "message": f"✅ Успешно! Вывод средств в обработку."})
+        add_log(f"📤 Вывод {amount} {token} на {recipient[:6]}... выполнен. Tx: {tx_signature[:10]}")
+        return web.json_response({"success": True, "message": f"✅ Успешно! Вывод отправлен в сеть. Tx: {tx_signature[:10]}..."})
     except Exception as e:
         return web.json_response({"success": False, "message": f"Ошибка вывода: {str(e)}"})
 
@@ -1342,7 +1383,7 @@ async def telegram_webhook_handler(request):
                 send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
                 payload = {
                     "chat_id": chat_id,
-                    "text": "👋 Терминал **ZERØLIFE Multi-Asset & Meme Sniper** готов.\nДоступен блок реального баланса, пополнений и общей доходности.",
+                    "text": "👋 Терминал **ZERØLIFE Multi-Asset & Meme Sniper** готов.",
                     "parse_mode": "Markdown", "reply_markup": keyboard
                 }
                 async with aiohttp.ClientSession() as session:
