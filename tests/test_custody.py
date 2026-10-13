@@ -516,6 +516,36 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("RPC", result["balance_check_error"])
         self.assertEqual(result["legacy_operations"][0]["state"], "PREPARED")
 
+    async def test_legacy_retirement_requires_owner_pin_and_preserves_money(self):
+        self.service.public_enabled = False
+        self.service.legacy_runtime.reserve("old-operation", "old-signature", "BUY", {})
+        before = self.ledger.liabilities()
+        body = {"signature": "old-signature", "pin": "123456", "confirm_archive_unknown": True}
+        with self.assertRaises(legacy.WalletError):
+            await self.service.retire_legacy(Request(202, body), None)
+        with self.assertRaises(legacy.WalletError):
+            await self.service.retire_legacy(Request(101, {**body, "pin": "wrong"}), None)
+        self.assertEqual(self.service.legacy_runtime.operation("old-operation")["state"], "PREPARED")
+        with patch.object(runtime, "prove_retirement", AsyncMock(return_value={"outcome": "UNKNOWN", "refund": False})):
+            reply = await self.service.retire_legacy(Request(101, body), None)
+        self.assertEqual(reply.status, 200)
+        self.assertEqual(self.service.legacy_runtime.operation("old-operation")["state"], "EXPIRED_UNCONFIRMED")
+        self.assertEqual(self.ledger.liabilities(), before)
+        with self.ledger.db() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM legacy_retirement_audit").fetchone()[0], 1)
+        self.assertEqual(self.service.ready(), self.signer)
+
+    async def test_failed_expiration_proof_keeps_old_pending_and_funds(self):
+        self.service.public_enabled = False
+        self.service.legacy_runtime.reserve("old-operation", "old-signature", "BUY", {})
+        before = self.ledger.liabilities()
+        with patch.object(runtime, "prove_retirement", AsyncMock(side_effect=legacy.WalletError("Proof missing"))):
+            with self.assertRaises(legacy.WalletError):
+                await self.service.retire_legacy(Request(101, {"signature": "old-signature",
+                    "pin": "123456", "confirm_archive_unknown": True}), None)
+        self.assertEqual(self.service.legacy_runtime.operation("old-operation")["state"], "PREPARED")
+        self.assertEqual(self.ledger.liabilities(), before)
+
     async def test_scan_paginates_across_cycles_without_losing_old_payments(self):
         self.ledger.invoice(101, SOL, 1_000_000)
         now = int(time.time())
