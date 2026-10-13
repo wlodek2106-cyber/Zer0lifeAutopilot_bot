@@ -934,12 +934,19 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div style="font-size: 13px; font-weight: 800; color: #fff; margin-bottom: 12px;">История Транзакций</div>
                 <div id="wallet-history-box" style="font-size: 11px; color: #64748b; text-align: center;">Транзакции отсутствуют...</div>
             </div>
-            <div id="admin-custody-panel" class="card" style="display:none;">
+            <div id="admin-custody-panel" data-fee-ui-version="inline-reserve-v1" class="card" style="display:none;">
                 <div style="font-weight:800;">Настройка администратора перед публичным открытием</div>
                 <div style="font-size:11px;margin-top:8px;">Комиссии оплачиваются из отдельного резерва оператора. Чужие балансы не используются.</div>
                 <button class="btn-copy" onclick="checkLegacyOperations()">Проверить старые операции</button>
                 <div id="legacy-operation-details" style="font-size:12px;overflow-wrap:anywhere;white-space:pre-wrap;margin-top:8px;"></div>
-                <button class="btn-copy" onclick="setupFeeReserve()">Выделить собственные SOL на комиссии</button>
+                <h3>Резерв комиссий · SOL</h3>
+                <div id="fee-status" class="status-output">Резерв ещё не проверен.</div>
+                <p class="muted">Личный SOL-баланс и резерв комиссий — разные счета. Выделение уменьшает ваш доступный остаток; перевода в сеть не происходит. Чужие средства не используются.</p>
+                <label for="fee-amount">Сумма своих SOL для резерва</label>
+                <input id="fee-amount" class="sig-input" type="text" inputmode="decimal" value="0.01" autocomplete="off">
+                <label style="display:flex;gap:10px;align-items:flex-start;font-size:12px;"><input id="fee-confirm" type="checkbox" style="width:auto;flex:0 0 auto;">Подтверждаю: это мои SOL, а не средства клиентов.</label>
+                <button id="fee-submit" class="btn-copy" onclick="setupFeeReserve()">Выделить собственные SOL на комиссии</button>
+                <div id="fee-result" class="status-output" role="status"></div>
                 <button class="btn-copy" onclick="importOwnOpeningBalance()">Перенести старый личный остаток</button>
             </div>
         </div>
@@ -1100,10 +1107,38 @@ RAW_HTML = r"""<!DOCTYPE html>
             await adminLedgerAction('/api/admin/retire_legacy', {signature, pin, confirm_archive_unknown:true});
             await checkLegacyOperations();
         }
+        function renderFeeStatus(fees) {
+            if(!fees)return;
+            document.getElementById('fee-status').textContent=
+                'В резерве: '+fees.reserve_sol+' SOL\nМинимум для запуска: '+fees.minimum_sol+
+                ' SOL\nВаш доступный остаток: '+fees.own_available_sol+' SOL\n'+
+                (fees.sufficient?'Резерв достаточен для проверки запуска.':'Резерв недостаточен.');
+        }
         async function setupFeeReserve() {
-            const amount = prompt('Сколько своих SOL выделить на комиссии? Сначала используется ваш личный SOL-баланс, затем только ваши нераспределённые монеты.', '0.01');
-            if (!amount || !confirm('Подтверждаете, что эта сумма принадлежит вам, не клиентам? Монеты не отправляются, меняется только учёт.')) return;
-            await adminLedgerAction('/api/admin/fee_reserve', {amount_sol:amount, confirm_own_unassigned:true});
+            const resultBox=document.getElementById('fee-result');
+            const button=document.getElementById('fee-submit');
+            const raw=document.getElementById('fee-amount').value.trim();
+            if(!/^\d+([.,]\d{1,9})?$/.test(raw)||Number(raw.replace(',','.'))<=0){
+                resultBox.textContent='Укажите положительную сумму SOL, например 0.01 или 0,01.';return;
+            }
+            if(!document.getElementById('fee-confirm').checked){
+                resultBox.textContent='Сначала подтвердите, что это ваши SOL, а не средства клиентов.';return;
+            }
+            if(button.disabled)return;
+            button.disabled=true;resultBox.textContent='Проверяю и выделяю ваши SOL…';
+            try{
+                const response=await apiFetch('/api/admin/fee_reserve',{method:'POST',headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({amount_sol:raw.replace(',','.'),confirm_own_unassigned:true})});
+                const result=await response.json();
+                if(!response.ok||!result.success)throw new Error(result.message||'Выделение не подтверждено.');
+                renderFeeStatus(result.operator_fees);
+                document.getElementById('fee-confirm').checked=false;
+                resultBox.textContent=result.message+'\nРезерв после выделения: '+result.operator_fees.reserve_sol+' SOL.';
+                await refresh();
+            }catch(e){
+                resultBox.textContent=(e.message||'Ответ сервера не получен.')+
+                    '\nНе повторяйте вслепую: нажмите «Обновить» и проверьте значение резерва.';
+            }finally{button.disabled=false;}
         }
         async function importOwnOpeningBalance() {
             const token = prompt('Актив для переноса старого личного остатка: USDC или SOL', 'USDC');
@@ -1387,6 +1422,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                         s.operation_pending ? 'Ожидается подтверждение вашей операции. Не повторяйте отправку.' :
                         'Показан только ваш счёт. Торговля рискованна и включается вами вручную.';
                     document.getElementById('admin-custody-panel').style.display = s.is_admin ? 'block' : 'none';
+                    if(s.is_admin)renderFeeStatus(s.operator_fees);
                     document.getElementById('operator-settings').style.display=s.is_admin?'block':'none';
                     updateToggleUI(s.trading_active);
                     currentTradingSettings=s.trading_settings||{order_usdc:1};
