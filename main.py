@@ -870,16 +870,11 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div id="section-deposit">
                     <div class="banner-limit">
                         <div style="color:#4ade80; font-weight:800;">Пополнение USDC или SOL — сеть Solana</div>
-                        <div style="font-size:11px; margin-top:6px;">Адрес общий, счёт — только ваш. Создайте запрос: его уникальный Memo обязателен. Без Memo перевод нельзя автоматически зачислить.</div>
+                        <div style="font-size:11px; margin-top:6px;">Обычный перевод на общий адрес, затем проверка по Tx. Чтобы чужой Tx не зачислили другому аккаунту, подтвердите свой кошелёк один раз.</div>
                     </div>
-                    <select id="deposit-token" class="sig-input"><option value="USDC">USDC</option><option value="SOL">SOL</option></select>
-                    <input id="deposit-amount" type="number" step="any" class="sig-input" placeholder="Сумма пополнения">
-                    <button class="btn-green-main" onclick="createDepositInvoice()">Создать запрос пополнения</button>
-                    <div id="deposit-invoice-details" style="display:none;">
-                        <div class="address-box" id="wallet-text"></div>
-                        <div style="font-size:11px;">Обязательный Memo: <span id="deposit-memo" style="overflow-wrap:anywhere;"></span></div>
-                        <a id="deposit-wallet-link" target="_blank" rel="noopener noreferrer" class="btn-copy">Оплатить через кошелёк</a>
-                        <button class="btn-copy" onclick="copyDepositMemo()">Копировать Memo</button>
+                    <button class="btn-copy" onclick="linkDepositWallet()">Подтвердить свой кошелёк один раз</button>
+                    <div id="deposit-invoice-details">
+                        <div class="address-box" id="wallet-text">__DEPOSIT_WALLET__</div>
                         <button class="btn-copy" onclick="copyWallet()">Копировать общий адрес</button>
                     </div>
                     <input id="dep-signature" class="sig-input" placeholder="Подпись входящего перевода — необязательно">
@@ -935,29 +930,14 @@ RAW_HTML = r"""<!DOCTYPE html>
         let currentWithdrawToken = 'USDC';
         let tradingActive = false;
         let withdrawSending = false;
-        let depositInvoiceId = localStorage.getItem('deposit_invoice_id') || '';
-
-        async function createDepositInvoice() {
+        async function linkDepositWallet() {
             try {
-                const token = document.getElementById('deposit-token').value;
-                const amount = document.getElementById('deposit-amount').value.trim();
-                if (!amount) { alert('Введите сумму пополнения.'); return; }
-                const response = await apiFetch('/api/deposit_invoice', {
-                    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token, amount})
-                });
-                const invoice = await response.json();
-                if (!response.ok || !invoice.success) throw new Error(invoice.message);
-                depositInvoiceId = invoice.invoice_id;
-                localStorage.setItem('deposit_invoice_id', depositInvoiceId);
-                document.getElementById('wallet-text').textContent = invoice.deposit_wallet;
-                document.getElementById('deposit-memo').textContent = invoice.memo;
-                document.getElementById('deposit-wallet-link').href = invoice.payment_url;
-                document.getElementById('deposit-invoice-details').style.display = 'block';
-                alert('Используйте страницу оплаты: она добавляет Memo автоматически. Не отправляйте просто на общий адрес без Memo.');
-            } catch(e) { alert(e.message || 'Не удалось создать платёжный запрос.'); }
-        }
-        function copyDepositMemo() {
-            navigator.clipboard.writeText(document.getElementById('deposit-memo').textContent);
+                const response = await apiFetch('/api/wallet_link', {method:'POST'});
+                const result = await response.json();
+                if (!response.ok || !result.success) throw new Error(result.message);
+                if (result.address) { alert('Ваш подтверждённый кошелёк: ' + result.address); return; }
+                if (tg?.openLink) tg.openLink(result.url); else window.open(result.url, '_blank', 'noopener');
+            } catch(e) { alert(e.message || 'Не удалось открыть подтверждение.'); }
         }
         async function checkLegacyOperations() {
             const box = document.getElementById('legacy-operation-details');
@@ -1230,19 +1210,16 @@ RAW_HTML = r"""<!DOCTYPE html>
         async function verifyOnchainDeposit() {
             const sig = document.getElementById('dep-signature').value.trim();
             if (!sig) { alert("Вставьте Signature транзакции."); return; }
-            if (!depositInvoiceId) { alert('Сначала создайте свой платёжный запрос. Подпись без Memo не подтверждает владельца депозита.'); return; }
 
             const btn = document.getElementById('btn-verify-action');
             btn.innerText = "Верификация...";
             btn.disabled = true;
 
             try {
-                const user = getUserData();
-                const customNick = localStorage.getItem('user_custom_nick') || user.username;
                 const res = await apiFetch('/api/verify_deposit', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ invoice_id: depositInvoiceId, tx_signature: sig })
+                    body: JSON.stringify({ tx_signature: sig })
                 });
                 const d = await res.json();
                 alert(d.message);
@@ -1780,6 +1757,7 @@ async def main():
     app.router.add_post('/api/toggle_trading', wallet_handler(runtime.toggle))
     app.router.add_post('/api/toggle_meme', api_toggle_meme)
     app.router.add_post('/api/verify_deposit', wallet_handler(runtime.deposit))
+    app.router.add_post('/api/wallet_link', wallet_handler(runtime.wallet_link))
     app.router.add_post('/api/deposit_invoice', wallet_handler(runtime.create_invoice))
     app.router.add_get('/api/admin/status', wallet_handler(runtime.admin_status))
     app.router.add_post('/api/admin/retire_legacy', wallet_handler(runtime.retire_legacy))
@@ -1793,8 +1771,19 @@ async def main():
     app.router.add_post('/webhook', telegram_webhook_handler)
     app.router.add_get('/deposit/{invoice}', payment_page)
     app.router.add_get('/deposit/{invoice}/status', payment_handler(runtime.payment_status))
-    app.router.add_post('/deposit/{invoice}/transaction', payment_handler(runtime.deposit_transaction))
+    app.router.add_post('/deposit/{invoice}/transaction', payment_handler(runtime.payment_disabled))
     app.router.add_post('/deposit/{invoice}/confirm', payment_handler(runtime.payment_confirm))
+    wallet_link_html = Path(__file__).with_name("wallet_link.html").read_text(encoding="utf-8")
+    async def wallet_link_page(request):
+        if not runtime.ledger.wallet_proof(request.match_info["nonce"]):
+            raise web.HTTPNotFound()
+        return web.Response(text=wallet_link_html, content_type="text/html", headers={
+            "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": "frame-ancestors 'none'; object-src 'none'; base-uri 'none'",
+            "X-Content-Type-Options": "nosniff"})
+    app.router.add_get('/wallet-link/{nonce}', wallet_link_page)
+    app.router.add_get('/wallet-link/{nonce}/status', payment_handler(runtime.wallet_link_status))
+    app.router.add_post('/wallet-link/{nonce}/confirm', payment_handler(runtime.wallet_link_confirm))
 
     runner = web.AppRunner(app)
     await runner.setup()

@@ -485,7 +485,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.service.legacy_runtime.reserve("old-operation", "old-signature", "WITHDRAW", {})
         self.status = {"confirmationStatus": "finalized", "err": "failed"}
         response = await self.service.handle(Request(101, {"token": "USDC", "amount": "1"}), self.service.create_invoice)
-        self.assertEqual(response.status, 200)
+        self.assertEqual(response.status, 410)
         self.assertEqual(self.service.legacy_runtime.operation("old-operation")["state"], "FAILED")
         self.assertFalse(self.service.readiness()["legacy_operation_pending"])
 
@@ -628,7 +628,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("username", data)
         self.assertNotIn("balance", data)
 
-    async def test_unsigned_sol_deposit_preserves_amount_recipient_memo(self):
+    async def test_unsigned_sol_transfer_preserves_amount_recipient_without_memo(self):
         invoice = self.ledger.invoice(101, SOL, 1_000_000)
         sender = Keypair()
         req = Request(body={"sender": str(sender.pubkey())})
@@ -643,9 +643,8 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         response = await self.service.deposit_transaction(req, None)
         tx = Transaction.from_bytes(base64.b64decode(json.loads(response.text)["transaction"]))
         self.assertEqual(str(tx.message.account_keys[0]), str(sender.pubkey()))
-        self.assertIn("ZL1:" + invoice["id"], bytes(tx.message.instructions[-1].data).decode())
-        memo_accounts = list(tx.message.instructions[-1].accounts)
-        self.assertEqual(memo_accounts, [0])
+        self.assertNotIn(legacy.MEMO, tx.message.account_keys)
+        self.assertEqual(len(tx.message.instructions), 1)
         self.assertEqual(int.from_bytes(bytes(tx.message.instructions[0].data)[4:], "little"), 1_000_000)
         self.assertTrue(all(s == Signature.default() for s in tx.signatures))
 
@@ -672,7 +671,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(transaction.message.header.num_required_signatures, 1)
         self.assertEqual(bytes(transaction.message.instructions[0].data),
                          bytes([12]) + (1_000_000).to_bytes(8, "little") + bytes([6]))
-        self.assertEqual(list(transaction.message.instructions[-1].accounts), [0])
+        self.assertNotIn(legacy.MEMO, transaction.message.account_keys)
 
     async def run_withdrawal(self, timeout=False, failed=False):
         invoice, sig, tx = self.payment(uid=101, raw=2_000_000)

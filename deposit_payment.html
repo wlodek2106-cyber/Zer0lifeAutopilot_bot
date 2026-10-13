@@ -18,8 +18,8 @@ button:disabled{opacity:.45}code{overflow-wrap:anywhere;font-size:12px}p{line-he
 <p class="muted">Только Solana mainnet. Подпись выполняется в вашем кошельке: сайт не запрашивает seed-фразу или приватный ключ.</p>
 <div class="box"><strong id="amount">Загрузка...</strong>
 <p>Общий адрес: <code id="address"></code></p>
-<p>Ваш платёжный Memo: <code id="memo"></code></p></div>
-<p class="muted">Memo включается в транзакцию автоматически. Без него перевод нельзя автоматически зачислить вашему аккаунту.</p>
+<p><code id="memo"></code></p></div>
+<p class="muted">Эта старая страница больше не отправляет платежи. Вернитесь в Wallet: обычный перевод и проверка Tx.</p>
 <a id="phantom" class="button">Открыть в Phantom</a>
 <button id="pay" disabled>Подключить кошелёк и оплатить</button>
 <p id="status" role="status"></p>
@@ -42,14 +42,14 @@ async function refresh() {
         if (!response.ok || !invoice.success) throw new Error(invoice.message || 'Запрос недоступен.');
         document.getElementById('amount').textContent = invoice.amount + ' ' + invoice.token;
         document.getElementById('address').textContent = invoice.deposit_wallet;
-        document.getElementById('memo').textContent = invoice.memo;
+        document.getElementById('memo').textContent = 'Обычный перевод. Подтвердите кошелёк в Telegram и проверьте Tx.';
         const credited = invoice.state === 'CREDITED';
-        pay.disabled = credited || submitting || paymentLocked || !!signature || invoice.expires_at * 1000 < Date.now();
+        pay.disabled = true;
         if (credited) status.textContent = 'Пополнение подтверждено и зачислено вашему аккаунту.';
         else if (signature) status.textContent = 'Отправлено. Ожидается финализация — повторять оплату не нужно.';
         else if (paymentLocked) status.textContent = 'Результат отправки неизвестен. Не платите повторно; проверьте историю кошелька и счёт в Telegram.';
         else if (!provider()) status.textContent = 'Откройте эту страницу в браузере вашего Solana-кошелька, например Phantom.';
-        else status.textContent = 'Проверьте сумму и подтвердите перевод в кошельке.';
+        else status.textContent = 'Старая страница отключена. Используйте обычный перевод и проверку Tx в Telegram.';
         if (provider()?.isPhantom) phantom.style.display = 'none';
     } catch(e) { pay.disabled = true; status.textContent = e.message; }
 }

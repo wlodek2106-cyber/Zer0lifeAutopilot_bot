@@ -20,6 +20,8 @@ from solders.transaction import Transaction, VersionedTransaction
 from wallet_runtime import WalletRuntime, WalletError, amount_raw, associated, TOKEN, ATA, SYSTEM, MEMO, GENESIS
 from custody_ledger import CustodyLedger, LedgerError, USDC, SOL, FEE_CAP, available, position_account
 from legacy_retirement import prove_retirement, RECOVERY_RPC
+from tx_deposits import incoming_amounts
+from solders.signature import Signature
 
 WRAPPED_SOL = "So11111111111111111111111111111111111111112"
 
@@ -51,6 +53,7 @@ class CustodyRuntime(WalletRuntime):
         super().__init__(*args, **kwargs)
         self.legacy_runtime = WalletRuntime(*args, **kwargs)
         self.ledger = CustodyLedger(self.db_file)
+        self.ledger.tx_epoch()
         self.base_url = base_url.rstrip("/")
         self.public_enabled = os.getenv("PUBLIC_CUSTODY_ENABLED", "").lower() == "true"
         beta = os.getenv("CUSTODY_BETA_USERS", "").split(",")
@@ -203,7 +206,7 @@ class CustodyRuntime(WalletRuntime):
 
     def public_invoice(self, invoice):
         token = "USDC" if invoice["asset"] == USDC else "SOL"
-        return {"invoice_id": invoice["id"], "memo": "ZL1:" + invoice["id"],
+        return {"invoice_id": invoice["id"], "deprecated": True,
             "token": token, "amount": display_raw(invoice["raw"], 6 if token == "USDC" else 9),
             "deposit_wallet": self.wallet, "expires_at": invoice["expires_at"],
             "state": invoice["state"], "payment_url": self.base_url + "/deposit/" + invoice["id"]}
@@ -211,32 +214,84 @@ class CustodyRuntime(WalletRuntime):
     async def create_invoice(self, request, session):
         uid = self.uid(request)
         self.admit(uid)
+        raise WalletError("Платёжные запросы отключены. Используйте обычный перевод на общий адрес и проверку Tx.", 410)
+
+    async def deposit(self, request, session):
+        uid = self.uid(request)
+        self.admit(uid)
+        body = await request.json()
+        signature = str(body.get("tx_signature", "")).strip()
+        if signature.startswith(("https://solscan.io/tx/", "https://explorer.solana.com/tx/")):
+            signature = signature.split("/tx/", 1)[1].split("?", 1)[0].split("#", 1)[0].rstrip("/")
+        try:
+            Signature.from_string(signature)
+        except ValueError:
+            raise WalletError("Вставьте полную подпись Tx или ссылку на неё в Solscan — не адрес кошелька.", 400)
+        async with self.lock:
+            if await self.rpc(session, "getGenesisHash") != GENESIS:
+                raise WalletError("Нужна Solana mainnet.", 409)
+            tx = await self.rpc(session, "getTransaction", [signature, {
+                "encoding": "jsonParsed", "commitment": "finalized", "maxSupportedTransactionVersion": 0}])
+            if not tx or not tx.get("meta") or "err" not in tx["meta"] or tx["meta"]["err"] is not None:
+                raise WalletError("Tx ещё не финализирована или отклонена. Повторять перевод не нужно.", 409)
+            # Old already-issued invoices retain their original owner and deduplication.
+            try:
+                old_iid = memo_invoice(tx)
+            except WalletError:
+                old_iid = None
+                if any(ix.get("programId") == str(MEMO) and isinstance(ix.get("parsed"), str)
+                       and ix["parsed"].startswith("ZL1:")
+                       for ix in tx["transaction"]["message"]["instructions"]):
+                    raise WalletError("Некорректная старая платёжная метка. Нельзя зачислить её другому счёту.", 409)
+            if old_iid:
+                old_invoice = self.ledger.get_invoice(old_iid)
+                if not old_invoice or old_invoice["uid"] != uid:
+                    raise WalletError("Этот старый запрос принадлежит другому аккаунту.", 403)
+                await self.apply_deposit(session, signature, old_iid)
+            else:
+                sender = self.ledger.wallet_address(uid)
+                if not sender:
+                    raise WalletError("Один раз подтвердите кошелёк кнопкой выше. После этого пополнения проверяются только по Tx.", 403)
+                amounts = incoming_amounts(tx, self.wallet, sender)
+                balances = await self.solvent(session)
+                self.ledger.credit_tx(uid, signature, sender, amounts, int(tx.get("blockTime") or 0),
+                                      {asset: data["raw"] for asset, data in balances.items()})
+        return web.json_response({"success": True, "message": "Tx проверена. Поступление зачислено только вашему аккаунту."})
+
+    async def wallet_link(self, request, session):
+        uid = self.uid(request)
+        self.admit(uid)
         if uid != self.owner_id:
             with self.ledger.db() as db:
                 fees = db.execute("SELECT raw FROM custody_accounts WHERE account='treasury' AND asset=?", (SOL,)).fetchone()
                 if not fees or fees["raw"] < FEE_CAP:
                     raise WalletError("Новые пополнения приостановлены: оператору нужно пополнить резерв комиссий.")
-        if await self.rpc(session, "getGenesisHash") != GENESIS:
-            raise WalletError("Разрешена только Solana mainnet.")
-        body = await request.json()
-        token = str(body.get("token", "")).upper()
-        if token not in ("USDC", "SOL"):
-            raise WalletError("Выберите USDC или SOL.", 400)
-        raw = amount_raw(body.get("amount", 0), 6 if token == "USDC" else 9)
-        if raw > 2**63 - 1:
-            raise WalletError("Сумма вне диапазона реестра.", 400)
-        invoice = self.ledger.invoice(uid, USDC if token == "USDC" else SOL, raw)
-        return web.json_response({"success": True, **self.public_invoice(invoice)})
+        address = self.ledger.wallet_address(uid)
+        nonce = None if address else self.ledger.wallet_challenge(uid, self.base_url)
+        return web.json_response({"success": True, "address": address,
+            "url": self.base_url + "/wallet-link/" + nonce if nonce else None})
 
-    async def deposit(self, request, session):
-        self.admit(self.uid(request))
+    async def wallet_link_status(self, request, session):
+        proof = self.ledger.wallet_proof(request.match_info["nonce"])
+        if not proof or proof["expires_at"] < int(time.time()):
+            raise WalletError("Ссылка подтверждения истекла. Создайте новую в боте.", 409)
+        return web.json_response({"success": True, "message": proof["message"],
+            "linked": bool(proof["used"]), "address": self.ledger.wallet_address(proof["uid"])})
+
+    async def wallet_link_confirm(self, request, session):
+        proof = self.ledger.wallet_proof(request.match_info["nonce"])
+        if not proof or proof["used"] or proof["expires_at"] < int(time.time()):
+            raise WalletError("Ссылка уже использована или истекла.", 409)
+        self.admit(proof["uid"])
         body = await request.json()
-        iid = str(body.get("invoice_id", ""))
-        invoice = self.ledger.get_invoice(iid)
-        if not invoice or invoice["uid"] != self.uid(request):
-            raise WalletError("Это не ваш платёжный запрос.", 403)
-        await self.apply_deposit(session, str(body.get("tx_signature", "")), iid)
-        return web.json_response({"success": True, "message": "Пополнение вашего счёта подтверждено."})
+        address = Pubkey.from_string(str(body.get("address", "")))
+        if not address.is_on_curve() or str(address) == self.wallet:
+            raise WalletError("Подтвердите личный кошелёк, не общий серверный адрес.", 400)
+        signature = Signature.from_bytes(base64.b64decode(body.get("signature", ""), validate=True))
+        if not signature.verify(address, proof["message"].encode("utf-8")):
+            raise WalletError("Подпись кошелька не подтверждена.", 403)
+        self.ledger.link_wallet(proof["nonce"], str(address))
+        return web.json_response({"success": True, "message": "Кошелёк подтверждён. Вернитесь в Telegram; дальше используйте обычный перевод и Tx."})
 
     async def deposit_transaction(self, request, session):
         iid = request.match_info["invoice"]
@@ -277,9 +332,7 @@ class CustodyRuntime(WalletRuntime):
             instructions.append(Instruction(TOKEN, bytes([12]) + invoice["raw"].to_bytes(8, "little") + bytes([6]), [
                 AccountMeta(source, False, True), AccountMeta(mint, False, False),
                 AccountMeta(dest, False, True), AccountMeta(sender, True, False)]))
-        # SPL Memo requires every listed account to sign. The custodian does NOT sign a deposit.
-        instructions.append(Instruction(MEMO, ("ZL1:" + iid).encode(), [
-            AccountMeta(sender, True, False)]))
+        # Ordinary transfer only. Never add a Memo instruction.
         block = (await self.rpc(session, "getLatestBlockhash", [{"commitment": "confirmed"}]))["value"]
         message = Message.new_with_blockhash(instructions, sender, Hash.from_string(block["blockhash"]))
         transaction = Transaction.new_unsigned(message)
@@ -306,6 +359,9 @@ class CustodyRuntime(WalletRuntime):
         body = await request.json()
         await self.apply_deposit(session, str(body.get("signature", "")), request.match_info["invoice"])
         return await self.payment_status(request, session)
+
+    async def payment_disabled(self, request, session):
+        raise WalletError("Старые страницы оплаты отключены. Вернитесь в Wallet: обычный перевод и проверка Tx.", 410)
 
     async def reserve_fees(self, request, session):
         if self.uid(request) != self.owner_id:
