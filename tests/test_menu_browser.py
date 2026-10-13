@@ -24,13 +24,26 @@ class MenuBrowserTests(unittest.TestCase):
             "trades": [], "logs": [], "trading_active": False, "is_admin": True,
             "wallet_status": {"wallet_configured": True, "persistent_storage": True, "finance_allowed": True},
             "trading_settings": {"order_usdc": 1, "max_positions": 5, "assets": ["SOL", "JUP"]},
+            "operator_fees": {"reserve_sol": "0", "minimum_sol": "0.005", "own_available_sol": "0.164009149", "sufficient": False},
         }
         stub = """<script>
         window.testErrors=[];
         window.onerror=(message)=>window.testErrors.push(String(message));
         window.onunhandledrejection=(event)=>window.testErrors.push(String(event.reason));
         window.Telegram={WebApp:{initData:'fixture',initDataUnsafe:{user:{id:101,username:'fixture'}},expand(){},ready(){}}};
-        window.fetch=async()=>new Response(JSON.stringify(FIXTURE),{status:200,headers:{'Content-Type':'application/json'}});
+        const fixture=FIXTURE;
+        window.feePosts=[];
+        window.prompt=()=>{throw new Error('native prompt must not be used for fees');};
+        window.confirm=()=>{throw new Error('native confirm must not be used for fees');};
+        window.fetch=async(url,options={})=>{
+            if(url==='/api/admin/fee_reserve'){
+                window.feePosts.push(JSON.parse(options.body));
+                fixture.operator_fees={reserve_sol:'0.01',minimum_sol:'0.005',own_available_sol:'0.154009149',sufficient:true};
+                return new Response(JSON.stringify({success:true,message:'Выделено',operator_fees:fixture.operator_fees}),
+                    {status:200,headers:{'Content-Type':'application/json'}});
+            }
+            return new Response(JSON.stringify(fixture),{status:200,headers:{'Content-Type':'application/json'}});
+        };
         </script>""".replace("FIXTURE", json.dumps(fixture))
         page = page.replace("</head>", stub + "</head>")
         checks = """<script>
@@ -49,6 +62,17 @@ class MenuBrowserTests(unittest.TestCase):
                 assert(document.getElementById('port-balance').textContent==='34.037005 USDC','personal USDC value');
                 assert(document.getElementById('port-withdrawable').textContent==='0.164009 SOL','separate SOL value');
                 assert(document.getElementById('strategy-order-size').textContent==='1.00 USDC','server size not legacy $20');
+                assert(document.getElementById('fee-status').textContent.includes('В резерве: 0 SOL'),'shows actual empty reserve');
+                assert(window.feePosts.length===0,'no automatic fee allocation');
+                document.getElementById('fee-amount').value='0,01';
+                await setupFeeReserve();
+                assert(window.feePosts.length===0,'explicit ownership confirmation required');
+                document.getElementById('fee-confirm').checked=true;
+                await setupFeeReserve();
+                assert(window.feePosts.length===1,'one explicitly requested allocation');
+                assert(window.feePosts[0].amount_sol==='0.01','mobile comma normalized');
+                assert(document.getElementById('fee-status').textContent.includes('В резерве: 0.01 SOL'),'actual post-allocation reserve visible');
+                assert(!document.getElementById('fee-confirm').checked,'confirmation cleared after success');
                 const tabs=['terminal','trading','deposit','settings'];
                 for(let i=0;i<tabs.length;i++){
                     gotoTab(tabs[i],document.querySelectorAll('.nav-btn')[i]);

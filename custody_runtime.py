@@ -449,7 +449,18 @@ class CustodyRuntime(WalletRuntime):
             await self.reconcile(session)
             backing = await self.solvent(session)
             self.ledger.seed_fees(raw, backing[SOL]["raw"], self.owner_id)
-        return web.json_response({"success": True, "message": "Ваши SOL выделены на комиссии оператора. Монеты не отправлялись; чужие остатки не менялись."})
+        return web.json_response({"success": True, "message": "Ваши SOL выделены на комиссии оператора. Монеты не отправлялись; чужие остатки не менялись.",
+                                 "operator_fees": self.operator_fees(self.owner_id)})
+
+    def operator_fees(self, uid):
+        if uid != self.owner_id:
+            return None
+        with self.ledger.db() as db:
+            row = db.execute("SELECT raw FROM custody_accounts WHERE account='treasury' AND asset=?", (SOL,)).fetchone()
+        raw = row["raw"] if row else 0
+        return {"reserve_sol": display_raw(raw, 9), "minimum_sol": display_raw(FEE_CAP, 9),
+                "own_available_sol": display_raw(self.ledger.balance(uid, SOL), 9),
+                "sufficient": raw >= FEE_CAP}
 
     async def opening_balance(self, request, session):
         uid = self.uid(request)
@@ -875,6 +886,7 @@ class CustodyRuntime(WalletRuntime):
                 "finance_allowed": self.public_enabled or uid in self.beta_users},
             "operation_pending": bool(own_pending), "ledger_audited": True,
             "trading_active": bool(settings["trading"]), "is_admin": uid == self.owner_id,
+            "operator_fees": self.operator_fees(uid),
             "sniper_active": bool(settings["sniper_trading"]),
             "sniper_settings": {"order_sol": settings["sniper_order_raw"]/1e9, "max_positions": 1},
             "profit_sol": sum(t["profit_units"] for t in trades if t["funding_currency"] == "SOL"),
@@ -914,7 +926,9 @@ class CustodyRuntime(WalletRuntime):
         with self.ledger.db() as db:
             fee = db.execute("SELECT raw FROM custody_accounts WHERE account='treasury' AND asset=?", (SOL,)).fetchone()
         if not fee or fee["raw"] < FEE_CAP:
-            raise WalletError("Не хватает отдельного операторского резерва SOL. Пополните его в Настройках; пользовательские SOL автоматически не расходуются.", 409)
+            reserve = display_raw(fee["raw"] if fee else 0, 9)
+            raise WalletError("Резерв комиссий: " + reserve + " SOL; требуется не меньше "
+                + display_raw(FEE_CAP, 9) + " SOL. В Настройках → Резерв комиссий выделите только свои SOL. Пользовательские средства автоматически не расходуются.", 409)
         prices = await self.prices_fn(session)
         if not any(prices.get(symbol, 0) > 0 for symbol in self.watchlist):
             raise WalletError("Источник котировок недоступен. Автопилот не запущен.", 503)
