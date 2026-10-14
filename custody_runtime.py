@@ -992,7 +992,12 @@ class CustodyRuntime(WalletRuntime):
             "closed_count": sum(p["state"] == "CLOSED" for p in positions), "trades": trades,
             "wallet_history": history[:20], "wallet_status": {**self.readiness(),
                 "finance_allowed": self.public_enabled or uid in self.beta_users},
-            "operation_pending": bool(own_pending), "ledger_audited": True,
+            "operation_pending": bool(own_pending),
+            "pending_operations": [
+                {key: row.get(key) for key in ("kind", "state", "created_at", "signature")}
+                for row in own_pending
+            ],
+            "ledger_audited": True,
             "trading_active": bool(settings["trading"]), "is_admin": uid == self.owner_id,
             "operator_fees": self.operator_fees(uid),
             "sniper_active": bool(settings["sniper_trading"]),

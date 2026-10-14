@@ -818,6 +818,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             <div class="banner-limit" style="border-color:#ef4444; background:#2a1014; margin-bottom:12px;">
                 <div style="color:#4ade80; font-size:13px; font-weight:800;">Your account · USDC / SOL</div>
                 <div id="wallet-runtime-status" style="color:#cbd5e1; font-size:11px; margin-top:4px;">Personal funds. Trading carries risk.</div>
+                <div id="account-pending-operation-details" role="status" style="display:none;color:#cbd5e1;font-size:11px;margin-top:8px;overflow-wrap:anywhere;white-space:pre-wrap;"></div>
             </div>
             <div class="control-bar">
                 <button id="btn-toggle" class="btn-ctl btn-toggle-off" onclick="toggleTrading()">
@@ -1605,6 +1606,24 @@ RAW_HTML = r"""<!DOCTYPE html>
                         !flags.finance_allowed ? 'Public deposits are not open yet.' :
                         s.operation_pending ? 'Your operation is pending. Do not resend.' :
                         'Personal funds. Trading carries risk.';
+                    const pendingDetails = document.getElementById('account-pending-operation-details');
+                    const pendingOperations = s.pending_operations || [];
+                    if (pendingDetails) {
+                        if (pendingOperations.length) {
+                            pendingDetails.style.display = 'block';
+                            pendingDetails.textContent = pendingOperations.map(op => {
+                                const seconds = Number(op.created_at);
+                                const created = Number.isFinite(seconds) && seconds > 0
+                                    ? new Date(seconds * 1000).toLocaleString() : 'unknown';
+                                return 'Operation: ' + (op.kind || 'unknown') + ' / ' + (op.state || 'unknown')
+                                    + '\nCreated: ' + created
+                                    + '\nSignature: ' + (op.signature || 'not recorded');
+                            }).join('\n\n') + '\n\nDo not resend this operation.';
+                        } else {
+                            pendingDetails.textContent = '';
+                            pendingDetails.style.display = 'none';
+                        }
+                    }
                     document.getElementById('admin-custody-panel').style.display = s.is_admin ? 'block' : 'none';
                     if(s.is_admin)renderFeeStatus(s.operator_fees);
                     document.getElementById('operator-settings').style.display=s.is_admin?'block':'none';
