@@ -568,6 +568,31 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             await self.service.admin_status(Request(202), None)
         self.assertEqual(error.exception.status, 403)
 
+    async def test_owner_can_read_global_pending_operation_without_private_fields_or_rpc(self):
+        invoice = self.ledger.invoice(202, USDC, 2_000_000)
+        self.ledger.credit_deposit(invoice["id"], str(Signature.new_unique()),
+                                   USDC, 2_000_000, invoice["created_at"])
+        operation = self.ledger.reserve(202, "pending-diagnostic", "BUY", USDC, 1_000_000,
+                                       {"output_asset": runtime.WRAPPED_SOL}, str(self.recipient))
+        signature = str(Signature.new_unique())
+        self.ledger.prepared(operation["id"], signature, "signed-wire")
+
+        response = await self.service.admin_pending_operations(Request(101), None)
+        result = json.loads(response.text)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(len(result["operations"]), 1)
+        row = result["operations"][0]
+        self.assertEqual(row["kind"], "BUY")
+        self.assertEqual(row["state"], "PREPARED")
+        self.assertEqual(row["signature"], signature)
+        self.assertEqual(set(row), {"kind", "state", "created_at", "signature"})
+        self.assertEqual(self.ledger.operation(operation["id"])["state"], "PREPARED")
+        self.assertEqual(self.calls, [])
+
+        with self.assertRaises(legacy.WalletError) as error:
+            await self.service.admin_pending_operations(Request(202), None)
+        self.assertEqual(error.exception.status, 403)
+
     async def test_owner_diagnostics_survive_rpc_failure_keep_unknown(self):
         self.service.legacy_runtime.reserve("old-operation", "old-signature", "WITHDRAW", {})
         self.service.rpc = AsyncMock(side_effect=legacy.WalletError("Solana RPC недоступен."))
