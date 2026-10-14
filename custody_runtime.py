@@ -592,6 +592,17 @@ class CustodyRuntime(WalletRuntime):
             "unassigned_sol": display_raw(backing[SOL]["raw"] - liabilities.get(SOL, 0), 9),
             "fee_reserve_sol": display_raw(fee["raw"] if fee else 0, 9)})
 
+    async def admin_pending_operations(self, request, session):
+        if self.uid(request) != self.owner_id:
+            raise WalletError("Только администратор.", 403)
+        operations = sorted(self.ledger.pending(),
+                            key=lambda row: int(row.get("created_at") or 0),
+                            reverse=True)[:5]
+        return web.json_response({"success": True, "operations": [
+            {key: row.get(key) for key in ("kind", "state", "created_at", "signature")}
+            for row in operations
+        ]})
+
     async def recovery_rpc(self, session, method, params):
         # Fixed, independently verified mainnet endpoint; keys/credentials never sent.
         async with session.post(RECOVERY_RPC, json={"jsonrpc": "2.0", "id": 1,

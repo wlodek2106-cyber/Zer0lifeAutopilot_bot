@@ -40,7 +40,7 @@ TELEGRAM_INIT_DATA_MAX_AGE_SECONDS = 86400
 PIN_HASH_ITERATIONS = 310000
 PIN_MAX_ATTEMPTS = 5
 PIN_LOCK_SECONDS = 900
-ADMIN_API_PATHS = {"/api/admin/status", "/api/admin/fee_reserve", "/api/admin/opening_balance", "/api/admin/retire_legacy"}
+ADMIN_API_PATHS = {"/api/admin/status", "/api/admin/pending_operations", "/api/admin/fee_reserve", "/api/admin/opening_balance", "/api/admin/retire_legacy"}
 WITHDRAW_LOCKS = {}
 CUSTODY_SAFE_MODE = True
 CUSTODY_PAUSE_MESSAGE = "Операции с реальными средствами временно приостановлены до сверки балансов и миграции реестра."
@@ -962,6 +962,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div style="font-size:11px;margin-top:8px;">Fees are paid from a separate operator reserve.</div>
                 <button class="btn-copy" onclick="checkLegacyOperations()">Check legacy operations</button>
                 <div id="legacy-operation-details" style="font-size:12px;overflow-wrap:anywhere;white-space:pre-wrap;margin-top:8px;"></div>
+                <button class="btn-copy" onclick="checkSharedPendingOperations()">Check current shared-wallet lock (read-only)</button>
+                <div id="shared-pending-operation-details" style="font-size:12px;overflow-wrap:anywhere;white-space:pre-wrap;margin-top:8px;"></div>
                 <h3>Fee reserve · SOL</h3>
                 <div id="fee-status" class="status-output">Reserve not checked yet.</div>
                 <p class="muted">Allocation reduces your available SOL balance. No on-chain transfer. Only your funds may be allocated.</p>
@@ -1154,6 +1156,30 @@ RAW_HTML = r"""<!DOCTYPE html>
                 });
                 await refresh();
             } catch(e) { box.textContent = e.message || 'Could not check legacy operations.'; }
+        }
+        async function checkSharedPendingOperations() {
+            const box = document.getElementById('shared-pending-operation-details');
+            box.textContent = 'Reading the current shared-wallet lock (read-only)…';
+            try {
+                const response = await apiFetch('/api/admin/pending_operations');
+                const result = await response.json();
+                if (!response.ok || !result.success) throw new Error(result.message || 'Check unavailable.');
+                const operations = result.operations || [];
+                if (!operations.length) {
+                    box.textContent = 'No active shared-wallet operation.';
+                    return;
+                }
+                box.textContent = operations.map(op => {
+                    const seconds = Number(op.created_at);
+                    const created = Number.isFinite(seconds) && seconds > 0
+                        ? new Date(seconds * 1000).toLocaleString() : 'unknown';
+                    return 'Operation: ' + (op.kind || 'unknown') + ' / ' + (op.state || 'unknown')
+                        + '\nCreated: ' + created
+                        + '\nSignature: ' + (op.signature || 'not recorded');
+                }).join('\n\n') + '\n\nRead-only check: no transaction was sent or changed.';
+            } catch(e) {
+                box.textContent = e.message || 'Could not read the current shared-wallet lock.';
+            }
         }
         async function retireLegacyOperation(signature) {
             if (!confirm('For a legacy personal operation only. The server checks transaction absence, blockhash expiry and nonce history. Without evidence nothing changes. The record stays unconfirmed; this is not a refund or a successful trade. Continue?')) return;
@@ -2141,6 +2167,7 @@ async def main():
     app.router.add_post('/api/wallet_link', wallet_handler(runtime.wallet_link))
     app.router.add_post('/api/deposit_invoice', wallet_handler(runtime.create_invoice))
     app.router.add_get('/api/admin/status', wallet_handler(runtime.admin_status))
+    app.router.add_get('/api/admin/pending_operations', wallet_handler(runtime.admin_pending_operations))
     app.router.add_post('/api/admin/retire_legacy', wallet_handler(runtime.retire_legacy))
     app.router.add_post('/api/admin/fee_reserve', wallet_handler(runtime.reserve_fees))
     app.router.add_post('/api/admin/opening_balance', wallet_handler(runtime.opening_balance))
