@@ -819,7 +819,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div style="color:#4ade80; font-size:13px; font-weight:800;">Your account · USDC / SOL</div>
                 <div id="wallet-runtime-status" style="color:#cbd5e1; font-size:11px; margin-top:4px;">Personal funds. Trading carries risk.</div>
                 <div id="account-pending-operation-details" role="status" style="display:none;color:#cbd5e1;font-size:11px;margin-top:8px;overflow-wrap:anywhere;white-space:pre-wrap;"></div>
-                <button id="recover-pending-sell" type="button" onclick="recoverPendingOperation()" style="display:none;width:100%;margin-top:8px;padding:12px;border:1px solid #64748b;border-radius:12px;background:#172338;color:#e2e8f0;font-weight:700;">Verify expired SELL and unlock</button>
+                <button id="recover-pending-sell" type="button" onclick="openRecoveryConfirm()" style="display:none;width:100%;margin-top:8px;padding:12px;border:1px solid #64748b;border-radius:12px;background:#172338;color:#e2e8f0;font-weight:700;touch-action:manipulation;cursor:pointer;">Verify expired SELL and unlock</button>
             </div>
             <div class="control-bar">
                 <button id="btn-toggle" class="btn-ctl btn-toggle-off" onclick="toggleTrading()">
@@ -1038,6 +1038,17 @@ RAW_HTML = r"""<!DOCTYPE html>
         <button class="nav-btn" onclick="gotoTab('trading', this)"><span>↗</span>Trading</button>
         <button class="nav-btn" onclick="gotoTab('deposit', this)"><span>⇄</span>Wallet</button>
         <button class="nav-btn" onclick="gotoTab('settings', this)"><span>⚙</span>Settings</button>
+    </div>
+
+    <div id="recovery-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="recovery-confirm-title" style="display:none;position:fixed;inset:0;z-index:20000;background:rgba(0,0,0,.78);align-items:center;justify-content:center;padding:20px;box-sizing:border-box;">
+        <div style="width:100%;max-width:420px;padding:20px;border:1px solid #334155;border-radius:18px;background:#101923;color:#e2e8f0;box-shadow:0 20px 60px rgba(0,0,0,.55);">
+            <h2 id="recovery-confirm-title" style="margin:0 0 12px;font-size:18px;">Verify the pending SELL</h2>
+            <p style="font-size:14px;line-height:1.5;color:#cbd5e1;">This performs a read-only Solana check. If the SELL is proven absent and expired, it will restore the reserved asset to the open position and preserve the audit record. No transaction will be sent. Autopilot stays OFF.</p>
+            <div style="display:flex;gap:10px;margin-top:18px;">
+                <button type="button" onclick="closeRecoveryConfirm()" style="flex:1;min-height:46px;border:1px solid #475569;border-radius:12px;background:#172338;color:#e2e8f0;font-weight:700;touch-action:manipulation;">Cancel</button>
+                <button type="button" onclick="confirmRecoveryAction()" style="flex:1;min-height:46px;border:1px solid #34d399;border-radius:12px;background:#34d399;color:#052e20;font-weight:800;touch-action:manipulation;">Verify and unlock</button>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -1526,14 +1537,25 @@ RAW_HTML = r"""<!DOCTYPE html>
             }, 500);
         }
 
+        function openRecoveryConfirm() {
+            if (!window.pendingRecoverySignature) return;
+            const modal = document.getElementById('recovery-confirm-modal');
+            if (modal) modal.style.display = 'flex';
+        }
+
+        function closeRecoveryConfirm() {
+            const modal = document.getElementById('recovery-confirm-modal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        function confirmRecoveryAction() {
+            closeRecoveryConfirm();
+            recoverPendingOperation();
+        }
+
         async function recoverPendingOperation() {
             const signature = window.pendingRecoverySignature;
             if (!signature) return;
-            const promptText = 'Read-only Solana history check. If it proves this SELL was never executed and its blockhash expired, the bot will mark it FAILED, restore its reserved asset to the open position, and preserve the audit record. No transaction will be sent; Autopilot stays OFF. Continue?';
-            const confirmed = tg?.showConfirm
-                ? await new Promise(resolve => tg.showConfirm(promptText, resolve))
-                : window.confirm(promptText);
-            if (!confirmed) return;
             const button = document.getElementById('recover-pending-sell');
             if (button) button.disabled = true;
             try {

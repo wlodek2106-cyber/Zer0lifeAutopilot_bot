@@ -52,6 +52,32 @@ class WebBrowserTests(unittest.TestCase):
             assert(!document.getElementById('btn-toggle').disabled,'paid access unlocked visually');
         """)
 
+    def test_pending_sell_recovery_opens_touchable_in_page_confirmation(self):
+        page=self.page("""<script>
+        window.pendingRecoverySignature='fixture-signature';
+        window.confirm=()=>{throw Error('Native confirm should not be used in Telegram iOS');};
+        window.fetch=async()=>new Response(JSON.stringify({success:false,message:'fixture'}));
+        </script>""")
+        browser.AccountBrowserTests().run_page(page,"""
+            document.getElementById('app').style.display='block';
+            document.getElementById('nav').style.display='flex';
+            document.getElementById('web-login').hidden=true;
+            document.getElementById('splash-screen').style.display='none';
+            const button=document.getElementById('recover-pending-sell');
+            button.style.display='block';
+            const box=button.getBoundingClientRect();
+            assert(document.elementFromPoint(box.x+box.width/2,box.y+box.height/2)===button,
+                'recovery button is the topmost touch target');
+            button.click();
+            const modal=document.getElementById('recovery-confirm-modal');
+            assert(modal.style.display==='flex','tap opens in-page confirmation without native dialog');
+            const confirm=document.querySelector('#recovery-confirm-modal button:last-child');
+            const confirmBox=confirm.getBoundingClientRect();
+            assert(document.elementFromPoint(confirmBox.x+confirmBox.width/2,confirmBox.y+confirmBox.height/2)===confirm,
+                'confirm button is the topmost touch target');
+            assert(modal.getAttribute('aria-modal')==='true','confirmation is announced as modal');
+        """)
+
     def test_signin_two_click_native_gesture_with_server_cookie_not_telegram_header(self):
         page=self.page("""<script>
         window.PublicKeyCredential=function(){};window.calls=[];window.nativeCalls=0;window.signedIn=false;
