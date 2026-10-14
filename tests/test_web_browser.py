@@ -52,6 +52,19 @@ class WebBrowserTests(unittest.TestCase):
             assert(!document.getElementById('btn-toggle').disabled,'paid access unlocked visually');
         """)
 
+    def test_realized_pnl_shows_usdc_and_sol_separately_with_loss_color(self):
+        page=self.page("<script>window.fetch=async()=>new Response(JSON.stringify({success:true}));</script>")
+        browser.AccountBrowserTests().run_page(page,"""
+            renderRealizedPnl({profit_usdc:0,profit_sol:-0.001325811});
+            assert(document.getElementById('pnl-val').textContent==='+$0.00','USDC total stays in USDC');
+            const sol=document.getElementById('pnl-sol-val');
+            assert(sol.textContent==='-0.001325811 SOL','SOL loss is visible in native units');
+            assert(sol.style.color==='rgb(248, 113, 113)','negative SOL PnL is colored red');
+            renderRealizedPnl({profit_usdc:1.25,profit_sol:0.002});
+            assert(document.getElementById('pnl-val').textContent==='+$1.25','positive USDC formatting');
+            assert(sol.textContent==='+0.002000000 SOL','positive SOL formatting');
+        """)
+
     def test_pending_sell_recovery_opens_touchable_in_page_confirmation(self):
         page=self.page("""<script>
         window.pendingRecoverySignature='fixture-signature';
