@@ -898,16 +898,19 @@ RAW_HTML = r"""<!DOCTYPE html>
 
         <div id="tab-stats" class="tab-panel">
             <div class="card">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start;">
                     <div>
-                        <div style="font-size: 12px; color: #94a3b8; text-transform: uppercase;">Your realized returns</div>
-                        <div id="pnl-val" style="font-size: 26px; font-weight: 900; color: #4ade80; font-family: monospace; margin-top: 4px;">+$0.00 USDC</div>
+                        <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase;">Realized PnL · USDC</div>
+                        <div id="pnl-val" style="font-size: 24px; font-weight: 900; color: #4ade80; font-family: monospace; margin-top: 4px;">+$0.00</div>
+                        <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase; margin-top:12px;">Realized PnL · SOL</div>
+                        <div id="pnl-sol-val" style="font-size: 20px; font-weight: 900; color: #4ade80; font-family: monospace; margin-top: 4px;">+0.000000000 SOL</div>
                     </div>
                     <div style="text-align: right;">
                         <div style="font-size: 11px; color: #94a3b8;">Closed trades</div>
                         <div id="closed-count" style="font-size: 18px; font-weight: 800; color: #fff; font-family: monospace;">0</div>
                     </div>
                 </div>
+                <div class="section-note" style="margin-top:12px;">Totals are shown separately in their settlement currencies; SOL is not converted to USDC.</div>
             </div>
 
             <div class="card">
@@ -1524,6 +1527,23 @@ RAW_HTML = r"""<!DOCTYPE html>
             }
         }
 
+        function renderRealizedPnl(stats) {
+            const usdc = Number(stats.profit_usdc ?? 0);
+            const sol = Number(stats.profit_sol ?? 0);
+            const usdcNode = document.getElementById('pnl-val');
+            const solNode = document.getElementById('pnl-sol-val');
+            if (usdcNode) {
+                const validUsdc = Number.isFinite(usdc) ? usdc : 0;
+                usdcNode.textContent = (validUsdc >= 0 ? '+$' : '-$') + Math.abs(validUsdc).toFixed(2);
+                usdcNode.style.color = validUsdc < 0 ? '#f87171' : '#4ade80';
+            }
+            if (solNode) {
+                const validSol = Number.isFinite(sol) ? sol : 0;
+                solNode.textContent = (validSol >= 0 ? '+' : '-') + Math.abs(validSol).toFixed(9) + ' SOL';
+                solNode.style.color = validSol < 0 ? '#f87171' : '#4ade80';
+            }
+        }
+
         async function manualRefresh() {
             const icon = document.getElementById('refresh-icon');
             if (icon) {
@@ -1716,8 +1736,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     const userEl = document.getElementById('display-username');
                     if (userEl) userEl.innerText = "@" + s.username;
                     
-                    const p = s.profit_usdc ? s.profit_usdc : 0;
-                    document.getElementById('pnl-val').innerText = (p >= 0 ? "+$" : "-$") + Math.abs(p).toFixed(2) + " USDC";
+                    renderRealizedPnl(s);
                     document.getElementById('closed-count').innerText = s.closed_count ? s.closed_count : 0;
                     
                     const dep = s.total_deposited ? s.total_deposited : 0;
