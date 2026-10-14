@@ -603,15 +603,69 @@ class CustodyRuntime(WalletRuntime):
             for row in operations
         ]})
 
+    async def recover_expired_operation(self, request, session):
+        uid = self.uid(request)
+        body = await request.json()
+        signature = str(body.get("signature", "")).strip()
+        if body.get("confirm_expired") is not True:
+            raise WalletError("Confirm the read-only expiry check.", 400)
+        if not signature:
+            raise WalletError("Pending operation signature is missing.", 400)
+        WalletRuntime.ready(self)
+        async with self.lock:
+            row = next((item for item in self.ledger.pending()
+                        if item.get("signature") == signature and int(item["uid"]) == uid), None)
+            if not row or row["kind"] != "SELL" or row["state"] not in ("PREPARED", "SUBMITTED", "UNKNOWN"):
+                raise WalletError("No matching pending SELL operation belongs to this account.", 409)
+            try:
+                wire = base64.b64decode(row.get("wire") or "", validate=True)
+                signed_tx = VersionedTransaction.from_bytes(wire)
+                account_keys = signed_tx.message.account_keys
+                if (not signed_tx.signatures or str(signed_tx.signatures[0]) != signature
+                        or not account_keys or str(account_keys[0]) != self.wallet
+                        or signed_tx.message.header.num_required_signatures != 1):
+                    raise ValueError("signature mismatch")
+                recent_blockhash = str(signed_tx.message.recent_blockhash)
+            except Exception:
+                raise WalletError("The signed operation cannot be safely verified; no record was changed.") from None
+            proof_row = {
+                "signature": signature,
+                "timestamp": datetime.fromtimestamp(int(row["created_at"]), timezone.utc).isoformat(),
+                "recent_blockhash": recent_blockhash,
+            }
+            try:
+                async with asyncio.timeout(45):
+                    async def read_rpc(method, params):
+                        return await self.recovery_rpc(session, method, params)
+                    evidence = await prove_retirement(read_rpc, self.wallet, proof_row)
+            except (asyncio.TimeoutError, aiohttp.ClientError):
+                raise WalletError("Recovery check was interrupted; no record was changed.", 503) from None
+            evidence = {**evidence, "outcome": "PROVEN_ABSENT_AND_EXPIRED",
+                        "ledger_release": True, "transaction_sent": False}
+            try:
+                self.ledger.fail(row["id"], network_proven=True, fee=0,
+                    recovery_audit={"actor_id": uid, "evidence": evidence})
+            except LedgerError as exc:
+                raise WalletError(str(exc), 409) from None
+            current = self.ledger.operation(row["id"])
+            with self.ledger.db() as db:
+                audited = db.execute(
+                    "SELECT signature FROM custody_operation_recovery_audit WHERE signature=?",
+                    (signature,)).fetchone()
+            if not current or current["state"] != "FAILED" or not audited:
+                raise WalletError("The operation changed during verification; refresh status before trying again.", 409)
+        return web.json_response({"success": True, "state": "FAILED",
+            "message": "Solana history proved this SELL absent and expired. The audit record is retained, the reserved asset was restored to the open position, and no transaction was sent. Autopilot remains OFF; enable it only when ready."})
+
     async def recovery_rpc(self, session, method, params):
         # Fixed, independently verified mainnet endpoint; keys/credentials never sent.
         async with session.post(RECOVERY_RPC, json={"jsonrpc": "2.0", "id": 1,
                 "method": method, "params": params}, timeout=aiohttp.ClientTimeout(total=8)) as response:
             if response.status != 200:
-                raise WalletError("RPC восстановления недоступен; запись не изменена.")
+                raise WalletError("Recovery RPC is unavailable; no record was changed.")
             result = await response.json()
         if "error" in result or "result" not in result:
-            raise WalletError("RPC не предоставил доказательства для восстановления; запись не изменена.")
+            raise WalletError("RPC did not provide recovery evidence; no record was changed.")
         return result["result"]
 
     async def retire_legacy(self, request, session):

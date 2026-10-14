@@ -413,13 +413,19 @@ class CustodyLedger:
             db.execute("UPDATE custody_operations SET state=? WHERE id=? AND state='PREPARED'",
                        ("SUBMITTED" if known else "UNKNOWN", oid))
 
-    def fail(self, oid, network_proven=False, fee=0):
+    def fail(self, oid, network_proven=False, fee=0, recovery_audit=None):
         with self.db() as db:
             row = db.execute("SELECT * FROM custody_operations WHERE id=?", (oid,)).fetchone()
             if not row or row["state"] in ("FAILED", "COMPLETED"):
                 return
             if row["state"] != "RESERVED" and not network_proven:
                 raise LedgerError("Нельзя возвращать резерв: исход транзакции неизвестен.")
+            if recovery_audit is not None and (
+                    row["state"] not in ("PREPARED", "SUBMITTED", "UNKNOWN")
+                    or not row["signature"]
+                    or not isinstance(recovery_audit.get("evidence"), dict)
+                    or type(recovery_audit.get("actor_id")) is not int):
+                raise LedgerError("Recovery audit evidence is incomplete.")
             if not isinstance(fee, int) or fee < 0 or fee > row["fee_cap"]:
                 raise LedgerError("Комиссия не соответствует резерву.")
             source = position_account(row["position_id"]) if row["kind"] == "SELL" else available(row["uid"])
@@ -430,6 +436,21 @@ class CustodyLedger:
             if row["kind"] == "SELL":
                 db.execute("UPDATE custody_positions SET state='OPEN' WHERE id=?", (row["position_id"],))
             db.execute("UPDATE custody_operations SET state='FAILED' WHERE id=?", (oid,))
+            if recovery_audit is not None:
+                db.execute("""CREATE TABLE IF NOT EXISTS custody_operation_recovery_audit(
+                    signature TEXT PRIMARY KEY, operation_id TEXT NOT NULL,
+                    actor_id INTEGER NOT NULL, state_before TEXT NOT NULL,
+                    evidence TEXT NOT NULL, timestamp TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+                db.execute("""CREATE TRIGGER IF NOT EXISTS custody_recovery_audit_immutable_update
+                    BEFORE UPDATE ON custody_operation_recovery_audit
+                    BEGIN SELECT RAISE(ABORT,'immutable custody recovery audit'); END""")
+                db.execute("""CREATE TRIGGER IF NOT EXISTS custody_recovery_audit_immutable_delete
+                    BEFORE DELETE ON custody_operation_recovery_audit
+                    BEGIN SELECT RAISE(ABORT,'immutable custody recovery audit'); END""")
+                db.execute("""INSERT INTO custody_operation_recovery_audit
+                    (signature,operation_id,actor_id,state_before,evidence) VALUES(?,?,?,?,?)""",
+                    (row["signature"], oid, recovery_audit["actor_id"], row["state"],
+                     json.dumps(recovery_audit["evidence"])))
 
     def finalize(self, oid, spent, fee, received=0):
         with self.db() as db:
