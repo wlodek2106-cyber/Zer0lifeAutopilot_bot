@@ -12,7 +12,8 @@ class RetirementProofTests(unittest.IsolatedAsyncioTestCase):
         self.row = {"timestamp": "2026-10-13 15:29:47", "signature": "old-signature"}
         self.nonces, self.status, self.old_tx = [], None, None
         self.now, self.blocks = self.created + 7200, list(range(501, 652))
-        self.kind, self.inner = "transfer", []
+        self.kind, self.inner, self.history = "transfer", [], None
+        self.blockhash_valid = False
         self.rpc = AsyncMock(side_effect=self.answer)
 
     async def answer(self, method, params):
@@ -22,8 +23,10 @@ class RetirementProofTests(unittest.IsolatedAsyncioTestCase):
         if method == "getBlockTime": return self.now
         if method == "getBlocksWithLimit": return self.blocks
         if method == "getSignaturesForAddress":
-            return [{"signature": "newer", "slot": 500, "blockTime": self.created + 600, "err": None},
-                    {"signature": "older", "slot": 100, "blockTime": self.created - 600, "err": None}]
+            return self.history if self.history is not None else [
+                {"signature": "newer", "slot": 500, "blockTime": self.created + 600, "err": None},
+                {"signature": "older", "slot": 100, "blockTime": self.created - 600, "err": None}]
+        if method == "isBlockhashValid": return {"value": self.blockhash_valid}
         if method == "getTransaction":
             if params[0] == "old-signature": return self.old_tx
             return {"meta": {"err": None, "innerInstructions": self.inner},
@@ -65,3 +68,18 @@ class RetirementProofTests(unittest.IsolatedAsyncioTestCase):
     async def test_insufficient_rooted_blocks_blocks_retirement(self):
         self.blocks = [501]
         with self.assertRaises(WalletError): await prove_retirement(self.rpc, "wallet", self.row)
+
+    async def test_no_later_wallet_transaction_uses_signed_recent_blockhash_proof(self):
+        self.history = []
+        row = {**self.row, "recent_blockhash": "expired-blockhash"}
+        proof = await prove_retirement(self.rpc, "wallet", row)
+        self.assertEqual(proof["expiry_proof"], "isBlockhashValid_false")
+        self.assertEqual(proof["rooted_blocks_after_anchor"], 0)
+
+    async def test_valid_or_unavailable_recent_blockhash_never_retires(self):
+        self.history = []
+        row = {**self.row, "recent_blockhash": "still-valid"}
+        self.blockhash_valid = True
+        with self.assertRaises(WalletError): await prove_retirement(self.rpc, "wallet", row)
+        self.blockhash_valid = None
+        with self.assertRaises(WalletError): await prove_retirement(self.rpc, "wallet", row)
