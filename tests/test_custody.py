@@ -341,6 +341,33 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["trading_settings"]["order_usdc"], 1)
         self.assertEqual(data["wallet_history"][0]["amount"], "1.5 USDC")
 
+    async def test_stats_exposes_pending_operation_only_to_its_own_account(self):
+        invoice = self.ledger.invoice(202, USDC, 2_000_000)
+        self.ledger.credit_deposit(invoice["id"], str(Signature.new_unique()),
+                                   USDC, 2_000_000, invoice["created_at"])
+        operation = self.ledger.reserve(202, "account-pending-diagnostic", "BUY", USDC, 1_000_000,
+                                       {"output_asset": runtime.WRAPPED_SOL}, str(self.recipient))
+        signature = str(Signature.new_unique())
+        self.ledger.prepared(operation["id"], signature, "signed-wire")
+        self.service.reconcile = AsyncMock()
+
+        own_response = await self.service.stats(Request(202), None)
+        own = json.loads(own_response.text)
+        self.assertTrue(own["operation_pending"])
+        self.assertEqual(len(own["pending_operations"]), 1)
+        pending = own["pending_operations"][0]
+        self.assertEqual(pending["kind"], "BUY")
+        self.assertEqual(pending["state"], "PREPARED")
+        self.assertEqual(pending["signature"], signature)
+        self.assertEqual(set(pending), {"kind", "state", "created_at", "signature"})
+
+        other_response = await self.service.stats(Request(101), None)
+        other = json.loads(other_response.text)
+        self.assertFalse(other["operation_pending"])
+        self.assertEqual(other["pending_operations"], [])
+        self.assertEqual(self.ledger.operation(operation["id"])["state"], "PREPARED")
+        self.assertEqual(self.calls, [])
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
