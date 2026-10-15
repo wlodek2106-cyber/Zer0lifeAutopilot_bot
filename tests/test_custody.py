@@ -268,6 +268,31 @@ class LedgerTests(unittest.TestCase):
         with self.assertRaises(LedgerError):
             self.ledger.seed_fees(1, 39_000_000, owner_uid=101)
 
+    def test_release_returns_only_fee_reserve_excess_to_owner(self):
+        self.credit(202, SOL, 8_000_000)
+        before_other = self.ledger.balance(202, SOL)
+        released = self.ledger.release_excess_fees(101, 15_000_000)
+        self.assertEqual(released, 15_000_000)
+        self.assertEqual(self.ledger.balance(101, SOL), 15_000_000)
+        self.assertEqual(self.ledger.balance(202, SOL), before_other)
+        with closing(sqlite3.connect(self.path)) as db:
+            reserve = db.execute("SELECT raw FROM custody_accounts WHERE account='treasury' AND asset=?",
+                                 (SOL,)).fetchone()[0]
+        self.assertEqual(reserve, FEE_CAP)
+
+    def test_release_requires_exact_excess_and_no_pending_operation(self):
+        with self.assertRaises(LedgerError):
+            self.ledger.release_excess_fees(101, 14_999_999)
+        self.reserve()
+        with self.assertRaises(LedgerError):
+            self.ledger.release_excess_fees(101, 15_000_000)
+        self.assertEqual(self.ledger.balance(101, SOL), 0)
+
+    def test_cannot_release_fee_reserve_below_minimum(self):
+        self.ledger.release_excess_fees(101, 15_000_000)
+        with self.assertRaises(LedgerError):
+            self.ledger.release_excess_fees(101, 1)
+
     def test_opening_is_backed_explicit_single_time(self):
         self.ledger.opening(101, USDC, 5_000_000, 45_000_000)
         self.assertEqual(self.ledger.balance(101, USDC), 15_000_000)
@@ -734,8 +759,32 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.ledger.pending())
 
     async def test_user_cannot_allocate_fees_or_import_opening(self):
-        for action in (self.service.reserve_fees, self.service.opening_balance, self.service.admin_status):
+        for action in (self.service.reserve_fees, self.service.release_fee_reserve,
+                       self.service.opening_balance, self.service.admin_status):
             self.assertEqual((await self.service.handle(Request(202), action)).status, 403)
+
+    async def test_owner_can_return_fee_reserve_excess_without_onchain_transfer(self):
+        self.service.balances = AsyncMock(return_value={
+            SOL: {"raw": 50_000_000, "decimals": 9},
+            runtime.WRAPPED_SOL: {"raw": 50_000_000, "decimals": 9},
+        })
+        body = {"expected_release_sol": "0.015", "confirm_excess_only": True, "confirm_own_funds": True}
+        response = await self.service.handle(Request(101, body), self.service.release_fee_reserve)
+        result = json.loads(response.text)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(result["released_sol"], "0.015")
+        self.assertEqual(result["operator_fees"]["reserve_sol"], "0.005")
+        self.assertEqual(result["operator_fees"]["own_available_sol"], "0.015")
+        self.assertFalse(any(method == "sendTransaction" for method, _ in self.calls))
+
+    async def test_fee_reserve_release_requires_explicit_owner_confirmation(self):
+        body = {"expected_release_sol": "0.015", "confirm_excess_only": True, "confirm_own_funds": False}
+        response = await self.service.handle(Request(101, body), self.service.release_fee_reserve)
+        self.assertEqual(response.status, 400)
+        with closing(sqlite3.connect(self.tmp.name + "/db")) as db:
+            reserve = db.execute("SELECT raw FROM custody_accounts WHERE account='treasury' AND asset=?",
+                                 (SOL,)).fetchone()[0]
+        self.assertEqual(reserve, 20_000_000)
 
     async def test_insolvent_wallet_fails_closed(self):
         invoice, sig, tx = self.payment(raw=1_000_000)

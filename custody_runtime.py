@@ -536,6 +536,26 @@ class CustodyRuntime(WalletRuntime):
         return web.json_response({"success": True, "message": "Ваши SOL выделены на комиссии оператора. Монеты не отправлялись; чужие остатки не менялись.",
                                  "operator_fees": self.operator_fees(self.owner_id)})
 
+    async def release_fee_reserve(self, request, session):
+        uid = self.uid(request)
+        if uid != self.owner_id:
+            raise WalletError("Только администратор.", 403)
+        self.ready()
+        body = await request.json()
+        if body.get("confirm_excess_only") is not True or body.get("confirm_own_funds") is not True:
+            raise WalletError("Подтвердите возврат только ваших средств сверх минимального резерва.", 400)
+        expected_raw = amount_raw(body.get("expected_release_sol", "0"), 9)
+        async with self.lock:
+            await self.solvent(session)
+            released_raw = self.ledger.release_excess_fees(uid, expected_raw)
+        released = display_raw(released_raw, 9)
+        return web.json_response({
+            "success": True,
+            "released_sol": released,
+            "message": f"{released} SOL возвращены в ваш доступный баланс. Перевод в Solana не отправлялся.",
+            "operator_fees": self.operator_fees(uid),
+        })
+
     def operator_fees(self, uid):
         if uid != self.owner_id:
             return None
@@ -543,6 +563,7 @@ class CustodyRuntime(WalletRuntime):
             row = db.execute("SELECT raw FROM custody_accounts WHERE account='treasury' AND asset=?", (SOL,)).fetchone()
         raw = row["raw"] if row else 0
         return {"reserve_sol": display_raw(raw, 9), "minimum_sol": display_raw(FEE_CAP, 9),
+                "releasable_sol": display_raw(max(0, raw - FEE_CAP), 9),
                 "own_available_sol": display_raw(self.ledger.balance(uid, SOL), 9),
                 "sufficient": raw >= FEE_CAP}
 

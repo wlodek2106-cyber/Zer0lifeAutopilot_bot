@@ -339,6 +339,26 @@ class CustodyLedger:
                 lines.append(("external", SOL, -unassigned))
             self.post(db, "fees:" + str(uuid.uuid4()), "operator allocates only own/unassigned SOL", lines)
 
+    def release_excess_fees(self, owner_uid, expected_raw):
+        if owner_uid is None or expected_raw <= 0:
+            raise LedgerError("Неверная сумма возврата резерва.")
+        with self.db() as db:
+            if db.execute("SELECT id FROM custody_operations WHERE state IN ('RESERVED','PREPARED','SUBMITTED','UNKNOWN') LIMIT 1").fetchone():
+                raise LedgerError("Сначала нужно подтвердить предыдущую операцию.")
+            row = db.execute("SELECT raw FROM custody_accounts WHERE account='treasury' AND asset=?",
+                             (SOL,)).fetchone()
+            reserve = row["raw"] if row else 0
+            releasable = reserve - FEE_CAP
+            if releasable <= 0:
+                raise LedgerError("Резерв комиссий уже на обязательном минимуме.")
+            if releasable != expected_raw:
+                raise LedgerError("Резерв изменился. Обновите экран и подтвердите актуальную сумму.")
+            self.post(db, "fee-release:" + str(uuid.uuid4()),
+                      "operator returns excess fee reserve to owner", [
+                          ("treasury", SOL, -releasable),
+                          (available(owner_uid), SOL, releasable)])
+            return releasable
+
     def opening(self, uid, asset, raw, backing):
         with self.db() as db:
             if db.execute("SELECT id FROM custody_operations WHERE state IN ('RESERVED','PREPARED','SUBMITTED','UNKNOWN')").fetchone():

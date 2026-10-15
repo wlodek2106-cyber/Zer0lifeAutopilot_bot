@@ -40,7 +40,7 @@ TELEGRAM_INIT_DATA_MAX_AGE_SECONDS = 86400
 PIN_HASH_ITERATIONS = 310000
 PIN_MAX_ATTEMPTS = 5
 PIN_LOCK_SECONDS = 900
-ADMIN_API_PATHS = {"/api/admin/status", "/api/admin/pending_operations", "/api/admin/fee_reserve", "/api/admin/opening_balance", "/api/admin/retire_legacy"}
+ADMIN_API_PATHS = {"/api/admin/status", "/api/admin/pending_operations", "/api/admin/fee_reserve", "/api/admin/release_fee_reserve", "/api/admin/opening_balance", "/api/admin/retire_legacy"}
 WITHDRAW_LOCKS = {}
 CUSTODY_SAFE_MODE = True
 CUSTODY_PAUSE_MESSAGE = "Операции с реальными средствами временно приостановлены до сверки балансов и миграции реестра."
@@ -977,6 +977,10 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <label style="display:flex;gap:10px;align-items:flex-start;font-size:12px;"><input id="fee-confirm" type="checkbox" style="width:auto;flex:0 0 auto;">I confirm these SOL belong to me, not to customers.</label>
                 <button id="fee-submit" class="btn-copy" onclick="setupFeeReserve()">Allocate my SOL to fees</button>
                 <div id="fee-result" class="status-output" role="status"></div>
+                <p class="muted">You may return only the amount above the required minimum. This changes your bot balance only; it does not send a Solana transaction.</p>
+                <label style="display:flex;gap:10px;align-items:flex-start;font-size:12px;"><input id="fee-release-confirm" type="checkbox" style="width:auto;flex:0 0 auto;">I confirm the fee reserve being returned is my SOL, not customer funds.</label>
+                <button id="fee-release-submit" class="btn-copy" onclick="releaseExcessFeeReserve()">Return excess fee reserve</button>
+                <div id="fee-release-result" class="status-output" role="status"></div>
                 <button class="btn-copy" onclick="importOwnOpeningBalance()">Import my legacy balance</button>
             </div>
         </div>
@@ -1204,12 +1208,20 @@ RAW_HTML = r"""<!DOCTYPE html>
             await adminLedgerAction('/api/admin/retire_legacy', {signature, pin, confirm_archive_unknown:true});
             await checkLegacyOperations();
         }
+        let operatorFeeState = null;
         function renderFeeStatus(fees) {
             if(!fees)return;
+            operatorFeeState=fees;
             document.getElementById('fee-status').textContent=
                 'Reserve: '+fees.reserve_sol+' SOL\nRequired minimum: '+fees.minimum_sol+
+                ' SOL\nExcess returnable to your balance: '+fees.releasable_sol+
                 ' SOL\nYour available balance: '+fees.own_available_sol+' SOL\n'+
                 (fees.sufficient?'Reserve sufficient for readiness checks.':'Reserve insufficient.');
+            const releaseButton=document.getElementById('fee-release-submit');
+            if(releaseButton){
+                releaseButton.textContent='Return '+fees.releasable_sol+' SOL to available balance';
+                releaseButton.disabled=Number(fees.releasable_sol)<=0;
+            }
         }
         async function setupFeeReserve() {
             const resultBox=document.getElementById('fee-result');
@@ -1236,6 +1248,32 @@ RAW_HTML = r"""<!DOCTYPE html>
                 resultBox.textContent=(e.message||'No response from server.')+
                     '\nDo not retry blindly. Refresh and check the actual reserve.';
             }finally{button.disabled=false;}
+        }
+        async function releaseExcessFeeReserve() {
+            const resultBox=document.getElementById('fee-release-result');
+            const button=document.getElementById('fee-release-submit');
+            const expected=operatorFeeState?.releasable_sol;
+            if(!expected||Number(expected)<=0){
+                resultBox.textContent='There is no amount above the required fee reserve to return.';return;
+            }
+            if(!document.getElementById('fee-release-confirm').checked){
+                resultBox.textContent='Confirm that these are your own SOL, not customer funds.';return;
+            }
+            if(button.disabled)return;
+            button.disabled=true;resultBox.textContent='Checking the balance and returning '+expected+' SOL to your available bot balance…';
+            try{
+                const response=await apiFetch('/api/admin/release_fee_reserve',{method:'POST',headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({expected_release_sol:expected,confirm_excess_only:true,confirm_own_funds:true})});
+                const result=await response.json();
+                if(!response.ok||!result.success)throw new Error(result.message||'Reserve release not confirmed.');
+                renderFeeStatus(result.operator_fees);
+                document.getElementById('fee-release-confirm').checked=false;
+                resultBox.textContent=result.message+'\nReserve after return: '+result.operator_fees.reserve_sol+' SOL.';
+                await refresh();
+            }catch(e){
+                resultBox.textContent=(e.message||'No response from server.')+
+                    '\nRefresh the fee status before trying again; do not retry blindly.';
+            }finally{button.disabled=Number(operatorFeeState?.releasable_sol)<=0;}
         }
         async function importOwnOpeningBalance() {
             const token = prompt('Asset to import from your legacy funds: USDC or SOL', 'USDC');
@@ -2274,6 +2312,7 @@ async def main():
     app.router.add_get('/api/admin/pending_operations', wallet_handler(runtime.admin_pending_operations))
     app.router.add_post('/api/admin/retire_legacy', wallet_handler(runtime.retire_legacy))
     app.router.add_post('/api/admin/fee_reserve', wallet_handler(runtime.reserve_fees))
+    app.router.add_post('/api/admin/release_fee_reserve', wallet_handler(runtime.release_fee_reserve))
     app.router.add_post('/api/admin/opening_balance', wallet_handler(runtime.opening_balance))
     app.router.add_post('/api/close_all', wallet_handler(runtime.close_all))
     app.router.add_post('/api/withdraw', wallet_handler(runtime.withdraw))
