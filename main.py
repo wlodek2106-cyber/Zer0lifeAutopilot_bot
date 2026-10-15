@@ -32,7 +32,7 @@ from wallet_runtime import WalletError
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
 # --- КОНФИГУРАЦИЯ ---
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
+TELEGRAM_TOKEN = (os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN") or "").strip()
 PORT = int(os.getenv("PORT", 10000))
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://zer0lifeautopilot-bot.onrender.com").strip()
 ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "428821665").strip() or "428821665"
@@ -819,7 +819,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div style="color:#4ade80; font-size:13px; font-weight:800;">Your account · USDC / SOL</div>
                 <div id="wallet-runtime-status" style="color:#cbd5e1; font-size:11px; margin-top:4px;">Personal funds. Trading carries risk.</div>
                 <div id="account-pending-operation-details" role="status" style="display:none;color:#cbd5e1;font-size:11px;margin-top:8px;overflow-wrap:anywhere;white-space:pre-wrap;"></div>
-                <button id="recover-pending-sell" type="button" onclick="openRecoveryConfirm()" style="display:none;width:100%;margin-top:8px;padding:12px;border:1px solid #64748b;border-radius:12px;background:#172338;color:#e2e8f0;font-weight:700;touch-action:manipulation;cursor:pointer;">Verify expired SELL and unlock</button>
+                <button id="recover-pending-operation" type="button" onclick="openRecoveryConfirm()" style="display:none;width:100%;margin-top:8px;padding:12px;border:1px solid #64748b;border-radius:12px;background:#172338;color:#e2e8f0;font-weight:700;touch-action:manipulation;cursor:pointer;">Verify expired operation and unlock</button>
             </div>
             <div class="control-bar">
                 <button id="btn-toggle" class="btn-ctl btn-toggle-off" onclick="toggleTrading()">
@@ -1045,8 +1045,8 @@ RAW_HTML = r"""<!DOCTYPE html>
 
     <div id="recovery-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="recovery-confirm-title" style="display:none;position:fixed;inset:0;z-index:20000;background:rgba(0,0,0,.78);align-items:center;justify-content:center;padding:20px;box-sizing:border-box;">
         <div style="width:100%;max-width:420px;padding:20px;border:1px solid #334155;border-radius:18px;background:#101923;color:#e2e8f0;box-shadow:0 20px 60px rgba(0,0,0,.55);">
-            <h2 id="recovery-confirm-title" style="margin:0 0 12px;font-size:18px;">Verify the pending SELL</h2>
-            <p style="font-size:14px;line-height:1.5;color:#cbd5e1;">This performs a read-only Solana check. If the SELL is proven absent and expired, it will restore the reserved asset to the open position and preserve the audit record. No transaction will be sent. Autopilot stays OFF.</p>
+            <h2 id="recovery-confirm-title" style="margin:0 0 12px;font-size:18px;">Verify the pending operation</h2>
+            <p style="font-size:14px;line-height:1.5;color:#cbd5e1;">This performs read-only Solana checks. Only if the network proves the signature absent and expired: a BUY releases its reserved funds, or a SELL restores its reserved asset to the open position; both trading modes are switched OFF and the audit is preserved. No transaction is sent. If proof is incomplete or unavailable, the operation stays pending and funds remain reserved.</p>
             <div style="display:flex;gap:10px;margin-top:18px;">
                 <button type="button" onclick="closeRecoveryConfirm()" style="flex:1;min-height:46px;border:1px solid #475569;border-radius:12px;background:#172338;color:#e2e8f0;font-weight:700;touch-action:manipulation;">Cancel</button>
                 <button type="button" onclick="confirmRecoveryAction()" style="flex:1;min-height:46px;border:1px solid #34d399;border-radius:12px;background:#34d399;color:#052e20;font-weight:800;touch-action:manipulation;">Verify and unlock</button>
@@ -1576,7 +1576,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         async function recoverPendingOperation() {
             const signature = window.pendingRecoverySignature;
             if (!signature) return;
-            const button = document.getElementById('recover-pending-sell');
+            const button = document.getElementById('recover-pending-operation');
             if (button) button.disabled = true;
             try {
                 const response = await apiFetch('/api/recover_expired_operation', {
@@ -1689,6 +1689,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                                 const created = Number.isFinite(seconds) && seconds > 0
                                     ? new Date(seconds * 1000).toLocaleString() : 'unknown';
                                 return 'Operation: ' + (op.kind || 'unknown') + ' / ' + (op.state || 'unknown')
+                                    + '\nReserved: ' + (op.reserved_amount || 'unknown') + ' ' + (op.reserved_asset || '')
                                     + '\nCreated: ' + created
                                     + '\nSignature: ' + (op.signature || 'not recorded');
                             }).join('\n\n') + '\n\nDo not resend this operation.';
@@ -1697,11 +1698,17 @@ RAW_HTML = r"""<!DOCTYPE html>
                             pendingDetails.style.display = 'none';
                         }
                     }
-                    const recoverButton = document.getElementById('recover-pending-sell');
-                    const pendingSell = pendingOperations.find(op =>
-                        op.kind === 'SELL' && ['PREPARED', 'SUBMITTED', 'UNKNOWN'].includes(op.state) && op.signature);
-                    window.pendingRecoverySignature = pendingSell ? pendingSell.signature : '';
-                    if (recoverButton) recoverButton.style.display = pendingSell ? 'block' : 'none';
+                    const recoverButton = document.getElementById('recover-pending-operation');
+                    const pendingRecovery = pendingOperations.find(op =>
+                        ['BUY', 'SELL'].includes(op.kind) && ['PREPARED', 'SUBMITTED', 'UNKNOWN'].includes(op.state) && op.signature);
+                    window.pendingRecoverySignature = pendingRecovery ? pendingRecovery.signature : '';
+                    window.pendingRecoveryKind = pendingRecovery ? pendingRecovery.kind : '';
+                    if (recoverButton) {
+                        recoverButton.style.display = pendingRecovery ? 'block' : 'none';
+                        recoverButton.textContent = pendingRecovery
+                            ? 'Verify expired ' + pendingRecovery.kind + ' and unlock'
+                            : 'Verify expired operation and unlock';
+                    }
                     document.getElementById('admin-custody-panel').style.display = s.is_admin ? 'block' : 'none';
                     if(s.is_admin)renderFeeStatus(s.operator_fees);
                     document.getElementById('operator-settings').style.display=s.is_admin?'block':'none';

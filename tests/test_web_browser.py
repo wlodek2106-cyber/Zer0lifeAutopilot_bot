@@ -65,19 +65,23 @@ class WebBrowserTests(unittest.TestCase):
             assert(sol.textContent==='+0.002000000 SOL','positive SOL formatting');
         """)
 
-    def test_pending_sell_recovery_opens_touchable_in_page_confirmation(self):
+    def test_pending_operation_recovery_opens_touchable_confirmation(self):
         page=self.page("""<script>
         window.pendingRecoverySignature='fixture-signature';
+        window.pendingRecoveryKind='BUY';
         window.confirm=()=>{throw Error('Native confirm should not be used in Telegram iOS');};
         window.fetch=async()=>new Response(JSON.stringify({success:false,message:'fixture'}));
         </script>""")
+        self.assertIn("['BUY', 'SELL'].includes(op.kind)", page)
+        self.assertIn("Reserved: ", page)
         browser.AccountBrowserTests().run_page(page,"""
             document.getElementById('app').style.display='block';
             document.getElementById('nav').style.display='flex';
             document.getElementById('web-login').hidden=true;
             document.getElementById('splash-screen').style.display='none';
-            const button=document.getElementById('recover-pending-sell');
+            const button=document.getElementById('recover-pending-operation');
             button.style.display='block';
+            assert(button.textContent.includes('Verify expired operation'),'generic recovery control is available');
             const box=button.getBoundingClientRect();
             assert(document.elementFromPoint(box.x+box.width/2,box.y+box.height/2)===button,
                 'recovery button is the topmost touch target');
@@ -85,6 +89,8 @@ class WebBrowserTests(unittest.TestCase):
             const modal=document.getElementById('recovery-confirm-modal');
             assert(modal.style.display==='flex','tap opens in-page confirmation without native dialog');
             const confirm=document.querySelector('#recovery-confirm-modal button:last-child');
+            assert(document.querySelector('#recovery-confirm-modal p').textContent.includes('BUY releases its reserved funds'),
+                'confirmation explains when a pending BUY can release funds');
             const confirmBox=confirm.getBoundingClientRect();
             assert(document.elementFromPoint(confirmBox.x+confirmBox.width/2,confirmBox.y+confirmBox.height/2)===confirm,
                 'confirm button is the topmost touch target');

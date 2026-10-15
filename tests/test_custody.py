@@ -183,6 +183,39 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(self.ledger.balance(101, USDC), 10_000_000)
         self.assertEqual(self.ledger.balance(202, USDC), 30_000_000)
 
+    def test_fartcoin_sell_rpc_effects_credit_exact_sol_proceeds(self):
+        wallet = str(Keypair().pubkey())
+        sale_tx = {
+            "transaction": {"message": {"accountKeys": [{"pubkey": wallet}]}},
+            "meta": {
+                "preBalances": [60_507_338],
+                "postBalances": [160_391_502],
+                "fee": 30_000,
+                "preTokenBalances": [],
+                "postTokenBalances": [],
+            },
+        }
+        received = runtime.CustodyRuntime.effects(sale_tx, wallet, SOL)
+        self.assertEqual(received, 99_914_164)
+
+        self.credit(101, SOL, 300_000_000)
+        position_asset = "FARTCOIN_MINT"
+        buy = self.ledger.reserve(
+            101, str(uuid.uuid4()), "BUY", SOL, 100_000_000,
+            {"output_asset": position_asset, "symbol": "FARTCOIN", "decimals": 6}, "recipient",
+        )
+        self.complete(buy, spent=100_000_000, received=68_858_000)
+        position = self.ledger.positions(101, "OPEN")[0]
+        sale = self.ledger.reserve(
+            101, str(uuid.uuid4()), "SELL", position_asset, position["raw"],
+            {"output_asset": SOL}, "recipient", position["id"],
+        )
+        self.complete(sale, spent=68_858_000, fee=30_000, received=received)
+        closed = self.ledger.positions(101)[0]
+        self.assertEqual(closed["state"], "CLOSED")
+        self.assertEqual(closed["proceeds_raw"], 99_914_164)
+        self.assertEqual(self.ledger.balance(101, SOL), 299_914_164)
+
     def test_reject_over_cap_finalization_keeps_reserve(self):
         op = self.reserve()
         self.ledger.prepared(op["id"], "signature", "wire")
@@ -359,7 +392,10 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pending["kind"], "BUY")
         self.assertEqual(pending["state"], "PREPARED")
         self.assertEqual(pending["signature"], signature)
-        self.assertEqual(set(pending), {"kind", "state", "created_at", "signature"})
+        self.assertEqual(pending["reserved_amount"], "1")
+        self.assertEqual(pending["reserved_asset"], "USDC")
+        self.assertEqual(set(pending), {
+            "kind", "state", "created_at", "signature", "reserved_amount", "reserved_asset"})
 
         other_response = await self.service.stats(Request(101), None)
         other = json.loads(other_response.text)
@@ -387,6 +423,76 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.ledger.prepared(sell["id"], signature, wire)
         self.ledger.submitted(sell["id"], True)
         return sell, signature, position["id"]
+
+    def pending_buy(self, uid=101, signer=None):
+        invoice = self.ledger.invoice(uid, USDC, 2_000_000)
+        self.ledger.credit_deposit(invoice["id"], str(Signature.new_unique()),
+                                   USDC, 2_000_000, invoice["created_at"])
+        tx_signer = signer or self.signer
+        tx = VersionedTransaction(Message.new_with_blockhash(
+            [], tx_signer.pubkey(), Hash.new_unique()), [tx_signer])
+        signature = str(tx.signatures[0])
+        wire = base64.b64encode(bytes(tx)).decode()
+        buy = self.ledger.reserve(uid, "recovery-buy-pending-" + str(uid), "BUY", USDC, 1_000_000,
+            {"output_asset": runtime.WRAPPED_SOL, "symbol": "BOME", "decimals": 9}, str(self.recipient))
+        self.ledger.prepared(buy["id"], signature, wire)
+        self.ledger.submitted(buy["id"], True)
+        return buy, signature
+
+    async def test_expired_pending_buy_releases_reserved_funds_only_after_proof(self):
+        buy, signature = self.pending_buy()
+        available_before = self.ledger.balance(101, USDC)
+        self.ledger.settings(101, enabled=True, sniper_enabled=True)
+        with patch.object(runtime, "prove_retirement", AsyncMock(return_value={
+                "signature": signature, "expiry_proof": "isBlockhashValid_false",
+                "outcome": "UNKNOWN", "refund": False})):
+            response = await self.service.recover_expired_operation(
+                Request(101, {"signature": signature, "confirm_expired": True}), None)
+        result = json.loads(response.text)
+        self.assertTrue(result["success"])
+        self.assertIn("BUY", result["message"])
+        self.assertIn("reserved purchase funds", result["message"])
+        self.assertEqual(self.ledger.operation(buy["id"])["state"], "FAILED")
+        self.assertEqual(self.ledger.balance(101, USDC), available_before + 1_000_000)
+        self.assertFalse(self.ledger.settings(101)["trading"])
+        self.assertFalse(self.ledger.settings(101)["sniper_trading"])
+        self.assertEqual(self.ledger.positions(101), [])
+        with self.ledger.db() as db:
+            audit = db.execute("SELECT actor_id,state_before,evidence FROM custody_operation_recovery_audit WHERE signature=?",
+                               (signature,)).fetchone()
+        self.assertEqual(audit["actor_id"], 101)
+        self.assertEqual(audit["state_before"], "SUBMITTED")
+        evidence = json.loads(audit["evidence"])
+        self.assertEqual(evidence["outcome"], "PROVEN_ABSENT_AND_EXPIRED")
+        self.assertFalse(evidence["transaction_sent"])
+        self.assertEqual(self.ledger.pending(), [])
+        self.assertTrue(self.ledger.audit())
+
+    async def test_expired_pending_buy_proof_failure_keeps_lock_and_funds(self):
+        buy, signature = self.pending_buy()
+        available_before = self.ledger.balance(101, USDC)
+        liabilities_before = self.ledger.liabilities()
+        with patch.object(runtime, "prove_retirement", AsyncMock(
+                side_effect=legacy.WalletError("No proof; record preserved."))):
+            with self.assertRaises(legacy.WalletError):
+                await self.service.recover_expired_operation(
+                    Request(101, {"signature": signature, "confirm_expired": True}), None)
+        self.assertEqual(self.ledger.operation(buy["id"])["state"], "SUBMITTED")
+        self.assertEqual(self.ledger.balance(101, USDC), available_before)
+        self.assertEqual(self.ledger.liabilities(), liabilities_before)
+        with self.ledger.db() as db:
+            table = db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='custody_operation_recovery_audit'").fetchone()
+        self.assertIsNone(table)
+        self.assertTrue(self.ledger.audit())
+
+    async def test_account_cannot_recover_another_users_pending_buy(self):
+        buy, signature = self.pending_buy(uid=202)
+        with patch.object(runtime, "prove_retirement", AsyncMock()) as proof:
+            with self.assertRaises(legacy.WalletError):
+                await self.service.recover_expired_operation(
+                    Request(101, {"signature": signature, "confirm_expired": True}), None)
+        proof.assert_not_awaited()
+        self.assertEqual(self.ledger.operation(buy["id"])["state"], "SUBMITTED")
 
     async def test_expired_pending_sell_is_audited_and_restored_only_after_proof(self):
         sell, signature, position_id = self.pending_sell()

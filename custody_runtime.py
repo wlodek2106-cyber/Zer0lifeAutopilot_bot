@@ -615,8 +615,8 @@ class CustodyRuntime(WalletRuntime):
         async with self.lock:
             row = next((item for item in self.ledger.pending()
                         if item.get("signature") == signature and int(item["uid"]) == uid), None)
-            if not row or row["kind"] != "SELL" or row["state"] not in ("PREPARED", "SUBMITTED", "UNKNOWN"):
-                raise WalletError("No matching pending SELL operation belongs to this account.", 409)
+            if not row or row["kind"] not in ("BUY", "SELL") or row["state"] not in ("PREPARED", "SUBMITTED", "UNKNOWN"):
+                raise WalletError("No matching pending BUY or SELL operation belongs to this account.", 409)
             try:
                 wire = base64.b64decode(row.get("wire") or "", validate=True)
                 signed_tx = VersionedTransaction.from_bytes(wire)
@@ -642,6 +642,8 @@ class CustodyRuntime(WalletRuntime):
                 raise WalletError("Recovery check was interrupted; no record was changed.", 503) from None
             evidence = {**evidence, "outcome": "PROVEN_ABSENT_AND_EXPIRED",
                         "ledger_release": True, "transaction_sent": False}
+            # Keep automation paused after releasing the pending-operation lock.
+            self.ledger.settings(uid, enabled=False, sniper_enabled=False)
             try:
                 self.ledger.fail(row["id"], network_proven=True, fee=0,
                     recovery_audit={"actor_id": uid, "evidence": evidence})
@@ -654,8 +656,12 @@ class CustodyRuntime(WalletRuntime):
                     (signature,)).fetchone()
             if not current or current["state"] != "FAILED" or not audited:
                 raise WalletError("The operation changed during verification; refresh status before trying again.", 409)
+            if row["kind"] == "BUY":
+                recovery = "the reserved purchase funds were released back to your available balance"
+            else:
+                recovery = "the reserved asset was restored to the open position"
         return web.json_response({"success": True, "state": "FAILED",
-            "message": "Solana history proved this SELL absent and expired. The audit record is retained, the reserved asset was restored to the open position, and no transaction was sent. Autopilot remains OFF; enable it only when ready."})
+            "message": f"Solana history proved this {row['kind']} absent and expired; {recovery}. The audit record is retained. No transaction was sent. Both trading modes are OFF; enable them only when ready."})
 
     async def recovery_rpc(self, session, method, params):
         # Fixed, independently verified mainnet endpoint; keys/credentials never sent.
@@ -1038,6 +1044,20 @@ class CustodyRuntime(WalletRuntime):
         profit = sum(t["profit_usdc"] for t in trades)
         settings = self.ledger.settings(uid)
         own_pending = [r for r in operations if r["state"] in ("RESERVED", "PREPARED", "SUBMITTED", "UNKNOWN")]
+        def pending_summary(row):
+            if row["asset"] == USDC:
+                reserved_amount, reserved_asset = display_raw(row["raw"], 6), "USDC"
+            elif row["asset"] == SOL:
+                reserved_amount, reserved_asset = display_raw(row["raw"], 9), "SOL"
+            else:
+                position = next((p for p in positions if p["id"] == row.get("position_id")), None)
+                reserved_amount = display_raw(row["raw"], position["decimals"]) if position else str(row["raw"])
+                reserved_asset = position["symbol"] if position else "token"
+            return {
+                "kind": row.get("kind"), "state": row.get("state"),
+                "created_at": row.get("created_at"), "signature": row.get("signature"),
+                "reserved_amount": reserved_amount, "reserved_asset": reserved_asset,
+            }
         return web.json_response({"success": True, "username": request["telegram_user"].get("username", "user"),
             "user_balance": user_usdc, "sol_balance": user_sol, "withdrawable": user_usdc,
             "withdrawable_sol": user_sol, "total_deposited": (sum(i["raw"] for i in invoices if i["asset"] == USDC)
@@ -1047,10 +1067,7 @@ class CustodyRuntime(WalletRuntime):
             "wallet_history": history[:20], "wallet_status": {**self.readiness(),
                 "finance_allowed": self.public_enabled or uid in self.beta_users},
             "operation_pending": bool(own_pending),
-            "pending_operations": [
-                {key: row.get(key) for key in ("kind", "state", "created_at", "signature")}
-                for row in own_pending
-            ],
+            "pending_operations": [pending_summary(row) for row in own_pending],
             "ledger_audited": True,
             "trading_active": bool(settings["trading"]), "is_admin": uid == self.owner_id,
             "operator_fees": self.operator_fees(uid),
