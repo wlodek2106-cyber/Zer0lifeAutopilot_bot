@@ -4,6 +4,7 @@ import base64
 import json
 import math
 import os
+import random
 import time
 import uuid
 from datetime import datetime, timezone
@@ -11,9 +12,12 @@ from decimal import Decimal
 
 import aiohttp
 from aiohttp import web
+from solders.address_lookup_table_account import (
+    AddressLookupTable, AddressLookupTableAccount, ID as ADDRESS_LOOKUP_TABLE_PROGRAM_ID,
+)
 from solders.hash import Hash
 from solders.instruction import AccountMeta, Instruction
-from solders.message import Message, to_bytes_versioned
+from solders.message import Message, MessageV0, to_bytes_versioned
 from solders.pubkey import Pubkey
 from solders.system_program import transfer, TransferParams
 from solders.transaction import Transaction, VersionedTransaction
@@ -28,10 +32,81 @@ import activity_log
 from meme_discovery import MemeDiscovery
 
 WRAPPED_SOL = "So11111111111111111111111111111111111111112"
+JITO_BUNDLE_SEND_URL = "https://mainnet.block-engine.jito.wtf/api/v1/transactions?bundleOnly=true"
+JITO_TIP_ACCOUNTS_URL = "https://mainnet.block-engine.jito.wtf/api/v1/bundles"
+JITO_TIP_LAMPORTS = 50_000
+JUPITER_PRIORITY_FEE_LAMPORTS = 25_000
 
 
 def asset_for_mint(mint):
     return SOL if mint == WRAPPED_SOL else mint
+
+
+def jupiter_swap_instructions_payload(quote, wallet):
+    return {
+        "quoteResponse": quote,
+        "userPublicKey": wallet,
+        "wrapAndUnwrapSol": True,
+        "dynamicComputeUnitLimit": True,
+        "prioritizationFeeLamports": {
+            "priorityLevelWithMaxLamports": {
+                "priorityLevel": "veryHigh",
+                "maxLamports": JUPITER_PRIORITY_FEE_LAMPORTS,
+                "global": False,
+            }
+        },
+    }
+
+
+def parse_jupiter_instruction(value):
+    if not isinstance(value, dict):
+        raise WalletError("Jupiter returned an incomplete swap instruction.")
+    program_id = value.get("programId")
+    accounts = value.get("accounts", [])
+    encoded_data = value.get("data")
+    if (not isinstance(program_id, str) or not isinstance(accounts, list)
+            or not isinstance(encoded_data, str)):
+        raise WalletError("Jupiter returned a malformed swap instruction.")
+    if len(accounts) > 256:
+        raise WalletError("The Jupiter swap instruction contains too many accounts.")
+    try:
+        metas = []
+        for account in accounts:
+            if (not isinstance(account, dict) or not isinstance(account.get("pubkey"), str)
+                    or type(account.get("isSigner")) is not bool
+                    or type(account.get("isWritable")) is not bool):
+                raise ValueError("invalid account metadata")
+            metas.append(AccountMeta(
+                Pubkey.from_string(account["pubkey"]),
+                account["isSigner"],
+                account["isWritable"],
+            ))
+        return Instruction(
+            Pubkey.from_string(program_id),
+            base64.b64decode(encoded_data, validate=True),
+            metas,
+        )
+    except Exception as exc:
+        raise WalletError("Jupiter returned malformed swap instruction data.") from exc
+
+
+def operator_tip_lamports(info):
+    tip = info.get("jito_tip_lamports", 0)
+    route = info.get("execution_route")
+    if (type(tip) is not int or tip < 0 or tip > JITO_TIP_LAMPORTS
+            or (route == "jito_bundle_only" and tip != JITO_TIP_LAMPORTS)
+            or (tip and route != "jito_bundle_only")):
+        raise WalletError("The recorded Jito tip does not match the approved limit.")
+    return tip
+
+
+def adjust_swap_amounts_for_operator_tip(spent, received, asset, output_asset, info):
+    tip = operator_tip_lamports(info)
+    if asset == SOL:
+        spent -= tip
+    if output_asset == SOL:
+        received += tip
+    return spent, received
 
 
 def display_raw(raw, decimals):
@@ -74,6 +149,8 @@ class CustodyRuntime(WalletRuntime):
         self.discovery_task = None
         self.discovery_due = 0
         self.discovery_started = 0
+        self._jito_tip_accounts = []
+        self._jito_tip_accounts_expiry = 0
         self.history_seen = {}
         self.restore_catalog()
 
@@ -793,11 +870,13 @@ class CustodyRuntime(WalletRuntime):
             else:
                 spent = -self.effects(tx, self.wallet, row["asset"])
                 received = self.effects(tx, self.wallet, info["output_asset"])
-                fee = int(tx["meta"]["fee"])
+                spent, received = adjust_swap_amounts_for_operator_tip(
+                    spent, received, row["asset"], info["output_asset"], info)
+                operator_tip = operator_tip_lamports(info)
                 # Economic SOL delta is actual native+owned-account change excluding network fee.
                 economic_sol = self.effects(tx, self.wallet, SOL)
                 trade_sol = (received if info["output_asset"] == SOL else 0) - (spent if row["asset"] == SOL else 0)
-                if economic_sol != trade_sol:
+                if economic_sol != trade_sol - operator_tip:
                     raise WalletError("Неожиданное изменение SOL при swap.")
                 fee = trade_sol - native_delta - self.wrapped_delta(tx, self.wallet)
             self.ledger.finalize(row["id"], spent, fee, received)
@@ -885,6 +964,8 @@ class CustodyRuntime(WalletRuntime):
             permitted = {row["asset"], SOL}
         else:
             spent, acquired = -deltas.get(row["asset"], 0), deltas.get(info["output_asset"], 0)
+            spent, acquired = adjust_swap_amounts_for_operator_tip(
+                spent, acquired, row["asset"], info["output_asset"], info)
             if spent <= 0 or spent > row["raw"] or acquired <= 0 or acquired < int(info["minimum_out"]):
                 raise WalletError("Симуляция swap выходит за сумму пользователя или slippage.")
             if row["kind"] == "SELL" and spent != row["raw"]:
@@ -911,8 +992,11 @@ class CustodyRuntime(WalletRuntime):
             self.ledger.fail(row["id"])
             raise
         try:
-            returned = await self.rpc(session, "sendTransaction", [wire, {
-                "encoding": "base64", "skipPreflight": False, "maxRetries": 0}])
+            if row["kind"] in ("BUY", "SELL"):
+                returned = await self.send_via_jito(session, wire, signature)
+            else:
+                returned = await self.rpc(session, "sendTransaction", [wire, {
+                    "encoding": "base64", "skipPreflight": False, "maxRetries": 0}])
             self.ledger.submitted(row["id"], returned == signature)
         except Exception:
             self.ledger.submitted(row["id"], False)
@@ -921,6 +1005,130 @@ class CustodyRuntime(WalletRuntime):
         except Exception:
             pass
         return self.ledger.operation(row["id"])
+
+    async def get_jito_tip_account(self, session):
+        now = time.monotonic()
+        cached = getattr(self, "_jito_tip_accounts", [])
+        if cached and now < getattr(self, "_jito_tip_accounts_expiry", 0):
+            return random.choice(cached)
+        payload = {"jsonrpc": "2.0", "id": 1, "method": "getTipAccounts", "params": []}
+        async with session.post(
+                JITO_TIP_ACCOUNTS_URL, json=payload,
+                timeout=aiohttp.ClientTimeout(total=6)) as response:
+            if response.status != 200:
+                raise WalletError("Jito tip accounts are unavailable.")
+            answer = await response.json()
+        values = answer.get("result") if isinstance(answer, dict) else None
+        if not isinstance(values, list) or not values:
+            raise WalletError("Jito returned no tip accounts.")
+        try:
+            accounts = list(dict.fromkeys(str(Pubkey.from_string(value)) for value in values))
+        except Exception as exc:
+            raise WalletError("Jito returned invalid tip accounts.") from exc
+        self._jito_tip_accounts = accounts
+        self._jito_tip_accounts_expiry = now + 300
+        return random.choice(accounts)
+
+    async def build_swap_transaction(self, session, instructions_data, tip_account):
+        if not isinstance(instructions_data, dict):
+            raise WalletError("Jupiter returned an incomplete set of swap instructions.")
+        instructions = []
+        for name in ("computeBudgetInstructions", "setupInstructions"):
+            group = instructions_data.get(name, [])
+            if not isinstance(group, list):
+                raise WalletError("Jupiter returned an invalid set of swap instructions.")
+            instructions.extend(parse_jupiter_instruction(item) for item in group)
+        token_ledger = instructions_data.get("tokenLedgerInstruction")
+        if token_ledger:
+            instructions.append(parse_jupiter_instruction(token_ledger))
+        swap_instruction = instructions_data.get("swapInstruction")
+        if not swap_instruction:
+            raise WalletError("Jupiter did not return the primary swap instruction.")
+        instructions.append(parse_jupiter_instruction(swap_instruction))
+        cleanup = instructions_data.get("cleanupInstruction")
+        if cleanup:
+            instructions.append(parse_jupiter_instruction(cleanup))
+        other = instructions_data.get("otherInstructions", [])
+        if not isinstance(other, list):
+            raise WalletError("Jupiter returned an invalid set of additional instructions.")
+        instructions.extend(parse_jupiter_instruction(item) for item in other)
+        try:
+            lookup_addresses = instructions_data.get("addressLookupTableAddresses", [])
+            if (not isinstance(lookup_addresses, list) or len(lookup_addresses) > 32
+                    or any(not isinstance(address, str) for address in lookup_addresses)):
+                raise ValueError("invalid lookup table list")
+            lookup_addresses = list(dict.fromkeys(lookup_addresses))
+            tip_pubkey = Pubkey.from_string(tip_account)
+            instructions.append(transfer(TransferParams(
+                from_pubkey=Pubkey.from_string(self.wallet),
+                to_pubkey=tip_pubkey,
+                lamports=JITO_TIP_LAMPORTS,
+            )))
+        except Exception as exc:
+            raise WalletError("Could not validate the Jito tip account.") from exc
+
+        async def load_lookup_tables():
+            if not lookup_addresses:
+                return []
+            result = await self.rpc(session, "getMultipleAccounts", [
+                lookup_addresses, {"encoding": "base64", "commitment": "confirmed"}])
+            rows = result.get("value")
+            if not isinstance(rows, list) or len(rows) != len(lookup_addresses):
+                raise WalletError("RPC returned an incomplete Jupiter lookup table list.")
+            tables = []
+            for address, row in zip(lookup_addresses, rows):
+                if (not row or row.get("owner") != str(ADDRESS_LOOKUP_TABLE_PROGRAM_ID)
+                        or not isinstance(row.get("data"), list) or not row["data"]):
+                    raise WalletError("Jupiter lookup table is unavailable or has an unexpected owner.")
+                try:
+                    lookup = AddressLookupTable.deserialize(
+                        base64.b64decode(row["data"][0], validate=True))
+                    tables.append(AddressLookupTableAccount(Pubkey.from_string(address), lookup.addresses))
+                except Exception as exc:
+                    raise WalletError("Could not decode the Jupiter lookup table.") from exc
+            return tables
+
+        async def recent_blockhash():
+            response = await self.rpc(session, "getLatestBlockhash", [{"commitment": "confirmed"}])
+            blockhash = response.get("value", {}).get("blockhash")
+            if not isinstance(blockhash, str):
+                raise WalletError("RPC did not return a recent blockhash.")
+            try:
+                return Hash.from_string(blockhash)
+            except Exception as exc:
+                raise WalletError("RPC returned an invalid blockhash.") from exc
+
+        lookup_tables, blockhash = await asyncio.gather(load_lookup_tables(), recent_blockhash())
+        try:
+            message = MessageV0.try_compile(
+                Pubkey.from_string(self.wallet), instructions, lookup_tables, blockhash)
+            if (not message.account_keys or str(message.account_keys[0]) != self.wallet
+                    or message.header.num_required_signatures != 1):
+                raise WalletError("The compiled swap transaction contains an unexpected signer.")
+            return VersionedTransaction(message, [self.ready()])
+        except WalletError:
+            raise
+        except Exception as exc:
+            raise WalletError("Could not safely build the swap transaction.") from exc
+
+    async def send_via_jito(self, session, wire, expected_signature):
+        """Privately submit a pre-simulated swap; never fall back to public broadcast."""
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "sendTransaction",
+            "params": [wire, {"encoding": "base64"}],
+        }
+        async with session.post(
+                JITO_BUNDLE_SEND_URL, json=payload,
+                timeout=aiohttp.ClientTimeout(total=8)) as response:
+            if response.status != 200:
+                raise WalletError("Jito private submission is unavailable.")
+            answer = await response.json()
+        if (not isinstance(answer, dict) or answer.get("error")
+                or answer.get("result") != expected_signature):
+            raise WalletError("Jito did not confirm the swap submission.")
+        return answer["result"]
 
     def result(self, row):
         state = row["state"]
@@ -979,6 +1187,8 @@ class CustodyRuntime(WalletRuntime):
         if self.pending():
             raise WalletError("Ожидается подтверждение предыдущей операции.", 409)
         await self.solvent(session)
+        metadata = {**metadata, "execution_route": "jito_bundle_only",
+                    "jito_tip_lamports": JITO_TIP_LAMPORTS}
         row = self.ledger.reserve(uid, str(uuid.uuid4()), kind, asset, raw, metadata, position_id=position_id)
         try:
             if await self.rpc(session, "getGenesisHash") != GENESIS:
@@ -999,18 +1209,19 @@ class CustodyRuntime(WalletRuntime):
                     or not 0 < int(quote.get("otherAmountThreshold", 0)) <= int(quote.get("outAmount", 0))):
                 raise WalletError("Неверная котировка Jupiter.")
             info = {**metadata, "minimum_out": int(quote["otherAmountThreshold"]), "manual_close": manual}
-            async with session.post("https://api.jup.ag/swap/v1/swap", headers=headers, json={
-                "quoteResponse": quote, "userPublicKey": self.wallet, "wrapAndUnwrapSol": True,
-                "prioritizationFeeLamports": 25000}) as response:
-                if response.status != 200:
-                    raise WalletError("Jupiter swap недоступен.")
-                data = await response.json()
-            unsigned = VersionedTransaction.from_bytes(base64.b64decode(data["swapTransaction"]))
-            if str(unsigned.message.account_keys[0]) != self.wallet or unsigned.message.header.num_required_signatures != 1:
-                raise WalletError("Неверный подписант Jupiter.")
+            async def fetch_swap_instructions():
+                async with session.post("https://api.jup.ag/swap/v1/swap-instructions",
+                        headers=headers, json=jupiter_swap_instructions_payload(quote, self.wallet),
+                        timeout=aiohttp.ClientTimeout(total=8)) as response:
+                    if response.status != 200:
+                        raise WalletError("Jupiter swap instructions are unavailable.")
+                    return await response.json()
+
+            instructions_data, tip_account = await asyncio.gather(
+                fetch_swap_instructions(), self.get_jito_tip_account(session))
+            transaction = await self.build_swap_transaction(session, instructions_data, tip_account)
             if getattr(self, "web_access", None):
                 self.web_access.require(uid, kind, position_id, manual)
-            transaction = VersionedTransaction(unsigned.message, [self.ready()])
         except Exception:
             self.ledger.fail(row["id"])
             raise
