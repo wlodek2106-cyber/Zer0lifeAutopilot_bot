@@ -1,13 +1,26 @@
 <style>
-#web-login{position:fixed;inset:5vh 18px auto;z-index:10002;max-width:460px;max-height:88vh;overflow:auto;margin:auto;background:#0e1720;border:1px solid #254437;border-radius:22px;padding:24px}
+#web-login{position:fixed;inset:max(18px,env(safe-area-inset-top,18px)) 18px auto;z-index:10002;max-width:460px;max-height:calc(100dvh - 36px - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px));overflow:auto;-webkit-overflow-scrolling:touch;margin:auto;background:linear-gradient(150deg,#14212b,#101922);color:#e9f0f2;border:1px solid #30424e;border-radius:22px;padding:24px;box-shadow:0 26px 80px rgba(0,0,0,.62),0 1px 0 rgba(220,244,239,.07) inset;touch-action:pan-y}
 #web-login[hidden],#subscription-card[hidden]{display:none}
-#web-login input{display:block;width:100%;margin:8px 0 18px;padding:14px;font-size:16px;color:#fff;background:#080e16;border:1px solid #29384a;border-radius:12px;box-sizing:border-box}
-#web-login button{width:100%;padding:16px;border:0;border-radius:12px;font-weight:800;font-size:16px;background:#22c55e;color:#04110a}
-#web-login p,#subscription-card p{line-height:1.5;overflow-wrap:anywhere}
+#web-login h2{margin:0 0 10px;color:#f0f7f5;font-size:26px;line-height:1.15;letter-spacing:-.045em}
+#web-login label{display:block;margin-top:15px;color:#c4d3d6;font-size:13px;font-weight:650}
+#web-login input{display:block;width:100%;min-height:50px;margin:7px 0 15px;padding:13px 14px;font-size:16px;color:#e8f0f1;background:#0b141c;border:1px solid #30424e;border-radius:12px;box-sizing:border-box}
+#web-login input::placeholder{color:#788b93}
+#web-login button{width:100%;min-height:52px;padding:14px 16px;border:1px solid #38c99a;border-radius:13px;font-weight:720;font-size:15px;background:linear-gradient(180deg,#36d9a2,#19ae81);color:#062219;box-shadow:0 3px 0 #087153,inset 0 1px 0 rgba(255,255,255,.24);touch-action:manipulation}
+#web-login button:disabled{opacity:.58;cursor:wait}
+#web-login p,#subscription-card p{line-height:1.6;overflow-wrap:anywhere}
+#web-login .section-note,#subscription-card .section-note{color:#9cabb1}
+#web-login #web-login-status{min-height:1.4em;color:#83cdb2;font-size:13px}
+#web-login a{display:inline-block;margin-top:8px;color:#83bdd5;text-underline-offset:3px}
+#subscription-card{background:#111b25!important;color:#e6eef0;border-color:#263744!important}
+#subscription-card h3{color:#eef5f4;letter-spacing:-.03em}
+#subscription-card strong{color:#64dcb1}
 #subscription-address{font-family:monospace;user-select:all}
+@media(max-width:480px){#web-login{padding:20px;border-radius:19px;inset:max(12px,env(safe-area-inset-top,12px)) 12px auto;max-height:calc(100dvh - 24px - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px))}}
+@media(prefers-reduced-motion:reduce){#web-login *,#subscription-card *{scroll-behavior:auto!important;transition-duration:.01ms!important;animation-duration:.01ms!important}}
+:where(#web-login,#subscription-card) :focus-visible{outline:3px solid #5ad9b0;outline-offset:3px}
 </style>
 <section id="web-login" hidden data-web-version="sol-access-v1">
-<h2>Sign in to Zer0Life</h2>
+<h2>Sign in to AI Trader</h2>
 <p class="section-note">Use your existing account nickname, withdrawal code and device passkey. Your balances stay with the same account.</p>
 <label for="web-nickname">Account nickname</label><input id="web-nickname" autocomplete="username" maxlength="24" autocapitalize="off">
 <label for="web-pin">Withdrawal confirmation code</label><input id="web-pin" type="password" autocomplete="current-password" maxlength="128">

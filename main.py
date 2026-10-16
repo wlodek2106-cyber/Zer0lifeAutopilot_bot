@@ -698,7 +698,7 @@ RAW_HTML = r"""<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Zer0Life Multi-Asset</title>
+    <title>AI Trader · Solana / USDC</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -797,12 +797,333 @@ RAW_HTML = r"""<!DOCTYPE html>
         .settings-label { display:block;font-size:13px;color:#a7b6c9;margin:16px 0 8px; }
         details summary { color:#b6c6da;font-size:13px;cursor:pointer;padding:10px 0; }
         .status-output { white-space:pre-wrap;font-size:13px;color:#b2c4da;line-height:1.6; }
+
+        :root {
+            color-scheme: light;
+            --paper: #f2f4f0;
+            --surface: #fbfcf9;
+            --surface-raised: #ffffff;
+            --ink: #182b34;
+            --muted: #64777d;
+            --line: #d9e1de;
+            --teal: #087b68;
+            --teal-soft: #e1f1eb;
+            --blue: #376c86;
+            --danger: #a23f42;
+        }
+        * { box-sizing: border-box; }
+        html { background: var(--paper); }
+        body {
+            width: 100%; height: 100%; min-height: 100dvh; overflow: hidden;
+            background:
+                radial-gradient(ellipse at 100% 0%, rgba(189, 215, 205, .42), transparent 36%),
+                var(--paper);
+            color: var(--ink);
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            letter-spacing: -.012em;
+        }
+        button, input { font: inherit; }
+        button { touch-action: manipulation; }
+        :focus-visible { outline: 3px solid #347b88 !important; outline-offset: 3px; }
+        #splash-screen {
+            z-index: 9999;
+            width: 100%; height: 100%; min-height: 100dvh; inset: 0;
+            justify-content: center; align-items: stretch;
+            padding: max(28px, env(safe-area-inset-top)) 25px calc(26px + env(safe-area-inset-bottom, 0px));
+            overflow: hidden;
+            background:
+                radial-gradient(ellipse at 75% 23%, rgba(184, 213, 201, .46), transparent 42%),
+                linear-gradient(145deg, #f5f7f2 0%, #e9efea 100%);
+            color: var(--ink);
+        }
+        #splash-screen::before {
+            content: ""; position: absolute; width: min(82vw, 350px); aspect-ratio: 1;
+            left: 50%; top: 8%; transform: translateX(-50%) rotateX(58deg) rotateZ(-35deg);
+            border-radius: 30%; border: 1px solid rgba(255,255,255,.88);
+            background:
+                linear-gradient(135deg, rgba(255,255,255,.82), rgba(218,232,224,.55)),
+                repeating-linear-gradient(0deg, transparent 0 31px, rgba(73,111,101,.07) 32px);
+            box-shadow: 22px 33px 40px rgba(40,76,66,.12), inset 0 1px 0 #fff;
+            pointer-events: none;
+        }
+        #splash-screen::after {
+            content: ""; position: absolute; width: min(54vw, 218px); aspect-ratio: 1;
+            left: 50%; top: 16%; transform: translateX(-50%) rotateX(56deg) rotateZ(45deg);
+            border-radius: 50%;
+            background: radial-gradient(circle at 32% 28%, #f8fffc 0 4%, #8dc4b0 5% 16%, #237c70 39%, #174f50 73%, #103d43 100%);
+            box-shadow: 12px 24px 24px rgba(20,75,67,.25), inset -10px -12px 18px rgba(6,35,40,.38), inset 7px 8px 13px rgba(255,255,255,.45);
+            pointer-events: none;
+        }
+        .brand-title, .brand-run, #splash-screen .start-btn, #splash-screen .splash-caption {
+            position: relative; z-index: 1; text-align: center;
+        }
+        .brand-title {
+            margin-top: auto; color: #193a43; font-size: clamp(38px, 12vw, 54px);
+            font-weight: 780; letter-spacing: -.075em; line-height: .96;
+        }
+        .brand-run {
+            margin-top: 11px; color: #187865; font-size: 12px; font-weight: 750;
+            letter-spacing: .21em; line-height: 1.4;
+        }
+        .splash-caption {
+            max-width: 330px; margin: 15px auto 24px; color: #5d7075;
+            font-size: 14px; line-height: 1.55; font-weight: 450;
+        }
+        .start-btn {
+            margin: 0 auto; width: 100%; max-width: 420px; min-height: 58px;
+            padding: 17px 20px; border: 1px solid #0b6e5d; border-radius: 16px;
+            background: linear-gradient(180deg, #178671, #0d705f);
+            color: #f4fffb; font-size: 15px; font-weight: 720; letter-spacing: .01em;
+            box-shadow: 0 8px 0 #075648, 0 15px 25px rgba(12,94,78,.19);
+            cursor: pointer; transition: transform .16s ease, box-shadow .16s ease, opacity .16s ease;
+        }
+        .start-btn:active { transform: translateY(4px); box-shadow: 0 4px 0 #075648, 0 8px 15px rgba(12,94,78,.16); }
+        .start-btn:disabled { opacity: .68; cursor: wait; }
+        #account-signup {
+            background: var(--surface-raised) !important; color: var(--ink);
+            border: 1px solid #d4dfda; border-radius: 22px; padding: 24px;
+            box-shadow: 0 22px 60px rgba(22,51,52,.2), 0 3px 8px rgba(22,51,52,.08);
+        }
+        #account-signup h2 { margin: 0 0 8px; font-size: 24px; letter-spacing: -.04em; }
+        #account-signup label { color: #354e54; font-size: 13px; line-height: 1.55; }
+        #account-signup .muted { color: var(--muted); font-size: 13px; line-height: 1.55; }
+        .card, .deposit-modal {
+            color: var(--ink); background: var(--surface-raised) !important;
+            border: 1px solid var(--line) !important; border-radius: 20px;
+            box-shadow: 0 5px 16px rgba(35,67,66,.045), 0 1px 2px rgba(35,67,66,.035);
+        }
+        #app .tab-panel {
+            width: 100%; max-width: 660px; height: var(--tg-viewport-stable-height, 100dvh);
+            margin: auto; padding: max(22px, env(safe-area-inset-top)) 18px calc(118px + env(safe-area-inset-bottom, 0px));
+            color: var(--ink); overscroll-behavior-y: contain; scrollbar-width: thin;
+        }
+        .page-heading { margin: 4px 0 20px; }
+        .page-heading h1 { color: #183740; font-size: 29px; font-weight: 760; letter-spacing: -.055em; }
+        .eyebrow { color: #67817f; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+        .section-note, .muted { color: #65777c; font-size: 13px; line-height: 1.6; }
+        #app .card { padding: 18px; margin-bottom: 14px; }
+        #app .banner-limit {
+            background: #e8f3ed !important; border: 1px solid #cfdfd6 !important;
+            color: #244c45; border-radius: 16px;
+        }
+        #app .banner-limit [style*="color"] { color: #345f57 !important; }
+        #app .stat-box {
+            min-width: 0; background: #f1f5f2 !important; border: 1px solid #dfe7e2 !important;
+            border-radius: 13px; padding: 13px;
+        }
+        #app .stat-label { color: #6a7d7d !important; font-size: 10px; letter-spacing: .075em; }
+        #app .stat-val { color: #1d3740 !important; font-size: 17px; line-height: 1.4; font-variant-numeric: tabular-nums; }
+        #app [style*="color: #fff"], #app [style*="color: #f8fafc"] { color: #203941 !important; }
+        #app [style*="color: #94a3b8"], #app [style*="color: #64748b"] { color: #697d80 !important; }
+        #app [style*="background: #06080e"], #app [style*="background:#06080e"],
+        #app [style*="background: #080a11"], #app [style*="background:#0b111b"] {
+            background: #f0f4f1 !important; color: #29434a !important;
+        }
+        #app [style*="color: #22c55e"], #app [style*="color: #4ade80"] { color: #087b68 !important; }
+        #app [style*="color: #60a5fa"] { color: #376c86 !important; }
+        #app [style*="color: #f87171"] { color: #a23f42 !important; }
+        .control-bar { gap: 9px; }
+        .btn-ctl, .btn-copy, .btn-green-main, .btn-verify, .action-btn, .wallet-tab, .token-btn {
+            min-height: 46px; border-radius: 13px; font-weight: 680; transition: transform .16s ease, background .16s ease, box-shadow .16s ease;
+        }
+        .btn-toggle-on { background: #e0f1e9; border: 1px solid #b9d8ca; color: #146c59; }
+        .btn-toggle-off { background: #f8eaea; border: 1px solid #e4c6c4; color: #984448; }
+        .btn-refresh, .btn-copy { background: #eff3f0; border: 1px solid #d7e0db; color: #304b51; }
+        #app .btn-green-main, .btn-green-main, .btn-verify {
+            color: #f4fffb !important; background: linear-gradient(180deg, #178671, #0d705f) !important;
+            border: 1px solid #0c6c5b; box-shadow: 0 3px 0 #075648;
+        }
+        .btn-sell-all { background: #fbf2ef; border: 1px solid #e5c7c0; color: #934d48; border-radius: 13px; }
+        .order-card { background: #f5f7f4; color: #32484d; border: 1px solid #dce4df; border-radius: 14px; }
+        .order-grid { color: #68797d; }
+        .badge-open { background: #e7f0f3; color: #376c86; border-color: #c8dce4; }
+        .badge-closed { background: #e3f1e9; color: #14765e; border-color: #c5dfd1; }
+        .log-console { color: #236b59; background: #f1f5f2; border-color: #dce5df; }
+        .deposit-modal { padding: 18px; }
+        .wallet-tabs { background: #edf2ef; border-color: #dce5df; }
+        .wallet-tab { color: #6b7d7f; }
+        .wallet-tab.active { color: #175b50; background: #dcece4; }
+        .token-btn { color: #607276; background: #f5f7f4; border-color: #dce5df; }
+        .token-btn.active { color: #087b68; background: #e5f2ec; border-color: #9fcbbb; }
+        .sig-input {
+            color: #213c43; background: #f7f9f7; border: 1px solid #cfdcd5;
+            border-radius: 12px; min-height: 48px; font: 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+        .sig-input::placeholder { color: #8a9999; }
+        .address-box { color: #126d5c; background: #f1f5f2; border-color: #d5e1da; }
+        .bottom-nav {
+            background: rgba(249,251,248,.94); border-top: 1px solid #d7e0db;
+            box-shadow: 0 -8px 24px rgba(34,62,59,.07); backdrop-filter: blur(16px);
+            padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
+        }
+        .nav-btn { min-height: 54px; border-radius: 13px; color: #718184; font-weight: 650; }
+        .nav-btn span { font-size: 18px; color: currentColor; }
+        .nav-btn.active { color: #146c59; background: #e5f1eb; }
+        details summary { color: #34565b; font-weight: 650; }
+        a { color: #176d72; text-underline-offset: 3px; }
+        button:hover:not(:disabled) { filter: brightness(.98); }
+        button:disabled { cursor: not-allowed; opacity: .58; }
+        @media (min-width: 640px) {
+            #splash-screen { align-items: center; padding-left: max(28px, calc((100vw - 460px) / 2)); padding-right: max(28px, calc((100vw - 460px) / 2)); }
+            #splash-screen::before { top: 7%; }
+            #splash-screen::after { top: 15%; }
+            #app .tab-panel { padding-left: 24px; padding-right: 24px; }
+        }
+        @media (max-height: 700px) {
+            #splash-screen { padding-top: max(18px, env(safe-area-inset-top)); padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px)); }
+            #splash-screen::before { width: min(58vw, 245px); top: 3%; }
+            #splash-screen::after { width: min(38vw, 155px); top: 9%; }
+            .brand-title { font-size: 38px; }
+            .splash-caption { margin: 10px auto 17px; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+        }
+        :root {
+            color-scheme: dark;
+            --paper: #080d13;
+            --surface: #101923;
+            --surface-raised: #121d27;
+            --ink: #e9f0f2;
+            --muted: #93a4ad;
+            --line: #263744;
+            --teal: #32d39b;
+            --teal-soft: #14372f;
+            --blue: #78a9c6;
+            --danger: #e18b8b;
+        }
+        html { background: #080d13; }
+        body {
+            background:
+                radial-gradient(ellipse at 82% -8%, rgba(32,100,91,.22), transparent 34%),
+                radial-gradient(ellipse at 4% 55%, rgba(41,78,106,.12), transparent 38%),
+                #080d13;
+            color: #e9f0f2;
+        }
+        :focus-visible { outline-color: #5ad9b0 !important; }
+        #splash-screen {
+            background:
+                radial-gradient(ellipse at 50% 27%, rgba(18,91,78,.23), transparent 37%),
+                radial-gradient(ellipse at 78% 20%, rgba(45,88,120,.15), transparent 40%),
+                linear-gradient(145deg, #0c141c 0%, #080d13 65%, #0a1118 100%);
+            color: #e9f0f2;
+        }
+        #splash-screen::before {
+            border: 1px solid rgba(151,190,190,.19);
+            background:
+                linear-gradient(135deg, rgba(34,56,65,.72), rgba(10,22,29,.35)),
+                repeating-linear-gradient(0deg, transparent 0 31px, rgba(123,165,169,.09) 32px),
+                repeating-linear-gradient(90deg, transparent 0 31px, rgba(123,165,169,.07) 32px);
+            box-shadow: 22px 34px 48px rgba(0,0,0,.4), inset 0 1px 0 rgba(218,243,237,.22), inset 0 -16px 34px rgba(8,16,23,.55);
+        }
+        #splash-screen::after {
+            background:
+                radial-gradient(circle at 31% 25%, rgba(255,255,255,.98) 0 1.2%, rgba(201,255,237,.94) 1.8% 3.5%, transparent 4.5%),
+                radial-gradient(circle at 34% 29%, #a7f5d5 0 5%, #40d7a6 14%, #168b78 34%, #155f63 57%, #122f43 80%, #0b1b29 100%);
+            border: 1px solid rgba(208,246,233,.55);
+            box-shadow: 0 0 34px rgba(44,211,158,.21), 12px 24px 30px rgba(0,0,0,.5),
+                inset -12px -15px 22px rgba(4,18,28,.74), inset 8px 8px 16px rgba(230,255,248,.38);
+        }
+        .brand-title { color: #f2f8f7; text-shadow: 0 2px 24px rgba(72,201,161,.12); }
+        .brand-run { color: #57d8ac; }
+        .splash-caption { color: #a6b6bd; }
+        .start-btn {
+            background: linear-gradient(180deg, #36d9a2, #19ae81);
+            color: #062219; border-color: #4de0ad;
+            box-shadow: 0 8px 0 #087153, 0 16px 34px rgba(20,178,127,.2), inset 0 1px 0 rgba(255,255,255,.32);
+        }
+        .start-btn:active { box-shadow: 0 4px 0 #087153, 0 9px 20px rgba(20,178,127,.16); }
+        #account-signup {
+            background: #111c26 !important; color: #e8f0f2;
+            border-color: #30414d; box-shadow: 0 22px 70px rgba(0,0,0,.58), 0 1px 0 rgba(222,244,240,.06) inset;
+        }
+        #account-signup h2, #account-signup label { color: #e5edef; }
+        #account-signup .muted { color: #9aabb3; }
+        .card, .deposit-modal {
+            color: #e6eef0; background: #111b25 !important; border-color: #263744 !important;
+            box-shadow: 0 10px 28px rgba(0,0,0,.2), inset 0 1px 0 rgba(220,240,236,.035);
+        }
+        #app .tab-panel { color: #e6eef0; }
+        .page-heading h1 { color: #f1f6f5; }
+        .eyebrow { color: #8da6ae; }
+        .section-note, .muted { color: #a0b0b7; }
+        #app .banner-limit {
+            background: linear-gradient(135deg, #13251f, #111e25) !important;
+            border-color: #245242 !important; color: #d9eee7;
+            box-shadow: inset 0 1px 0 rgba(218,245,232,.045);
+        }
+        #app .banner-limit [style*="color"] { color: #9fb7ba !important; }
+        #app .banner-limit > div:first-child { color: #53d7a4 !important; }
+        #app .stat-box {
+            background: linear-gradient(145deg, #0d151d, #121e28) !important;
+            border-color: #263744 !important; box-shadow: inset 0 1px 0 rgba(229,246,244,.035);
+        }
+        #app .stat-label { color: #91a5ad !important; }
+        #app .stat-val { color: #f0f6f5 !important; }
+        #app [style*="color: #fff"], #app [style*="color: #f8fafc"] { color: #eaf1f2 !important; }
+        #app [style*="color: #94a3b8"], #app [style*="color: #64748b"] { color: #91a3ad !important; }
+        #app [style*="background: #06080e"], #app [style*="background:#06080e"],
+        #app [style*="background: #080a11"], #app [style*="background:#0b111b"] {
+            background: #0b131c !important; color: #d7e3e5 !important;
+        }
+        #app [style*="color: #22c55e"], #app [style*="color: #4ade80"] { color: #54d9a5 !important; }
+        #app [style*="color: #60a5fa"] { color: #83b9d7 !important; }
+        #app [style*="color: #f87171"] { color: #f08a8c !important; }
+        .btn-toggle-on { background: #14362e; border-color: #28644f; color: #67e0b1; }
+        .btn-toggle-off { background: #352124; border-color: #694044; color: #ef9999; }
+        .btn-refresh, .btn-copy { background: #172530; border-color: #30424f; color: #d6e3e6; }
+        #app .btn-green-main, .btn-green-main, .btn-verify {
+            color: #062219 !important; background: linear-gradient(180deg, #36d9a2, #19ae81) !important;
+            border-color: #38c99a; box-shadow: 0 3px 0 #087153, inset 0 1px 0 rgba(255,255,255,.24);
+        }
+        .btn-sell-all { background: #291d21; border-color: #58363d; color: #e89a9b; }
+        .order-card { background: #0d151e; color: #d8e4e6; border-color: #293a46; }
+        .order-grid { color: #9aabb2; }
+        .badge-open { background: #142b38; color: #86b9d6; border-color: #2d5367; }
+        .badge-closed { background: #14342b; color: #65dbae; border-color: #286048; }
+        .log-console { color: #70d9ad; background: #09121a; border-color: #263944; }
+        .wallet-tabs { background: #0b141c; border-color: #273944; }
+        .wallet-tab { color: #8ea0a8; }
+        .wallet-tab.active { color: #6be0b5; background: #15352d; }
+        .token-btn { color: #9aabb2; background: #0d171f; border-color: #2b3c47; }
+        .token-btn.active { color: #55d7a4; background: #14362e; border-color: #32745b; }
+        .sig-input { color: #e6eff0; background: #0b141c; border-color: #30424e; }
+        .sig-input::placeholder { color: #788a93; }
+        .address-box { color: #61d9ad; background: #0b141b; border-color: #2b3c46; }
+        .bottom-nav {
+            background: rgba(10,17,24,.95); border-top-color: #263641;
+            box-shadow: 0 -8px 24px rgba(0,0,0,.24);
+        }
+        .nav-btn { color: #91a1a8; }
+        .nav-btn.active { color: #65ddb1; background: #15342c; }
+        details summary { color: #c2d2d5; }
+        a { color: #7bbbd5; }
+        .action-btn {
+            display: inline-flex; width: 100%; min-height: 46px;
+            align-items: center; justify-content: center;
+            padding: 12px 16px; border: 1px solid #38c99a; border-radius: 13px;
+            background: linear-gradient(180deg, #36d9a2, #19ae81);
+            color: #062219; font-size: 14px; font-weight: 720; line-height: 1.25;
+            box-shadow: 0 3px 0 #087153, inset 0 1px 0 rgba(255,255,255,.24);
+            cursor: pointer; touch-action: manipulation;
+            transition: transform .14s ease, opacity .14s ease;
+        }
+        .action-btn:hover:not(:disabled) { filter: brightness(1.04); }
+        .action-btn:active:not(:disabled) { transform: translateY(2px); }
+        .action-btn:focus-visible {
+            outline: 3px solid #83b9d7 !important; outline-offset: 3px;
+        }
+        .action-btn:disabled {
+            color: #a8b5b7; background: #25333b; border-color: #3a4b53;
+            box-shadow: none; opacity: .72; cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
     <div id="splash-screen">
-        <div class="brand-title">ZERØLIFE</div>
-        <div class="brand-run">MULTI-ASSET</div>
+        <div class="brand-title">AI Trader</div>
+        <div class="brand-run">SOLANA / USDC · PERSONAL TERMINAL</div>
+        <p class="splash-caption">Your account. Your capital. A clear view of AI decisions and trading controls.</p>
         <button id="launch-terminal" class="start-btn" onclick="openTerminal()">Launch Terminal</button>
     </div>
 
@@ -820,7 +1141,7 @@ RAW_HTML = r"""<!DOCTYPE html>
     </section>
     <div id="app" data-ui-version="console-ai-v1" style="display: none;">
         <div id="tab-terminal" class="tab-panel active">
-            <header class="page-heading"><div><p class="eyebrow">ZERØLIFE · Personal account</p><h1>Overview</h1></div></header>
+            <header class="page-heading"><div><p class="eyebrow">AI Trader · Personal account</p><h1>Overview</h1></div></header>
             <div class="banner-limit" style="border-color:#ef4444; background:#2a1014; margin-bottom:12px;">
                 <div style="color:#4ade80; font-size:13px; font-weight:800;">Your account · USDC / SOL</div>
                 <div id="wallet-runtime-status" style="color:#cbd5e1; font-size:11px; margin-top:4px;">Personal funds. Trading carries risk.</div>
@@ -833,13 +1154,13 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <span id="toggle-text">Autopilot: OFF</span>
                 </button>
                 <button id="btn-refresh-top" class="btn-ctl btn-refresh" onclick="manualRefresh()">
-                    <span id="refresh-icon">🔄</span>
+                    <span id="refresh-icon" aria-hidden="true">↻</span>
                     <span>Refresh</span>
                 </button>
             </div>
 
             <button class="btn-sell-all" onclick="closeAllPositions()">
-                <span>⚠️ Close all my positions</span>
+                <span>Close all my positions</span>
             </button>
 
             <div class="card" style="border: 1px solid rgba(34, 197, 94, 0.3); background: linear-gradient(135deg, #0e111a 0%, #0a150d 100%);">
