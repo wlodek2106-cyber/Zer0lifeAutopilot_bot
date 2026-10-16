@@ -50,7 +50,7 @@ DB_FILE = os.path.join(DB_DIR, "zer0life_users.db") if os.path.exists(DB_DIR) el
 
 SOLANA_RPC = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com").strip()
 SHARED_DEPOSIT_WALLET = os.getenv("DEPOSIT_WALLET", "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L").strip()
-SPLASH_IMAGE_URL = "https://i.postimg.cc/52n94Pzg/57D47DDD-9BED-4D4B-AA69-2B59CAB400AD.png"
+SPLASH_IMAGE_URL = "/static/zerolife-ai-trader-core.webp"
 
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
@@ -1117,14 +1117,316 @@ RAW_HTML = r"""<!DOCTYPE html>
             color: #a8b5b7; background: #25333b; border-color: #3a4b53;
             box-shadow: none; opacity: .72; cursor: not-allowed;
         }
+
+        /* Zer0Life AI Trader splash: cinematic 3D, without simulated market data. */
+        #splash-screen.zl-prism {
+            position: fixed; inset: 0; z-index: 9999;
+            display: flex; flex-direction: column; justify-content: flex-start; align-items: stretch;
+            width: 100%; height: 100vh; height: 100dvh; min-height: 100dvh;
+            padding: max(22px, env(safe-area-inset-top)) max(20px, calc((100vw - 460px) / 2)) max(18px, env(safe-area-inset-bottom));
+            overflow-x: hidden; overflow-y: auto; isolation: isolate;
+            color: #f0f4e9;
+            background:
+                radial-gradient(ellipse at 48% 41%, rgba(85,133,15,.19), transparent 42%),
+                radial-gradient(ellipse at 92% 72%, rgba(79,116,14,.11), transparent 32%),
+                linear-gradient(152deg, #0a0d08 0%, #050704 58%, #090d06 100%);
+        }
+        #splash-screen.zl-prism::before {
+            content: ""; position: absolute; z-index: 0; inset: 0; pointer-events: none; opacity: .12;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.2'/%3E%3C/svg%3E");
+            mix-blend-mode: screen;
+        }
+        #splash-screen.zl-prism::after { display: none; }
+        #splash-screen.zl-prism > * { position: relative; z-index: 1; }
+        .zl-prism__top {
+            display: flex; align-items: center; justify-content: space-between;
+            width: 100%; max-width: 1100px; margin: 0 auto;
+        }
+        .zl-prism__wordmark { display: inline-flex; align-items: center; gap: 10px; color: #f3f5ed; text-decoration: none; }
+        .zl-prism__mark {
+            display: flex; align-items: center; gap: 2px; height: 18px; transform: skew(-22deg);
+        }
+        .zl-prism__mark i {
+            display: block; width: 4px; height: 13px; border-radius: 2px;
+            background: #c8ff37; box-shadow: 0 0 10px rgba(200,255,55,.35);
+        }
+        .zl-prism__mark i:nth-child(2) { height: 18px; }
+        .zl-prism__mark i:nth-child(3) { height: 10px; }
+        .zl-prism__brand { font-size: 15px; font-weight: 760; letter-spacing: -.045em; }
+        .zl-prism__brand-zero { color: #c8ff37; }
+        .zl-prism__network {
+            display: inline-flex; align-items: center; gap: 8px; padding: 8px 11px;
+            border: 1px solid rgba(222,239,193,.14); border-radius: 999px;
+            color: #a9b29a; background: rgba(255,255,255,.035);
+            font: 600 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .13em;
+        }
+        .zl-prism__network-dot, .zl-prism__pulse {
+            width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%;
+            background: #c8ff37; box-shadow: 0 0 11px rgba(200,255,55,.75);
+        }
+        .zl-prism__hero {
+            position: relative; display: grid; grid-template-rows: minmax(300px, 1fr) auto;
+            align-items: center; width: 100%; max-width: 1100px; flex: 1; margin: 0 auto;
+            padding: 2vh 0 1vh;
+        }
+        .zl-prism__art {
+            position: relative; display: grid; place-items: center; width: 100%;
+            min-height: 285px; max-height: 540px; margin: 0 auto; perspective: 900px;
+        }
+        .zl-prism__halo {
+            position: absolute; width: min(80vw, 440px); aspect-ratio: 1; border-radius: 50%;
+            background: radial-gradient(circle, rgba(182,245,38,.16), rgba(101,148,19,.08) 34%, transparent 69%);
+            filter: blur(10px);
+        }
+        .zl-prism__image-frame {
+            position: relative; width: min(91vw, 470px); aspect-ratio: 1; overflow: hidden;
+            border-radius: 38% 38% 43% 43%; transform: translateY(-2%) rotate(-3deg);
+            -webkit-mask-image: radial-gradient(ellipse at 50% 48%, #000 52%, rgba(0,0,0,.94) 64%, transparent 81%);
+            mask-image: radial-gradient(ellipse at 50% 48%, #000 52%, rgba(0,0,0,.94) 64%, transparent 81%);
+            animation: zl-prism-float 8s ease-in-out infinite;
+        }
+        .zl-prism__image-frame::after {
+            content: ""; position: absolute; inset: 0; pointer-events: none;
+            background: linear-gradient(180deg, rgba(5,7,4,.02) 55%, #050704 100%),
+                radial-gradient(ellipse at 50% 45%, transparent 39%, rgba(5,7,4,.21) 72%, #050704 100%);
+        }
+        .zl-prism__image-frame img {
+            display: block; width: 100%; height: 100%; object-fit: cover;
+            filter: saturate(.9) contrast(1.08);
+        }
+        .zl-prism__orbit {
+            position: absolute; left: 50%; top: 48%; width: min(88vw, 500px); height: min(32vw, 170px);
+            border: 1px solid rgba(201,255,64,.28); border-left-color: rgba(201,255,64,.06);
+            border-bottom-color: rgba(201,255,64,.12); border-radius: 50%;
+            transform: translate(-50%,-50%) rotate(-25deg); pointer-events: none;
+            box-shadow: 0 0 16px rgba(171,233,31,.07), inset 0 0 12px rgba(171,233,31,.035);
+        }
+        .zl-prism__orbit--two {
+            width: min(75vw, 410px); height: min(24vw, 124px);
+            transform: translate(-50%,-50%) rotate(58deg);
+            border-color: rgba(218,242,183,.17); border-right-color: rgba(201,255,64,.35);
+        }
+        .zl-prism__annotation {
+            position: absolute; z-index: 2; color: rgba(212,230,188,.7);
+            font: 600 8px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .16em;
+        }
+        .zl-prism__annotation--top { top: 13%; right: 2%; display: flex; align-items: center; gap: 8px; color: #c8ff37; }
+        .zl-prism__annotation--top i { display: block; width: 28px; height: 1px; background: #c8ff37; opacity: .7; }
+        .zl-prism__annotation--bottom { bottom: 7%; left: 2%; }
+        .zl-prism__copy {
+            position: relative; z-index: 2; display: flex; flex-direction: column; align-items: flex-start;
+            width: 100%; max-width: 510px; margin: -2.5vh auto 0;
+        }
+        .zl-prism__eyebrow {
+            display: flex; align-items: center; gap: 9px; margin: 0 0 13px;
+            color: #c2d39f; font: 650 9px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .2em;
+        }
+        .zl-prism__eyebrow-line { width: 17px; height: 1px; background: #c8ff37; box-shadow: 0 0 9px rgba(200,255,55,.55); }
+        .zl-prism__title {
+            margin: 0; color: #f4f6ee; font-size: clamp(44px, 13vw, 68px);
+            font-weight: 760; letter-spacing: -.075em; line-height: .91; text-shadow: 0 8px 36px rgba(0,0,0,.5);
+        }
+        .zl-prism__title em { color: #c8ff37; font-style: normal; font-weight: 650; letter-spacing: -.08em; }
+        #splash-screen .splash-caption {
+            max-width: 330px; margin: 17px 0 23px; color: #a9b09f;
+            font-size: 14px; line-height: 1.55; font-weight: 450; text-align: left;
+        }
+        #splash-screen .zl-prism__launch {
+            display: flex; width: 100%; min-height: 58px; align-items: center; justify-content: space-between;
+            margin: 0; padding: 0 18px 0 21px; border: 1px solid rgba(229,255,165,.7); border-radius: 13px;
+            color: #101605; background: linear-gradient(105deg, #d4ff63 0%, #b9f535 62%, #a4e72a 100%);
+            box-shadow: 0 8px 26px rgba(167,221,44,.15), inset 0 1px 0 rgba(255,255,255,.65);
+            font: 750 14px/1 system-ui, sans-serif; letter-spacing: -.015em; cursor: pointer;
+            transition: transform .18s ease, filter .18s ease;
+        }
+        #splash-screen .zl-prism__launch::after {
+            content: "↗"; display: grid; width: 30px; height: 30px; place-items: center;
+            border: 1px solid rgba(12,27,0,.16); border-radius: 9px; font-size: 17px; font-weight: 500;
+        }
+        #splash-screen .zl-prism__launch:hover:not(:disabled) { transform: translateY(-2px); filter: brightness(1.06); }
+        #splash-screen .zl-prism__launch:active:not(:disabled) { transform: translateY(0); }
+        #splash-screen .zl-prism__launch:focus-visible { outline: 2px solid #f1ffcf !important; outline-offset: 4px; }
+        #splash-screen .zl-prism__launch:disabled { opacity: .72; cursor: not-allowed; }
+        .zl-prism__note { display: flex; align-items: center; gap: 9px; margin: 13px 2px 0; color: #747d68; font: 550 8px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .13em; }
+        .zl-prism__note i { width: 2px; height: 2px; border-radius: 50%; background: #525a49; }
+        .zl-prism__footer {
+            display: flex; align-items: center; gap: 12px; width: 100%; max-width: 1100px;
+            margin: 16px auto 0; color: #626b58;
+            font: 550 7px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .14em;
+        }
+        .zl-prism__footer-rule { flex: 1; height: 1px; background: rgba(212,232,181,.13); }
+        @keyframes zl-prism-float {
+            0%, 100% { transform: translateY(-2%) rotate(-3deg); }
+            50% { transform: translateY(0) rotate(-1deg); }
+        }
+        @media (min-width: 760px) {
+            #splash-screen.zl-prism { padding: max(32px, env(safe-area-inset-top)) 7vw max(24px, env(safe-area-inset-bottom)); }
+            .zl-prism__hero { grid-template-columns: 1.08fr .92fr; grid-template-rows: 1fr; gap: clamp(24px, 5vw, 80px); padding: 3vh 0; }
+            .zl-prism__art { grid-column: 1; grid-row: 1; max-height: 680px; }
+            .zl-prism__copy { grid-column: 2; grid-row: 1; margin: 0; }
+            .zl-prism__title { font-size: clamp(58px, 7.2vw, 92px); }
+            #splash-screen .splash-caption { font-size: 15px; }
+            .zl-prism__annotation--top { right: -2%; }
+            .zl-prism__annotation--bottom { left: -4%; bottom: 13%; }
+        }
+        @media (max-height: 720px) and (max-width: 759px) {
+            #splash-screen.zl-prism { padding-top: max(14px, env(safe-area-inset-top)); padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+            .zl-prism__hero { grid-template-rows: minmax(220px, 42vh) auto; padding-top: 1vh; }
+            .zl-prism__art { min-height: 220px; }
+            .zl-prism__image-frame { width: min(67vw, 320px); }
+            .zl-prism__copy { margin-top: -5px; }
+            .zl-prism__title { font-size: clamp(38px, 10vw, 52px); }
+            #splash-screen .splash-caption { margin: 11px 0 15px; font-size: 13px; }
+            #splash-screen .zl-prism__launch { min-height: 52px; }
+            .zl-prism__footer { margin-top: 10px; }
+        }
+        @media (max-width: 359px) {
+            #splash-screen.zl-prism { padding-right: 15px; padding-left: 15px; }
+            .zl-prism__hero { grid-template-rows: minmax(260px, 1fr) auto; }
+            .zl-prism__title { font-size: 42px; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .zl-prism__image-frame { animation: none; }
+            #splash-screen .zl-prism__launch { transition: none; }
+        }
+
+        /* Partner program: compact level ledger, live status, and explicit payout rules. */
+        #partner-program.partner-card {
+            --partner-lime: #c9f36a; --partner-muted: #929c89;
+            position: relative; overflow: hidden; padding: 18px 15px 16px;
+            border: 1px solid rgba(197,238,135,.17);
+            background: linear-gradient(148deg, rgba(24,30,21,.98), rgba(14,18,14,.98) 65%);
+            box-shadow: 0 18px 40px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.045);
+        }
+        #partner-program.partner-card::before {
+            content: ""; position: absolute; width: 230px; height: 230px; right: -150px; top: -130px;
+            border: 1px solid rgba(201,243,106,.09); border-radius: 50%;
+            box-shadow: 0 0 0 25px rgba(201,243,106,.018), 0 0 0 55px rgba(201,243,106,.012);
+            pointer-events: none;
+        }
+        #partner-program .partner-head, #partner-program .partner-table,
+        #partner-program .partner-wallet, #partner-program .partner-earnings,
+        #partner-program .partner-invite, #partner-program .partner-rules,
+        #partner-program #partner-history { position: relative; z-index: 1; }
+        #partner-program .partner-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:14px; }
+        #partner-program .partner-kicker { margin:0 0 6px; color:var(--partner-lime); font-size:9px; font-weight:750; letter-spacing:.16em; }
+        #partner-program .partner-head h3 { margin:0; color:#eef2e9; font-size:19px; line-height:1.15; letter-spacing:-.035em; }
+        #partner-program .partner-intro { margin:8px 0 0; color:#a3ab9b; font-size:12px; line-height:1.45; }
+        #partner-program .partner-level-count { flex:none; margin-top:2px; padding:6px 8px; border:1px solid rgba(201,243,106,.2); border-radius:7px; color:#a8c87a; font:700 8px ui-monospace,monospace; letter-spacing:.1em; }
+        #partner-program .partner-table { overflow:hidden; border:1px solid rgba(201,243,106,.12); border-radius:13px; background:rgba(7,10,7,.48); }
+        #partner-program .partner-table-head, #partner-program .partner-table-row {
+            display:grid; grid-template-columns:minmax(112px,1fr) 52px 68px; align-items:center; column-gap:7px;
+        }
+        #partner-program .partner-table-head {
+            min-height:34px; padding:0 9px; border-bottom:1px solid rgba(255,255,255,.08);
+            color:#77816e; font:700 8px ui-monospace,monospace; letter-spacing:.075em;
+        }
+        #partner-program .partner-table-head span:last-child { text-align:right; }
+        #partner-program .partner-table-row { min-height:57px; padding:7px 9px; border-bottom:1px solid rgba(255,255,255,.055); }
+        #partner-program .partner-table-row:last-child { border-bottom:0; }
+        #partner-program .partner-level-name { display:flex; align-items:center; gap:9px; min-width:0; }
+        #partner-program .partner-level-number {
+            display:grid; flex:none; width:27px; height:27px; place-items:center; border:1px solid rgba(201,243,106,.19);
+            border-radius:8px; color:#bddc84; background:rgba(201,243,106,.055); font:700 10px ui-monospace,monospace;
+        }
+        #partner-program .partner-level-name strong { display:block; overflow:hidden; color:#e4eadc; font-size:11px; font-weight:650; text-overflow:ellipsis; white-space:nowrap; }
+        #partner-program .partner-level-name small, #partner-program .partner-count small { display:block; margin-top:3px; color:#788171; font-size:8px; letter-spacing:.055em; }
+        #partner-program .partner-rate { color:var(--partner-lime); font-size:15px; font-weight:740; letter-spacing:-.04em; }
+        #partner-program .partner-count { text-align:right; }
+        #partner-program .partner-count strong { display:block; color:#e3e9dc; font:600 12px ui-monospace,monospace; }
+        #partner-program .partner-network-total { display:flex; justify-content:space-between; padding:10px 10px 1px; color:#9ba391; font-size:10px; }
+        #partner-program .partner-network-total strong { color:#e7ecdf; font:650 12px ui-monospace,monospace; }
+        #partner-program .partner-wallet {
+            display:flex; align-items:center; gap:10px; min-height:60px; margin:11px 0; padding:10px 12px;
+            border:1px solid rgba(201,243,106,.15); border-radius:13px;
+            background:linear-gradient(100deg,rgba(163,208,79,.09),rgba(17,23,15,.86));
+        }
+        #partner-program .partner-wallet-icon {
+            display:grid; flex:none; width:32px; height:32px; place-items:center; border-radius:10px;
+            color:var(--partner-lime); background:rgba(201,243,106,.11); font-size:16px;
+        }
+        #partner-program .partner-wallet-copy { flex:1; min-width:0; }
+        #partner-program .partner-wallet-copy strong, #partner-program .partner-wallet-copy small { display:block; }
+        #partner-program .partner-wallet-copy strong { color:#e6ebdf; font-size:11px; font-weight:650; }
+        #partner-program .partner-wallet-copy small { margin-top:3px; color:#8e9884; font-size:9px; line-height:1.35; }
+        #partner-program .partner-wallet-badge { display:flex; flex:none; align-items:center; gap:4px; color:#bddc84; font:700 8px ui-monospace,monospace; letter-spacing:.04em; }
+        #partner-program .partner-wallet-badge::before { content:""; width:5px; height:5px; border-radius:50%; background:var(--partner-lime); }
+        #partner-program .partner-wallet.is-unlinked .partner-wallet-badge { color:#e7bd73; }
+        #partner-program .partner-wallet.is-unlinked .partner-wallet-badge::before { background:#e7bd73; }
+        #partner-program .partner-earnings { margin:0 0 12px; padding:12px; border:1px solid rgba(255,255,255,.075); border-radius:12px; background:rgba(7,10,7,.42); }
+        #partner-program .partner-earnings-title { margin:0 0 7px; color:#87917d; font:700 8px ui-monospace,monospace; letter-spacing:.12em; text-transform:uppercase; }
+        #partner-program .partner-earning-row { display:flex; justify-content:space-between; gap:8px; padding:6px 0; border-top:1px solid rgba(255,255,255,.05); color:#9da693; font-size:10px; line-height:1.4; }
+        #partner-program .partner-earning-row strong { color:#dce4d2; text-align:right; font:600 10px ui-monospace,monospace; }
+        #partner-program .partner-earnings-empty { margin:0; color:#a4ad9a; font-size:11px; }
+        #partner-program .partner-invite { padding:14px 13px 12px; border:1px solid rgba(201,243,106,.13); border-radius:13px; background:rgba(7,10,7,.38); }
+        #partner-program .partner-invite-title { margin:0 0 4px; color:#e5ebdc; font-size:13px; font-weight:680; }
+        #partner-program .partner-invite-note { margin:0 0 11px; color:#929c89; font-size:10px; line-height:1.45; }
+        #partner-program .partner-link-label { display:block; margin:0 0 6px; color:#818b77; font:700 8px ui-monospace,monospace; letter-spacing:.11em; }
+        #partner-program .partner-link-row { display:flex; align-items:center; gap:7px; }
+        #partner-program .partner-link-row .partner-link-input {
+            width:100%; min-width:0; flex:1; height:42px; margin:0; padding:0 10px; border:1px solid rgba(255,255,255,.1);
+            border-radius:9px; outline:none; background:#0a0d09; color:#d7e0cc;
+            font:11px ui-monospace,SFMono-Regular,Menlo,monospace; text-overflow:ellipsis;
+        }
+        #partner-program .partner-link-row .partner-link-input:focus-visible { border-color:#a9d64c; box-shadow:0 0 0 2px rgba(201,243,106,.18); }
+        #partner-program .partner-copy-button {
+            display:flex; width:100%; min-height:43px; align-items:center; justify-content:space-between; margin:8px 0 0; padding:0 13px;
+            border:1px solid rgba(201,243,106,.32); border-radius:9px;
+            color:#131a0c; background:linear-gradient(145deg,#c9f36a,#83b631); font-size:11px; font-weight:700;
+        }
+        #partner-program .partner-copy-button span { font-size:15px; font-weight:500; }
+        #partner-program .partner-copy-button:focus-visible, #partner-program .btn-copy:focus-visible { outline:2px solid #e5ffb3; outline-offset:3px; }
+        #partner-program .partner-copy-status { min-height:12px; margin:7px 0 0; color:#75816c; font-size:9px; }
+        #partner-program .partner-rules { margin-top:13px; border-top:1px solid rgba(255,255,255,.08); padding-top:11px; }
+        #partner-program .partner-rules summary { color:#c7d1ba; font-size:11px; font-weight:650; cursor:pointer; }
+        #partner-program .partner-rules ul { margin:9px 0 0; padding-left:17px; color:#9aa493; font-size:10px; line-height:1.55; }
+        #partner-program .partner-rules li { margin:6px 0; padding-left:2px; }
+        #partner-program .partner-history { margin-top:10px; }
+        #partner-program .partner-history-row { padding:9px 10px; border-top:1px solid rgba(255,255,255,.06); color:#a3ad9b; font-size:10px; line-height:1.5; overflow-wrap:anywhere; }
+        #partner-program .partner-history-row .btn-copy { margin:8px 0 0; }
+        #partner-program .partner-sr-only {
+            position:absolute !important; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
+            clip:rect(0,0,0,0); white-space:nowrap; border:0;
+        }
+        @media (max-width: 360px) {
+            #partner-program.partner-card { padding:15px 12px 13px; }
+            #partner-program .partner-table-head, #partner-program .partner-table-row { grid-template-columns:minmax(100px,1fr) 46px 58px; column-gap:5px; padding-right:7px; padding-left:7px; }
+            #partner-program .partner-table-head { font-size:7px; }
+            #partner-program .partner-level-name { gap:7px; }
+            #partner-program .partner-level-name strong { font-size:10px; }
+            #partner-program .partner-rate { font-size:14px; }
+            #partner-program .partner-wallet { gap:7px; padding-right:8px; padding-left:8px; }
+            #partner-program .partner-wallet-badge { font-size:7px; }
+        }
     </style>
 </head>
 <body>
-    <div id="splash-screen">
-        <div class="brand-title">AI Trader</div>
-        <div class="brand-run">SOLANA / USDC · PERSONAL TERMINAL</div>
-        <p class="splash-caption">Your account. Your capital. A clear view of AI decisions and trading controls.</p>
-        <button id="launch-terminal" class="start-btn" onclick="openTerminal()">Launch Terminal</button>
+    <div id="splash-screen" class="zl-prism">
+        <header class="zl-prism__top">
+            <div class="zl-prism__wordmark" aria-label="Zer0Life AI Trader">
+                <span class="zl-prism__mark" aria-hidden="true"><i></i><i></i><i></i></span>
+                <span class="zl-prism__brand">Zer<span class="zl-prism__brand-zero">0</span>Life</span>
+            </div>
+            <span class="zl-prism__network"><i class="zl-prism__network-dot"></i> SOLANA / USDC</span>
+        </header>
+        <section class="zl-prism__hero" aria-labelledby="splash-title">
+            <div class="zl-prism__art" aria-hidden="true">
+                <div class="zl-prism__halo"></div>
+                <div class="zl-prism__image-frame"><img src="__SPLASH_URL__" alt=""></div>
+                <span class="zl-prism__orbit"></span>
+                <span class="zl-prism__orbit zl-prism__orbit--two"></span>
+                <span class="zl-prism__annotation zl-prism__annotation--top">01 <i></i> AI SIGNAL / REVIEW</span>
+                <span class="zl-prism__annotation zl-prism__annotation--bottom">PERSONAL EXECUTION LAYER</span>
+            </div>
+            <div class="zl-prism__copy">
+                <p class="zl-prism__eyebrow"><span class="zl-prism__eyebrow-line"></span> YOUR CAPITAL. YOUR CALL.</p>
+                <h1 id="splash-title" class="zl-prism__title">Zer0Life<br><em>AI Trader</em></h1>
+                <p class="splash-caption">See what the AI sees. Stay in control of every move.</p>
+                <button id="launch-terminal" class="start-btn zl-prism__launch" onclick="openTerminal()">Launch Terminal</button>
+                <p class="zl-prism__note"><span class="zl-prism__pulse"></span> SOLANA · USDC <i></i> DIRECT CONTROL</p>
+            </div>
+        </section>
+        <footer class="zl-prism__footer"><span>AI-ASSISTED · USER-DIRECTED</span><span class="zl-prism__footer-rule"></span><span>TRADE WITH CLARITY</span></footer>
     </div>
 
     <section id="account-signup" class="card" data-account-version="telegram-passkey-v1" data-entry-fix="signup-above-splash-v1" style="display:none;position:fixed;inset:7vh 18px auto;z-index:10001;max-width:460px;max-height:82vh;overflow-y:auto;-webkit-overflow-scrolling:touch;margin:auto">
@@ -1352,15 +1654,50 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <button class="btn-green-main" onclick="saveTradingSettings()">Save order sizes</button>
                 <p id="settings-budget" class="section-note"></p>
             </div>
-            <div class="card" id="partner-program">
-                <h3 style="margin-top:0">Partner program · 3 levels</h3>
-                <p class="section-note">Earn 1% from direct referrals, 0.5% from level 2, and 0.25% from level 3. Commissions use realized trade profit (sale proceeds minus recorded purchase cost), after prior trading losses are recovered. Separately paid network fees are not netted here. USDC and SOL are accounted for separately; open trades and deposits do not count.</p>
-                <p class="section-note">Automatic payouts go to each partner’s verified linked wallet. If no wallet is linked, the earned amount stays queued. Solana network fees are paid from the operator reserve, not deducted from the partner’s commission.</p>
-                <label class="settings-label" for="partner-invite-link">Your referral link</label>
-                <input id="partner-invite-link" class="sig-input" type="text" readonly value="Loading referral link…">
-                <button class="btn-copy" onclick="copyPartnerLink()">Copy referral link</button>
-                <p id="partner-program-status" class="status-output" role="status">Loading partner balances…</p>
-                <div id="partner-history" class="status-output" aria-live="polite"></div>
+            <div class="card partner-card" id="partner-program">
+                <div class="partner-head">
+                    <div><p class="partner-kicker">ZER0LIFE · PARTNER DESK</p><h3>Partner program</h3><p class="partner-intro">Share eligible realized trading profit across three referral levels.</p></div>
+                    <span class="partner-level-count">03 LEVELS</span>
+                </div>
+                <div class="partner-table" role="table" aria-label="Partner commission rates and referrals by level">
+                    <div class="partner-table-head" role="row"><span role="columnheader">LEVEL / NETWORK</span><span role="columnheader">RATE</span><span role="columnheader">REFERRALS</span></div>
+                    <div id="partner-level-rows" role="rowgroup">
+                        <div class="partner-table-row" role="row"><div class="partner-level-name" role="cell"><span class="partner-level-number">01</span><span><strong>Direct</strong><small>DIRECT REFERRALS</small></span></div><strong class="partner-rate" role="cell">1%</strong><span class="partner-count" role="cell"><strong>0</strong><small>partners</small></span></div>
+                        <div class="partner-table-row" role="row"><div class="partner-level-name" role="cell"><span class="partner-level-number">02</span><span><strong>Second level</strong><small>SECOND CIRCLE</small></span></div><strong class="partner-rate" role="cell">0.5%</strong><span class="partner-count" role="cell"><strong>0</strong><small>partners</small></span></div>
+                        <div class="partner-table-row" role="row"><div class="partner-level-name" role="cell"><span class="partner-level-number">03</span><span><strong>Third level</strong><small>THIRD CIRCLE</small></span></div><strong class="partner-rate" role="cell">0.25%</strong><span class="partner-count" role="cell"><strong>0</strong><small>partners</small></span></div>
+                    </div>
+                    <div class="partner-network-total"><span>Active referral network</span><strong id="partner-network-total">0 partners</strong></div>
+                </div>
+                <div class="partner-wallet" id="partner-wallet-card">
+                    <span class="partner-wallet-icon" aria-hidden="true">◇</span>
+                    <span class="partner-wallet-copy"><strong id="partner-wallet-label">Loading wallet status…</strong><small id="partner-wallet-detail">Checking automatic payout eligibility.</small></span>
+                    <span class="partner-wallet-badge" id="partner-wallet-badge">CHECKING</span>
+                </div>
+                <p id="partner-program-status" class="partner-sr-only" role="status">Loading partner balances…</p>
+                <div class="partner-earnings">
+                    <p class="partner-earnings-title">Pending and paid earnings</p>
+                    <div id="partner-earnings-summary" aria-live="polite"><p class="partner-earnings-empty">Loading partner balances…</p></div>
+                </div>
+                <div class="partner-invite">
+                    <h4 class="partner-invite-title">Your referral link</h4>
+                    <p class="partner-invite-note">Share your link. Eligible partner activity is tracked automatically.</p>
+                    <label class="partner-link-label" for="partner-invite-link">REFERRAL LINK</label>
+                    <div class="partner-link-row">
+                        <input id="partner-invite-link" class="sig-input partner-link-input" type="text" readonly value="Loading referral link…" aria-label="Your referral link">
+                    </div>
+                    <button class="partner-copy-button" type="button" onclick="copyPartnerLink()" aria-label="Copy referral link">Copy referral link <span aria-hidden="true">↗</span></button>
+                    <p class="partner-copy-status" aria-live="polite">Loading your account-specific link…</p>
+                </div>
+                <details class="partner-rules">
+                    <summary>How commissions and payouts work</summary>
+                    <ul>
+                        <li>Commissions use realized trade profit — sale proceeds minus recorded purchase cost — after prior trading losses are recovered.</li>
+                        <li>USDC and SOL are accounted for separately. Open trades and deposits do not count.</li>
+                        <li>Automatic payouts go to each partner’s verified linked wallet. Without a linked wallet, earnings remain queued.</li>
+                        <li>Solana network fees are paid from the operator reserve and are not deducted from the partner’s commission.</li>
+                    </ul>
+                </details>
+                <div id="partner-history" class="partner-history" aria-live="polite"></div>
             </div>
             <details id="strategy-help"><summary>Strategy limits &amp; risks</summary>
                 <p class="section-note">Core trades use your USDC; sniper trades use your SOL. Other users' funds and the operator fee reserve are never your trading capital. Automatic conversion or profit allocation between strategies is not implemented.</p>
@@ -1446,28 +1783,93 @@ RAW_HTML = r"""<!DOCTYPE html>
         async function loadPartnerProgram() {
             const link = document.getElementById('partner-invite-link');
             const status = document.getElementById('partner-program-status');
+            const levelRows = document.getElementById('partner-level-rows');
+            const networkTotal = document.getElementById('partner-network-total');
+            const walletCard = document.getElementById('partner-wallet-card');
+            const walletLabel = document.getElementById('partner-wallet-label');
+            const walletDetail = document.getElementById('partner-wallet-detail');
+            const walletBadge = document.getElementById('partner-wallet-badge');
+            const earningsSummary = document.getElementById('partner-earnings-summary');
+            const copyStatus = document.querySelector('.partner-copy-status');
+            const levelInfo = [
+                {name:'Direct', depth:'DIRECT REFERRALS'},
+                {name:'Second level', depth:'SECOND CIRCLE'},
+                {name:'Third level', depth:'THIRD CIRCLE'}
+            ];
+            const formatRate = value => {
+                const bps=Number(value);
+                return Number.isFinite(bps)&&bps>=0 ?
+                    (bps/100).toFixed(2).replace(/\.?0+$/,'')+'%' : '—';
+            };
+            const formatAmount = (raw, asset) => {
+                const decimals=asset==='SOL'?9:6;
+                const value=Number(raw||0);
+                return Number.isFinite(value)?(value/10**decimals).toFixed(decimals):'—';
+            };
             try {
                 const response=await apiFetch('/api/partners');
                 const data=await response.json();
                 if(!response.ok||!data.success)throw Error(data.message||'Partner program is unavailable.');
                 link.value=data.invite_url||'Open this bot through Telegram to generate your referral link.';
-                const count=data.referrals_by_level||[0,0,0];
-                const earnings=(data.earnings||[]).map(item=>{
-                    const decimals=item.asset==='SOL'?9:6;
-                    const ticker=item.asset==='SOL'?'SOL':'USDC';
-                    return 'Level '+item.level+' · '+(Number(item.pending_raw)/10**decimals).toFixed(decimals)+' '+ticker+' pending; '+
-                        (Number(item.paid_raw)/10**decimals).toFixed(decimals)+' '+ticker+' paid';
-                });
-                status.textContent='Referrals by level: '+count.join(' / ')+'. '+
-                    (data.wallet_linked?'Verified wallet linked.':'Link and verify a wallet in Wallet to receive automatic payouts.')+
-                    (earnings.length?'\\n'+earnings.join('\\n'):'\\nNo partner earnings yet.');
+                if(copyStatus)copyStatus.textContent=data.invite_url?'Your account-specific link is ready to share.':'Open this bot through Telegram to generate your link.';
+                const rates=Array.isArray(data.rates_bps)?data.rates_bps:[100,50,25];
+                const rawCounts=Array.isArray(data.referrals_by_level)?data.referrals_by_level:[0,0,0];
+                const counts=[0,1,2].map(index=>Math.max(0,Math.floor(Number(rawCounts[index])||0)));
+                if(levelRows){
+                    levelRows.replaceChildren();
+                    levelInfo.forEach((level,index)=>{
+                        const row=document.createElement('div');row.className='partner-table-row';row.setAttribute('role','row');
+                        const nameCell=document.createElement('div');nameCell.className='partner-level-name';nameCell.setAttribute('role','cell');
+                        const number=document.createElement('span');number.className='partner-level-number';number.textContent=String(index+1).padStart(2,'0');
+                        const nameWrap=document.createElement('span');
+                        const name=document.createElement('strong');name.textContent=level.name;
+                        const depth=document.createElement('small');depth.textContent=level.depth;
+                        nameWrap.append(name,depth);nameCell.append(number,nameWrap);
+                        const rate=document.createElement('strong');rate.className='partner-rate';rate.setAttribute('role','cell');rate.textContent=formatRate(rates[index]);
+                        const referralCell=document.createElement('span');referralCell.className='partner-count';referralCell.setAttribute('role','cell');
+                        const referralCount=document.createElement('strong');referralCount.textContent=counts[index].toLocaleString('en-US');
+                        const referralLabel=document.createElement('small');referralLabel.textContent='partners';
+                        referralCell.append(referralCount,referralLabel);row.append(nameCell,rate,referralCell);levelRows.appendChild(row);
+                    });
+                }
+                const totalReferrals=counts.reduce((total,count)=>total+count,0);
+                if(networkTotal)networkTotal.textContent=totalReferrals.toLocaleString('en-US')+' partners';
+                const payoutReady=Boolean(data.automatic_payouts);
+                if(walletCard)walletCard.classList.toggle('is-unlinked',!data.wallet_linked);
+                if(walletLabel)walletLabel.textContent=data.wallet_linked?'Verified wallet linked':'Wallet not linked';
+                if(walletDetail)walletDetail.textContent=data.wallet_linked&&payoutReady?
+                    'Automatic payouts go to your verified wallet.':
+                    'Link and verify a wallet in Wallet; earnings stay queued.';
+                if(walletBadge)walletBadge.textContent=data.wallet_linked&&payoutReady?'VERIFIED':'ACTION NEEDED';
+                status.textContent='Referrals by level: '+counts.join(' / ')+'. '+
+                    (data.wallet_linked&&payoutReady?'Verified wallet linked; automatic payouts enabled.':
+                        'A verified wallet is required before automatic payouts can be sent.');
+                const allEarnings=Array.isArray(data.earnings)?data.earnings:[];
+                const earned=allEarnings.filter(item=>Number(item.pending_raw||0)>0||Number(item.paid_raw||0)>0);
+                if(earningsSummary){
+                    earningsSummary.replaceChildren();
+                    if(!earned.length){
+                        const empty=document.createElement('p');empty.className='partner-earnings-empty';empty.textContent='No partner earnings yet.';
+                        earningsSummary.appendChild(empty);
+                    }else{
+                        earned.forEach(item=>{
+                            const row=document.createElement('div');row.className='partner-earning-row';
+                            const asset=item.asset==='SOL'?'SOL':'USDC';
+                            const level=document.createElement('span');level.textContent='Level '+Number(item.level)+' · '+asset;
+                            const amounts=document.createElement('strong');
+                            amounts.textContent=formatAmount(item.pending_raw,asset)+' pending · '+formatAmount(item.paid_raw,asset)+' paid';
+                            row.append(level,amounts);earningsSummary.appendChild(row);
+                        });
+                    }
+                }
                 const history=document.getElementById('partner-history');
                 history.replaceChildren();
                 for(const item of (data.history||[])){
                     const row=document.createElement('div');
+                    row.className='partner-history-row';
                     const decimals=item.asset==='SOL'?9:6;
                     row.textContent='Level '+item.level+' · '+(Number(item.amount_raw)/10**decimals).toFixed(decimals)+' '+item.asset+
-                        ' · '+item.state+(item.signature?' · '+item.signature:'');
+                        ' · '+String(item.state||'UNKNOWN').replace(/_/g,' ')+(item.signature?' · '+item.signature:'');
                     history.appendChild(row);
                     if(item.state==='NEEDS_REVIEW'){
                         const retry=document.createElement('button');
@@ -1479,13 +1881,31 @@ RAW_HTML = r"""<!DOCTYPE html>
             } catch(error) {
                 if(link)link.value='Referral link unavailable.';
                 if(status)status.textContent=error.message||'Partner program unavailable.';
+                if(walletLabel)walletLabel.textContent='Partner status unavailable';
+                if(walletDetail)walletDetail.textContent='Could not load wallet or payout status.';
+                if(walletBadge)walletBadge.textContent='UNAVAILABLE';
+                if(earningsSummary)earningsSummary.textContent='Could not load partner earnings.';
+                if(copyStatus)copyStatus.textContent='Partner referral link is unavailable.';
             }
         }
         async function copyPartnerLink() {
             const link=document.getElementById('partner-invite-link');
-            if(!link.value||!link.value.startsWith('https://t.me/'))return;
-            try { await navigator.clipboard.writeText(link.value); alert('Referral link copied.'); }
-            catch(e) { link.focus();link.select();document.execCommand('copy'); }
+            const status=document.querySelector('.partner-copy-status');
+            if(!link.value||!link.value.startsWith('https://t.me/')){
+                if(status)status.textContent='Referral link is not ready yet.';
+                return;
+            }
+            try {
+                if(navigator.clipboard&&window.isSecureContext)await navigator.clipboard.writeText(link.value);
+                else{
+                    link.focus();link.select();
+                    if(!document.execCommand('copy'))throw Error('Clipboard is unavailable.');
+                }
+                if(status)status.textContent='Referral link copied.';
+            } catch(e) {
+                link.focus();link.select();
+                if(status)status.textContent='Could not copy. Select the link and copy it manually.';
+            }
         }
         async function retryPartnerPayout(earningId) {
             if(!confirm('Retry this previously earned payout to your verified wallet?'))return;
@@ -2288,6 +2708,16 @@ async def index_handler(request):
         "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff",
         "Content-Security-Policy": "frame-ancestors 'none'; object-src 'none'; base-uri 'none'"})
 
+async def splash_asset_handler(request):
+    asset = Path(__file__).with_name("static") / "zerolife-ai-trader-core.webp"
+    if not asset.is_file():
+        raise web.HTTPNotFound()
+    return web.FileResponse(asset, headers={
+        "Content-Type": "image/webp",
+        "Cache-Control": "public, max-age=3600",
+        "X-Content-Type-Options": "nosniff"
+    })
+
 async def health_handler(request):
     runtime = request.app["wallet_runtime"]
     flags = runtime.readiness()
@@ -2699,6 +3129,7 @@ async def main():
             "X-Content-Type-Options": "nosniff"})
     app.router.add_get('/', index_handler)
     app.router.add_get('/terminal', index_handler)
+    app.router.add_get('/static/zerolife-ai-trader-core.webp', splash_asset_handler)
     async def web_script(request):
         return web.Response(text=Path(__file__).with_name("web_terminal.js").read_text(encoding="utf-8"),
                             content_type="application/javascript", headers={"Cache-Control":"no-store"})
