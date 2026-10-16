@@ -4,6 +4,12 @@ from unittest.mock import AsyncMock
 from datetime import datetime, timezone
 from legacy_retirement import prove_retirement
 from wallet_runtime import WalletError, GENESIS, SYSTEM
+import base64
+from solders.keypair import Keypair
+from solders.hash import Hash
+from solders.message import Message
+from solders.instruction import Instruction
+from solders.transaction import VersionedTransaction
 
 
 class RetirementProofTests(unittest.IsolatedAsyncioTestCase):
@@ -83,3 +89,93 @@ class RetirementProofTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(WalletError): await prove_retirement(self.rpc, "wallet", row)
         self.blockhash_valid = None
         with self.assertRaises(WalletError): await prove_retirement(self.rpc, "wallet", row)
+
+
+class SignedExpiryTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.signer = Keypair()
+        self.wallet = str(self.signer.pubkey())
+        self.validity = {"context": {"slot": 100}, "value": False}
+        self.statuses = {"context": {"slot": 101}, "value": [None]}
+        self.found_tx = None
+        self.history = []
+        self.rpc = AsyncMock(side_effect=self.answer)
+        self.row = self.signed_row([])
+
+    def signed_row(self, instructions):
+        tx = VersionedTransaction(Message.new_with_blockhash(
+            instructions, self.signer.pubkey(), Hash.new_unique()), [self.signer])
+        return {"signature": str(tx.signatures[0]),
+                "signed_wire": base64.b64encode(bytes(tx)).decode(),
+                "timestamp": datetime.now(timezone.utc).isoformat()}
+
+    async def answer(self, method, params):
+        if method == "getGenesisHash": return GENESIS
+        if method == "isBlockhashValid": return self.validity
+        if method == "getSignatureStatuses": return self.statuses
+        if method == "getTransaction": return self.found_tx
+        if method == "getSignaturesForAddress": return self.history
+        raise AssertionError("Unexpected RPC: " + method)
+
+    async def test_recent_signed_swap_recovers_without_one_hour_wait(self):
+        proof = await prove_retirement(self.rpc, self.wallet, self.row)
+        self.assertEqual(proof["expiry_proof"], "signed_non_nonce_blockhash_finalized_expired")
+        self.assertEqual([c.args[0] for c in self.rpc.call_args_list], [
+            "getGenesisHash", "isBlockhashValid", "getSignatureStatuses", "getTransaction",
+            "getSignaturesForAddress"])
+        self.assertFalse(proof["rebroadcast"])
+
+    async def test_live_blockhash_never_releases(self):
+        self.validity["value"] = True
+        with self.assertRaises(WalletError):
+            await prove_retirement(self.rpc, self.wallet, self.row)
+
+    async def test_missing_expiry_context_never_releases(self):
+        self.validity = {"value": False}
+        with self.assertRaises(WalletError):
+            await prove_retirement(self.rpc, self.wallet, self.row)
+
+    async def test_stale_status_context_never_releases(self):
+        self.statuses["context"]["slot"] = 99
+        with self.assertRaises(WalletError):
+            await prove_retirement(self.rpc, self.wallet, self.row)
+
+    async def test_found_processed_signature_never_releases(self):
+        self.statuses["value"] = [{"confirmationStatus": "processed"}]
+        with self.assertRaises(WalletError):
+            await prove_retirement(self.rpc, self.wallet, self.row)
+
+    async def test_found_transaction_never_releases(self):
+        self.found_tx = {"meta": {"err": None}}
+        with self.assertRaises(WalletError):
+            await prove_retirement(self.rpc, self.wallet, self.row)
+
+    async def test_durable_nonce_rejected_without_expiry_check(self):
+        self.row = self.signed_row([Instruction(SYSTEM, (4).to_bytes(4, "little"), [])])
+        with self.assertRaises(WalletError):
+            await prove_retirement(self.rpc, self.wallet, self.row)
+        self.assertEqual(self.rpc.await_count, 1)
+
+    async def test_wrong_wallet_rejected(self):
+        with self.assertRaises(WalletError):
+            await prove_retirement(self.rpc, str(Keypair().pubkey()), self.row)
+
+    async def test_bad_wire_rejected(self):
+        self.row["signed_wire"] = "invalid"
+        with self.assertRaises(WalletError):
+            await prove_retirement(self.rpc, self.wallet, self.row)
+
+    async def test_wrong_signature_rejected(self):
+        self.row["signature"] = "other"
+        with self.assertRaises(WalletError):
+            await prove_retirement(self.rpc, self.wallet, self.row)
+
+    async def test_history_disagreement_never_releases(self):
+        self.history = [{"signature": self.row["signature"], "blockTime": 1}]
+        with self.assertRaises(WalletError):
+            await prove_retirement(self.rpc, self.wallet, self.row)
+
+    async def test_missing_history_time_never_releases(self):
+        self.history = [{"signature": "other"}]
+        with self.assertRaises(WalletError):
+            await prove_retirement(self.rpc, self.wallet, self.row)

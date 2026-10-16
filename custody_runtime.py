@@ -730,6 +730,7 @@ class CustodyRuntime(WalletRuntime):
                 "signature": signature,
                 "timestamp": datetime.fromtimestamp(int(row["created_at"]), timezone.utc).isoformat(),
                 "recent_blockhash": recent_blockhash,
+                "signed_wire": row["wire"],
             }
             try:
                 async with asyncio.timeout(45):
@@ -835,6 +836,31 @@ class CustodyRuntime(WalletRuntime):
             statuses = await self.rpc(session, "getSignatureStatuses", [[row["signature"]], {"searchTransactionHistory": True}])
             status = statuses["value"][0]
             if status is None:
+                # A dropped Jito bundle can never acquire a signature status.
+                # Recover only with independent rooted-expiry evidence; never resend.
+                if (row["kind"] in ("BUY", "SELL") and row.get("wire")
+                        and time.time() - row["created_at"] >= 180):
+                    checks = getattr(self, "_expiry_checks", {})
+                    last_check = checks.get(row["id"], 0)
+                    if time.monotonic() - last_check >= 60:
+                        self._expiry_checks = {row["id"]: time.monotonic()}
+                        try:
+                            async with asyncio.timeout(25):
+                                async def independent_rpc(method, params):
+                                    return await self.recovery_rpc(session, method, params)
+                                evidence = await prove_retirement(independent_rpc, self.wallet, {
+                                    "signature": row["signature"], "signed_wire": row["wire"],
+                                    "timestamp": datetime.fromtimestamp(
+                                        row["created_at"], timezone.utc).isoformat()})
+                            self.ledger.settings(row["uid"], enabled=False, sniper_enabled=False)
+                            self.ledger.fail(row["id"], network_proven=True, fee=0,
+                                recovery_audit={"actor_id": row["uid"], "evidence": {
+                                    **evidence, "outcome": "PROVEN_ABSENT_AND_EXPIRED",
+                                    "ledger_release": True, "transaction_sent": False,
+                                    "automatic": True}})
+                        except (WalletError, LedgerError, asyncio.TimeoutError, aiohttp.ClientError):
+                            # Missing proof is not a failed transaction. Retain its lock.
+                            pass
                 continue
             if status.get("err") is not None:
                 # Failed transactions still pay a fee. Fetch it, charge only operator treasury.

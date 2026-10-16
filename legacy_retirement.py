@@ -1,8 +1,75 @@
 """Read-only evidence that a missing signature cannot still execute."""
 from datetime import datetime, timezone
 from wallet_runtime import WalletError, GENESIS, SYSTEM
+import base64
+from solders.transaction import VersionedTransaction
 
 RECOVERY_RPC = "https://api.mainnet-beta.solana.com"
+
+
+async def prove_signed_expiry(rpc, wallet, row):
+    """Prove a persisted, non-nonce signed transaction absent after rooted expiry."""
+    try:
+        tx = VersionedTransaction.from_bytes(base64.b64decode(row["signed_wire"], validate=True))
+        keys = tx.message.account_keys
+        if (len(tx.signatures) != 1 or tx.message.header.num_required_signatures != 1
+                or str(keys[0]) != wallet or str(tx.signatures[0]) != row["signature"]
+                or not all(tx.verify_with_results())):
+            raise ValueError("Invalid signed operation")
+        # Durable-nonce transactions require advanceNonceAccount as instruction zero.
+        # An unresolved program ID is not evidence that a transaction is non-nonce.
+        if tx.message.instructions:
+            first = tx.message.instructions[0]
+            if first.program_id_index >= len(keys):
+                raise ValueError("Unresolved first program")
+            if (keys[first.program_id_index] == SYSTEM
+                    and bytes(first.data)[:4] == (4).to_bytes(4, "little")):
+                raise ValueError("Durable nonce")
+    except Exception:
+        raise WalletError("The signed operation cannot be proved non-nonce; funds remain reserved.", 409) from None
+    signature = row["signature"]
+    options = {"encoding": "jsonParsed", "commitment": "finalized", "maxSupportedTransactionVersion": 0}
+    validity = await rpc("isBlockhashValid", [str(tx.message.recent_blockhash), {"commitment": "finalized"}])
+    if (not isinstance(validity, dict) or validity.get("value") is not False
+            or type(validity.get("context", {}).get("slot")) is not int):
+        raise WalletError("The transaction has not been proved expired; funds remain reserved.", 409)
+    # Check absence AFTER rooted expiry, not just before it.
+    statuses = await rpc("getSignatureStatuses", [[signature], {"searchTransactionHistory": True}])
+    if (not isinstance(statuses, dict) or statuses.get("value") != [None]
+            or type(statuses.get("context", {}).get("slot")) is not int
+            or statuses["context"]["slot"] < validity["context"]["slot"]
+            or await rpc("getTransaction", [signature, options]) is not None):
+        raise WalletError("The network found the operation or returned incomplete evidence; funds remain reserved.", 409)
+    created = datetime.fromisoformat(row["timestamp"]).timestamp()
+    before = None
+    covered = False
+    for _ in range(3):
+        history_options = {"limit": 1000, "commitment": "finalized",
+                           "minContextSlot": validity["context"]["slot"]}
+        if before:
+            history_options["before"] = before
+        page = await rpc("getSignaturesForAddress", [wallet, history_options])
+        if not isinstance(page, list):
+            raise WalletError("Incomplete wallet history; funds remain reserved.", 409)
+        for record in page:
+            if record.get("signature") == signature:
+                raise WalletError("The signature appears in wallet history; funds remain reserved.", 409)
+            if type(record.get("blockTime")) is not int:
+                raise WalletError("Wallet history is missing timestamps; funds remain reserved.", 409)
+            if record["blockTime"] < created - 300:
+                covered = True
+        if covered or len(page) < 1000:
+            covered = True
+            break
+        before = page[-1]["signature"]
+    if not covered:
+        raise WalletError("Wallet history could not be fully checked; funds remain reserved.", 409)
+    return {"rpc": RECOVERY_RPC, "signature": signature,
+            "expiry_proof": "signed_non_nonce_blockhash_finalized_expired",
+            "finalized_slot": validity["context"]["slot"],
+            "status_slot": statuses["context"]["slot"], "wallet_history_checked": True,
+            "outcome": "UNKNOWN",
+            "rebroadcast": False, "refund": False}
 
 
 async def prove_retirement(rpc, wallet, row):
@@ -10,6 +77,8 @@ async def prove_retirement(rpc, wallet, row):
     created = (parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)).timestamp()
     if await rpc("getGenesisHash", []) != GENESIS:
         raise WalletError("Recovery verification requires Solana mainnet.")
+    if row.get("signed_wire"):
+        return await prove_signed_expiry(rpc, wallet, row)
     sig = row["signature"]
     status = (await rpc("getSignatureStatuses", [[sig], {"searchTransactionHistory": True}]))["value"][0]
     tx_options = {"encoding": "jsonParsed", "commitment": "finalized", "maxSupportedTransactionVersion": 0}
