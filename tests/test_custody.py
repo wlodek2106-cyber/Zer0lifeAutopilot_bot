@@ -37,6 +37,29 @@ class Request(dict):
         return self.body
 
 
+class NotificationSession:
+    def __init__(self, status=200, result=None, error=None):
+        self.status = status
+        self.result = result if result is not None else {"ok": True, "result": {"message_id": 1}}
+        self.error = error
+        self.calls = []
+
+    def post(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        if self.error:
+            raise self.error
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def json(self):
+        return self.result
+
+
 class LedgerTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -527,6 +550,109 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         proof.assert_awaited_once()
         self.assertEqual(self.ledger.balance(101, USDC), before)
         self.assertEqual(self.ledger.operation(buy["id"])["state"], "SUBMITTED")
+
+    async def recovered_notification(self):
+        buy, signature = self.pending_buy()
+        self.ledger.settings(101, enabled=True, sniper_enabled=True, close=True)
+        with patch.object(runtime, "prove_retirement", AsyncMock(return_value={
+                "signature": signature, "expiry_proof": "signed_non_nonce_blockhash_finalized_expired"})):
+            await self.service.recover_expired_operation(
+                Request(101, {"signature": signature, "confirm_expired": True}), None)
+        return buy
+
+    async def test_recovery_atomically_pauses_and_queues_one_owner_alert(self):
+        self.ledger.settings(202, enabled=True, sniper_enabled=True)
+        buy = await self.recovered_notification()
+        settings = self.ledger.settings(101)
+        self.assertFalse(settings["trading"])
+        self.assertFalse(settings["sniper_trading"])
+        self.assertFalse(settings["close_requested"])
+        self.ledger.fail(buy["id"], network_proven=True)
+        events = self.ledger.recovery_notifications(int(time.time()))
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["uid"], 101)
+        self.assertEqual(events[0]["operation_id"], buy["id"])
+        restarted = CustodyLedger(self.ledger.path)
+        self.assertEqual(len(restarted.recovery_notifications(int(time.time()))), 1)
+        self.assertTrue(self.ledger.settings(202)["trading"])
+        self.assertTrue(self.ledger.settings(202)["sniper_trading"])
+
+    async def test_alert_enqueue_failure_rolls_back_entire_recovery(self):
+        buy, signature = self.pending_buy()
+        before = self.ledger.balance(101, USDC)
+        with self.ledger.db() as db:
+            db.execute("""CREATE TRIGGER reject_test_alert BEFORE INSERT ON custody_recovery_notifications
+                BEGIN SELECT RAISE(ABORT,'test enqueue failure'); END""")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.ledger.fail(buy["id"], network_proven=True, recovery_audit={
+                "actor_id": 101, "evidence": {"expiry_proof": "test-only"}})
+        self.assertEqual(self.ledger.operation(buy["id"])["state"], "SUBMITTED")
+        self.assertEqual(self.ledger.balance(101, USDC), before)
+        self.assertEqual(self.ledger.recovery_notifications(int(time.time())), [])
+        self.assertTrue(self.ledger.audit())
+
+    async def test_recovered_sell_alert_confirms_position_restored_without_selling_again(self):
+        sell, signature, position = self.pending_sell()
+        with patch.object(runtime, "prove_retirement", AsyncMock(return_value={
+                "signature": signature, "expiry_proof": "signed_non_nonce_blockhash_finalized_expired"})):
+            await self.service.recover_expired_operation(
+                Request(101, {"signature": signature, "confirm_expired": True}), None)
+        self.service.notification_token = "test-only-token"
+        session = NotificationSession()
+        await self.service.deliver_recovery_notifications(session)
+        self.assertIn("restored to the open position", session.calls[0][1]["json"]["text"])
+        self.assertEqual(self.ledger.operation(sell["id"])["state"], "FAILED")
+        self.assertEqual(self.ledger.positions(101, "OPEN")[0]["id"], position)
+
+    async def test_successful_telegram_alert_not_sent_again(self):
+        await self.recovered_notification()
+        self.service.notification_token = "test-only-token"
+        session = NotificationSession()
+        await self.service.deliver_recovery_notifications(session)
+        await self.service.deliver_recovery_notifications(session)
+        self.assertEqual(len(session.calls), 1)
+        message = session.calls[0][1]["json"]
+        self.assertEqual(message["chat_id"], 101)
+        self.assertIn("1 USDC", message["text"])
+        self.assertIn("Core: OFF. Sniper: OFF.", message["text"])
+        self.assertEqual(self.ledger.recovery_notifications(int(time.time()) + 100000), [])
+
+    async def test_telegram_rate_limit_retains_event_and_respects_retry_after(self):
+        buy = await self.recovered_notification()
+        self.service.notification_token = "test-only-token"
+        session = NotificationSession(429, {"ok": False, "parameters": {"retry_after": 1234}})
+        before = int(time.time())
+        await self.service.deliver_recovery_notifications(session)
+        self.assertEqual(self.ledger.operation(buy["id"])["state"], "FAILED")
+        self.assertEqual(self.ledger.recovery_notifications(before + 1233), [])
+        events = self.ledger.recovery_notifications(before + 1240)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["attempts"], 1)
+        self.assertFalse(self.ledger.settings(101)["trading"])
+        with patch.object(runtime.time, "time", return_value=before + 1240):
+            success = NotificationSession()
+            await self.service.deliver_recovery_notifications(success)
+        self.assertEqual(len(success.calls), 1)
+
+    async def test_notification_network_error_does_not_expose_token_or_undo_recovery(self):
+        buy = await self.recovered_notification()
+        self.service.notification_token = "test-only-token"
+        messages = []
+        self.service.log = messages.append
+        await self.service.deliver_recovery_notifications(
+            NotificationSession(error=RuntimeError("url contains test-only-token")))
+        self.assertNotIn("test-only-token", " ".join(messages))
+        self.assertEqual(self.ledger.operation(buy["id"])["state"], "FAILED")
+        self.assertFalse(self.ledger.settings(101)["sniper_trading"])
+        self.assertEqual(len(self.ledger.recovery_notifications(int(time.time()) + 100)), 1)
+
+    async def test_missing_token_keeps_notification_queued(self):
+        await self.recovered_notification()
+        self.service.notification_token = ""
+        session = NotificationSession()
+        await self.service.deliver_recovery_notifications(session)
+        self.assertEqual(session.calls, [])
+        self.assertEqual(len(self.ledger.recovery_notifications(int(time.time()) + 100)), 1)
 
     async def test_expired_pending_buy_proof_failure_keeps_lock_and_funds(self):
         buy, signature = self.pending_buy()

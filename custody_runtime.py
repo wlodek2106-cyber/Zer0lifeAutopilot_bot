@@ -128,8 +128,10 @@ def memo_invoice(tx):
 
 
 class CustodyRuntime(WalletRuntime):
-    def __init__(self, *args, base_url, **kwargs):
+    def __init__(self, *args, base_url, notification_token="", **kwargs):
         super().__init__(*args, **kwargs)
+        self.notification_token = notification_token
+        self._notification_lock = asyncio.Lock()
         self.legacy_runtime = WalletRuntime(*args, **kwargs)
         self.ledger = CustodyLedger(self.db_file)
         self.ledger.tx_epoch()
@@ -741,8 +743,7 @@ class CustodyRuntime(WalletRuntime):
                 raise WalletError("Recovery check was interrupted; no record was changed.", 503) from None
             evidence = {**evidence, "outcome": "PROVEN_ABSENT_AND_EXPIRED",
                         "ledger_release": True, "transaction_sent": False}
-            # Keep automation paused after releasing the pending-operation lock.
-            self.ledger.settings(uid, enabled=False, sniper_enabled=False)
+            # The ledger atomically pauses both modes and queues an alert on recovery.
             try:
                 self.ledger.fail(row["id"], network_proven=True, fee=0,
                     recovery_audit={"actor_id": uid, "evidence": evidence})
@@ -852,7 +853,6 @@ class CustodyRuntime(WalletRuntime):
                                     "signature": row["signature"], "signed_wire": row["wire"],
                                     "timestamp": datetime.fromtimestamp(
                                         row["created_at"], timezone.utc).isoformat()})
-                            self.ledger.settings(row["uid"], enabled=False, sniper_enabled=False)
                             self.ledger.fail(row["id"], network_proven=True, fee=0,
                                 recovery_audit={"actor_id": row["uid"], "evidence": {
                                     **evidence, "outcome": "PROVEN_ABSENT_AND_EXPIRED",
@@ -1523,6 +1523,59 @@ class CustodyRuntime(WalletRuntime):
                         ON CONFLICT(address) DO UPDATE SET newest_signature=excluded.newest_signature,
                         boundary_signature=excluded.boundary_signature,before_signature=excluded.before_signature,
                         cutoff=excluded.cutoff""", (address, newest, cursor, before, cutoff))
+
+    async def deliver_recovery_notifications(self, session):
+        async with self._notification_lock:
+            for event in self.ledger.recovery_notifications(int(time.time())):
+                payload = json.loads(event["payload"])
+                restored = "The reserved asset was restored to the open position."
+                if payload["kind"] == "BUY":
+                    asset = payload["asset"]
+                    amount = (display_raw(payload["raw"], 9 if asset == SOL else 6)
+                              if asset in (SOL, USDC) else str(payload["raw"]))
+                    symbol = "SOL" if asset == SOL else "USDC" if asset == USDC else asset
+                    restored = f"Purchase reservation released: {amount} {symbol}."
+                text = (
+                    "AI Trader: a pending operation was safely recovered.\n"
+                    "Solana proved expiry; the transaction was not found.\n"
+                    f"{restored}\nCore: OFF. Sniper: OFF.\n"
+                    "No repeat trade was sent. Enable a mode manually to resume.\n"
+                    f"Transaction: https://solscan.io/tx/{payload['signature']}")
+                delivered, error = False, "Telegram delivery unavailable"
+                retry_after = min(3600, 60 * 2 ** min(event["attempts"], 6))
+                try:
+                    if not self.notification_token:
+                        raise WalletError("Telegram notification token is not configured.")
+                    async with session.post(
+                            f"https://api.telegram.org/bot{self.notification_token}/sendMessage",
+                            json={"chat_id": event["uid"], "text": text,
+                                  "disable_web_page_preview": True},
+                            timeout=aiohttp.ClientTimeout(total=8)) as response:
+                        result = await response.json()
+                        delivered = (response.status == 200 and result.get("ok") is True
+                                     and isinstance(result.get("result"), dict)
+                                     and type(result["result"].get("message_id")) is int)
+                        if not delivered:
+                            error = f"Telegram delivery rejected (HTTP {response.status})"
+                            delay = result.get("parameters", {}).get("retry_after")
+                            if type(delay) is int and delay > 0:
+                                retry_after = max(retry_after, delay)
+                except Exception:
+                    # Never log exception text: HTTP errors can include the bot token.
+                    pass
+                self.ledger.recovery_notification_result(
+                    event["operation_id"], int(time.time()), delivered, retry_after, error)
+                if not delivered:
+                    self.log("Recovery notification pending; delivery will be retried.")
+
+    async def recovery_notification_worker(self):
+        while True:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    await self.deliver_recovery_notifications(session)
+            except Exception:
+                self.log("Recovery notification worker unavailable; queued alerts are retained.")
+            await asyncio.sleep(20)
 
     async def worker(self):
         # Settings are paused on restart. No agent-triggered trades or blind retries.

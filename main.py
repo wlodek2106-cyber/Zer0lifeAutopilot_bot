@@ -2260,7 +2260,8 @@ async def main():
     init_db()
     app = web.Application(middlewares=[english_json_middleware, telegram_auth_middleware])
     runtime = CustodyRuntime(DB_FILE, SOLANA_RPC, ADMIN_TELEGRAM_ID, SHARED_DEPOSIT_WALLET,
-        get_signer_keypair, verify_user_pin, get_token_prices, WATCHLIST, add_log, base_url=RENDER_URL)
+        get_signer_keypair, verify_user_pin, get_token_prices, WATCHLIST, add_log,
+        base_url=RENDER_URL, notification_token=TELEGRAM_TOKEN)
     runtime.recent_logs = lambda: RECENT_LOGS
     runtime.accounts = AccountSecurity(runtime.ledger, RENDER_URL, verify_user_pin, runtime.wallet)
     runtime.web_access = WebAccess(runtime)
@@ -2358,6 +2359,7 @@ async def main():
 
     runtime.poll_discovery()
     asyncio.create_task(runtime.worker())
+    asyncio.create_task(runtime.recovery_notification_worker())
     await set_telegram_webhook()
     if TELEGRAM_TOKEN:
         try:

@@ -57,6 +57,11 @@ class CustodyLedger:
                 source.close()
         with self.db() as db:
             db.executescript("""
+                CREATE TABLE IF NOT EXISTS custody_recovery_notifications (
+                    operation_id TEXT PRIMARY KEY, uid INTEGER NOT NULL,
+                    payload TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+                    next_attempt INTEGER NOT NULL DEFAULT 0, delivered_at INTEGER,
+                    last_error TEXT);
                 CREATE TABLE IF NOT EXISTS custody_users (
                     uid INTEGER PRIMARY KEY CHECK(uid>0), username TEXT NOT NULL,
                     trading INTEGER NOT NULL DEFAULT 0, close_requested INTEGER NOT NULL DEFAULT 0,
@@ -471,6 +476,29 @@ class CustodyLedger:
                     (signature,operation_id,actor_id,state_before,evidence) VALUES(?,?,?,?,?)""",
                     (row["signature"], oid, recovery_audit["actor_id"], row["state"],
                      json.dumps(recovery_audit["evidence"])))
+                # Pause, release, audit and enqueue atomically. A Telegram failure
+                # must never roll back recovery or permit trading to resume.
+                db.execute("UPDATE custody_users SET trading=0,sniper_trading=0,close_requested=0 WHERE uid=?",
+                           (row["uid"],))
+                db.execute("""INSERT INTO custody_recovery_notifications(operation_id,uid,payload)
+                    VALUES(?,?,?)""", (oid, row["uid"], json.dumps({
+                        "kind": row["kind"], "asset": row["asset"], "raw": row["raw"],
+                        "signature": row["signature"]})))
+
+    def recovery_notifications(self, now):
+        with self.db() as db:
+            return [dict(row) for row in db.execute("""
+                SELECT * FROM custody_recovery_notifications
+                WHERE delivered_at IS NULL AND next_attempt<=?
+                ORDER BY next_attempt,operation_id LIMIT 5""", (now,))]
+
+    def recovery_notification_result(self, oid, now, delivered, retry_after=60, error=None):
+        with self.db() as db:
+            db.execute("""UPDATE custody_recovery_notifications SET attempts=attempts+1,
+                delivered_at=?, next_attempt=?, last_error=?
+                WHERE operation_id=? AND delivered_at IS NULL""",
+                (now if delivered else None, now + retry_after,
+                 None if delivered else error, oid))
 
     def finalize(self, oid, spent, fee, received=0):
         with self.db() as db:
