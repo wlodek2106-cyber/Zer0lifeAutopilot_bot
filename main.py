@@ -1398,6 +1398,204 @@ RAW_HTML = r"""<!DOCTYPE html>
             #partner-program .partner-wallet { gap:7px; padding-right:8px; padding-left:8px; }
             #partner-program .partner-wallet-badge { font-size:7px; }
         }
+        /* Zer0Life AI Trader: carry the Solana Prism material language into the terminal. */
+        :root {
+            --zl-acid: #c8ff37;
+            --zl-mint: #69dda7;
+            --zl-glass-line: rgba(202, 241, 152, .15);
+            --zl-panel-top: rgba(21, 29, 18, .96);
+            --zl-panel-bottom: rgba(10, 14, 10, .97);
+        }
+        body {
+            background:
+                radial-gradient(ellipse at 84% 0%, rgba(123, 177, 31, .13), transparent 34%),
+                radial-gradient(ellipse at 4% 60%, rgba(32, 89, 61, .1), transparent 38%),
+                #070906;
+        }
+        #app .tab-panel {
+            position: relative;
+            isolation: isolate;
+            background:
+                radial-gradient(ellipse at 94% 7%, rgba(161, 221, 50, .075), transparent 27%),
+                linear-gradient(180deg, rgba(8, 12, 8, .14), rgba(6, 8, 6, .04));
+        }
+        #app .tab-panel::before {
+            content: "";
+            position: absolute;
+            z-index: 0;
+            top: 4px;
+            right: -9px;
+            width: 172px;
+            height: 142px;
+            pointer-events: none;
+            opacity: .2;
+            background: url("/static/zerolife-ai-trader-core.webp") center / cover no-repeat;
+            mix-blend-mode: screen;
+            -webkit-mask-image: radial-gradient(ellipse at 53% 48%, #000 22%, rgba(0,0,0,.86) 47%, transparent 77%);
+            mask-image: radial-gradient(ellipse at 53% 48%, #000 22%, rgba(0,0,0,.86) 47%, transparent 77%);
+        }
+        #app .tab-panel > * { position: relative; z-index: 1; }
+        #app .card:not(#partner-program), #app .deposit-modal {
+            position: relative;
+            overflow: hidden;
+            color: #edf2e7;
+            background: linear-gradient(148deg, var(--zl-panel-top), var(--zl-panel-bottom) 72%) !important;
+            border: 1px solid var(--zl-glass-line) !important;
+            border-radius: 21px;
+            box-shadow:
+                0 16px 34px rgba(0, 0, 0, .34),
+                inset 0 1px 0 rgba(238, 255, 220, .065),
+                inset 0 -1px 0 rgba(0, 0, 0, .42);
+            -webkit-backdrop-filter: blur(12px);
+            backdrop-filter: blur(12px);
+        }
+        #app .banner-limit {
+            position: relative;
+            overflow: hidden;
+            background: linear-gradient(132deg, rgba(29, 40, 18, .97), rgba(12, 18, 12, .96) 72%) !important;
+            border: 1px solid rgba(200, 255, 55, .2) !important;
+            border-radius: 17px;
+            box-shadow: 0 12px 28px rgba(0, 0, 0, .27), inset 0 1px 0 rgba(239, 255, 223, .08);
+        }
+        #app .banner-limit::after, #passkey-settings::after, #tab-deposit .deposit-modal::after {
+            content: "";
+            position: absolute;
+            z-index: 0;
+            top: -18px;
+            right: -13px;
+            width: 104px;
+            height: 104px;
+            pointer-events: none;
+            opacity: .22;
+            background: url("/static/zerolife-ai-trader-core.webp") center / cover no-repeat;
+            mix-blend-mode: screen;
+            -webkit-mask-image: radial-gradient(circle at center, #000 22%, rgba(0,0,0,.82) 48%, transparent 76%);
+            mask-image: radial-gradient(circle at center, #000 22%, rgba(0,0,0,.82) 48%, transparent 76%);
+        }
+        #app .banner-limit > *, #passkey-settings > *, #tab-deposit .deposit-modal > * {
+            position: relative;
+            z-index: 1;
+        }
+        #app .banner-limit > div:first-child { color: var(--zl-acid) !important; }
+        #app .banner-limit [style*="color"] { color: #b5c4a9 !important; }
+        #app .page-heading { min-height: 52px; margin-top: 3px; }
+        #app .page-heading h1 {
+            color: #f2f5eb;
+            font-weight: 760;
+            letter-spacing: -.06em;
+            text-shadow: 0 2px 22px rgba(177, 228, 68, .11);
+        }
+        #app .eyebrow {
+            color: #b7cd8e;
+            font: 650 10px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+            letter-spacing: .15em;
+        }
+        #app .section-note, #app .muted { color: #a3ad9b; }
+        #app .stat-box {
+            background: linear-gradient(145deg, rgba(8, 13, 8, .9), rgba(18, 27, 16, .92)) !important;
+            border: 1px solid rgba(210, 235, 194, .12) !important;
+            border-radius: 14px;
+            box-shadow: inset 0 1px 0 rgba(240, 255, 224, .035), inset 0 -10px 18px rgba(0, 0, 0, .14);
+        }
+        #app .stat-label {
+            color: #a9b59c !important;
+            letter-spacing: .13em;
+        }
+        #app .stat-val { color: #f1f4e9 !important; }
+        #app #port-withdrawable { color: var(--zl-acid) !important; }
+        #app [style*="color: #22c55e"], #app [style*="color: #4ade80"] { color: var(--zl-mint) !important; }
+        #app [style*="color: #60a5fa"] { color: #91c2de !important; }
+        #app [style*="color: #f87171"] { color: #ed9290 !important; }
+        #app .btn-ctl, #app .btn-copy, #app .wallet-tab, #app .token-btn,
+        #app .btn-green-main, #app .btn-verify, #app .action-btn {
+            min-height: 46px;
+            border-radius: 13px;
+            transition: transform .16s ease, box-shadow .16s ease, filter .16s ease;
+        }
+        #app .btn-copy, #app .btn-refresh, #app .wallet-tab, #app .token-btn {
+            color: #dce6d7;
+            background: linear-gradient(145deg, rgba(24, 33, 23, .98), rgba(12, 18, 14, .98));
+            border: 1px solid rgba(218, 239, 196, .14);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.045), 0 3px 9px rgba(0,0,0,.18);
+        }
+        #app .wallet-tab.active, #app .token-btn.active {
+            color: #e0ff9c;
+            background: linear-gradient(145deg, rgba(53, 75, 28, .9), rgba(24, 42, 20, .96));
+            border-color: rgba(200, 255, 55, .36);
+            box-shadow: inset 0 1px 0 rgba(240,255,210,.12), 0 0 18px rgba(171, 222, 52, .08);
+        }
+        #app .btn-green-main, #app .btn-verify, #app .action-btn {
+            color: #152006 !important;
+            background: linear-gradient(145deg, #d8ff78 0%, #c8ff37 55%, #a9e62c 100%) !important;
+            border: 1px solid rgba(230, 255, 169, .72) !important;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.55), 0 3px 0 #668d19, 0 9px 22px rgba(155, 205, 43, .13);
+            font-weight: 760;
+        }
+        #app .btn-green-main:active:not(:disabled), #app .btn-verify:active:not(:disabled),
+        #app .action-btn:active:not(:disabled) {
+            transform: translateY(2px);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 1px 0 #668d19;
+        }
+        #app .btn-toggle-off {
+            color: #e8a2a0;
+            background: linear-gradient(145deg, rgba(66, 31, 31, .8), rgba(35, 19, 21, .94));
+            border: 1px solid rgba(225, 125, 116, .3);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
+        }
+        #app .sig-input {
+            color: #edf3e8;
+            background: linear-gradient(145deg, #080d09, #101810) !important;
+            border: 1px solid rgba(210, 235, 194, .16) !important;
+            border-radius: 12px;
+            box-shadow: inset 0 3px 9px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.025);
+        }
+        #app .sig-input:focus-visible {
+            border-color: rgba(200, 255, 55, .62) !important;
+            box-shadow: 0 0 0 3px rgba(200, 255, 55, .1), inset 0 2px 7px rgba(0,0,0,.22);
+        }
+        #app .address-box, #app .order-card, #app .log-console {
+            color: #cce995;
+            background: linear-gradient(145deg, #080d09, #111910);
+            border-color: rgba(210, 235, 194, .13);
+            border-radius: 13px;
+        }
+        #app .wallet-tabs {
+            background: rgba(5, 9, 6, .8);
+            border-color: rgba(210, 235, 194, .13);
+        }
+        #app .nav-btn { color: #919b8d; }
+        #nav.bottom-nav {
+            background: rgba(8, 12, 8, .93);
+            border-top: 1px solid rgba(210, 235, 194, .14);
+            box-shadow: 0 -12px 30px rgba(0, 0, 0, .34), inset 0 1px 0 rgba(255,255,255,.025);
+            -webkit-backdrop-filter: blur(20px);
+            backdrop-filter: blur(20px);
+        }
+        #nav .nav-btn {
+            min-height: 56px;
+            border: 1px solid transparent;
+            border-radius: 13px;
+        }
+        #nav .nav-btn.active {
+            color: #d7ff78;
+            background: linear-gradient(145deg, rgba(45, 64, 23, .78), rgba(20, 35, 18, .88));
+            border-color: rgba(200, 255, 55, .14);
+            box-shadow: inset 0 1px 0 rgba(244,255,226,.07), 0 3px 14px rgba(0,0,0,.18);
+        }
+        #app details summary { color: #d3dfc8; }
+        #app a { color: #c9ed7d; }
+        @media (max-width: 380px) {
+            #app .tab-panel { padding-right: 14px; padding-left: 14px; }
+            #app .card:not(#partner-program), #app .deposit-modal { padding: 15px; }
+            #app .stat-box { padding: 11px; }
+            #app .stat-val { font-size: 15px; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            #app .btn-ctl, #app .btn-copy, #app .wallet-tab, #app .token-btn,
+            #app .btn-green-main, #app .btn-verify, #app .action-btn {
+                transition-duration: .01ms !important;
+            }
+        }
     </style>
 </head>
 <body>
