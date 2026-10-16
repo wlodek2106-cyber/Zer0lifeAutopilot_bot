@@ -1303,7 +1303,7 @@ class SimulationTests(unittest.IsolatedAsyncioTestCase):
                 return {"value": {"err": None, "accounts": after}}
             raise AssertionError(method)
         self.service.rpc = rpc
-        row = {"asset": asset, "raw": raw, "fee_cap": FEE_CAP, "kind": kind}
+        row = {"asset": asset, "raw": raw, "fee_cap": FEE_CAP, "kind": kind, "uid": 101}
         result = await self.service.safe_simulation(None, tx, row, info or {})
         if versioned:
             self.assertEqual(fee_message[0][0], 0x80)
@@ -1316,6 +1316,15 @@ class SimulationTests(unittest.IsolatedAsyncioTestCase):
         before = [self.native(50_000_000), self.token_account(USDC, 10_000_000)]
         after = [self.native(49_995_000), self.token_account(USDC, 9_000_000)]
         self.assertTrue(await self.simulate(before, after))
+
+    async def test_core_cost_guard_blocks_missing_evidence_before_broadcast(self):
+        before = [self.native(50_000_000), self.token_account(USDC, 10_000_000)]
+        after = [self.native(50_995_000), self.token_account(USDC, 9_000_000)]
+        with self.assertRaises(runtime.EntryCostError):
+            await self.simulate(before, after, kind="BUY",
+                info={"output_asset": SOL, "minimum_out": 1_000_000})
+        self.assertEqual(self.ledger.entry_cost_report(101)["status"], "SKIP")
+        self.assertIsNone(self.ledger.entry_cost_report(202))
 
     async def test_simulation_blocks_extra_usdc_spend(self):
         before = [self.native(50_000_000), self.token_account(USDC, 10_000_000)]
@@ -1363,7 +1372,22 @@ class SimulationTests(unittest.IsolatedAsyncioTestCase):
         before = [self.native(50_000_000), self.token_account(USDC, 10_000_000)]
         after = [self.native(59_995_000), self.token_account(USDC, 9_000_000)]
         self.assertTrue(await self.simulate(before, after, kind="BUY",
-            info={"output_asset": SOL, "minimum_out": 9_000_000}, versioned=True))
+            info={"output_asset": SOL, "minimum_out": 9_000_000,
+                  "entry_cost_context": {"input_raw": 1_000_000, "exit_minimum_raw": 992000,
+                      "quoted_at": time.time(), "sol_usdc": "1", "exit_rent_lamports": 2_039_280}},
+            versioned=True))
+        self.assertEqual(self.ledger.entry_cost_report(101)["status"], "ALLOW")
+
+    async def test_simulation_rejects_core_buy_with_expensive_entry_exit(self):
+        before = [self.native(50_000_000), self.token_account(USDC, 10_000_000)]
+        after = [self.native(59_995_000), self.token_account(USDC, 9_000_000)]
+        with self.assertRaises(runtime.EntryCostError):
+            await self.simulate(before, after, kind="BUY",
+                info={"output_asset": SOL, "minimum_out": 9_000_000,
+                      "entry_cost_context": {"input_raw": 1_000_000, "exit_minimum_raw": 992000,
+                          "quoted_at": time.time(), "sol_usdc": "100", "exit_rent_lamports": 2_039_280}},
+                versioned=True)
+        self.assertGreater(self.ledger.entry_cost_report(101)["estimated_cost_pct"], 2.5)
 
     async def test_native_sniper_buy_with_operator_paid_new_ata_rent(self):
         mint = str(Keypair().pubkey())

@@ -29,6 +29,7 @@ from tx_deposits import incoming_amounts
 from solders.signature import Signature
 import ai_decisions
 import activity_log
+from entry_costs import EntryCostError, quote_amounts, assess_entry
 from meme_discovery import MemeDiscovery
 
 WRAPPED_SOL = "So11111111111111111111111111111111111111112"
@@ -1000,6 +1001,19 @@ class CustodyRuntime(WalletRuntime):
             expense = trade_sol - native_delta - wrapped_delta
             if expense > row["fee_cap"]:
                 raise WalletError("Swap расходует слишком большой резерв комиссий.")
+            if row["kind"] == "BUY" and row["asset"] == USDC:
+                try:
+                    context = info.get("entry_cost_context") or {}
+                    if context.get("input_raw") != row["raw"]:
+                        raise EntryCostError("ENTRY SKIPPED: cost evidence does not match the reserved order.", 409)
+                    report = assess_entry(context, max(0, expense))
+                    report["symbol"] = info.get("symbol", "")
+                    self.ledger.entry_cost_report(row["uid"], report)
+                    if report["status"] != "ALLOW":
+                        raise EntryCostError(report["reason"], 409)
+                except EntryCostError as exc:
+                    self.record_entry_cost_error(row["uid"], exc, info.get("symbol", ""))
+                    raise
             permitted = {row["asset"], info["output_asset"], SOL}
         if any(delta for asset, delta in deltas.items() if asset not in permitted):
             raise WalletError("Симуляция затрагивает посторонние пользовательские активы.")
@@ -1203,6 +1217,47 @@ class CustodyRuntime(WalletRuntime):
                 raise
             return self.result(await self.send_reserved(session, tx, row, {}))
 
+    def record_entry_cost_error(self, uid, exc, symbol=""):
+        existing = self.ledger.entry_cost_report(uid) or {}
+        if existing.get("status") == "SKIP" and existing.get("reason") == str(exc):
+            return
+        self.ledger.entry_cost_report(uid, {"status": "SKIP", "checked_at": int(time.time()),
+            "symbol": symbol, "max_cost_pct": 2.5, "estimate_only": True, "reason": str(exc)})
+
+    async def core_entry_cost_context(self, session, uid, quote, raw, output, headers, symbol=""):
+        quoted_at = time.time()
+        try:
+            _, minimum_tokens = quote_amounts(quote, USDC, output, raw)
+            async with session.get("https://api.jup.ag/swap/v1/quote", headers=headers, params={
+                    "inputMint": output, "outputMint": USDC, "amount": minimum_tokens,
+                    "slippageBps": 40}, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                if response.status != 200:
+                    raise EntryCostError("ENTRY SKIPPED: reverse quote is unavailable.", 503)
+                reverse = await response.json()
+            _, minimum_usdc = quote_amounts(reverse, output, USDC, minimum_tokens)
+            if abs(reverse["contextSlot"] - quote["contextSlot"]) > 75:
+                raise EntryCostError("ENTRY SKIPPED: entry and exit quotes are not contemporaneous.", 409)
+            sol_quote = reverse
+            if output != WRAPPED_SOL:
+                async with session.get("https://api.jup.ag/swap/v1/quote", headers=headers, params={
+                        "inputMint": WRAPPED_SOL, "outputMint": USDC, "amount": 1_000_000_000,
+                        "slippageBps": 40}, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                    if response.status != 200:
+                        raise EntryCostError("ENTRY SKIPPED: SOL/USDC fee conversion is unavailable.", 503)
+                    sol_quote = await response.json()
+                quote_amounts(sol_quote, WRAPPED_SOL, USDC, 1_000_000_000)
+                if abs(sol_quote["contextSlot"] - reverse["contextSlot"]) > 75:
+                    raise EntryCostError("ENTRY SKIPPED: SOL/USDC fee conversion is stale.", 409)
+            sol_usdc = Decimal(sol_quote["outAmount"]) * 1000 / Decimal(sol_quote["inAmount"])
+            rent = await self.rpc(session, "getMinimumBalanceForRentExemption", [165, {"commitment": "confirmed"}])
+            return {"quoted_at": quoted_at, "input_raw": raw, "exit_minimum_raw": minimum_usdc,
+                    "sol_usdc": str(sol_usdc), "exit_rent_lamports": rent}
+        except Exception as exc:
+            if not isinstance(exc, EntryCostError):
+                exc = EntryCostError("ENTRY SKIPPED: complete entry and exit cost evidence is unavailable.", 503)
+            self.record_entry_cost_error(uid, exc, symbol)
+            raise exc from None
+
     async def trade(self, session, uid, asset, output_asset, raw, kind, metadata, position_id=None, manual=False):
         if getattr(self, "web_access", None):
             self.web_access.require(uid, kind, position_id, manual)
@@ -1235,6 +1290,9 @@ class CustodyRuntime(WalletRuntime):
                     or not 0 < int(quote.get("otherAmountThreshold", 0)) <= int(quote.get("outAmount", 0))):
                 raise WalletError("Неверная котировка Jupiter.")
             info = {**metadata, "minimum_out": int(quote["otherAmountThreshold"]), "manual_close": manual}
+            if kind == "BUY" and asset == USDC:
+                info["entry_cost_context"] = await self.core_entry_cost_context(
+                    session, uid, quote, raw, mint_out, headers, metadata.get("symbol", ""))
             async def fetch_swap_instructions():
                 async with session.post("https://api.jup.ag/swap/v1/swap-instructions",
                         headers=headers, json=jupiter_swap_instructions_payload(quote, self.wallet),
@@ -1337,6 +1395,7 @@ class CustodyRuntime(WalletRuntime):
                 "max_positions": 5, "take_profit_pct": 3.5, "stop_loss_pct": 2,
                 "slippage_pct": .4, "entry_dip_pct": .3, "poll_seconds": 20,
                 "assets": self.ai_universes()["main"], "warmup_samples": 5},
+            "entry_cost_check": self.ledger.entry_cost_report(uid),
             "worker_error": self.last_error if uid == self.owner_id else None})
 
     async def save_trading_settings(self, request, session):
@@ -1746,6 +1805,9 @@ class CustodyRuntime(WalletRuntime):
             "EXECUTION CHECK: evaluating an AI order. This is not confirmation of a broadcast or completed trade.")
         try:
             return await self.trade(*args)
+        except EntryCostError as exc:
+            activity_log.record(self, uid, snapshot, mode, "entry_cost_skip", str(exc))
+            return None
         except Exception:
             activity_log.record(self, uid, snapshot, mode, "execution_error",
                 "EXECUTION INTERRUPTED: a safety check or execution step failed. Check readiness and transaction "

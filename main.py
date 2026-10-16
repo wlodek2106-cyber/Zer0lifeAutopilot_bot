@@ -65,7 +65,10 @@ WATCHLIST = {
     "JUP":  {"mint": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", "decimals": 6},
     "RAY":  {"mint": "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R", "decimals": 6},
     "WIF":  {"mint": "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm", "decimals": 6},
-    "PYTH": {"mint": "HZ1JovNiDcZvKhgWNgQX5Z59C3b22DoPtRUC544HLD37", "decimals": 6}
+    "PYTH": {"mint": "HZ1JovNiDcZvKhgWNgQX5Z59C3b22DoPtRUC544HLD37", "decimals": 6},
+    # Official Jito/Orca mint addresses; decimals verified on Solana mainnet.
+    "JTO": {"mint": "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL", "decimals": 9},
+    "ORCA": {"mint": "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE", "decimals": 6}
 }
 
 TRADE_AMOUNT_USDC = 20.0
@@ -887,6 +890,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <div class="stat-box"><div class="stat-label">Take Profit</div><div class="stat-val" style="color: #4ade80;">+3.50%</div></div>
                     <div class="stat-box"><div class="stat-label">Stop Loss</div><div class="stat-val" style="color: #f87171;">-2.00%</div></div>
                 </div>
+                <p class="section-note">Core entry cost budget: 2.50% of the order. Includes quoted DEX fees, price impact, slippage, estimated network fees, Jito tips and account rent for entry/exit. Estimates do not guarantee profit or exit costs. SELL exits are not blocked by this filter.</p>
+                <p id="entry-cost-check" class="section-note" aria-live="polite">No entry cost check yet.</p>
             </div>
 
             <div class="card">
@@ -1025,7 +1030,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             </div>
             <details id="strategy-help"><summary>Strategy limits &amp; risks</summary>
                 <p class="section-note">Core trades use your USDC; sniper trades use your SOL. Other users' funds and the operator fee reserve are never your trading capital. Automatic conversion or profit allocation between strategies is not implemented.</p>
-                <p class="section-note">Core: SOL, JUP, RAY, PYTH; up to 5 positions. Sniper: up to 1 SOL-funded position. Every 15 minutes a bounded DexScreener profiles/search scan checks up to 90 Solana mints, screens up to 20 and sends at most 8 current candidates plus held assets to AI. This is not every project or a profit forecast; profiles alone do not establish meme status.</p>
+                <p class="section-note">Core: SOL, JUP, RAY, PYTH, JTO, ORCA; up to 5 positions. ORCA currently retains mint authority (additional tokens may be issued); no token is risk-free. Sniper: up to 1 SOL-funded position. Every 15 minutes a bounded DexScreener profiles/search scan checks up to 90 Solana mints, screens up to 20 and sends at most 8 current candidates plus held assets to AI. This is not every project or a profit forecast; profiles alone do not establish meme status.</p>
                 <p class="section-note">Sniper entry filters: approved DEX, at least $100k pool liquidity and 24h volume, 200 daily trades, pool age 24h+, extreme-pump exclusion, standard SPL mint with no mint/freeze authority. Fresh eligibility is required for every buy. Scores rank liquidity/activity, not expected profit. Holder concentration, LP locks and every contract/market risk are not fully checked. Standard mint checks do not guarantee token safety.</p>
                 <p class="section-note">AI makes decisions after you enable a mode. Orders require personal funds, permitted assets, at least 5 price samples, a fresh decision and stable pricing. Only one shared-wallet operation can be pending at a time.</p>
                 <p class="section-note">TP/SL are checked approximately every 20 seconds independently of AI availability. Model failures stop new AI orders. After a server restart both modes pause and need manual reactivation.</p>
@@ -1752,6 +1757,13 @@ RAW_HTML = r"""<!DOCTYPE html>
                     document.getElementById('operator-settings').style.display=s.is_admin?'block':'none';
                     updateToggleUI(s.trading_active);
                     currentTradingSettings=s.trading_settings||{order_usdc:1};
+                    const cost=s.entry_cost_check;
+                    document.getElementById('entry-cost-check').textContent=cost
+                        ? 'Last entry check ('+(cost.symbol||'Core')+'): '+cost.status+' · '
+                          +(Number.isFinite(cost.estimated_cost_pct)
+                            ? cost.estimated_cost_pct.toFixed(2)+'% / 2.50% budget · ' : '')
+                          +new Date(cost.checked_at*1000).toLocaleString()+' · '+cost.reason
+                        : 'No entry cost check yet. Checked before each USDC-funded BUY; missing evidence blocks entry.';
                     const ai=s.ai_status||{};
                     aiConfigured=!!ai.configured;
                     updateMemeToggleUI(s.sniper_active);

@@ -57,6 +57,8 @@ class CustodyLedger:
                 source.close()
         with self.db() as db:
             db.executescript("""
+                CREATE TABLE IF NOT EXISTS custody_entry_cost_checks (
+                    uid INTEGER PRIMARY KEY, report TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS custody_recovery_notifications (
                     operation_id TEXT PRIMARY KEY, uid INTEGER NOT NULL,
                     payload TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
@@ -491,6 +493,14 @@ class CustodyLedger:
                 SELECT * FROM custody_recovery_notifications
                 WHERE delivered_at IS NULL AND next_attempt<=?
                 ORDER BY next_attempt,operation_id LIMIT 5""", (now,))]
+
+    def entry_cost_report(self, uid, report=None):
+        with self.db() as db:
+            if report is not None:
+                db.execute("""INSERT INTO custody_entry_cost_checks(uid,report) VALUES(?,?)
+                    ON CONFLICT(uid) DO UPDATE SET report=excluded.report""", (uid, json.dumps(report)))
+            row = db.execute("SELECT report FROM custody_entry_cost_checks WHERE uid=?", (uid,)).fetchone()
+            return json.loads(row["report"]) if row else None
 
     def recovery_notification_result(self, oid, now, delivered, retry_after=60, error=None):
         with self.db() as db:
