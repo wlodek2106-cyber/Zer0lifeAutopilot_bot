@@ -89,7 +89,8 @@ class AccountSecurity:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS app_profiles (
                     uid INTEGER PRIMARY KEY, nickname TEXT NOT NULL,
-                    nickname_key TEXT NOT NULL UNIQUE, accepted_at INTEGER NOT NULL);
+                    nickname_key TEXT NOT NULL UNIQUE, accepted_at INTEGER NOT NULL,
+                    partner_terms_accepted_at INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS app_passkeys (
                     id TEXT PRIMARY KEY, uid INTEGER NOT NULL, public_key BLOB NOT NULL,
                     counter INTEGER NOT NULL, created_at INTEGER NOT NULL);
@@ -103,14 +104,19 @@ class AccountSecurity:
                     expires INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
                     used INTEGER NOT NULL DEFAULT 0);
             """)
+            profile_columns = {row[1] for row in db.execute("PRAGMA table_info(app_profiles)")}
+            if "partner_terms_accepted_at" not in profile_columns:
+                db.execute("ALTER TABLE app_profiles ADD COLUMN partner_terms_accepted_at INTEGER NOT NULL DEFAULT 0")
 
     def state(self, uid):
         with self.ledger.db() as db:
-            row = db.execute("SELECT nickname FROM app_profiles WHERE uid=?", (uid,)).fetchone()
+            row = db.execute("SELECT nickname,partner_terms_accepted_at FROM app_profiles WHERE uid=?", (uid,)).fetchone()
             keys = db.execute("SELECT COUNT(*) FROM app_passkeys WHERE uid=?", (uid,)).fetchone()[0]
             recovery = db.execute("SELECT COUNT(*) FROM app_recovery WHERE uid=?", (uid,)).fetchone()[0]
+            referred = db.execute("SELECT 1 FROM custody_referrals WHERE uid=?", (uid,)).fetchone()
         return {"success": True, "registered": bool(row), "nickname": row["nickname"] if row else None,
                 "has_passkey": keys > 0, "passkey_count": keys, "recovery_codes_remaining": recovery,
+                "partner_terms_required": bool(referred and (not row or not row["partner_terms_accepted_at"])),
                 "withdrawal_requires_passkey": True}
 
     def require(self, uid):
@@ -130,10 +136,16 @@ class AccountSecurity:
             raise WalletError("Acknowledge that trading can lose money.", 400)
         with self.ledger.db() as db:
             old = db.execute("SELECT nickname FROM app_profiles WHERE uid=?", (uid,)).fetchone()
+            referred = db.execute("SELECT 1 FROM custody_referrals WHERE uid=?", (uid,)).fetchone()
+            if not old and referred and body.get("accept_partner_terms") is not True:
+                raise WalletError("Review and accept the partner commission terms before creating this account.", 400)
             if not old:
                 if db.execute("SELECT uid FROM app_profiles WHERE nickname_key=?", (nick.lower(),)).fetchone():
                     raise WalletError("This nickname is already taken.", 409)
-                db.execute("INSERT INTO app_profiles VALUES(?,?,?,?)", (uid,nick,nick.lower(),int(time.time())))
+                db.execute("""INSERT INTO app_profiles
+                    (uid,nickname,nickname_key,accepted_at,partner_terms_accepted_at)
+                    VALUES(?,?,?,?,?)""",
+                    (uid,nick,nick.lower(),int(time.time()),int(time.time()) if referred else 0))
         # Never create/reassign financial ownership based on nickname or request body UID.
         return await self.status(request)
 

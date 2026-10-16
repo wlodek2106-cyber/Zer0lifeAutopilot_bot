@@ -716,8 +716,8 @@ class CustodyRuntime(WalletRuntime):
         async with self.lock:
             row = next((item for item in self.ledger.pending()
                         if item.get("signature") == signature and int(item["uid"]) == uid), None)
-            if not row or row["kind"] not in ("BUY", "SELL") or row["state"] not in ("PREPARED", "SUBMITTED", "UNKNOWN"):
-                raise WalletError("No matching pending BUY or SELL operation belongs to this account.", 409)
+            if not row or row["kind"] not in ("BUY", "SELL", "PARTNER_PAYOUT") or row["state"] not in ("PREPARED", "SUBMITTED", "UNKNOWN"):
+                raise WalletError("No matching pending operation belongs to this account.", 409)
             try:
                 wire = base64.b64decode(row.get("wire") or "", validate=True)
                 signed_tx = VersionedTransaction.from_bytes(wire)
@@ -759,8 +759,10 @@ class CustodyRuntime(WalletRuntime):
                 raise WalletError("The operation changed during verification; refresh status before trying again.", 409)
             if row["kind"] == "BUY":
                 recovery = "the reserved purchase funds were released back to your available balance"
-            else:
+            elif row["kind"] == "SELL":
                 recovery = "the reserved asset was restored to the open position"
+            else:
+                recovery = "the affiliate commission was returned to its pending payout queue"
         return web.json_response({"success": True, "state": "FAILED",
             "message": f"Solana history proved this {row['kind']} absent and expired; {recovery}. The audit record is retained. No transaction was sent. Both trading modes are OFF; enable them only when ready."})
 
@@ -885,11 +887,11 @@ class CustodyRuntime(WalletRuntime):
             addresses = [k.get("pubkey") if isinstance(k, dict) else k for k in keys]
             index = addresses.index(self.wallet)
             native_delta = tx["meta"]["postBalances"][index] - tx["meta"]["preBalances"][index]
-            if row["kind"] == "WITHDRAW":
+            if row["kind"] in ("WITHDRAW", "PARTNER_PAYOUT"):
                 spent = row["raw"]
                 asset_delta = self.effects(tx, self.wallet, row["asset"])
-                if row["asset"] == USDC and asset_delta != -spent:
-                    raise WalletError("Результат вывода USDC не соответствует резерву.")
+                if asset_delta != -spent:
+                    raise WalletError("Результат партнёрского перевода не соответствует резерву.")
                 fee = -native_delta - (spent if row["asset"] == SOL else 0)
                 if fee < int(tx["meta"]["fee"]):
                     raise WalletError("Не удалось установить фактическую комиссию вывода.")
@@ -981,10 +983,10 @@ class CustodyRuntime(WalletRuntime):
                 wrapped_delta += new_raw - old_raw
             # Token account lamports include rent and, for WSOL, wrapped amount.
             deltas[SOL] += (new["lamports"] if new else 0) - (old["lamports"] if old else 0)
-        if row["kind"] == "WITHDRAW":
+        if row["kind"] in ("WITHDRAW", "PARTNER_PAYOUT"):
             expected = -row["raw"]
-            if row["asset"] == USDC and deltas.get(USDC, 0) != expected:
-                raise WalletError("Симуляция вывода USDC не соответствует сумме.")
+            if deltas.get(row["asset"], 0) != expected:
+                raise WalletError("Симуляция перевода не соответствует зарезервированной сумме.")
             expense = -native_delta - (row["raw"] if row["asset"] == SOL else 0)
             if expense < fee or expense > row["fee_cap"]:
                 raise WalletError("Расход SOL на вывод выходит за резерв комиссий.")
@@ -1331,12 +1333,15 @@ class CustodyRuntime(WalletRuntime):
             native = p["funding_asset"] == SOL
             scale = 1e9 if native else 1e6
             cost = p["cost_raw"] / scale
-            profit = ((p["proceeds_raw"] or 0) - p["cost_raw"]) / scale if p["state"] == "CLOSED" else 0
+            gross_profit_raw = (p["proceeds_raw"] or 0) - p["cost_raw"]
+            net_profit_raw = gross_profit_raw - p["partner_commission_raw"]
+            profit = net_profit_raw / scale if p["state"] == "CLOSED" else 0
             trades.append({"token_symbol": self.watchlist.get(p["symbol"], {}).get("label", p["symbol"]), "symbol": p["symbol"],
                 "token_mint": WRAPPED_SOL if p["asset"] == SOL else p["asset"],
                 "amount_tokens": qty, "buy_price": cost / qty,
                 "sell_price": (p["proceeds_raw"] or 0) / scale / qty if p["state"] == "CLOSED" else 0,
                 "profit_usdc": profit if not native else 0, "profit_units": profit,
+                "partner_commission": p["partner_commission_raw"] / scale,
                 "funding_currency": "SOL" if native else "USDC", "profit_pct": profit / cost * 100,
                 "timestamp": datetime.fromtimestamp(p["created_at"], timezone.utc).isoformat(),
                 "buy_tx": p["buy_tx"], "sell_tx": p["sell_tx"], "status": p["state"]})
@@ -1485,6 +1490,55 @@ class CustodyRuntime(WalletRuntime):
         return web.json_response({"success": True, **activity_log.report(self, uid),
             "trading_active": bool(self.ledger.settings(uid)["trading"]),
             "sniper_active": bool(self.ledger.settings(uid)["sniper_trading"])})
+
+    async def partner_program(self, request, session):
+        uid = self.uid(request)
+        bot_username = getattr(getattr(self, "web_access", None), "bot_username", "")
+        return web.json_response({"success": True, **self.ledger.partner_report(uid, bot_username)})
+
+    async def retry_partner_payout(self, request, session):
+        uid = self.uid(request)
+        body = await request.json()
+        if body.get("confirm") is not True:
+            raise WalletError("Confirm the retry of this previously earned partner payout.", 400)
+        if not self.ledger.wallet_address(uid):
+            raise WalletError("Link and verify your Solana wallet before retrying a payout.", 409)
+        if not self.ledger.retry_partner_earning(uid, str(body.get("earning_id", ""))):
+            raise WalletError("This payout is not awaiting review or does not belong to your account.", 409)
+        return web.json_response({"success": True,
+            "message": "Payout queued again. The server will check the shared-wallet lock before sending."})
+
+    async def process_partner_payout(self, session):
+        earning = self.ledger.next_partner_earning()
+        if not earning or self.pending():
+            return
+        uid = earning["partner_uid"]
+        recipient_text = self.ledger.wallet_address(uid)
+        if not recipient_text:
+            return
+        recipient = Pubkey.from_string(recipient_text)
+        request_id = "partner-" + str(uuid.uuid4())
+        async with self.lock:
+            if self.pending():
+                return
+            await self.solvent(session)
+            operation = self.ledger.reserve(uid, request_id, "PARTNER_PAYOUT",
+                earning["asset"], earning["amount_raw"], {}, recipient_text)
+            if operation["state"] == "COMPLETED":
+                return
+            if operation["state"] != "RESERVED":
+                return
+            self.ledger.set_partner_operation(earning["id"], operation["id"])
+            try:
+                token = "SOL" if earning["asset"] == SOL else "USDC"
+                transaction = await super().withdraw_transaction(
+                    session, self.ready(), token, recipient, earning["amount_raw"], operation["id"])
+                await self.send_reserved(session, transaction, operation, {})
+            except Exception:
+                current = self.ledger.operation(operation["id"])
+                if current and current["state"] == "RESERVED":
+                    self.ledger.fail(operation["id"])
+                raise
 
     async def toggle(self, request, session):
         uid = self.uid(request)
@@ -1645,6 +1699,7 @@ class CustodyRuntime(WalletRuntime):
                         self.web_access.pause_expired()
                     await self.reconcile(session)
                     await self.scan_deposits(session)
+                    await self.process_partner_payout(session)
                     users = self.ledger.active_users()
                     if users:
                         self.poll_discovery()

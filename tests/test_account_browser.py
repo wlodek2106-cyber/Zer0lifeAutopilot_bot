@@ -38,7 +38,7 @@ class AccountBrowserTests(unittest.TestCase):
         stub="""<script>
         window.Telegram={WebApp:{initData:'fixture',initDataUnsafe:{user:{id:101,username:'TelegramName'}},expand(){},ready(){}}};
         window.alert=()=>{};window.prompt=()=>{throw Error('No native nickname prompt');};
-        let profile={success:true,registered:false,has_passkey:false,passkey_count:0,recovery_codes_remaining:0};
+        let profile={success:true,registered:false,partner_terms_required:true,has_passkey:false,passkey_count:0,recovery_codes_remaining:0};
         window.requests=[];
         window.fetch=async(url,options={})=>{
             window.requests.push({url,body:options.body?JSON.parse(options.body):null,headers:options.headers});
@@ -51,6 +51,8 @@ class AccountBrowserTests(unittest.TestCase):
         self.run_page(page,"""
             await openTerminal();
             assert(document.getElementById('account-signup').style.display==='block','signup shown after launch');
+            assert(!document.getElementById('affiliate-terms').hidden,'referred signup discloses partner share');
+            assert(!document.getElementById('account-partner-terms').checked,'commission consent is not pre-checked');
             assert(document.getElementById('app').style.display==='none','no terminal before signup');
             const field=document.getElementById('account-nickname'),box=field.getBoundingClientRect();
             assert(document.elementFromPoint(box.x+box.width/2,box.y+box.height/2)===field,
@@ -61,12 +63,14 @@ class AccountBrowserTests(unittest.TestCase):
             assert(!document.getElementById('launch-terminal').disabled,'launch state restored after loading');
             document.getElementById('account-nickname').value='TraderNew';
             document.getElementById('account-risk').checked=true;
+            document.getElementById('account-partner-terms').checked=true;
             await createAccount();await refresh();
             assert(document.getElementById('account-signup').style.display==='none','signup hidden after server acceptance');
             assert(accountState.nickname==='ServerChosen','server owns nickname state');
             assert(document.getElementById('tab-settings').classList.contains('active'),'passkey setup next');
             const request=window.requests.find(r=>r.url==='/api/account/register');
             assert(request.body.nickname==='TraderNew'&&request.body.accept_risk===true,'real registration request');
+            assert(request.body.accept_partner_terms===true,'commission consent is explicitly sent');
             assert(request.headers['X-Telegram-Init-Data']==='fixture','signed Telegram data forwarded');
             assert(!window.requests.some(r=>r.url==='/api/withdraw'),'signup never withdraws funds');
         """)

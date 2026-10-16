@@ -11,6 +11,7 @@ USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 SOL = "SOL"
 FEE_CAP = 5_000_000
 ACTIVE = ("RESERVED", "PREPARED", "SUBMITTED", "UNKNOWN")
+PARTNER_LEVEL_BPS = (100, 50, 25)
 
 
 class LedgerError(Exception):
@@ -27,6 +28,16 @@ def reserve_account(oid):
 
 def position_account(pid):
     return "position:" + pid
+
+
+def partner_account(uid):
+    return "partner:" + str(int(uid))
+
+
+def _balance(db, account, asset):
+    row = db.execute("SELECT raw FROM custody_accounts WHERE account=? AND asset=?",
+                     (account, asset)).fetchone()
+    return row["raw"] if row else 0
 
 
 class CustodyLedger:
@@ -59,6 +70,29 @@ class CustodyLedger:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS custody_entry_cost_checks (
                     uid INTEGER PRIMARY KEY, report TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS custody_partner_codes (
+                    uid INTEGER PRIMARY KEY, code TEXT NOT NULL UNIQUE);
+                CREATE TABLE IF NOT EXISTS custody_referrals (
+                    uid INTEGER PRIMARY KEY, parent_uid INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL, CHECK(uid<>parent_uid));
+                CREATE TABLE IF NOT EXISTS custody_partner_profit_state (
+                    trader_uid INTEGER NOT NULL, asset TEXT NOT NULL,
+                    net_profit_raw INTEGER NOT NULL DEFAULT 0,
+                    high_water_raw INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(trader_uid,asset));
+                CREATE TABLE IF NOT EXISTS custody_partner_earnings (
+                    id TEXT PRIMARY KEY, position_id TEXT NOT NULL,
+                    trader_uid INTEGER NOT NULL, partner_uid INTEGER NOT NULL,
+                    level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 3),
+                    asset TEXT NOT NULL, profit_basis_raw INTEGER NOT NULL,
+                    amount_raw INTEGER NOT NULL CHECK(amount_raw>0),
+                    state TEXT NOT NULL DEFAULT 'QUEUED',
+                    attempts INTEGER NOT NULL DEFAULT 0, next_attempt INTEGER NOT NULL DEFAULT 0,
+                    operation_id TEXT, signature TEXT,
+                    created_at INTEGER NOT NULL,
+                    UNIQUE(position_id,level));
+                CREATE INDEX IF NOT EXISTS custody_partner_earnings_queue
+                    ON custody_partner_earnings(state,created_at);
                 CREATE TABLE IF NOT EXISTS custody_recovery_notifications (
                     operation_id TEXT PRIMARY KEY, uid INTEGER NOT NULL,
                     payload TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
@@ -201,6 +235,142 @@ class CustodyLedger:
         with self.db() as db:
             db.execute("""INSERT INTO custody_users(uid,username,created_at) VALUES(?,?,?)
                 ON CONFLICT(uid) DO UPDATE SET username=excluded.username""", (uid, str(username)[:128], int(time.time())))
+
+    def partner_referral_code(self, uid):
+        with self.db() as db:
+            if not db.execute("SELECT 1 FROM custody_users WHERE uid=?", (uid,)).fetchone():
+                raise LedgerError("Create an AI Trader account before sharing a referral link.")
+            row = db.execute("SELECT code FROM custody_partner_codes WHERE uid=?", (uid,)).fetchone()
+            if row:
+                return row["code"]
+            for _ in range(8):
+                code = secrets.token_urlsafe(9)
+                try:
+                    db.execute("INSERT INTO custody_partner_codes(uid,code) VALUES(?,?)", (uid, code))
+                    return code
+                except sqlite3.IntegrityError:
+                    continue
+            raise LedgerError("Could not create a unique referral link.")
+
+    def bind_referral_code(self, referred_uid, code):
+        if type(referred_uid) is not int or referred_uid <= 0 or not isinstance(code, str):
+            return False
+        with self.db() as db:
+            partner = db.execute("SELECT uid FROM custody_partner_codes WHERE code=?", (code,)).fetchone()
+            if not partner or partner["uid"] == referred_uid:
+                return False
+            if db.execute("SELECT 1 FROM custody_users WHERE uid=?", (referred_uid,)).fetchone():
+                return False
+            db.execute("INSERT OR IGNORE INTO custody_referrals(uid,parent_uid,created_at) VALUES(?,?,?)",
+                       (referred_uid, partner["uid"], int(time.time())))
+            return db.execute("SELECT parent_uid FROM custody_referrals WHERE uid=?",
+                              (referred_uid,)).fetchone()["parent_uid"] == partner["uid"]
+
+    def partner_report(self, uid, bot_username=""):
+        code = self.partner_referral_code(uid)
+        with self.db() as db:
+            referrals = [dict(row) for row in db.execute(
+                "SELECT uid,parent_uid FROM custody_referrals WHERE parent_uid=?", (uid,))]
+            counts = []
+            for level in range(1, 4):
+                counts.append(sum(1 for row in referrals if level == 1))
+                if level == 2:
+                    counts[-1] = db.execute(
+                        "SELECT COUNT(*) FROM custody_referrals r JOIN custody_referrals p ON p.uid=r.parent_uid WHERE p.parent_uid=?",
+                        (uid,)).fetchone()[0]
+                elif level == 3:
+                    counts[-1] = db.execute(
+                        """SELECT COUNT(*) FROM custody_referrals r
+                           JOIN custody_referrals p ON p.uid=r.parent_uid
+                           JOIN custody_referrals g ON g.uid=p.parent_uid
+                           WHERE g.parent_uid=?""", (uid,)).fetchone()[0]
+            earned = []
+            for level in range(1, 4):
+                row = db.execute("""SELECT asset,COALESCE(SUM(amount_raw),0) total,
+                    COALESCE(SUM(CASE WHEN state='PAID' THEN amount_raw ELSE 0 END),0) paid
+                    FROM custody_partner_earnings WHERE partner_uid=? AND level=? GROUP BY asset""",
+                    (uid, level)).fetchall()
+                for item in row:
+                    earned.append({"level": level, "asset": item["asset"],
+                                   "earned_raw": item["total"], "paid_raw": item["paid"],
+                                   "pending_raw": item["total"] - item["paid"]})
+            earnings_history = [dict(row) for row in db.execute(
+                """SELECT id,level,asset,amount_raw,state,signature,created_at
+                   FROM custody_partner_earnings WHERE partner_uid=?
+                   ORDER BY created_at DESC LIMIT 20""", (uid,))]
+            review_required = db.execute(
+                "SELECT COUNT(*) FROM custody_partner_earnings WHERE partner_uid=? AND state='NEEDS_REVIEW'",
+                (uid,)).fetchone()[0]
+            return {"code": code,
+                "invite_url": ("https://t.me/" + bot_username + "?start=ref_" + code) if bot_username else "",
+                "rates_bps": list(PARTNER_LEVEL_BPS), "referrals_by_level": counts,
+                "earnings": earned, "history": earnings_history,
+                "automatic_payouts": True,
+                "review_required": review_required,
+                "wallet_linked": bool(db.execute(
+                    "SELECT 1 FROM custody_wallet_links WHERE uid=?", (uid,)).fetchone())}
+
+    def next_partner_earning(self):
+        with self.db() as db:
+            row = db.execute("""SELECT e.* FROM custody_partner_earnings e
+                JOIN custody_wallet_links w ON w.uid=e.partner_uid
+                WHERE e.state='QUEUED' AND e.next_attempt<=?
+                ORDER BY e.created_at,e.level LIMIT 1""", (int(time.time()),)).fetchone()
+            return dict(row) if row else None
+
+    def set_partner_operation(self, earning_id, operation_id):
+        with self.db() as db:
+            db.execute("""UPDATE custody_partner_earnings SET state='SUBMITTED',operation_id=?
+                WHERE id=? AND state='QUEUED'""", (operation_id, earning_id))
+
+    def retry_partner_earning(self, uid, earning_id):
+        with self.db() as db:
+            changed = db.execute("""UPDATE custody_partner_earnings
+                SET state='QUEUED',attempts=0,next_attempt=0
+                WHERE id=? AND partner_uid=? AND state='NEEDS_REVIEW'""",
+                (earning_id, uid)).rowcount
+            return changed == 1
+
+    @staticmethod
+    def _record_partner_profit(db, position, profit_raw):
+        """Return ledger credits after carrying prior losses and applying three fixed rates."""
+        referral = db.execute("SELECT parent_uid FROM custody_referrals WHERE uid=?",
+                              (position["uid"],)).fetchone()
+        if not referral:
+            return {}, 0
+        trader_uid, asset = position["uid"], position["funding_asset"]
+        db.execute("""INSERT OR IGNORE INTO custody_partner_profit_state
+            (trader_uid,asset,net_profit_raw,high_water_raw) VALUES(?,?,0,0)""",
+            (trader_uid, asset))
+        state = db.execute("""SELECT net_profit_raw,high_water_raw
+            FROM custody_partner_profit_state WHERE trader_uid=? AND asset=?""",
+            (trader_uid, asset)).fetchone()
+        net = state["net_profit_raw"] + profit_raw
+        new_high_water = max(state["high_water_raw"], max(0, net))
+        eligible_raw = max(0, new_high_water - state["high_water_raw"])
+        db.execute("""UPDATE custody_partner_profit_state SET net_profit_raw=?,high_water_raw=?
+            WHERE trader_uid=? AND asset=?""", (net, new_high_water, trader_uid, asset))
+        credits = {}
+        total = 0
+        partner_uid = referral["parent_uid"]
+        for level, rate_bps in enumerate(PARTNER_LEVEL_BPS, 1):
+            if not partner_uid:
+                break
+            amount = eligible_raw * rate_bps // 10_000
+            if amount:
+                earning_id = str(uuid.uuid4())
+                db.execute("""INSERT INTO custody_partner_earnings
+                    (id,position_id,trader_uid,partner_uid,level,asset,profit_basis_raw,
+                     amount_raw,created_at) VALUES(?,?,?,?,?,?,?,?,?)""",
+                    (earning_id, position["id"], trader_uid, partner_uid, level, asset,
+                     eligible_raw, amount, int(time.time())))
+                account = partner_account(partner_uid)
+                credits[account] = credits.get(account, 0) + amount
+                total += amount
+            row = db.execute("SELECT parent_uid FROM custody_referrals WHERE uid=?",
+                             (partner_uid,)).fetchone()
+            partner_uid = row["parent_uid"] if row else None
+        return credits, total
 
     def balance(self, uid, asset):
         with self.db() as db:
@@ -418,6 +588,10 @@ class CustodyLedger:
             elif kind == "BUY":
                 if asset not in (USDC, SOL) or metadata.get("output_asset") in (None, asset):
                     raise LedgerError("Недопустимая валюта покупки.")
+            elif kind == "PARTNER_PAYOUT":
+                source = partner_account(uid)
+                if asset not in (USDC, SOL) or not recipient or raw > _balance(db, source, asset):
+                    raise LedgerError("Партнёрская выплата не покрыта начислениями.")
             self.post(db, "reserve:" + oid, "reserve owner funds and operator fees", [
                 (source, asset, -raw), (reserve_account(oid), asset, raw),
                 ("treasury", SOL, -FEE_CAP), (reserve_account(oid), SOL, FEE_CAP)])
@@ -455,13 +629,24 @@ class CustodyLedger:
                 raise LedgerError("Recovery audit evidence is incomplete.")
             if not isinstance(fee, int) or fee < 0 or fee > row["fee_cap"]:
                 raise LedgerError("Комиссия не соответствует резерву.")
-            source = position_account(row["position_id"]) if row["kind"] == "SELL" else available(row["uid"])
+            source = (position_account(row["position_id"]) if row["kind"] == "SELL" else
+                      partner_account(row["uid"]) if row["kind"] == "PARTNER_PAYOUT" else available(row["uid"]))
             self.post(db, "failed:" + oid, "release only proven unsent/failed", [
                 (reserve_account(oid), row["asset"], -row["raw"]), (source, row["asset"], row["raw"]),
                 (reserve_account(oid), SOL, -row["fee_cap"]), ("treasury", SOL, row["fee_cap"] - fee),
                 ("external", SOL, fee)])
             if row["kind"] == "SELL":
                 db.execute("UPDATE custody_positions SET state='OPEN' WHERE id=?", (row["position_id"],))
+            elif row["kind"] == "PARTNER_PAYOUT":
+                earning = db.execute("""SELECT attempts FROM custody_partner_earnings
+                    WHERE operation_id=? AND state='SUBMITTED'""", (oid,)).fetchone()
+                if not earning:
+                    raise LedgerError("Партнёрское начисление не связано с этой операцией.")
+                db.execute("""UPDATE custody_partner_earnings SET
+                    state=CASE WHEN attempts+1>=3 THEN 'NEEDS_REVIEW' ELSE 'QUEUED' END,
+                    attempts=attempts+1,next_attempt=?,operation_id=NULL
+                    WHERE operation_id=? AND state='SUBMITTED'""",
+                    (int(time.time()) + 60 * (2 ** min(earning["attempts"], 6)), oid))
             db.execute("UPDATE custody_operations SET state='FAILED' WHERE id=?", (oid,))
             if recovery_audit is not None:
                 db.execute("""CREATE TABLE IF NOT EXISTS custody_operation_recovery_audit(
@@ -519,9 +704,12 @@ class CustodyLedger:
                 raise LedgerError("Неверное состояние финализации.")
             if not isinstance(fee, int) or fee > row["fee_cap"] or spent <= 0 or spent > row["raw"]:
                 raise LedgerError("Фактическая сумма выходит за зарезервированные пределы.")
+            if row["kind"] == "PARTNER_PAYOUT" and spent != row["raw"]:
+                raise LedgerError("Партнёрская выплата должна совпасть с точной суммой резерва.")
             info = json.loads(row["metadata"])
             account = reserve_account(oid)
-            source = position_account(row["position_id"]) if row["kind"] == "SELL" else available(row["uid"])
+            source = (position_account(row["position_id"]) if row["kind"] == "SELL" else
+                      partner_account(row["uid"]) if row["kind"] == "PARTNER_PAYOUT" else available(row["uid"]))
             lines = [(account, row["asset"], -spent), ("external", row["asset"], spent),
                 (account, SOL, -fee), ("external", SOL, fee),
                 (account, SOL, -(row["fee_cap"] - fee)), ("treasury", SOL, row["fee_cap"] - fee)]
@@ -532,7 +720,21 @@ class CustodyLedger:
                     raise LedgerError("Нет подтверждённого результата swap.")
                 output = info["output_asset"]
                 target = position_account(oid) if row["kind"] == "BUY" else available(row["uid"])
-                lines += [("external", output, -received), (target, output, received)]
+                if row["kind"] == "SELL":
+                    position = db.execute("SELECT * FROM custody_positions WHERE id=? AND uid=?",
+                                           (row["position_id"], row["uid"])).fetchone()
+                    if not position or position["state"] != "RESERVED" or position["funding_asset"] != output:
+                        raise LedgerError("Продажа позиции не соответствует сохранённому состоянию.")
+                    commission_accounts, commission_total = self._record_partner_profit(
+                        db, position, received - position["cost_raw"])
+                    if commission_total > received:
+                        raise LedgerError("Партнёрские комиссии превышают полученную прибыль.")
+                    lines += [("external", output, -received),
+                              (target, output, received - commission_total)]
+                    lines.extend((account, output, amount)
+                                 for account, amount in commission_accounts.items())
+                else:
+                    lines += [("external", output, -received), (target, output, received)]
             self.post(db, "complete:" + oid, "finalized blockchain effects", lines)
             if row["kind"] == "BUY":
                 db.execute("""INSERT INTO custody_positions
@@ -547,11 +749,17 @@ class CustodyLedger:
                 db.execute("""UPDATE custody_positions SET state='CLOSED',sell_tx=?,proceeds_usdc=?,proceeds_raw=?
                     WHERE id=? AND uid=?""", (row["signature"], received if info["output_asset"] == USDC else None,
                     received, row["position_id"], row["uid"]))
+            elif row["kind"] == "PARTNER_PAYOUT":
+                db.execute("""UPDATE custody_partner_earnings SET state='PAID',signature=?
+                    WHERE operation_id=? AND state='SUBMITTED'""", (row["signature"], oid))
             db.execute("UPDATE custody_operations SET state='COMPLETED' WHERE id=?", (oid,))
 
     def positions(self, uid, state=None):
         with self.db() as db:
-            rows = db.execute("SELECT * FROM custody_positions WHERE uid=?" +
+            rows = db.execute("""SELECT p.*,
+                COALESCE((SELECT SUM(e.amount_raw) FROM custody_partner_earnings e
+                          WHERE e.position_id=p.id),0) AS partner_commission_raw
+                FROM custody_positions p WHERE p.uid=?""" +
                 (" AND state=?" if state else "") + " ORDER BY created_at DESC",
                 (uid, state) if state else (uid,))
             return [dict(r) for r in rows]

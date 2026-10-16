@@ -812,6 +812,9 @@ RAW_HTML = r"""<!DOCTYPE html>
         <input id="account-nickname" class="sig-input" autocomplete="nickname" minlength="3" maxlength="24" pattern="[A-Za-z0-9_]{3,24}" placeholder="Your nickname">
         <p class="muted">3–24 letters, numbers or underscores. Your balance stays linked to your Telegram account, not this name.</p>
         <label style="display:flex;gap:10px"><input id="account-risk" type="checkbox" style="width:auto">I understand trading can lose money and returns are not guaranteed.</label>
+        <div id="affiliate-terms" hidden>
+            <label style="display:flex;gap:10px;margin-top:12px"><input id="account-partner-terms" type="checkbox" style="width:auto">I understand this account was referred. Up to 1.75% of realized trading profit may be paid to its referral partners: 1% / 0.5% / 0.25% by level, after prior trading losses are recovered. Profit means sale proceeds minus recorded purchase cost; separately paid network fees are not netted here. Deposits and open trades are excluded; USDC and SOL are accounted for separately.</label>
+        </div>
         <button id="account-create" class="btn-green-main" onclick="createAccount()">Create account</button>
         <p id="account-error" class="status-output" role="status"></p>
     </section>
@@ -1028,6 +1031,16 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <button class="btn-green-main" onclick="saveTradingSettings()">Save order sizes</button>
                 <p id="settings-budget" class="section-note"></p>
             </div>
+            <div class="card" id="partner-program">
+                <h3 style="margin-top:0">Partner program · 3 levels</h3>
+                <p class="section-note">Earn 1% from direct referrals, 0.5% from level 2, and 0.25% from level 3. Commissions use realized trade profit (sale proceeds minus recorded purchase cost), after prior trading losses are recovered. Separately paid network fees are not netted here. USDC and SOL are accounted for separately; open trades and deposits do not count.</p>
+                <p class="section-note">Automatic payouts go to each partner’s verified linked wallet. If no wallet is linked, the earned amount stays queued. Solana network fees are paid from the operator reserve, not deducted from the partner’s commission.</p>
+                <label class="settings-label" for="partner-invite-link">Your referral link</label>
+                <input id="partner-invite-link" class="sig-input" type="text" readonly value="Loading referral link…">
+                <button class="btn-copy" onclick="copyPartnerLink()">Copy referral link</button>
+                <p id="partner-program-status" class="status-output" role="status">Loading partner balances…</p>
+                <div id="partner-history" class="status-output" aria-live="polite"></div>
+            </div>
             <details id="strategy-help"><summary>Strategy limits &amp; risks</summary>
                 <p class="section-note">Core trades use your USDC; sniper trades use your SOL. Other users' funds and the operator fee reserve are never your trading capital. Automatic conversion or profit allocation between strategies is not implemented.</p>
                 <p class="section-note">Core: SOL, JUP, RAY, PYTH, JTO, ORCA; up to 5 positions. ORCA currently retains mint authority (additional tokens may be issued); no token is risk-free. Sniper: up to 1 SOL-funded position. Every 15 minutes a bounded DexScreener profiles/search scan checks up to 90 Solana mints, screens up to 20 and sends at most 8 current candidates plus held assets to AI. This is not every project or a profit forecast; profiles alone do not establish meme status.</p>
@@ -1108,6 +1121,61 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const result=await response.json();if(!response.ok||!result.success)throw new Error(result.message);
                 settingsOrderDirty=false;alert(result.message);await refresh();
             } catch(e) {alert(e.message);}
+        }
+        async function loadPartnerProgram() {
+            const link = document.getElementById('partner-invite-link');
+            const status = document.getElementById('partner-program-status');
+            try {
+                const response=await apiFetch('/api/partners');
+                const data=await response.json();
+                if(!response.ok||!data.success)throw Error(data.message||'Partner program is unavailable.');
+                link.value=data.invite_url||'Open this bot through Telegram to generate your referral link.';
+                const count=data.referrals_by_level||[0,0,0];
+                const earnings=(data.earnings||[]).map(item=>{
+                    const decimals=item.asset==='SOL'?9:6;
+                    const ticker=item.asset==='SOL'?'SOL':'USDC';
+                    return 'Level '+item.level+' · '+(Number(item.pending_raw)/10**decimals).toFixed(decimals)+' '+ticker+' pending; '+
+                        (Number(item.paid_raw)/10**decimals).toFixed(decimals)+' '+ticker+' paid';
+                });
+                status.textContent='Referrals by level: '+count.join(' / ')+'. '+
+                    (data.wallet_linked?'Verified wallet linked.':'Link and verify a wallet in Wallet to receive automatic payouts.')+
+                    (earnings.length?'\\n'+earnings.join('\\n'):'\\nNo partner earnings yet.');
+                const history=document.getElementById('partner-history');
+                history.replaceChildren();
+                for(const item of (data.history||[])){
+                    const row=document.createElement('div');
+                    const decimals=item.asset==='SOL'?9:6;
+                    row.textContent='Level '+item.level+' · '+(Number(item.amount_raw)/10**decimals).toFixed(decimals)+' '+item.asset+
+                        ' · '+item.state+(item.signature?' · '+item.signature:'');
+                    history.appendChild(row);
+                    if(item.state==='NEEDS_REVIEW'){
+                        const retry=document.createElement('button');
+                        retry.className='btn-copy';retry.textContent='Retry verified payout';
+                        retry.onclick=()=>retryPartnerPayout(item.id);
+                        history.appendChild(retry);
+                    }
+                }
+            } catch(error) {
+                if(link)link.value='Referral link unavailable.';
+                if(status)status.textContent=error.message||'Partner program unavailable.';
+            }
+        }
+        async function copyPartnerLink() {
+            const link=document.getElementById('partner-invite-link');
+            if(!link.value||!link.value.startsWith('https://t.me/'))return;
+            try { await navigator.clipboard.writeText(link.value); alert('Referral link copied.'); }
+            catch(e) { link.focus();link.select();document.execCommand('copy'); }
+        }
+        async function retryPartnerPayout(earningId) {
+            if(!confirm('Retry this previously earned payout to your verified wallet?'))return;
+            try{
+                const response=await apiFetch('/api/partners/retry',{method:'POST',
+                    headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({earning_id:earningId,confirm:true})});
+                const data=await response.json();
+                if(!response.ok||!data.success)throw Error(data.message||'Could not queue payout.');
+                alert(data.message);await refresh();
+            }catch(error){alert(error.message||'Could not queue payout.');}
         }
         async function checkTradingReadiness() {
             const output=document.getElementById('trading-readiness');output.textContent='Checking funds, fees and market APIs…';
@@ -1337,6 +1405,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const profile=await loadAccount();
                 if(!profile.registered){
                     document.getElementById('account-nickname').value=user.username.replace(/[^A-Za-z0-9_]/g,'').slice(0,24);
+                    document.getElementById('affiliate-terms').hidden=!profile.partner_terms_required;
+                    document.getElementById('account-partner-terms').checked=false;
                     document.getElementById('account-signup').style.display='block';
                     return;
                 }
@@ -1349,7 +1419,8 @@ RAW_HTML = r"""<!DOCTYPE html>
             try{
                 const response=await apiFetch('/api/account/register',{method:'POST',headers:{'Content-Type':'application/json'},
                     body:JSON.stringify({nickname:document.getElementById('account-nickname').value,
-                        accept_risk:document.getElementById('account-risk').checked})});
+                        accept_risk:document.getElementById('account-risk').checked,
+                        accept_partner_terms:document.getElementById('account-partner-terms').checked})});
                 const data=await response.json();if(!response.ok||!data.success)throw Error(data.message||'Could not create account.');
                 accountState=data;document.getElementById('account-signup').style.display='none';
                 await finishAccount();
@@ -1710,6 +1781,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const s = await apiFetch('/api/stats?' + params.toString()).then(r => r.json());
                 
                 if (s.success) {
+                    await loadPartnerProgram();
                     if(!window.ZRL_WEB&&!s.is_admin){
                         document.querySelectorAll('.nav-btn')[1].style.display='none';
                         document.querySelectorAll('[data-target-tab="trading"]').forEach(b=>b.style.display='none');
@@ -1743,7 +1815,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     }
                     const recoverButton = document.getElementById('recover-pending-operation');
                     const pendingRecovery = pendingOperations.find(op =>
-                        ['BUY', 'SELL'].includes(op.kind) && ['PREPARED', 'SUBMITTED', 'UNKNOWN'].includes(op.state) && op.signature);
+                        ['BUY', 'SELL', 'PARTNER_PAYOUT'].includes(op.kind) && ['PREPARED', 'SUBMITTED', 'UNKNOWN'].includes(op.state) && op.signature);
                     window.pendingRecoverySignature = pendingRecovery ? pendingRecovery.signature : '';
                     window.pendingRecoveryKind = pendingRecovery ? pendingRecovery.kind : '';
                     if (recoverButton) {
@@ -2234,6 +2306,16 @@ async def telegram_webhook_handler(request):
             if text.startswith("/start") and chat_id and TELEGRAM_TOKEN:
                 conn = sqlite3.connect(DB_FILE)
                 c = conn.cursor()
+                already_registered = c.execute(
+                    "SELECT 1 FROM users WHERE telegram_id=?", (chat_id,)).fetchone()
+                payload = text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else ""
+                sender = message.get("from", {})
+                if (not already_registered and message.get("chat", {}).get("type") == "private"
+                        and int(sender.get("id", 0)) == int(chat_id) and payload.startswith("ref_")):
+                    try:
+                        request.app["wallet_runtime"].ledger.bind_referral_code(chat_id, payload[4:])
+                    except Exception:
+                        pass
                 c.execute("""INSERT INTO users (telegram_id, username) 
                              VALUES (?, ?) 
                              ON CONFLICT(telegram_id) DO UPDATE SET username=excluded.username""", (chat_id, username))
@@ -2244,7 +2326,7 @@ async def telegram_webhook_handler(request):
                 send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
                 payload = {
                     "chat_id": chat_id,
-                    "text": "👋 Your **ZERØLIFE Multi-Asset & Meme Sniper** terminal is ready.",
+                    "text": "👋 Your **AI Trader** terminal is ready. If you joined through a partner link, partners can receive 1% / 0.5% / 0.25% of realized trading profit (sale proceeds minus recorded purchase cost), only after previous trading losses are recovered. Separately paid network fees are not netted here. The total is capped at 1.75%; deposits and open trades do not count.",
                     "parse_mode": "Markdown", "reply_markup": keyboard
                 }
                 async with aiohttp.ClientSession() as session:
@@ -2309,6 +2391,8 @@ async def main():
     app.router.add_post('/api/subscription/verify', wallet_handler(runtime.web_access.verify))
     app.router.add_get('/health', health_handler)
     app.router.add_get('/api/logs', wallet_handler(runtime.logs))
+    app.router.add_get('/api/partners', wallet_handler(runtime.partner_program))
+    app.router.add_post('/api/partners/retry', wallet_handler(runtime.retry_partner_payout))
     app.router.add_get('/api/stats', wallet_handler(runtime.stats))
     app.router.add_post('/api/toggle_trading', wallet_handler(runtime.toggle))
     app.router.add_post('/api/trading_settings', wallet_handler(runtime.save_trading_settings))

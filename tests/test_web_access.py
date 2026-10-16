@@ -54,7 +54,9 @@ class WebAccessTests(unittest.IsolatedAsyncioTestCase):
             db.execute("INSERT INTO custody_wallet_links VALUES(?,?,?)", (OWNER, RECEIVER, int(time.time())))
             for uid in (OWNER, 101, 102):
                 nick = "Trader" + str(uid)
-                db.execute("INSERT INTO app_profiles VALUES(?,?,?,?)", (uid, nick, nick.lower(), int(time.time())))
+                db.execute("""INSERT INTO app_profiles
+                    (uid,nickname,nickname_key,accepted_at) VALUES(?,?,?,?)""",
+                    (uid, nick, nick.lower(), int(time.time())))
 
     def tearDown(self):
         self.temp.cleanup()

@@ -72,7 +72,7 @@ class WebBrowserTests(unittest.TestCase):
         window.confirm=()=>{throw Error('Native confirm should not be used in Telegram iOS');};
         window.fetch=async()=>new Response(JSON.stringify({success:false,message:'fixture'}));
         </script>""")
-        self.assertIn("['BUY', 'SELL'].includes(op.kind)", page)
+        self.assertIn("['BUY', 'SELL', 'PARTNER_PAYOUT'].includes(op.kind)", page)
         self.assertIn("Reserved: ", page)
         browser.AccountBrowserTests().run_page(page,"""
             document.getElementById('app').style.display='block';
