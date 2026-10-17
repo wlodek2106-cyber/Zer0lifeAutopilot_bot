@@ -47,6 +47,10 @@ def positive(value):
     return (type(value) in (int, float) and math.isfinite(value) and value > 0)
 
 
+def risk_exit(price, entry):
+    return positive(price) and positive(entry) and (price / entry - 1 >= .035 or price / entry - 1 <= -.020)
+
+
 def fresh(created_at, now, maximum):
     return (type(created_at) in (int, float) and math.isfinite(created_at)
             and 0 <= now - created_at <= maximum)

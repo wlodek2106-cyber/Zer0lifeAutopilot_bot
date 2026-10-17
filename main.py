@@ -1832,6 +1832,24 @@ RAW_HTML = r"""<!DOCTYPE html>
                 </details>
             </div>
             <div id="trading-strategy"></div>
+            <div class="card">
+                <h3>Virtual Core · no real funds</h3>
+                <p class="section-note">Forward test, not a backtest. Uses the same admission policy and live minimum-output quotes. No signatures, transfers, real balance changes or partner payouts.</p>
+                <div class="metrics-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;align-items:end">
+                    <label style="display:block">Starting virtual USDC<input id="paper-capital" type="number" min="1" max="1000000" value="100" style="display:block;width:100%;box-sizing:border-box;margin-top:8px;padding:12px;border:1px solid #344331;border-radius:12px;background:#0b1310;color:#eaf0e3"></label>
+                    <label style="display:block">Virtual order USDC<input id="paper-order" type="number" min="1" value="30" style="display:block;width:100%;box-sizing:border-box;margin-top:8px;padding:12px;border:1px solid #344331;border-radius:12px;background:#0b1310;color:#eaf0e3"></label>
+                </div>
+                <button class="btn-copy" data-paper-control onclick="controlPaper('start')">Start / new virtual run</button>
+                <button class="btn-copy" id="paper-pause" data-paper-control onclick="controlPaper(paperReport?.run?.enabled?'pause':'resume')" disabled>Pause virtual test</button>
+                <p id="paper-status" class="status-output">Virtual test not started.</p>
+                <div id="paper-metrics" class="status-output"></div>
+                <details><summary>Virtual positions &amp; results</summary>
+                    <p id="paper-positions" class="section-note"></p>
+                    <div style="overflow-x:auto"><table style="width:100%;min-width:560px;font-size:12px"><thead><tr><th>Asset / time</th><th>Gross USDC</th><th>Costs USDC</th><th>Partner model</th><th>Net USDC / reasons</th></tr></thead><tbody id="paper-trades"></tbody></table></div>
+                    <p id="paper-archives" class="section-note"></p>
+                </details>
+                <details><summary>Model assumptions &amp; limits</summary><p class="section-note">Minimum quoted output on both legs; DEX fees/impact/slippage are already included, not charged twice. Each leg assumes capped network/tip costs plus token-account rent, with no rent refund. No signed transaction simulation or landing guarantee. All modeled operator expenses reduce virtual equity; live operator fees are separate. Worst-case partner model: 1% + 0.5% + 0.25%, only on new net profit after prior losses. Drawdown is sampled, not intratick. Existing AI API limits and possible API charges still apply. Pausing retains virtual positions; a new run archives them without closing them.</p></details>
+            </div>
             <div id="trading-sniper"></div>
             <div class="card">
                 <button class="btn-copy" onclick="checkTradingReadiness()">Check readiness · no trade</button>
@@ -2726,7 +2744,76 @@ RAW_HTML = r"""<!DOCTYPE html>
             }
         }
 
+        let paperReport = null, paperBusy = false, paperLoading = false, paperEpoch = 0;
+        function renderPaper(data) {
+            paperReport = data;
+            const r=data.run, status=document.getElementById('paper-status');
+            const pause=document.getElementById('paper-pause');
+            pause.disabled=paperBusy||!r;
+            pause.textContent=r?.enabled?'Pause virtual test':'Resume virtual test';
+            status.textContent=r?(r.enabled?'RUNNING · ':'PAUSED · ')+r.status+
+                (r.last_tick?' · Last tick '+new Date(r.last_tick*1000).toLocaleString():''):'Virtual test not started.';
+            const money=v=>Number(v).toFixed(6);
+            document.getElementById('paper-metrics').textContent=r?
+                'Virtual start: '+money(r.initial_usdc)+' USDC · order: '+money(r.order_usdc)+
+                '\nCash: '+money(r.cash_usdc)+' · net liquidation equity: '+(r.equity_usdc==null?'unavailable / stale':money(r.equity_usdc))+
+                '\nClosed: '+r.closed_count+' · net realized: '+money(r.realized_net_usdc)+' USDC'+
+                '\nGross: '+money(r.gross_realized_usdc)+' · modeled costs: '+money(r.realized_expenses_usdc)+' · modeled partners: '+money(r.modeled_partner_usdc)+
+                '\nWin rate: '+(r.win_rate_pct==null?'not enough trades':r.win_rate_pct.toFixed(1)+'%')+
+                ' · sampled max drawdown: '+r.max_sampled_drawdown_pct.toFixed(2)+'% · longest losing streak: '+r.longest_loss_streak:'';
+            document.getElementById('paper-positions').textContent=r?
+                'Open virtual positions: '+(r.positions.map(p=>p.symbol+' · '+p.quantity+' · entry '+money(p.entry_usdc)+' USDC').join('; ')||'none'):'';
+            const rows=document.getElementById('paper-trades'); rows.replaceChildren();
+            for(const t of r?.trades||[]) {
+                const row=document.createElement('tr');
+                for(const value of [t.symbol+' · '+new Date(t.closed_at*1000).toLocaleString(),
+                    money(t.gross_usdc),money(t.expenses_usdc),money(t.partner_usdc),
+                    money(t.net_usdc)+' · entry: '+t.entry_reason+' · exit: '+t.exit_reason]) {
+                    const cell=document.createElement('td');cell.textContent=value;row.appendChild(cell);
+                } rows.appendChild(row);
+            }
+            document.getElementById('paper-archives').textContent=r?
+                'Recent archived runs (positions were not closed): '+(r.archives.map(a=>
+                    new Date(a.created_at*1000).toLocaleString()+' · '+a.closed_count+' closed · net realized '+money(a.net_usdc)+
+                    ' USDC · '+a.open_count+' archived open positions').join('; ')||'none'):'';
+        }
+        async function refreshPaper() {
+            if(paperLoading||paperBusy)return;
+            paperLoading=true;
+            const epoch=paperEpoch;
+            try {
+                const response=await apiFetch('/api/paper_core');
+                const data=await response.json();
+                if(!response.ok||!data.success)throw new Error(data.message||'Virtual report unavailable');
+                if(!paperBusy&&epoch===paperEpoch)renderPaper(data.paper);
+            } catch(e) {if(epoch===paperEpoch&&!paperBusy)document.getElementById('paper-status').textContent='Virtual report unavailable: '+e.message;}
+            finally {paperLoading=false;}
+        }
+        async function controlPaper(action) {
+            if(paperBusy)return;
+            const replacing=action==='start'&&!!paperReport?.run;
+            if(replacing&&!confirm('Archive this virtual run, including its open virtual positions, and start a new one? Real funds are never changed.'))return;
+            paperBusy=true;paperEpoch++;
+            for(const button of document.querySelectorAll('[data-paper-control]'))button.disabled=true;
+            try {
+                const body={action};
+                if(action==='start')Object.assign(body,{
+                    initial_usdc:document.getElementById('paper-capital').value,
+                    order_usdc:document.getElementById('paper-order').value,confirm_new_run:replacing});
+                const response=await apiFetch('/api/paper_core',{method:'POST',
+                    headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+                const data=await response.json();
+                if(!response.ok||!data.success)throw new Error(data.message||'Virtual action failed');
+                renderPaper(data.paper);
+            } catch(e) {document.getElementById('paper-status').textContent=e.message;}
+            finally {
+                paperBusy=false;
+                for(const button of document.querySelectorAll('[data-paper-control]'))button.disabled=false;
+                document.getElementById('paper-pause').disabled=!paperReport?.run;
+            }
+        }
         async function refresh() {
+            refreshPaper();
             try {
                 const l = await apiFetch('/api/logs').then(r => r.json()).catch(() => ({success:false}));
                 if (l.success) {
@@ -3399,6 +3486,8 @@ async def main():
     app.router.add_post('/api/trading_settings', wallet_handler(runtime.save_trading_settings))
     app.router.add_post('/api/trading_readiness', wallet_handler(runtime.trading_readiness))
     app.router.add_post('/api/ai_preview', wallet_handler(runtime.ai_preview))
+    app.router.add_get('/api/paper_core', wallet_handler(runtime.paper_status))
+    app.router.add_post('/api/paper_core', wallet_handler(runtime.paper_control))
     app.router.add_post('/api/recover_expired_operation', wallet_handler(runtime.recover_expired_operation))
     app.router.add_post('/api/toggle_sniper', wallet_handler(runtime.toggle_sniper))
     app.router.add_post('/api/meme_scan', wallet_handler(runtime.scan_candidates))

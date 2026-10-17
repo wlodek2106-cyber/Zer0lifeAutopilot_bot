@@ -29,6 +29,8 @@ from tx_deposits import incoming_amounts
 from solders.signature import Signature
 import ai_decisions
 import execution_policy
+from paper_core import PaperCore
+from paper_market import QuoteMarket
 import activity_log
 from entry_costs import EntryCostError, quote_amounts
 from meme_discovery import MemeDiscovery
@@ -147,6 +149,9 @@ class CustodyRuntime(WalletRuntime):
         self.sniper_symbols = [symbol for symbol in ("WIF",) if symbol in self.watchlist]
         self.watchlist = {symbol: dict(info) for symbol, info in self.watchlist.items()}
         self.main_symbols = [s for s in self.watchlist if s not in self.sniper_symbols]
+        self.paper = PaperCore(self.db_file+".paper.sqlite3", self.watchlist,
+                               lambda: self.ai_universes()["main"])
+        self.paper_task = None
         self.discovery = MemeDiscovery(self.ledger, self.rpc,
             [self.watchlist[s]["mint"] for s in self.main_symbols],
             {s: self.watchlist[s] for s in self.sniper_symbols})
@@ -328,7 +333,7 @@ class CustodyRuntime(WalletRuntime):
         try:
             self.owner(request)
             if (getattr(self, "web_access", None) and request.method == "POST"
-                    and action.__name__ in {"ai_preview", "scan_candidates", "trading_readiness", "save_trading_settings"}):
+                    and action.__name__ in {"ai_preview", "scan_candidates", "trading_readiness", "save_trading_settings", "paper_control"}):
                 self.web_access.trading_request(request)
             if (getattr(self, "accounts", None) and request.method == "POST" and action.__name__ in
                     {"create_invoice","deposit","wallet_link","toggle","toggle_sniper","withdraw"}):
@@ -1752,6 +1757,42 @@ class CustodyRuntime(WalletRuntime):
                 self.log("Recovery notification worker unavailable; queued alerts are retained.")
             await asyncio.sleep(20)
 
+    async def paper_status(self, request, session):
+        return web.json_response({"success": True, "paper": self.paper.store.report(self.uid(request))})
+
+    async def paper_control(self, request, session):
+        uid, body = self.uid(request), await request.json()
+        if (not isinstance(body, dict) or set(body)-{"action", "initial_usdc", "order_usdc", "confirm_new_run"}
+                or body.get("action") not in ("start", "pause", "resume")):
+            raise WalletError("Invalid virtual-run request.", 400)
+        if body["action"] == "start":
+            self.paper.store.start(uid, amount_raw(body.get("initial_usdc", "100"), 6),
+                amount_raw(body.get("order_usdc", "30"), 6), body.get("confirm_new_run") is True)
+        else:
+            self.paper.store.pause(uid, body["action"] == "resume")
+        return web.json_response({"success": True, "paper": self.paper.store.report(uid)})
+
+    async def background_paper(self, prices, snapshot):
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+            async def read_rpc(method, params):
+                if method not in {"getSlot", "getMinimumBalanceForRentExemption"}:
+                    raise WalletError("Paper RPC permits market reads only.", 403)
+                return await self.rpc(session, method, params)
+            market = QuoteMarket(session, read_rpc,
+                                 {"x-api-key": os.getenv("JUPITER_API_KEY", "")})
+            for uid in self.paper.store.active():
+                await self.paper.tick(uid, market, snapshot, prices)
+
+    def poll_paper(self, prices, snapshot):
+        if self.paper_task and self.paper_task.done():
+            try:
+                self.paper_task.result()
+            except Exception as exc:
+                self.log("Paper worker: " + type(exc).__name__)
+            self.paper_task = None
+        if self.paper_task is None:
+            self.paper_task = asyncio.create_task(self.background_paper(dict(prices), snapshot))
+
     async def worker(self):
         # Settings are paused on restart. No agent-triggered trades or blind retries.
         while True:
@@ -1763,8 +1804,10 @@ class CustodyRuntime(WalletRuntime):
                     await self.scan_deposits(session)
                     await self.process_partner_payout(session)
                     users = self.ledger.active_users()
-                    if users:
-                        self.poll_discovery()
+                    paper_users = self.paper.store.active()
+                    if users or paper_users:
+                        if users:
+                            self.poll_discovery()
                         prices = await self.current_prices(session)
                         for symbol in self.history:
                             if symbol not in prices:
@@ -1775,8 +1818,12 @@ class CustodyRuntime(WalletRuntime):
                                     self.history[symbol] = []
                                 self.history[symbol] = (self.history[symbol] + [price])[-90:]
                                 self.history_seen[symbol] = time.time()
+                        paper_ready = paper_users and any(len(self.history.get(s, [])) >= 5
+                                                          for s in self.ai_universes()["main"])
                         snapshot = self.poll_ai(prices) if any(
-                            user["trading"] or user["sniper_trading"] for user in users) else None
+                            user["trading"] or user["sniper_trading"] for user in users) or paper_ready else None
+                        if paper_users:
+                            self.poll_paper(prices, snapshot)
                         for settings in users:
                             uid = settings["uid"]
                             async with self.lock:
@@ -1816,8 +1863,7 @@ class CustodyRuntime(WalletRuntime):
             if not math.isfinite(price) or price <= 0:
                 return False
         entry = position["cost_raw"] / (1e9 if native else 1e6) / (position["raw"]/10**position["decimals"])
-        change = price / entry - 1
-        return change >= .035 or change <= -.020
+        return execution_policy.risk_exit(price, entry)
 
     async def verify_sniper_mint(self, session, symbol):
         watch = self.watchlist[symbol]
