@@ -1783,6 +1783,9 @@ RAW_HTML = r"""<!DOCTYPE html>
                     </div>
                     <input id="withdraw-address" class="sig-input" placeholder="Recipient wallet address">
                     <input id="withdraw-amount" type="number" step="any" class="sig-input" placeholder="Amount">
+                    <p id="withdraw-progress" class="status-output" role="status" aria-live="polite" hidden></p>
+                    <a id="withdraw-approval-link" class="btn-copy" style="display:none;text-align:center;text-decoration:none;"
+                       target="_blank" rel="noopener noreferrer">Open current withdrawal approval</a>
                     <button class="btn-green-main" id="btn-withdraw-action" onclick="secureWithdraw()">Withdraw</button>
                 </div>
             </div>
@@ -2387,12 +2390,20 @@ RAW_HTML = r"""<!DOCTYPE html>
             const data=await response.json();if(!response.ok||!data.success)throw Error(data.message||'Could not start verification.');
             const link=document.getElementById('passkey-browser-link');link.href=data.url;link.hidden=false;
             document.getElementById('passkey-progress').textContent='Complete verification in the browser, then return here. No funds are sent by the browser.';
+            if(body.purpose==='withdraw'){
+                const walletStatus=document.getElementById('withdraw-progress');
+                const walletLink=document.getElementById('withdraw-approval-link');
+                walletStatus.hidden=false;
+                walletStatus.textContent='Complete Face ID / Passkey in the browser, then return here. The USDC transfer has not been sent yet.';
+                walletLink.href=data.url;
+                walletLink.style.display='block';
+            }
             if(tg?.openLink)tg.openLink(data.url);else window.open(data.url,'_blank','noopener,noreferrer');
             return data.ticket;
         }
         async function waitPasskey(ticket,phase){
-            for(let i=0;i<100;i++){
-                await new Promise(resolve=>setTimeout(resolve,3000));
+            for(let i=0;i<150;i++){
+                await new Promise(resolve=>setTimeout(resolve,2000));
                 const response=await apiFetch('/api/account/passkey_status?ticket='+encodeURIComponent(ticket)),data=await response.json();
                 if(!response.ok||!data.success)throw Error(data.message||'Could not check verification.');
                 if(data.phase===phase&&(phase==='enrolled'||!data.expired))return;
@@ -2507,27 +2518,47 @@ RAW_HTML = r"""<!DOCTYPE html>
             localStorage.setItem('withdraw_intent', JSON.stringify({intent, id: requestId}));
 
             const btn = document.getElementById('btn-withdraw-action');
-            btn.innerText = "Processing on-chain...";
+            const progress = document.getElementById('withdraw-progress');
+            const approvalLink = document.getElementById('withdraw-approval-link');
+            progress.hidden = false;
+            progress.textContent = 'Opening secure withdrawal approval…';
+            approvalLink.style.display = 'none';
+            approvalLink.removeAttribute('href');
+            btn.innerText = "Waiting for Passkey…";
             btn.disabled = true;
 
             try {
                 const ticket=await passkeyTicket({purpose:'withdraw',token,recipient_address:addr,
                     amount,pin:enteredPin,request_id:requestId});
+                btn.innerText = "Confirm Face ID in browser…";
                 await waitPasskey(ticket,'approved');
+                approvalLink.style.display = 'none';
+                progress.textContent = 'Passkey approved. Sending the withdrawal to Solana…';
+                btn.innerText = "Sending to Solana…";
                 const res = await apiFetch('/api/withdraw', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ token, recipient_address: addr, amount: amount, pin: enteredPin, request_id: requestId, passkey_ticket:ticket })
                 });
                 const d = await res.json();
-                alert(d.message);
+                const signatureText=d.tx_signature ? '\nSignature: '+d.tx_signature : '';
+                alert((d.message||'Withdrawal status received.')+signatureText);
                 if (d.success) {
+                    progress.textContent=d.state==='COMPLETED'
+                        ? 'Withdrawal confirmed on Solana.'
+                        : 'Withdrawal submitted; waiting for network confirmation.'+signatureText;
                     document.getElementById('withdraw-address').value = '';
                     document.getElementById('withdraw-amount').value = '';
                     refresh();
                 }
+                if(!d.success)progress.textContent=d.message||'Withdrawal failed before completion.';
                 if (d.state === 'COMPLETED' || d.state === 'FAILED') localStorage.removeItem('withdraw_intent');
-            } catch (e) { alert(e.message || "Network error."); }
+            } catch (e) {
+                progress.hidden = false;
+                progress.textContent = e.message || "Could not confirm withdrawal status.";
+                if (/expired|replaced|timed out/i.test(progress.textContent)) approvalLink.style.display = 'none';
+                alert(e.message || "Network error.");
+            }
             finally {
                 withdrawSending = false;
                 btn.innerText = "Withdraw 🚀";

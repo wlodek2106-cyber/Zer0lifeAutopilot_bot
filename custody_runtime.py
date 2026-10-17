@@ -1042,6 +1042,12 @@ class CustodyRuntime(WalletRuntime):
             self.ledger.submitted(row["id"], returned == signature)
         except Exception:
             self.ledger.submitted(row["id"], False)
+        if row["kind"] == "WITHDRAW":
+            # Return the signature as soon as the RPC accepts (or ambiguously
+            # rejects) the broadcast. Finality is reconciled by the next
+            # authenticated stats refresh; never keep the withdrawal UI waiting
+            # for finalized commitment before showing the transaction ID.
+            return self.ledger.operation(row["id"])
         try:
             await self.reconcile(session)
         except Exception:

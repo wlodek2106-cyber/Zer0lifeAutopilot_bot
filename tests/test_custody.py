@@ -1230,14 +1230,22 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         request = Request(101, {"token": "USDC", "amount": "1", "recipient_address": str(self.recipient),
             "pin": "123456", "request_id": str(uuid.uuid4())})
         response = await self.service.handle(request, self.service.withdraw)
+        self.assertEqual(response.status, 202)
+        submitted = json.loads(response.text)
+        self.assertEqual(submitted["tx_signature"], sends[0])
         if timeout:
-            self.assertEqual(response.status, 202)
+            self.assertEqual(submitted["state"], "UNKNOWN")
             self.assertEqual(self.ledger.pending()[0]["state"], "UNKNOWN")
             self.assertEqual(self.ledger.balance(101, USDC), 1_000_000)
             finalized = True
             await self.service.reconcile(None)
         else:
-            self.assertEqual(response.status, 409 if failed else 200)
+            self.assertEqual(submitted["state"], "SUBMITTED")
+            self.assertEqual(self.ledger.balance(101, USDC), 1_000_000)
+            finalized = True
+            await self.service.reconcile(None)
+            final_state = self.ledger.operation(submitted["operation_id"])["state"]
+            self.assertEqual(final_state, "FAILED" if failed else "COMPLETED")
         repeat = await self.service.handle(request, self.service.withdraw)
         self.assertEqual(repeat.status, 409 if failed else 200)
         self.assertEqual(len(sends), 1)

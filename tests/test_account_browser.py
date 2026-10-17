@@ -108,3 +108,35 @@ class AccountBrowserTests(unittest.TestCase):
             assert(document.getElementById('status').textContent.includes('Withdrawal approved'),'approval shown without sending funds');
             assert(document.getElementById('pin').value==='','code input cleared');
         ""","#ticket="+"a"*43)
+
+    def test_withdraw_approval_link_and_waiting_state_are_visible_in_wallet(self):
+        source=ast.parse((ROOT/"main.py").read_text())
+        page=next(ast.literal_eval(node.value) for node in source.body if isinstance(node,ast.Assign)
+                  and any(isinstance(target,ast.Name) and target.id=="RAW_HTML" for target in node.targets))
+        page=re.sub(r'<script src="[^"]+"></script>','',page)
+        stub="""<script>
+        window.Telegram={WebApp:{initData:'fixture',initDataUnsafe:{user:{id:101,username:'test'}},
+            openLink(url){window.openedPasskeyUrl=url;},expand(){},ready(){}}};
+        window.fetch=async(url,options={})=>{
+            if(url==='/api/account/passkey')return new Response(JSON.stringify({
+                success:true,ticket:'ticket-fixture',url:'https://example.test/passkey#ticket=fixture'
+            }),{headers:{'Content-Type':'application/json'}});
+            if(url.startsWith('/api/account/passkey_status'))return new Response(JSON.stringify({
+                success:true,phase:'approved',expired:false,used:false
+            }),{headers:{'Content-Type':'application/json'}});
+            return new Response(JSON.stringify({success:false}),{headers:{'Content-Type':'application/json'}});
+        };
+        </script>"""
+        page=page.replace("</head>",stub+"</head>")
+        self.run_page(page,"""
+            const ticket=await passkeyTicket({purpose:'withdraw'});
+            const link=document.getElementById('withdraw-approval-link');
+            const status=document.getElementById('withdraw-progress');
+            assert(ticket==='ticket-fixture','withdrawal ticket returned');
+            assert(link.style.display==='block'&&link.href==='https://example.test/passkey#ticket=fixture',
+                'current approval link is visible directly in wallet');
+            assert(window.openedPasskeyUrl===link.href,'app opens the current secure approval');
+            assert(!status.hidden&&status.textContent.includes('transfer has not been sent yet'),
+                'status does not claim the transaction was sent before passkey approval');
+            await waitPasskey(ticket,'approved');
+        """)
