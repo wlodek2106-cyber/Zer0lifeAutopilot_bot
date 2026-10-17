@@ -1692,7 +1692,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <div class="stat-box"><div class="stat-label">Available SOL</div><div class="stat-val" id="sniper-sol-balance">Loading...</div></div>
                     <div class="stat-box"><div class="stat-label">Order size</div><div class="stat-val" id="sniper-order-size">Loading...</div></div>
                 </div>
-                <p class="section-note">Screened Solana candidates · 1 position max</p>
+                <p id="sniper-position-cap" class="section-note">Screened Solana candidates · Checking position limit…</p>
                 <div id="discovery-status" class="section-note">Candidate scan pending.</div>
                 <button class="action-btn" id="scan-candidates" onclick="scanCandidates()">Scan candidates</button>
                 <details><summary>Candidate shortlist</summary><div id="candidate-list" class="section-note" style="white-space:pre-line">No verified shortlist yet.</div></details>
@@ -2800,6 +2800,12 @@ RAW_HTML = r"""<!DOCTYPE html>
                           +new Date(cost.checked_at*1000).toLocaleString()+' · '+cost.reason
                         : 'No entry cost check yet. Checked before each USDC-funded BUY; missing evidence blocks entry.';
                     const policy=s.execution_policy;
+                    const sniperPositionCap=document.getElementById('sniper-position-cap');
+                    const sniperMax=Number(policy?.max_positions?.sniper);
+                    if(sniperPositionCap)sniperPositionCap.textContent=
+                        Number.isSafeInteger(sniperMax)&&sniperMax>0
+                            ? 'Screened Solana candidates · up to '+sniperMax+' positions'
+                            : 'Screened Solana candidates · position limit unavailable';
                     document.getElementById('execution-policy-summary').textContent=policy
                         ? 'Decision ≤ '+policy.decision_max_age_seconds+'s · Quote ≤ '+policy.quote_max_age_seconds
                           +'s / '+policy.quote_max_slot_distance+' slots · Slippage ≤ '+(policy.slippage_bps/100)

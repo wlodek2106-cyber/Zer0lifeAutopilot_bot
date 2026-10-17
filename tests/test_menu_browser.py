@@ -24,6 +24,12 @@ class MenuBrowserTests(unittest.TestCase):
             "trades": [], "logs": [], "trading_active": False, "is_admin": True,
             "wallet_status": {"wallet_configured": True, "persistent_storage": True, "finance_allowed": True},
             "trading_settings": {"order_usdc": 1, "max_positions": 5, "assets": ["SOL", "JUP"]},
+            "execution_policy": {
+                "decision_max_age_seconds": 60, "quote_max_age_seconds": 20,
+                "quote_max_slot_distance": 20, "slippage_bps": 40,
+                "buy_max_price_impact_pct": 1.25, "core_max_cost_pct": 2.5,
+                "max_positions": {"main": 5, "sniper": 5},
+            },
             "operator_fees": {"reserve_sol": "0", "minimum_sol": "0.005", "own_available_sol": "0.164009149", "sufficient": False},
         }
         stub = """<script>
@@ -55,6 +61,7 @@ class MenuBrowserTests(unittest.TestCase):
                 assert(document.querySelectorAll('.nav-btn').length===4,'four navigation items');
                 assert(document.getElementById('meme-sniper-card').closest('.tab-panel').id==='tab-trading','SOL sniper in Trading, not Overview');
                 assert(document.getElementById('sniper-sol-balance').textContent==='0.164009 SOL','sniper shows personal SOL');
+                assert(document.getElementById('sniper-position-cap').textContent==='Screened Solana candidates · up to 5 positions','sniper cap matches server policy');
                 assert(document.getElementById('btn-meme-toggle').disabled,'unconnected sniper cannot trade');
                 assert(document.getElementById('meme-toggle-text').textContent==='NOT CONNECTED','honest sniper status');
                 assert(document.getElementById('btn-toggle').closest('.tab-panel').id==='tab-trading','controls in Trading');
