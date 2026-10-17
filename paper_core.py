@@ -8,6 +8,7 @@ import time
 import execution_policy as policy
 from custody_ledger import USDC, SOL
 from paper_store import PaperStore
+import paper_benchmark
 from wallet_runtime import WalletError
 
 
@@ -54,7 +55,8 @@ class PaperCore:
         if not run or not run["enabled"]:
             return
         try:
-            await self._tick(run, market, snapshot, prices)
+            if await paper_benchmark.update(self, run, market):
+                await self._tick(run, market, snapshot, prices)
         except WalletError as exc:
             self.store.note(run, str(exc))
         except Exception as exc:

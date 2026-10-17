@@ -1843,6 +1843,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <button class="btn-copy" id="paper-pause" data-paper-control onclick="controlPaper(paperReport?.run?.enabled?'pause':'resume')" disabled>Pause virtual test</button>
                 <p id="paper-status" class="status-output">Virtual test not started.</p>
                 <div id="paper-metrics" class="status-output"></div>
+                <div id="paper-benchmark" class="status-output" aria-live="polite"></div>
+                <p class="section-note">SOL benchmark: same starting USDC and period. Both stay in cash until the first validated SOL entry quote. Buy once, hold a fixed SOL quantity; value at minimum exit proceeds, less modeled entry/exit costs and the same profit-only partner model. No real transactions. Legacy runs require a new run for comparison; pauses retain both portfolios and do not reset the clock.</p>
                 <details><summary>Virtual positions &amp; results</summary>
                     <p id="paper-positions" class="section-note"></p>
                     <div style="overflow-x:auto"><table style="width:100%;min-width:560px;font-size:12px"><thead><tr><th>Asset / time</th><th>Gross USDC</th><th>Costs USDC</th><th>Partner model</th><th>Net USDC / reasons</th></tr></thead><tbody id="paper-trades"></tbody></table></div>
@@ -2763,6 +2765,17 @@ RAW_HTML = r"""<!DOCTYPE html>
                 ' · sampled max drawdown: '+r.max_sampled_drawdown_pct.toFixed(2)+'% · longest losing streak: '+r.longest_loss_streak:'';
             document.getElementById('paper-positions').textContent=r?
                 'Open virtual positions: '+(r.positions.map(p=>p.symbol+' · '+p.quantity+' · entry '+money(p.entry_usdc)+' USDC').join('; ')||'none'):'';
+            const b=r?.sol_comparison;
+            document.getElementById('paper-benchmark').textContent=!r?'':b?.status==='ready'?
+                'CORE vs SOL HOLD · modeled net liquidation'+
+                '\nCore: '+money(b.core_equity_usdc)+' USDC · '+b.core_return_pct.toFixed(2)+'%'+
+                '\nSOL hold: '+money(b.hold_equity_usdc)+' USDC · '+b.hold_return_pct.toFixed(2)+'%'+
+                '\nCore advantage: '+money(b.advantage_usdc)+' USDC · '+b.advantage_percentage_points.toFixed(2)+' percentage points'+
+                '\nHeld SOL: '+b.sol_quantity+' · modeled costs: '+money(b.hold_expenses_usdc)+
+                ' · modeled partners: '+money(b.hold_modeled_partner_usdc)+
+                '\nMarket start: '+new Date(b.started_at*1000).toLocaleString()+
+                ' · valued: '+new Date(b.as_of*1000).toLocaleString():
+                'CORE vs SOL HOLD · '+(b?.reason||'Comparison unavailable.');
             const rows=document.getElementById('paper-trades'); rows.replaceChildren();
             for(const t of r?.trades||[]) {
                 const row=document.createElement('tr');

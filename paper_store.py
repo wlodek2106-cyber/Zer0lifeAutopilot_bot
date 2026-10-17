@@ -41,6 +41,10 @@ class PaperStore:
                     entry_reason TEXT NOT NULL, exit_reason TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS claims(
                     run_id TEXT NOT NULL, analysis_id TEXT NOT NULL, PRIMARY KEY(run_id,analysis_id));
+                CREATE TABLE IF NOT EXISTS sol_benchmarks(
+                    run_id TEXT PRIMARY KEY, started_at INTEGER, raw INTEGER,
+                    entry_raw INTEGER, entry_expense_raw INTEGER, cash_raw INTEGER,
+                    mark_raw INTEGER, mark_expense_raw INTEGER, mark_at INTEGER);
             """)
         os.chmod(path, 0o600)
 
@@ -72,9 +76,11 @@ class PaperStore:
             if db.execute("SELECT id FROM runs WHERE uid=? AND current=1", (uid,)).fetchone() and confirm is not True:
                 raise WalletError("Confirm archiving the current virtual run. Real funds are never changed.", 409)
             db.execute("UPDATE runs SET current=0,enabled=0,revision=revision+1 WHERE uid=? AND current=1", (uid,))
+            run_id = uuid.uuid4().hex
             db.execute("""INSERT INTO runs(id,uid,created_at,initial_raw,order_raw,cash_raw,peak_raw)
-                          VALUES(?,?,?,?,?,?,?)""", (uuid.uuid4().hex, uid, int(time.time()),
+                          VALUES(?,?,?,?,?,?,?)""", (run_id, uid, int(time.time()),
                           initial_raw, order_raw, initial_raw, initial_raw))
+            db.execute("INSERT INTO sol_benchmarks(run_id) VALUES(?)", (run_id,))
 
     def pause(self, uid, enabled):
         with self.db() as db:
@@ -207,6 +213,7 @@ class PaperStore:
             "initial_usdc": run["initial_raw"]/SCALE, "order_usdc": run["order_raw"]/SCALE,
             "cash_usdc": run["cash_raw"]/SCALE, "equity_usdc": equity/SCALE if equity is not None else None,
             "equity_fresh": equity is not None, "realized_net_usdc": net/SCALE,
+            "sol_comparison": self.sol_comparison(run, positions, equity),
             "gross_realized_usdc": sum(t["gross_raw"] for t in trades)/SCALE,
             "realized_expenses_usdc": sum(t["expenses_raw"] for t in trades)/SCALE,
             "modeled_partner_usdc": run["partner_raw"]/SCALE, "closed_count": len(trades),
@@ -222,3 +229,51 @@ class PaperStore:
             "archives": [{"created_at": a["created_at"], "initial_usdc": a["initial_raw"]/SCALE,
                           "net_usdc": a["net_raw"]/SCALE, "closed_count": a["closed_count"],
                           "open_count": a["open_count"]} for a in archives]}}
+
+    def benchmark(self, run_id):
+        with self.db() as db:
+            row = db.execute("SELECT * FROM sol_benchmarks WHERE run_id=?", (run_id,)).fetchone()
+            return dict(row) if row else None
+
+    def benchmark_save(self, run, values):
+        allowed = {"started_at", "raw", "entry_raw", "entry_expense_raw", "cash_raw",
+                   "mark_raw", "mark_expense_raw", "mark_at"}
+        if not values or set(values)-allowed:
+            raise ValueError("Invalid benchmark fields")
+        with self.db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if not self.valid(db, run):
+                return False
+            db.execute("UPDATE sol_benchmarks SET "+",".join(k+"=?" for k in values)+" WHERE run_id=?",
+                       (*values.values(), run["id"]))
+            return True
+
+    def sol_comparison(self, run, positions, equity):
+        b = self.benchmark(run["id"])
+        result = {"status": "unavailable", "reason": "", "started_at": None}
+        if b is None:
+            result["reason"] = "This run predates the benchmark. Start a new run; no historical price is invented."
+            return result
+        result["started_at"] = b["started_at"]
+        if b["raw"] is None:
+            result["reason"] = "Waiting for executable SOL entry quotes; both strategies remain in virtual cash."
+            return result
+        now = int(time.time())
+        if (b["mark_at"] is None or not 0 <= now-b["mark_at"] <= 60 or equity is None
+                or any(abs(p["mark_at"]-b["mark_at"]) > 30 for p in positions)):
+            result["reason"] = "Fresh, time-aligned exit quotes are unavailable. No comparison result is shown."
+            return result
+        pre = b["mark_raw"]-b["mark_expense_raw"]-b["entry_raw"]-b["entry_expense_raw"]
+        partner = (max(0, pre)*PARTNER_BPS+9999)//10000
+        hold = b["cash_raw"]+b["mark_raw"]-b["mark_expense_raw"]-partner
+        initial = run["initial_raw"]
+        return {**result, "status": "ready", "reason": "", "as_of": b["mark_at"],
+                "sol_quantity": b["raw"]/1_000_000_000,
+                "hold_equity_usdc": hold/SCALE, "hold_net_usdc": (hold-initial)/SCALE,
+                "hold_return_pct": (hold-initial)*100/initial,
+                "core_equity_usdc": equity/SCALE, "core_net_usdc": (equity-initial)/SCALE,
+                "core_return_pct": (equity-initial)*100/initial,
+                "advantage_usdc": (equity-hold)/SCALE,
+                "advantage_percentage_points": (equity-hold)*100/initial,
+                "hold_expenses_usdc": (b["entry_expense_raw"]+b["mark_expense_raw"])/SCALE,
+                "hold_modeled_partner_usdc": partner/SCALE}
