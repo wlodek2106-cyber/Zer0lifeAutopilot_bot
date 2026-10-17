@@ -1040,10 +1040,13 @@ class CustodyRuntime(WalletRuntime):
                 returned = await self.send_via_jito(session, wire, signature)
             else:
                 returned = await self.rpc(session, "sendTransaction", [wire, {
-                    "encoding": "base64", "skipPreflight": False, "maxRetries": 0}])
+                    "encoding": "base64", "skipPreflight": False,
+                    "preflightCommitment": "confirmed"}])
             self.ledger.submitted(row["id"], returned == signature)
-        except Exception:
+        except Exception as exc:
             self.ledger.submitted(row["id"], False)
+            if row["kind"] == "WITHDRAW":
+                self.log("Withdrawal RPC outcome unknown; reserve retained (" + type(exc).__name__ + ").")
         if row["kind"] == "WITHDRAW":
             # Return the signature as soon as the RPC accepts (or ambiguously
             # rejects) the broadcast. Finality is reconciled by the next
@@ -1184,9 +1187,11 @@ class CustodyRuntime(WalletRuntime):
         state = row["state"]
         return web.json_response({"success": state != "FAILED", "state": state,
             "operation_id": row["id"], "tx_signature": row["signature"],
-            "message": "Подтверждено сетью." if state == "COMPLETED" else
-                "Операция не выполнена. Ваш резерв возвращён." if state == "FAILED" else
-                "Сумма зарезервирована на вашем счёте. Ожидается подтверждение; не повторяйте перевод."
+            "message": "Confirmed on Solana." if state == "COMPLETED" else
+                "Withdrawal failed. Reserved funds returned." if state == "FAILED" else
+                "Solana RPC accepted the withdrawal. Waiting for confirmation; do not repeat it."
+                if state == "SUBMITTED" else
+                "RPC did not confirm submission. Checking the outcome; funds remain reserved. Do not repeat it."
         }, status=200 if state == "COMPLETED" else 409 if state == "FAILED" else 202)
 
     async def withdraw(self, request, session):

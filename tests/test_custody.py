@@ -19,6 +19,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from solders.hash import Hash
 from solders.keypair import Keypair
 from solders.message import Message, MessageV0
+from solders.pubkey import Pubkey
 from solders.signature import Signature
 from solders.transaction import Transaction, VersionedTransaction
 
@@ -1276,6 +1277,13 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                 return {"value": 5000}
             if method == "sendTransaction":
                 row = self.ledger.pending()[0]
+                self.assertEqual(params[1]["preflightCommitment"], "confirmed")
+                self.assertNotIn("maxRetries", params[1])
+                transaction = Transaction.from_bytes(base64.b64decode(params[0]))
+                destination_ata = legacy.associated(
+                    self.recipient, Pubkey.from_string(USDC))
+                self.assertIn(destination_ata, transaction.message.account_keys)
+                self.assertEqual(row["recipient"], str(self.recipient))
                 self.assertEqual(row["state"], "PREPARED")
                 self.assertEqual(self.ledger.balance(101, USDC), 1_000_000)
                 sends.append(row["signature"])
@@ -1325,6 +1333,22 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ledger.balance(101, USDC), 2_000_000 if failed else 1_000_000)
         self.assertEqual(self.ledger.balance(202, USDC), 7_000_000)
         self.assertTrue(self.ledger.audit())
+
+    async def test_native_sol_withdrawal_targets_the_entered_recipient(self):
+        async def rpc(session, method, params=None):
+            if method == "getGenesisHash":
+                return legacy.GENESIS
+            if method == "getLatestBlockhash":
+                return {"value": {"blockhash": str(Hash.new_unique())}}
+            if method == "getFeeForMessage":
+                return {"value": 5000}
+            raise AssertionError("Unexpected RPC: " + method)
+        self.service.rpc = rpc
+        tx = await self.service.withdraw_transaction(
+            None, self.signer, "SOL", self.recipient, 1_000_000, "recipient-test")
+        self.assertIn(self.recipient, tx.message.account_keys)
+        self.assertIn(self.signer.pubkey(), tx.message.account_keys)
+        self.assertNotEqual(tx.signatures[0], Signature.default())
 
     async def test_complete_withdrawal_pipeline_is_owner_scoped_and_idempotent(self):
         await self.run_withdrawal()
