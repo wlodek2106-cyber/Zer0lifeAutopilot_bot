@@ -1927,7 +1927,7 @@ RAW_HTML = r"""<!DOCTYPE html>
     <div id="recovery-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="recovery-confirm-title" style="display:none;position:fixed;inset:0;z-index:20000;background:rgba(0,0,0,.78);align-items:center;justify-content:center;padding:20px;box-sizing:border-box;">
         <div style="width:100%;max-width:420px;padding:20px;border:1px solid #334155;border-radius:18px;background:#101923;color:#e2e8f0;box-shadow:0 20px 60px rgba(0,0,0,.55);">
             <h2 id="recovery-confirm-title" style="margin:0 0 12px;font-size:18px;">Verify the pending operation</h2>
-            <p style="font-size:14px;line-height:1.5;color:#cbd5e1;">This performs read-only Solana checks. Only if the network proves the signature absent and expired: a BUY releases its reserved funds, or a SELL restores its reserved asset to the open position; both trading modes are switched OFF and the audit is preserved. No transaction is sent. If proof is incomplete or unavailable, the operation stays pending and funds remain reserved.</p>
+            <p style="font-size:14px;line-height:1.5;color:#cbd5e1;">This performs read-only Solana checks. Only if the network proves the signature absent and expired: a BUY or WITHDRAW releases its reserved funds, or a SELL restores its reserved asset to the open position; both trading modes are switched OFF and the audit is preserved. This check does not send or resend a transaction. If proof is incomplete or unavailable, the operation stays pending and funds remain reserved.</p>
             <div style="display:flex;gap:10px;margin-top:18px;">
                 <button type="button" onclick="closeRecoveryConfirm()" style="flex:1;min-height:46px;border:1px solid #475569;border-radius:12px;background:#172338;color:#e2e8f0;font-weight:700;touch-action:manipulation;">Cancel</button>
                 <button type="button" onclick="confirmRecoveryAction()" style="flex:1;min-height:46px;border:1px solid #34d399;border-radius:12px;background:#34d399;color:#052e20;font-weight:800;touch-action:manipulation;">Verify and unlock</button>
@@ -2785,7 +2785,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     }
                     const recoverButton = document.getElementById('recover-pending-operation');
                     const pendingRecovery = pendingOperations.find(op =>
-                        ['BUY', 'SELL', 'PARTNER_PAYOUT'].includes(op.kind) && ['PREPARED', 'SUBMITTED', 'UNKNOWN'].includes(op.state) && op.signature);
+                        ['BUY', 'SELL', 'WITHDRAW', 'PARTNER_PAYOUT'].includes(op.kind) && ['PREPARED', 'SUBMITTED', 'UNKNOWN'].includes(op.state) && op.signature);
                     window.pendingRecoverySignature = pendingRecovery ? pendingRecovery.signature : '';
                     window.pendingRecoveryKind = pendingRecovery ? pendingRecovery.kind : '';
                     if (recoverButton) {

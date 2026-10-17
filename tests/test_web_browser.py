@@ -72,7 +72,7 @@ class WebBrowserTests(unittest.TestCase):
         window.confirm=()=>{throw Error('Native confirm should not be used in Telegram iOS');};
         window.fetch=async()=>new Response(JSON.stringify({success:false,message:'fixture'}));
         </script>""")
-        self.assertIn("['BUY', 'SELL', 'PARTNER_PAYOUT'].includes(op.kind)", page)
+        self.assertIn("['BUY', 'SELL', 'WITHDRAW', 'PARTNER_PAYOUT'].includes(op.kind)", page)
         self.assertIn("Reserved: ", page)
         browser.AccountBrowserTests().run_page(page,"""
             document.getElementById('app').style.display='block';
@@ -89,8 +89,8 @@ class WebBrowserTests(unittest.TestCase):
             const modal=document.getElementById('recovery-confirm-modal');
             assert(modal.style.display==='flex','tap opens in-page confirmation without native dialog');
             const confirm=document.querySelector('#recovery-confirm-modal button:last-child');
-            assert(document.querySelector('#recovery-confirm-modal p').textContent.includes('BUY releases its reserved funds'),
-                'confirmation explains when a pending BUY can release funds');
+            assert(document.querySelector('#recovery-confirm-modal p').textContent.includes('BUY or WITHDRAW releases its reserved funds'),
+                'confirmation explains when a pending withdrawal can release funds');
             const confirmBox=confirm.getBoundingClientRect();
             assert(document.elementFromPoint(confirmBox.x+confirmBox.width/2,confirmBox.y+confirmBox.height/2)===confirm,
                 'confirm button is the topmost touch target');

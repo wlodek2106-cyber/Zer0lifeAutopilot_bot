@@ -716,7 +716,7 @@ class CustodyRuntime(WalletRuntime):
         async with self.lock:
             row = next((item for item in self.ledger.pending()
                         if item.get("signature") == signature and int(item["uid"]) == uid), None)
-            if not row or row["kind"] not in ("BUY", "SELL", "PARTNER_PAYOUT") or row["state"] not in ("PREPARED", "SUBMITTED", "UNKNOWN"):
+            if not row or row["kind"] not in ("BUY", "SELL", "WITHDRAW", "PARTNER_PAYOUT") or row["state"] not in ("PREPARED", "SUBMITTED", "UNKNOWN"):
                 raise WalletError("No matching pending operation belongs to this account.", 409)
             try:
                 wire = base64.b64decode(row.get("wire") or "", validate=True)
@@ -761,10 +761,12 @@ class CustodyRuntime(WalletRuntime):
                 recovery = "the reserved purchase funds were released back to your available balance"
             elif row["kind"] == "SELL":
                 recovery = "the reserved asset was restored to the open position"
+            elif row["kind"] == "WITHDRAW":
+                recovery = "the reserved withdrawal funds were released back to your available balance"
             else:
                 recovery = "the affiliate commission was returned to its pending payout queue"
         return web.json_response({"success": True, "state": "FAILED",
-            "message": f"Solana history proved this {row['kind']} absent and expired; {recovery}. The audit record is retained. No transaction was sent. Both trading modes are OFF; enable them only when ready."})
+            "message": f"Solana history proved this {row['kind']} absent and expired; {recovery}. The audit record is retained. No transaction was sent or resent by this recovery check. Both trading modes are OFF; enable them only when ready."})
 
     async def recovery_rpc(self, session, method, params):
         # Fixed, independently verified mainnet endpoint; keys/credentials never sent.
@@ -840,9 +842,9 @@ class CustodyRuntime(WalletRuntime):
             statuses = await self.rpc(session, "getSignatureStatuses", [[row["signature"]], {"searchTransactionHistory": True}])
             status = statuses["value"][0]
             if status is None:
-                # A dropped Jito bundle can never acquire a signature status.
-                # Recover only with independent rooted-expiry evidence; never resend.
-                if (row["kind"] in ("BUY", "SELL") and row.get("wire")
+                # A missing signature can be recovered only with independent
+                # rooted-expiry evidence; never resend an unresolved operation.
+                if (row["kind"] in ("BUY", "SELL", "WITHDRAW") and row.get("wire")
                         and time.time() - row["created_at"] >= 180):
                     checks = getattr(self, "_expiry_checks", {})
                     last_check = checks.get(row["id"], 0)

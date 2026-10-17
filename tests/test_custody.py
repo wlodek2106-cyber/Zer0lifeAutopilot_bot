@@ -487,6 +487,20 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.ledger.submitted(buy["id"], True)
         return buy, signature
 
+    def pending_withdraw(self, uid=101):
+        invoice = self.ledger.invoice(uid, USDC, 5_000_000)
+        self.ledger.credit_deposit(invoice["id"], str(Signature.new_unique()),
+                                   USDC, 5_000_000, invoice["created_at"])
+        tx = VersionedTransaction(Message.new_with_blockhash(
+            [], self.signer.pubkey(), Hash.new_unique()), [self.signer])
+        signature = str(tx.signatures[0])
+        wire = base64.b64encode(bytes(tx)).decode()
+        operation = self.ledger.reserve(uid, "recovery-withdraw-" + str(uid),
+            "WITHDRAW", USDC, 4_000_000, {"token": "USDC"}, str(self.recipient))
+        self.ledger.prepared(operation["id"], signature, wire)
+        self.ledger.submitted(operation["id"], False)
+        return operation, signature
+
     async def test_expired_pending_buy_releases_reserved_funds_only_after_proof(self):
         buy, signature = self.pending_buy()
         available_before = self.ledger.balance(101, USDC)
@@ -516,6 +530,43 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ledger.pending(), [])
         self.assertTrue(self.ledger.audit())
 
+    async def test_expired_pending_withdraw_releases_usdc_only_after_proof(self):
+        operation, signature = self.pending_withdraw()
+        available_before = self.ledger.balance(101, USDC)
+        self.ledger.settings(101, enabled=True, sniper_enabled=True)
+        with patch.object(runtime, "prove_retirement", AsyncMock(return_value={
+                "signature": signature, "expiry_proof": "signed_non_nonce_blockhash_finalized_expired"})):
+            response = await self.service.recover_expired_operation(
+                Request(101, {"signature": signature, "confirm_expired": True}), None)
+        result = json.loads(response.text)
+        self.assertTrue(result["success"])
+        self.assertIn("withdrawal funds", result["message"])
+        self.assertEqual(self.ledger.operation(operation["id"])["state"], "FAILED")
+        self.assertEqual(self.ledger.balance(101, USDC), available_before + 4_000_000)
+        self.assertFalse(self.ledger.settings(101)["trading"])
+        self.assertFalse(self.ledger.settings(101)["sniper_trading"])
+        with self.ledger.db() as db:
+            audit = db.execute(
+                "SELECT actor_id,state_before,evidence FROM custody_operation_recovery_audit WHERE signature=?",
+                (signature,)).fetchone()
+        self.assertEqual(audit["actor_id"], 101)
+        self.assertEqual(audit["state_before"], "UNKNOWN")
+        self.assertEqual(json.loads(audit["evidence"])["outcome"], "PROVEN_ABSENT_AND_EXPIRED")
+        self.assertEqual(self.ledger.pending(), [])
+        self.assertTrue(self.ledger.audit())
+
+    async def test_expired_pending_withdraw_stays_reserved_without_proof(self):
+        operation, signature = self.pending_withdraw()
+        available_before = self.ledger.balance(101, USDC)
+        with patch.object(runtime, "prove_retirement", AsyncMock(
+                side_effect=legacy.WalletError("No proof; record preserved."))):
+            with self.assertRaises(legacy.WalletError):
+                await self.service.recover_expired_operation(
+                    Request(101, {"signature": signature, "confirm_expired": True}), None)
+        self.assertEqual(self.ledger.operation(operation["id"])["state"], "UNKNOWN")
+        self.assertEqual(self.ledger.balance(101, USDC), available_before)
+        self.assertTrue(self.ledger.audit())
+
     async def test_worker_recovers_dropped_buy_and_pauses_without_resend(self):
         buy, signature = self.pending_buy()
         with self.ledger.db() as db:
@@ -536,6 +587,28 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.ledger.settings(101)["sniper_trading"])
         self.assertTrue(self.ledger.audit())
         self.assertNotIn("sendTransaction", [c.args[1] for c in self.service.rpc.call_args_list])
+
+    async def test_worker_recovers_expired_withdraw_without_resending(self):
+        operation, signature = self.pending_withdraw()
+        with self.ledger.db() as db:
+            db.execute("UPDATE custody_operations SET created_at=created_at-300 WHERE id=?",
+                       (operation["id"],))
+        self.service.rpc = AsyncMock(side_effect=lambda session, method, params=None:
+            legacy.GENESIS if method == "getGenesisHash" else {"value": [None]})
+        before = self.ledger.balance(101, USDC)
+        with patch.object(runtime, "prove_retirement", AsyncMock(return_value={
+                "signature": signature,
+                "expiry_proof": "signed_non_nonce_blockhash_finalized_expired"})) as proof:
+            await self.service.reconcile(None)
+            await self.service.reconcile(None)
+        proof.assert_awaited_once()
+        self.assertTrue(proof.call_args.args[2]["signed_wire"])
+        self.assertEqual(self.ledger.balance(101, USDC), before + 4_000_000)
+        self.assertEqual(self.ledger.operation(operation["id"])["state"], "FAILED")
+        self.assertFalse(self.ledger.settings(101)["trading"])
+        self.assertFalse(self.ledger.settings(101)["sniper_trading"])
+        self.assertNotIn("sendTransaction", [call.args[1] for call in self.service.rpc.call_args_list])
+        self.assertTrue(self.ledger.audit())
 
     async def test_worker_keeps_dropped_buy_reserved_without_proof(self):
         buy, _ = self.pending_buy()
