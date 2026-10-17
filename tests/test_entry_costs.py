@@ -113,6 +113,15 @@ class CostRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 QuoteSession([reverse]), 101, quote(), 30_000_000, JTO, {}, "JTO")
 
     async def test_expensive_core_entry_releases_unsent_reserve_without_signing_or_sending(self):
+        self.ledger.settings(101, enabled=True, raw=30_000_000)
+        self.service.watchlist["JTO"] = {"mint": JTO, "decimals": 9}
+        self.service.main_symbols.append("JTO")
+        original_rpc = self.service.rpc
+        async def policy_rpc(session, method, params=None):
+            if method == "getSlot":
+                return 100
+            return await original_rpc(session, method, params)
+        self.service.rpc = policy_rpc
         invoice = self.ledger.invoice(101, USDC, 30_000_000)
         self.ledger.credit_deposit(invoice["id"], str(Signature.new_unique()),
                                    USDC, invoice["raw"], invoice["created_at"])

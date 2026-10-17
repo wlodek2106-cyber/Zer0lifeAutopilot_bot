@@ -28,8 +28,9 @@ from legacy_retirement import prove_retirement, RECOVERY_RPC
 from tx_deposits import incoming_amounts
 from solders.signature import Signature
 import ai_decisions
+import execution_policy
 import activity_log
-from entry_costs import EntryCostError, quote_amounts, assess_entry
+from entry_costs import EntryCostError, quote_amounts
 from meme_discovery import MemeDiscovery
 
 WRAPPED_SOL = "So11111111111111111111111111111111111111112"
@@ -1010,7 +1011,7 @@ class CustodyRuntime(WalletRuntime):
                     context = info.get("entry_cost_context") or {}
                     if context.get("input_raw") != row["raw"]:
                         raise EntryCostError("ENTRY SKIPPED: cost evidence does not match the reserved order.", 409)
-                    report = assess_entry(context, max(0, expense))
+                    report = execution_policy.costs(context, max(0, expense))
                     report["symbol"] = info.get("symbol", "")
                     self.ledger.entry_cost_report(row["uid"], report)
                     if report["status"] != "ALLOW":
@@ -1029,6 +1030,12 @@ class CustodyRuntime(WalletRuntime):
             if getattr(self, "web_access", None) and row["kind"] in ("BUY", "SELL"):
                 self.web_access.require(row["uid"], row["kind"], row.get("position_id"),
                                         manual=info.get("manual_close") is True)
+            if row["kind"] in ("BUY", "SELL"):
+                self.authorize_execution_order(
+                    row["uid"], row["asset"], info["output_asset"], row["raw"],
+                    row["kind"], info, row.get("position_id"), reserved=True)
+                await self.authorize_execution_quote(session, row["uid"], row["kind"],
+                    row["asset"], info["output_asset"], row["raw"], info)
             signature = str(tx.signatures[0])
             self.ledger.prepared(row["id"], signature, wire)
         except Exception:
@@ -1233,6 +1240,7 @@ class CustodyRuntime(WalletRuntime):
             return self.result(await self.send_reserved(session, tx, row, {}))
 
     def record_entry_cost_error(self, uid, exc, symbol=""):
+        self.record_execution_check(uid, execution_policy.deny("cost", str(exc)), "cost", "BUY", symbol)
         existing = self.ledger.entry_cost_report(uid) or {}
         if existing.get("status") == "SKIP" and existing.get("reason") == str(exc):
             return
@@ -1273,6 +1281,40 @@ class CustodyRuntime(WalletRuntime):
             self.record_entry_cost_error(uid, exc, symbol)
             raise exc from None
 
+    def record_execution_check(self, uid, verdict, stage, kind, symbol=""):
+        self.ledger.execution_report(uid, {
+            "policy_version": execution_policy.VERSION,
+            "status": "ALLOW" if verdict.allowed else "BLOCKED",
+            "stage": stage, "action": kind, "symbol": symbol,
+            "code": verdict.code, "reason": verdict.reason, "checked_at": int(time.time())})
+        return verdict
+
+    def authorize_execution_order(self, uid, asset, output_asset, raw, kind, info,
+                                  position_id=None, reserved=False):
+        verdict = execution_policy.order(uid=uid, kind=kind, asset=asset,
+            output_asset=output_asset, raw=raw, metadata=info, position_id=position_id,
+            settings=self.ledger.settings(uid), positions=self.ledger.positions(uid, "OPEN"),
+            watchlist=self.watchlist, universes=self.ai_universes(),
+            balance=self.ledger.balance(uid, asset) + (raw if reserved and kind == "BUY" else 0))
+        if verdict.allowed and info.get("ai_analysis") and not execution_policy.fresh(
+                info.get("ai_created_at"), time.time(), execution_policy.DECISION_SECONDS):
+            verdict = execution_policy.deny("stale", "BLOCKED: AI decision expired before execution.")
+        self.record_execution_check(uid, verdict, "pre_send" if reserved else "order",
+                                    kind, info.get("symbol", "")).require()
+
+    async def authorize_execution_quote(self, session, uid, kind, asset, output_asset, raw, info):
+        try:
+            head_slot = await self.rpc(session, "getSlot", [{"commitment": "confirmed"}])
+        except Exception:
+            self.record_execution_check(uid, execution_policy.deny("quote_evidence",
+                "BLOCKED: current Solana slot could not be verified. No transaction was sent."),
+                "quote", kind, info.get("symbol", "")).require()
+        verdict = execution_policy.quote(kind=kind, value=info.get("risk_quote"),
+            input_mint=WRAPPED_SOL if asset == SOL else asset,
+            output_mint=WRAPPED_SOL if output_asset == SOL else output_asset, raw=raw,
+            received_at=info.get("quote_received_at"), head_slot=head_slot)
+        self.record_execution_check(uid, verdict, "quote", kind, info.get("symbol", "")).require()
+
     async def trade(self, session, uid, asset, output_asset, raw, kind, metadata, position_id=None, manual=False):
         if getattr(self, "web_access", None):
             self.web_access.require(uid, kind, position_id, manual)
@@ -1283,7 +1325,9 @@ class CustodyRuntime(WalletRuntime):
         if self.pending():
             raise WalletError("Ожидается подтверждение предыдущей операции.", 409)
         await self.solvent(session)
-        metadata = {**metadata, "execution_route": "jito_bundle_only",
+        self.authorize_execution_order(uid, asset, output_asset, raw, kind, metadata, position_id)
+        metadata = {**metadata, "execution_policy_version": execution_policy.VERSION,
+                    "execution_route": "jito_bundle_only",
                     "jito_tip_lamports": JITO_TIP_LAMPORTS}
         row = self.ledger.reserve(uid, str(uuid.uuid4()), kind, asset, raw, metadata, position_id=position_id)
         try:
@@ -1294,6 +1338,7 @@ class CustodyRuntime(WalletRuntime):
                 headers["x-api-key"] = os.environ["JUPITER_API_KEY"]
             mint_in = WRAPPED_SOL if asset == SOL else asset
             mint_out = WRAPPED_SOL if output_asset == SOL else output_asset
+            quote_received_at = time.time()
             async with session.get("https://api.jup.ag/swap/v1/quote", headers=headers, params={
                 "inputMint": mint_in, "outputMint": mint_out, "amount": raw, "slippageBps": 40}) as response:
                 if response.status != 200:
@@ -1304,7 +1349,9 @@ class CustodyRuntime(WalletRuntime):
                     or quote.get("swapMode") != "ExactIn"
                     or not 0 < int(quote.get("otherAmountThreshold", 0)) <= int(quote.get("outAmount", 0))):
                 raise WalletError("Неверная котировка Jupiter.")
-            info = {**metadata, "minimum_out": int(quote["otherAmountThreshold"]), "manual_close": manual}
+            info = {**metadata, "minimum_out": int(quote["otherAmountThreshold"]), "manual_close": manual,
+                    "risk_quote": quote, "quote_received_at": quote_received_at}
+            await self.authorize_execution_quote(session, uid, kind, asset, output_asset, raw, info)
             if kind == "BUY" and asset == USDC:
                 info["entry_cost_context"] = await self.core_entry_cost_context(
                     session, uid, quote, raw, mint_out, headers, metadata.get("symbol", ""))
@@ -1409,6 +1456,8 @@ class CustodyRuntime(WalletRuntime):
             "sniper_settings": {"order_sol": settings["sniper_order_raw"]/1e9, "max_positions": 1},
             "profit_sol": sum(t["profit_units"] for t in trades if t["funding_currency"] == "SOL"),
             "ai_status": self.ai_status(),
+            "execution_policy": execution_policy.describe(),
+            "execution_check": self.ledger.execution_report(uid),
             "trading_settings": {"order_usdc": settings["order_raw"]/1e6,
                 "max_positions": 5, "take_profit_pct": 3.5, "stop_loss_pct": 2,
                 "slippage_pct": .4, "entry_dip_pct": .3, "poll_seconds": 20,
@@ -1788,58 +1837,52 @@ class CustodyRuntime(WalletRuntime):
     async def apply_ai_decision(self, session, uid, settings, positions, prices, snapshot):
         # No provider output can select an amount, wallet, owner, or non-allowlisted mint.
         ai_decisions.validate_decisions(snapshot["decisions"], snapshot.get("universes", self.ai_universes()))
-        if time.time() - snapshot["created_at"] > 120:
+        if not execution_policy.fresh(snapshot["created_at"], time.time(), execution_policy.DECISION_SECONDS):
             for mode, flag in (("main", "trading"), ("sniper", "sniper_trading")):
                 if settings[flag]:
                     activity_log.observe(self, uid, snapshot, mode)
                     activity_log.record(self, uid, snapshot, mode, "stale",
                         "SKIPPED: AI decision is older than 120 seconds. Waiting for a fresh analysis.")
+                    self.record_execution_check(uid, execution_policy.deny("stale",
+                        "BLOCKED: AI decision timestamp is stale or invalid."),
+                        "proposal", snapshot["decisions"][mode]["action"],
+                        snapshot["decisions"][mode]["symbol"] or "")
             return
-        for mode, funding, flag, size_key, cap in [
-                ("main", USDC, "trading", "order_raw", 5),
-                ("sniper", SOL, "sniper_trading", "sniper_order_raw", 1)]:
+        for mode, funding, flag, size_key in [
+                ("main", USDC, "trading", "order_raw"),
+                ("sniper", SOL, "sniper_trading", "sniper_order_raw")]:
             if not settings[flag]:
                 continue
             activity_log.observe(self, uid, snapshot, mode)
             def note(code, message):
                 activity_log.record(self, uid, snapshot, mode, code, message)
+                self.record_execution_check(uid, execution_policy.deny(code, message),
+                                            "proposal", action, symbol or "")
             decision = snapshot["decisions"][mode]
             symbol, action = decision["symbol"], decision["action"]
             held = [p for p in positions if p["funding_asset"] == funding]
-            if action == "HOLD":
-                note("hold", "WAIT: AI chose HOLD. No transaction requested.")
+            verdict = execution_policy.proposal(mode=mode, decision=decision,
+                # Interpret the proposal against its server-captured universe.
+                # The mandatory order gate rechecks the LIVE catalog before any send.
+                universe=snapshot.get("universes", self.ai_universes())[mode],
+                created_at=snapshot["created_at"],
+                original=snapshot["prices"], prices=prices, samples=snapshot.get("samples", {}),
+                held=held, balance=self.ledger.balance(uid, funding), order_raw=settings[size_key])
+            self.record_execution_check(uid, verdict, "proposal", action, symbol or "")
+            if not verdict.allowed:
+                note(verdict.code, verdict.reason)
                 continue
-            original = snapshot["prices"].get(symbol, 0)
-            price = prices.get(symbol, 0)
-            if (not math.isfinite(original) or not math.isfinite(price)
-                    or original <= 0 or price <= 0 or abs(price/original-1) > .01):
-                note("price", "SKIPPED: price data is missing/invalid or moved more than 1% since analysis.")
-                continue
-            if funding == SOL:
-                old_sol, now_sol = snapshot["prices"].get("SOL", 0), prices.get("SOL", 0)
-                if (not math.isfinite(old_sol) or not math.isfinite(now_sol)
-                        or old_sol <= 0 or now_sol <= 0):
-                    note("sol_price", "SKIPPED: valid SOL reference prices are unavailable.")
-                    continue
-                relative_now, relative_old = price/now_sol, original/old_sol
-                if (not math.isfinite(relative_now) or not math.isfinite(relative_old)
-                        or relative_now <= 0 or relative_old <= 0
-                        or abs(relative_now/relative_old-1) > .01):
-                    note("relative_price", "SKIPPED: token/SOL price drift exceeds the 1% safety limit.")
-                    continue
             if action == "SELL":
                 position = next((p for p in held if p["symbol"] == symbol), None)
                 if position and self.ledger.ai_claim(snapshot["id"], uid, mode):
                     await self.observed_ai_trade(uid, snapshot, mode, session, uid, position["asset"],
                         funding, position["raw"], "SELL",
-                        {"output_asset": funding, "ai_analysis": snapshot["id"]}, position["id"])
+                        {"output_asset": funding, "ai_analysis": snapshot["id"],
+                         "ai_created_at": snapshot["created_at"]}, position["id"])
                     return
                 note("sell_skipped", "SKIPPED: no owned open position in this asset." if not position else
                      "SKIPPED: this analysis was already claimed; no automatic retry.")
-            elif (snapshot.get("samples", {}).get(symbol, 0) >= 5
-                    and (funding != SOL or snapshot.get("samples", {}).get("SOL", 0) >= 5) and len(held) < cap
-                    and not any(p["symbol"] == symbol for p in held)
-                    and self.ledger.balance(uid, funding) >= settings[size_key]):
+            elif action == "BUY":
                 if mode == "sniper":
                     if getattr(self, "discovery", None) and not self.discovery.entry_allowed(symbol):
                         note("candidate", "SKIPPED: candidate screening is stale or the asset is no longer eligible.")
@@ -1854,19 +1897,10 @@ class CustodyRuntime(WalletRuntime):
                     await self.observed_ai_trade(uid, snapshot, mode, session, uid, funding,
                         asset_for_mint(watch["mint"]), settings[size_key], "BUY",
                         {"symbol": symbol, "output_asset": asset_for_mint(watch["mint"]),
-                         "decimals": watch["decimals"], "ai_analysis": snapshot["id"]})
+                         "decimals": watch["decimals"], "ai_analysis": snapshot["id"],
+                         "ai_created_at": snapshot["created_at"]})
                     return
                 note("already_claimed", "SKIPPED: this analysis was already claimed; no automatic retry.")
-            else:
-                if snapshot.get("samples", {}).get(symbol, 0) < 5 or (
-                        funding == SOL and snapshot.get("samples", {}).get("SOL", 0) < 5):
-                    note("warmup", "SKIPPED: fewer than five price samples; waiting for market-data warm-up.")
-                elif len(held) >= cap:
-                    note("position_limit", "SKIPPED: this mode's open-position limit has been reached.")
-                elif any(p["symbol"] == symbol for p in held):
-                    note("already_open", "SKIPPED: you already hold an open position in this asset.")
-                else:
-                    note("balance", "SKIPPED: your available balance is below the saved purchase size.")
 
     async def observed_ai_trade(self, uid, snapshot, mode, *args):
         activity_log.record(self, uid, snapshot, mode, "execution_check",

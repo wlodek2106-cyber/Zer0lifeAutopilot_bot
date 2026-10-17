@@ -13,6 +13,7 @@ from custody_runtime import (
     JITO_TIP_LAMPORTS,
     JUPITER_PRIORITY_FEE_LAMPORTS,
     SOL,
+    USDC,
     WalletError,
     adjust_swap_amounts_for_operator_tip,
     jupiter_swap_instructions_payload,
@@ -143,6 +144,8 @@ class JitoRoutingTests(unittest.IsolatedAsyncioTestCase):
         )
         runtime = SimpleNamespace(
             safe_simulation=AsyncMock(return_value="signed-base64"),
+            authorize_execution_order=Mock(),
+            authorize_execution_quote=AsyncMock(),
             web_access=None,
             ledger=ledger,
             send_via_jito=AsyncMock(side_effect=TimeoutError()),
@@ -151,7 +154,8 @@ class JitoRoutingTests(unittest.IsolatedAsyncioTestCase):
         )
         result = await CustodyRuntime.send_reserved(
             runtime, None, SimpleNamespace(signatures=[signature]),
-            {"id": "op1", "kind": "BUY"}, {})
+            {"id": "op1", "kind": "BUY", "uid": 101, "asset": SOL, "raw": 1},
+            {"output_asset": USDC})
 
         self.assertEqual(result, {"state": "UNKNOWN"})
         runtime.send_via_jito.assert_awaited_once()

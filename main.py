@@ -1823,6 +1823,13 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <p id="ai-status" class="status-output">Checking AI status...</p>
                 <button class="btn-copy" onclick="previewAI()">Check AI · no trade</button>
                 <p id="ai-decisions" class="status-output"></p>
+                <details>
+                    <summary>Independent execution guard</summary>
+                    <p class="section-note">AI proposes BUY / SELL / HOLD only. Server-owned checks decide whether an order is allowed. AI cannot change limits or disable checks.</p>
+                    <p id="execution-policy-summary" class="section-note">Policy loading...</p>
+                    <p id="execution-policy-result" class="status-output">No execution check recorded yet.</p>
+                    <p class="section-note">Liquidity is checked through the executable route and price impact at the requested size, not a promise of market depth. Entry cost estimates are not profit forecasts. Entry-efficiency checks never block owned-position exits or withdrawals. A passed check is not proof of a filled trade.</p>
+                </details>
             </div>
             <div id="trading-strategy"></div>
             <div id="trading-sniper"></div>
@@ -2806,6 +2813,19 @@ RAW_HTML = r"""<!DOCTYPE html>
                             ? cost.estimated_cost_pct.toFixed(2)+'% / 2.50% budget · ' : '')
                           +new Date(cost.checked_at*1000).toLocaleString()+' · '+cost.reason
                         : 'No entry cost check yet. Checked before each USDC-funded BUY; missing evidence blocks entry.';
+                    const policy=s.execution_policy;
+                    document.getElementById('execution-policy-summary').textContent=policy
+                        ? 'Decision ≤ '+policy.decision_max_age_seconds+'s · Quote ≤ '+policy.quote_max_age_seconds
+                          +'s / '+policy.quote_max_slot_distance+' slots · Slippage ≤ '+(policy.slippage_bps/100)
+                          +'% · Buy impact ≤ '+policy.buy_max_price_impact_pct+'% · Core round-trip costs ≤ '
+                          +policy.core_max_cost_pct+'% · Positions: Core '+policy.max_positions.main
+                          +' / Sniper '+policy.max_positions.sniper+'. Order sizes come from your saved settings.'
+                        : 'Independent policy unavailable. Do not enable real trading.';
+                    const gate=s.execution_check;
+                    document.getElementById('execution-policy-result').textContent=gate
+                        ? new Date(gate.checked_at*1000).toLocaleString()+' · '+gate.status+' · '
+                          +gate.stage+' / '+gate.action+(gate.symbol?' '+gate.symbol:'')+'\\n'+gate.reason
+                        : 'No execution check recorded yet. AI suggestions are not executed trades.';
                     const ai=s.ai_status||{};
                     aiConfigured=!!ai.configured;
                     updateMemeToggleUI(s.sniper_active);
