@@ -1878,12 +1878,12 @@ RAW_HTML = r"""<!DOCTYPE html>
                 </div>
                 <div class="partner-wallet" id="partner-wallet-card">
                     <span class="partner-wallet-icon" aria-hidden="true">◇</span>
-                    <span class="partner-wallet-copy"><strong id="partner-wallet-label">Loading wallet status…</strong><small id="partner-wallet-detail">Checking automatic payout eligibility.</small></span>
-                    <span class="partner-wallet-badge" id="partner-wallet-badge">CHECKING</span>
+                    <span class="partner-wallet-copy"><strong id="partner-wallet-label">Partner earnings credit to your main balance</strong><small id="partner-wallet-detail">Withdraw credited USDC or SOL through Wallet.</small></span>
+                    <span class="partner-wallet-badge" id="partner-wallet-badge">IN-APP</span>
                 </div>
                 <p id="partner-program-status" class="partner-sr-only" role="status">Loading partner balances…</p>
                 <div class="partner-earnings">
-                    <p class="partner-earnings-title">Pending and paid earnings</p>
+                    <p class="partner-earnings-title">Partner earnings by currency</p>
                     <div id="partner-earnings-summary" aria-live="polite"><p class="partner-earnings-empty">Loading partner balances…</p></div>
                 </div>
                 <div class="partner-invite">
@@ -1901,7 +1901,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <ul>
                         <li>Commissions use realized trade profit — sale proceeds minus recorded purchase cost — after prior trading losses are recovered.</li>
                         <li>USDC and SOL are accounted for separately. Open trades and deposits do not count.</li>
-                        <li>Automatic payouts go to each partner’s verified linked wallet. Without a linked wallet, earnings remain queued.</li>
+                        <li>Partner commissions are credited to the main available balance. Withdraw them through Wallet when ready.</li>
                         <li>Solana network fees are paid from the operator reserve and are not deducted from the partner’s commission.</li>
                     </ul>
                 </details>
@@ -2042,18 +2042,15 @@ RAW_HTML = r"""<!DOCTYPE html>
                 }
                 const totalReferrals=counts.reduce((total,count)=>total+count,0);
                 if(networkTotal)networkTotal.textContent=totalReferrals.toLocaleString('en-US')+' partners';
-                const payoutReady=Boolean(data.automatic_payouts);
-                if(walletCard)walletCard.classList.toggle('is-unlinked',!data.wallet_linked);
-                if(walletLabel)walletLabel.textContent=data.wallet_linked?'Verified wallet linked':'Wallet not linked';
-                if(walletDetail)walletDetail.textContent=data.wallet_linked&&payoutReady?
-                    'Automatic payouts go to your verified wallet.':
-                    'Link and verify a wallet in Wallet; earnings stay queued.';
-                if(walletBadge)walletBadge.textContent=data.wallet_linked&&payoutReady?'VERIFIED':'ACTION NEEDED';
-                status.textContent='Referrals by level: '+counts.join(' / ')+'. '+
-                    (data.wallet_linked&&payoutReady?'Verified wallet linked; automatic payouts enabled.':
-                        'A verified wallet is required before automatic payouts can be sent.');
+                if(walletCard)walletCard.classList.remove('is-unlinked');
+                if(walletLabel)walletLabel.textContent='Partner earnings credit to your main balance';
+                if(walletDetail)walletDetail.textContent='Withdraw credited USDC or SOL through Wallet.';
+                if(walletBadge)walletBadge.textContent='IN-APP';
+                status.textContent='Referrals by level: '+counts.join(' / ')+
+                    '. Partner commissions are credited to your main balance for normal withdrawal.';
                 const allEarnings=Array.isArray(data.earnings)?data.earnings:[];
-                const earned=allEarnings.filter(item=>Number(item.pending_raw||0)>0||Number(item.paid_raw||0)>0);
+                const earned=allEarnings.filter(item=>Number(item.credited_raw||0)>0||
+                    Number(item.pending_raw||0)>0||Number(item.paid_raw||0)>0);
                 if(earningsSummary){
                     earningsSummary.replaceChildren();
                     if(!earned.length){
@@ -2065,7 +2062,11 @@ RAW_HTML = r"""<!DOCTYPE html>
                             const asset=item.asset==='SOL'?'SOL':'USDC';
                             const level=document.createElement('span');level.textContent='Level '+Number(item.level)+' · '+asset;
                             const amounts=document.createElement('strong');
-                            amounts.textContent=formatAmount(item.pending_raw,asset)+' pending · '+formatAmount(item.paid_raw,asset)+' paid';
+                            const parts=[];
+                            if(Number(item.credited_raw||0)>0)parts.push(formatAmount(item.credited_raw,asset)+' credited');
+                            if(Number(item.pending_raw||0)>0)parts.push(formatAmount(item.pending_raw,asset)+' pending');
+                            if(Number(item.paid_raw||0)>0)parts.push(formatAmount(item.paid_raw,asset)+' sent');
+                            amounts.textContent=parts.join(' · ');
                             row.append(level,amounts);earningsSummary.appendChild(row);
                         });
                     }
@@ -2076,15 +2077,11 @@ RAW_HTML = r"""<!DOCTYPE html>
                     const row=document.createElement('div');
                     row.className='partner-history-row';
                     const decimals=item.asset==='SOL'?9:6;
+                    const stateLabel=item.state==='CREDITED'?'ADDED TO MAIN BALANCE':
+                        item.state==='PAID'?'SENT TO LINKED WALLET':String(item.state||'UNKNOWN').replace(/_/g,' ');
                     row.textContent='Level '+item.level+' · '+(Number(item.amount_raw)/10**decimals).toFixed(decimals)+' '+item.asset+
-                        ' · '+String(item.state||'UNKNOWN').replace(/_/g,' ')+(item.signature?' · '+item.signature:'');
+                        ' · '+stateLabel+(item.signature?' · '+item.signature:'');
                     history.appendChild(row);
-                    if(item.state==='NEEDS_REVIEW'){
-                        const retry=document.createElement('button');
-                        retry.className='btn-copy';retry.textContent='Retry verified payout';
-                        retry.onclick=()=>retryPartnerPayout(item.id);
-                        history.appendChild(retry);
-                    }
                 }
             } catch(error) {
                 if(link)link.value='Referral link unavailable.';
@@ -2114,17 +2111,6 @@ RAW_HTML = r"""<!DOCTYPE html>
                 link.focus();link.select();
                 if(status)status.textContent='Could not copy. Select the link and copy it manually.';
             }
-        }
-        async function retryPartnerPayout(earningId) {
-            if(!confirm('Retry this previously earned payout to your verified wallet?'))return;
-            try{
-                const response=await apiFetch('/api/partners/retry',{method:'POST',
-                    headers:{'Content-Type':'application/json'},
-                    body:JSON.stringify({earning_id:earningId,confirm:true})});
-                const data=await response.json();
-                if(!response.ok||!data.success)throw Error(data.message||'Could not queue payout.');
-                alert(data.message);await refresh();
-            }catch(error){alert(error.message||'Could not queue payout.');}
         }
         async function checkTradingReadiness() {
             const output=document.getElementById('trading-readiness');output.textContent='Checking funds, fees and market APIs…';

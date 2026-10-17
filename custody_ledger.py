@@ -188,6 +188,7 @@ class CustodyLedger:
                     if name not in columns:
                         db.execute("ALTER TABLE " + table + " ADD COLUMN " + name + " " + definition)
             db.execute("UPDATE custody_positions SET cost_raw=cost_usdc,proceeds_raw=proceeds_usdc WHERE cost_raw IS NULL")
+        self.credit_safe_partner_earnings()
 
     @contextmanager
     def db(self):
@@ -290,13 +291,16 @@ class CustodyLedger:
             earned = []
             for level in range(1, 4):
                 row = db.execute("""SELECT asset,COALESCE(SUM(amount_raw),0) total,
-                    COALESCE(SUM(CASE WHEN state='PAID' THEN amount_raw ELSE 0 END),0) paid
+                    COALESCE(SUM(CASE WHEN state='CREDITED' THEN amount_raw ELSE 0 END),0) credited,
+                    COALESCE(SUM(CASE WHEN state='PAID' THEN amount_raw ELSE 0 END),0) paid,
+                    COALESCE(SUM(CASE WHEN state NOT IN ('CREDITED','PAID')
+                        THEN amount_raw ELSE 0 END),0) pending
                     FROM custody_partner_earnings WHERE partner_uid=? AND level=? GROUP BY asset""",
                     (uid, level)).fetchall()
                 for item in row:
                     earned.append({"level": level, "asset": item["asset"],
-                                   "earned_raw": item["total"], "paid_raw": item["paid"],
-                                   "pending_raw": item["total"] - item["paid"]})
+                                   "earned_raw": item["total"], "credited_raw": item["credited"],
+                                   "paid_raw": item["paid"], "pending_raw": item["pending"]})
             earnings_history = [dict(row) for row in db.execute(
                 """SELECT id,level,asset,amount_raw,state,signature,created_at
                    FROM custody_partner_earnings WHERE partner_uid=?
@@ -308,10 +312,44 @@ class CustodyLedger:
                 "invite_url": ("https://t.me/" + bot_username + "?start=ref_" + code) if bot_username else "",
                 "rates_bps": list(PARTNER_LEVEL_BPS), "referrals_by_level": counts,
                 "earnings": earned, "history": earnings_history,
-                "automatic_payouts": True,
+                "automatic_payouts": False, "balance_crediting": True,
                 "review_required": review_required,
                 "wallet_linked": bool(db.execute(
                     "SELECT 1 FROM custody_wallet_links WHERE uid=?", (uid,)).fetchone())}
+
+    def credit_safe_partner_earnings(self):
+        """Move unsubmitted legacy partner earnings into withdrawable user balances."""
+        credited = 0
+        with self.db() as db:
+            groups = db.execute("""SELECT partner_uid,asset,SUM(amount_raw) AS amount
+                FROM custody_partner_earnings
+                WHERE state IN ('QUEUED','NEEDS_REVIEW') AND operation_id IS NULL
+                GROUP BY partner_uid,asset""").fetchall()
+            for group in groups:
+                uid, asset = group["partner_uid"], group["asset"]
+                rows = db.execute("""SELECT id,amount_raw FROM custody_partner_earnings
+                    WHERE partner_uid=? AND asset=? AND state IN ('QUEUED','NEEDS_REVIEW')
+                    AND operation_id IS NULL ORDER BY created_at,id""", (uid, asset)).fetchall()
+                expected = sum(row["amount_raw"] for row in rows)
+                source = partner_account(uid)
+                # A mismatch may indicate an older payout is still unresolved. Never
+                # credit it to the main balance unless the legacy ledger fully backs it.
+                if not rows or expected != group["amount"] or _balance(db, source, asset) != expected:
+                    continue
+                for row in rows:
+                    jid = "partner-main-credit:" + row["id"]
+                    if not self.post(db, jid, "move verified partner earnings to main balance", [
+                            (source, asset, -row["amount_raw"]),
+                            (available(uid), asset, row["amount_raw"])]):
+                        raise LedgerError("Partner earning was already transferred.")
+                    changed = db.execute("""UPDATE custody_partner_earnings SET state='CREDITED'
+                        WHERE id=? AND partner_uid=? AND asset=?
+                        AND state IN ('QUEUED','NEEDS_REVIEW') AND operation_id IS NULL""",
+                        (row["id"], uid, asset)).rowcount
+                    if changed != 1:
+                        raise LedgerError("Partner earning changed during balance transfer.")
+                    credited += 1
+        return credited
 
     def next_partner_earning(self):
         with self.db() as db:
@@ -364,10 +402,10 @@ class CustodyLedger:
                 earning_id = str(uuid.uuid4())
                 db.execute("""INSERT INTO custody_partner_earnings
                     (id,position_id,trader_uid,partner_uid,level,asset,profit_basis_raw,
-                     amount_raw,created_at) VALUES(?,?,?,?,?,?,?,?,?)""",
+                     amount_raw,created_at,state) VALUES(?,?,?,?,?,?,?,?,?,'CREDITED')""",
                     (earning_id, position["id"], trader_uid, partner_uid, level, asset,
                      eligible_raw, amount, int(time.time())))
-                account = partner_account(partner_uid)
+                account = available(partner_uid)
                 credits[account] = credits.get(account, 0) + amount
                 total += amount
             row = db.execute("SELECT parent_uid FROM custody_referrals WHERE uid=?",

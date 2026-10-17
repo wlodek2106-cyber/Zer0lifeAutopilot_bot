@@ -1560,48 +1560,8 @@ class CustodyRuntime(WalletRuntime):
         return web.json_response({"success": True, **self.ledger.partner_report(uid, bot_username)})
 
     async def retry_partner_payout(self, request, session):
-        uid = self.uid(request)
-        body = await request.json()
-        if body.get("confirm") is not True:
-            raise WalletError("Confirm the retry of this previously earned partner payout.", 400)
-        if not self.ledger.wallet_address(uid):
-            raise WalletError("Link and verify your Solana wallet before retrying a payout.", 409)
-        if not self.ledger.retry_partner_earning(uid, str(body.get("earning_id", ""))):
-            raise WalletError("This payout is not awaiting review or does not belong to your account.", 409)
-        return web.json_response({"success": True,
-            "message": "Payout queued again. The server will check the shared-wallet lock before sending."})
-
-    async def process_partner_payout(self, session):
-        earning = self.ledger.next_partner_earning()
-        if not earning or self.pending():
-            return
-        uid = earning["partner_uid"]
-        recipient_text = self.ledger.wallet_address(uid)
-        if not recipient_text:
-            return
-        recipient = Pubkey.from_string(recipient_text)
-        request_id = "partner-" + str(uuid.uuid4())
-        async with self.lock:
-            if self.pending():
-                return
-            await self.solvent(session)
-            operation = self.ledger.reserve(uid, request_id, "PARTNER_PAYOUT",
-                earning["asset"], earning["amount_raw"], {}, recipient_text)
-            if operation["state"] == "COMPLETED":
-                return
-            if operation["state"] != "RESERVED":
-                return
-            self.ledger.set_partner_operation(earning["id"], operation["id"])
-            try:
-                token = "SOL" if earning["asset"] == SOL else "USDC"
-                transaction = await super().withdraw_transaction(
-                    session, self.ready(), token, recipient, earning["amount_raw"], operation["id"])
-                await self.send_reserved(session, transaction, operation, {})
-            except Exception:
-                current = self.ledger.operation(operation["id"])
-                if current and current["state"] == "RESERVED":
-                    self.ledger.fail(operation["id"])
-                raise
+        self.uid(request)
+        raise WalletError("Partner earnings are credited to your main balance. External payout retries are disabled.", 409)
 
     async def toggle(self, request, session):
         uid = self.uid(request)
@@ -1762,7 +1722,7 @@ class CustodyRuntime(WalletRuntime):
                         self.web_access.pause_expired()
                     await self.reconcile(session)
                     await self.scan_deposits(session)
-                    await self.process_partner_payout(session)
+                    self.ledger.credit_safe_partner_earnings()
                     users = self.ledger.active_users()
                     if users:
                         self.poll_discovery()
