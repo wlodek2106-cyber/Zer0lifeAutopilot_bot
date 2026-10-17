@@ -10,7 +10,7 @@ from entry_costs import MAX_COST_BPS, MAX_PRICE_IMPACT_PCT, MAX_QUOTE_AGE_SECOND
 from wallet_runtime import WalletError
 
 VERSION = "independent-execution-v1"
-MAX_POSITIONS = MappingProxyType({"main": 5, "sniper": 1})
+MAX_POSITIONS = MappingProxyType({"main": 5, "sniper": 5})
 DECISION_SECONDS = 120
 QUOTE_SECONDS = MAX_QUOTE_AGE_SECONDS
 MAX_SLOT_DISTANCE = 75

@@ -57,6 +57,31 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(self.proposal(held=[{"symbol": "X"}] * 5).code, "position_limit")
         self.assertEqual(self.proposal(held=[{"symbol": "SOL"}]).code, "already_open")
 
+    def test_sniper_allows_up_to_five_positions_and_blocks_the_sixth(self):
+        decision = {"action": "BUY", "symbol": "WIF", "reason": "signal"}
+        proposal_values = dict(mode="sniper", decision=decision, universe=["WIF"],
+            created_at=1000, now=1001, original={"WIF": 1, "SOL": 100},
+            prices={"WIF": 1, "SOL": 100}, samples={"WIF": 5, "SOL": 5},
+            balance=25_000_000, order_raw=5_000_000)
+        four_open = [{"symbol": f"TOKEN{i}"} for i in range(4)]
+        five_open = [{"symbol": f"TOKEN{i}"} for i in range(5)]
+        self.assertTrue(policy.proposal(held=four_open, **proposal_values).allowed)
+        self.assertEqual(policy.proposal(held=five_open, **proposal_values).code, "position_limit")
+        self.assertEqual(policy.proposal(held=four_open[:3] + [{"symbol": "WIF"}],
+            **proposal_values).code, "already_open")
+
+        order_values = dict(uid=101, kind="BUY", asset=SOL, output_asset="wif-mint",
+            raw=5_000_000, metadata={"symbol": "WIF", "decimals": 6},
+            position_id=None, settings={"sniper_trading": True, "sniper_order_raw": 5_000_000},
+            watchlist={"WIF": {"mint": "wif-mint", "decimals": 6}},
+            universes={"main": [], "sniper": ["WIF"]}, balance=25_000_000)
+        four_open = [{"funding_asset": SOL, "symbol": f"TOKEN{i}"} for i in range(4)]
+        five_open = [{"funding_asset": SOL, "symbol": f"TOKEN{i}"} for i in range(5)]
+        self.assertTrue(policy.order(positions=four_open, **order_values).allowed)
+        self.assertEqual(policy.order(positions=five_open, **order_values).code, "position_limit")
+        self.assertEqual(policy.order(positions=four_open[:3] + [
+            {"funding_asset": SOL, "symbol": "WIF"}], **order_values).code, "already_open")
+
     def test_hold_cannot_execute(self):
         self.assertEqual(self.proposal(decision={"action": "HOLD", "symbol": None,
                                                "reason": "wait"}).code, "hold")
