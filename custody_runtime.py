@@ -1094,15 +1094,27 @@ class CustodyRuntime(WalletRuntime):
         return data
 
     async def safe_simulation(self, session, tx, row, info):
-        """Constrain all custodian-owned SPL accounts, not just quote amounts."""
-        tokens = (await self.rpc(session, "getTokenAccountsByOwner", [
-            self.wallet, {"programId": str(TOKEN)}, {"encoding": "base64", "commitment": "confirmed"}]))["value"]
-        addresses = [self.wallet] + [item["pubkey"] for item in tokens]
-        for asset in {row["asset"], info.get("output_asset")}:
-            if asset and asset != SOL:
-                address = str(associated(Pubkey.from_string(self.wallet), Pubkey.from_string(asset)))
-                if address not in addresses:
-                    addresses.append(address)
+        """Constrain user-owned accounts without exceeding narrow RPC account limits."""
+        if row["kind"] in ("WITHDRAW", "PARTNER_PAYOUT"):
+            # These locally-built transfers can only debit the native wallet and
+            # the source ATA for this asset. Don't request every token account
+            # owned by the shared wallet: some RPC providers cap account batches
+            # at six, while a custody wallet may hold many unrelated token ATAs.
+            addresses = [self.wallet]
+            if row["asset"] != SOL:
+                addresses.append(str(associated(
+                    Pubkey.from_string(self.wallet), Pubkey.from_string(row["asset"]))))
+        else:
+            tokens = (await self.rpc(session, "getTokenAccountsByOwner", [
+                self.wallet, {"programId": str(TOKEN)},
+                {"encoding": "base64", "commitment": "confirmed"}]))["value"]
+            addresses = [self.wallet] + [item["pubkey"] for item in tokens]
+            for asset in {row["asset"], info.get("output_asset")}:
+                if asset and asset != SOL:
+                    address = str(associated(
+                        Pubkey.from_string(self.wallet), Pubkey.from_string(asset)))
+                    if address not in addresses:
+                        addresses.append(address)
         if len(addresses) > 100:
             raise WalletError("Слишком много token accounts для полной безопасной симуляции.")
         before = (await self.rpc(session, "getMultipleAccounts", [addresses, {

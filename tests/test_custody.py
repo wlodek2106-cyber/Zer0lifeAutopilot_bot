@@ -1741,6 +1741,35 @@ class SimulationTests(unittest.IsolatedAsyncioTestCase):
         after = [self.native(49_995_000), self.token_account(USDC, 9_000_000)]
         self.assertTrue(await self.simulate(before, after))
 
+    async def test_usdc_withdrawal_simulation_stays_under_rpc_six_account_limit(self):
+        before = [self.native(50_000_000), self.token_account(USDC, 10_000_000)]
+        after = [self.native(49_995_000), self.token_account(USDC, 9_000_000)]
+        calls = {"enumerate_tokens": 0}
+        message = Message.new_with_blockhash([], self.signer.pubkey(), Hash.new_unique())
+        tx = Transaction.new_unsigned(message)
+
+        async def rpc(session, method, params=None):
+            if method == "getTokenAccountsByOwner":
+                calls["enumerate_tokens"] += 1
+                return {"value": [{"pubkey": str(legacy.Pubkey.new_unique())}
+                                  for _ in range(12)]}
+            if method == "getMultipleAccounts":
+                self.assertLessEqual(len(params[0]), 6)
+                return {"value": before}
+            if method == "getFeeForMessage":
+                return {"value": 5000}
+            if method == "simulateTransaction":
+                self.assertLessEqual(
+                    len(params[1]["accounts"]["addresses"]), 6)
+                return {"value": {"err": None, "accounts": after}}
+            raise AssertionError(method)
+
+        self.service.rpc = rpc
+        row = {"asset": USDC, "raw": 1_000_000, "fee_cap": FEE_CAP,
+               "kind": "WITHDRAW", "uid": 101}
+        self.assertTrue(await self.service.safe_simulation(None, tx, row, {}))
+        self.assertEqual(calls["enumerate_tokens"], 0)
+
     async def test_core_cost_guard_blocks_missing_evidence_before_broadcast(self):
         before = [self.native(50_000_000), self.token_account(USDC, 10_000_000)]
         after = [self.native(50_995_000), self.token_account(USDC, 9_000_000)]
