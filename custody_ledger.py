@@ -103,6 +103,11 @@ class CustodyLedger:
                     payload TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
                     next_attempt INTEGER NOT NULL DEFAULT 0, delivered_at INTEGER,
                     last_error TEXT);
+                CREATE TABLE IF NOT EXISTS custody_withdrawal_notifications (
+                    operation_id TEXT PRIMARY KEY, uid INTEGER NOT NULL,
+                    payload TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+                    next_attempt INTEGER NOT NULL DEFAULT 0, delivered_at INTEGER,
+                    last_error TEXT);
                 CREATE TABLE IF NOT EXISTS custody_users (
                     uid INTEGER PRIMARY KEY CHECK(uid>0), username TEXT NOT NULL,
                     trading INTEGER NOT NULL DEFAULT 0, close_requested INTEGER NOT NULL DEFAULT 0,
@@ -998,6 +1003,21 @@ class CustodyLedger:
                 (now if delivered else None, now + retry_after,
                  None if delivered else error, oid))
 
+    def withdrawal_notifications(self, now):
+        with self.db() as db:
+            return [dict(row) for row in db.execute("""
+                SELECT * FROM custody_withdrawal_notifications
+                WHERE delivered_at IS NULL AND next_attempt<=?
+                ORDER BY next_attempt,operation_id LIMIT 10""", (now,))]
+
+    def withdrawal_notification_result(self, oid, now, delivered, retry_after=60, error=None):
+        with self.db() as db:
+            db.execute("""UPDATE custody_withdrawal_notifications SET attempts=attempts+1,
+                delivered_at=?, next_attempt=?, last_error=?
+                WHERE operation_id=? AND delivered_at IS NULL""",
+                (now if delivered else None, now + retry_after,
+                 None if delivered else error, oid))
+
     def finalize(self, oid, spent, fee, received=0):
         with self.db() as db:
             row = db.execute("SELECT * FROM custody_operations WHERE id=?", (oid,)).fetchone()
@@ -1056,6 +1076,11 @@ class CustodyLedger:
                 db.execute("""UPDATE custody_partner_earnings SET state='PAID',signature=?
                     WHERE operation_id=? AND state='SUBMITTED'""", (row["signature"], oid))
             db.execute("UPDATE custody_operations SET state='COMPLETED' WHERE id=?", (oid,))
+            if row["kind"] == "WITHDRAW":
+                db.execute("""INSERT OR IGNORE INTO custody_withdrawal_notifications
+                    (operation_id,uid,payload) VALUES(?,?,?)""", (oid, row["uid"], json.dumps({
+                        "asset": row["asset"], "raw": spent, "recipient": row["recipient"],
+                        "signature": row["signature"]})))
 
     def positions(self, uid, state=None):
         with self.db() as db:

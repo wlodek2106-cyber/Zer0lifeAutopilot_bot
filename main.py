@@ -1776,8 +1776,11 @@ RAW_HTML = r"""<!DOCTYPE html>
                 </div>
 
                 <div id="section-withdraw" style="display: none;">
+                    <div class="banner-limit">
+                        <div style="color:#4ade80;font-weight:800;">USDC / SOL · Solana mainnet</div>
+                        <div style="font-size:11px;margin-top:6px;">Verified on Solana · receipt sent in Telegram after confirmation.</div>
+                    </div>
                     <div id="chain-withdraw-balances" style="font-size:12px; margin-bottom:8px;">Loading balance...</div>
-                    <p class="muted">The Telegram code confirms this exact amount and recipient address.</p>
                     <div class="token-selector">
                         <button class="token-btn active" id="wtoken-usdc" onclick="selectWithdrawToken('USDC')">USDC</button>
                         <button class="token-btn" id="wtoken-sol" onclick="selectWithdrawToken('SOL')">Solana (SOL)</button>
@@ -1789,19 +1792,18 @@ RAW_HTML = r"""<!DOCTYPE html>
                         maxlength="6" pattern="[0-9]{6}" placeholder="6-digit Telegram code">
                     <p id="withdraw-code-status" class="status-output" role="status" aria-live="polite"></p>
                     <p id="withdraw-progress" class="status-output" role="status" aria-live="polite" hidden></p>
-                    <a id="withdraw-tx-link" class="tx-link" hidden target="_blank" rel="noopener noreferrer">Verify transaction on Solscan ↗</a>
-                    <button class="btn-copy" id="btn-check-withdrawal" onclick="checkWithdrawalStatus()" hidden>Check transaction status</button>
-                    <button class="btn-green-main" id="btn-withdraw-action" onclick="secureWithdraw()">Withdraw</button>
+                    <a id="withdraw-tx-link" class="tx-link" hidden target="_blank" rel="noopener noreferrer">Open Solscan ↗</a>
+                    <button class="btn-copy" id="btn-check-withdrawal" onclick="checkWithdrawalStatus()" hidden>Verify on Solana</button>
+                    <button class="btn-verify" id="btn-withdraw-action" onclick="secureWithdraw()">Withdraw</button>
                     <details id="wallet-external-reconcile" hidden>
-                        <summary>Verify a USDC transfer already sent</summary>
-                        <p class="muted">Owner-only recovery for a transfer already sent from the AI Trader wallet. The server verifies it on Solana and updates the ledger once; it will not send another transfer.</p>
-                        <input id="wallet-external-transfer-signature" class="sig-input" placeholder="Solana transaction signature">
-                        <input id="wallet-external-transfer-recipient" class="sig-input" placeholder="Exact recipient wallet address">
+                        <summary>Verify previous USDC transfer</summary>
+                        <input id="wallet-external-transfer-signature" class="sig-input" placeholder="Transaction signature">
+                        <input id="wallet-external-transfer-recipient" class="sig-input" placeholder="Recipient wallet address">
                         <label style="display:flex;gap:10px;align-items:flex-start;font-size:12px;">
                             <input id="wallet-external-transfer-confirm" type="checkbox" style="width:auto;flex:0 0 auto;">
-                            I confirm this USDC transfer was already completed from the AI Trader wallet.
+                            Confirm this transfer was already sent.
                         </label>
-                        <button class="btn-copy" onclick="recordExternalTransfer('wallet-external-transfer')">Verify and update account (no new send)</button>
+                        <button class="btn-copy" onclick="recordExternalTransfer('wallet-external-transfer')">Verify TX</button>
                         <div id="wallet-external-transfer-result" class="status-output" role="status"></div>
                     </details>
                 </div>
@@ -2625,7 +2627,17 @@ RAW_HTML = r"""<!DOCTYPE html>
             const txLink=document.getElementById('withdraw-tx-link');
             const checkButton=document.getElementById('btn-check-withdrawal');
             const progress=document.getElementById('withdraw-progress');
-            if(!txLink||!['COMPLETED','FAILED'].includes(txLink.dataset.state))return;
+            if(!txLink)return;
+            const txHref=txLink.href||'';
+            const signature=txLink.dataset.signature||
+                (txHref.includes('solscan.io/tx/')?decodeURIComponent(txHref.split('/').pop()):'');
+            const history=(window.latestAccountStats?.wallet_history||[])
+                .find(row=>row.type==='WITHDRAW'&&row.tx===signature);
+            const pending=(window.latestAccountStats?.pending_operations||[])
+                .find(row=>row.signature===signature);
+            const state=history?.status||pending?.state||txLink.dataset.state;
+            if(state)txLink.dataset.state=state;
+            if(!['COMPLETED','FAILED'].includes(state))return;
             txLink.hidden=true;
             txLink.removeAttribute('href');
             delete txLink.dataset.signature;
@@ -2655,12 +2667,9 @@ RAW_HTML = r"""<!DOCTYPE html>
                 document.getElementById('withdraw-code').focus();
             } catch(e) {
                 const message=e.message||'Could not request a Telegram code.';
-                const noCodeSent=' No Telegram code was sent and no new transfer was made.';
                 status.textContent=message.toLowerCase().includes('wallet funds do not cover recorded account balances')
-                    ? message+noCodeSent : message;
-                const recovery=document.getElementById('wallet-external-reconcile');
-                if(recovery&&!recovery.hidden&&message.toLowerCase().includes('wallet funds do not cover recorded account balances'))
-                    recovery.open=true;
+                    ? 'Withdrawal paused: wallet funds do not cover recorded balances. No code or transfer was sent.'
+                    : message;
             } finally {
                 button.disabled=false;button.textContent='Send code in Telegram';
             }
@@ -2670,10 +2679,17 @@ RAW_HTML = r"""<!DOCTYPE html>
             if (withdrawSending) return;
             const context=withdrawalContext();
             const code=document.getElementById('withdraw-code').value.trim();
-            const progress=document.getElementById('withdraw-progress');
-            if(!context.addr||!context.amount){progress.hidden=false;progress.textContent='Enter the recipient address and amount.';return;}
-            if(!/^\d{6}$/.test(code)){progress.hidden=false;progress.textContent='Enter the 6-digit code sent in Telegram.';return;}
-            if(withdrawalCodeBinding!==context.intent){progress.hidden=false;progress.textContent='Request a new Telegram code for these exact transfer details.';return;}
+            const status=document.getElementById('withdraw-code-status');
+            clearTerminalWithdrawalResult();
+            if(!context.addr||!context.amount){status.textContent='Enter the recipient address and amount.';return;}
+            if(!/^\d{6}$/.test(code)){
+                if(!status.textContent.startsWith('Withdrawal paused:'))status.textContent='Request a Telegram code first.';
+                return;
+            }
+            if(withdrawalCodeBinding!==context.intent){
+                if(!status.textContent.startsWith('Withdrawal paused:'))status.textContent='Request a new code for these details.';
+                return;
+            }
             await submitWithdraw(code,context);
         }
 
@@ -2712,7 +2728,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 }
                 if (d.success) {
                     progress.textContent=d.state==='COMPLETED'
-                        ? 'Withdrawal confirmed on Solana.'+signatureText
+                        ? context.amount+' '+context.token+' sent and confirmed on Solana.'+signatureText
                         : (d.message||'Withdrawal is awaiting network confirmation.')+signatureText;
                     document.getElementById('withdraw-code').value='';
                     withdrawalCodeBinding='';
@@ -2749,7 +2765,8 @@ RAW_HTML = r"""<!DOCTYPE html>
             checkButton.hidden=terminal;
             progress.hidden=false;
             progress.textContent=operation.status==='COMPLETED'
-                ? 'Withdrawal confirmed on Solana (finalized).'
+                ? operation.amount+' sent · confirmed on Solana · Telegram receipt '+
+                    (operation.telegram_notified?'sent.':'pending.')
                 : operation.status==='FAILED'
                     ? 'Withdrawal failed on Solana. The amount was returned to your balance.'
                     : operation.status==='UNKNOWN'
@@ -2765,7 +2782,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             const txSignature=document.getElementById('withdraw-tx-link').dataset.signature;
             button.disabled=true;
             const oldLabel=button.textContent;
-            button.textContent='Checking Solana…';
+            button.textContent='Verifying…';
             progress.hidden=false;
             progress.textContent='Checking the transaction against Solana finality. Do not submit it again.';
             try {

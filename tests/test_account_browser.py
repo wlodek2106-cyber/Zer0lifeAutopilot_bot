@@ -164,7 +164,8 @@ class AccountBrowserTests(unittest.TestCase):
                 url==='/api/withdraw/code'?{success:true,expires_in:300}:
                 url==='/api/withdraw'?{success:true,state:'SUBMITTED',tx_signature:'1'.repeat(88)}:
                 {success:true,user_balance:7,sol_balance:1,withdrawable:7,
-                 wallet_history:[{type:'WITHDRAW',amount:'5 USDC',tx:'1'.repeat(88),status:'COMPLETED'}],trades:[],
+                  wallet_history:[{type:'WITHDRAW',amount:'5 USDC',tx:'1'.repeat(88),status:'COMPLETED',
+                      telegram_notified:true}],trades:[],
                   logs:[],is_admin:true,trading_settings:{order_usdc:1,order_sol:0.05,assets:[],max_positions:5},
                   wallet_status:{},pending_operations:[]};
             return new Response(JSON.stringify(body),{headers:{'Content-Type':'application/json'}});
@@ -178,10 +179,15 @@ class AccountBrowserTests(unittest.TestCase):
             document.getElementById('withdraw-amount').value='5.000749';
             await requestWithdrawalCode();
             const recovery=document.getElementById('wallet-external-reconcile');
-            assert(recovery.open,'an owner balance-coverage block opens the TX verification form');
-            assert(document.getElementById('withdraw-code-status').textContent.includes('No Telegram code was sent'),
-                'the blocked request clearly says no code or transfer was sent');
+            assert(!recovery.open,'the previous-transfer check stays collapsed');
+            assert(document.getElementById('withdraw-code-status').textContent.includes('No code or transfer was sent'),
+                'the balance block clearly says no code or transfer was sent');
+            await secureWithdraw();
+            assert(document.getElementById('withdraw-progress').hidden&&
+                document.getElementById('withdraw-code-status').textContent.startsWith('Withdrawal paused:'),
+                'tapping Withdraw without a code does not add a stale prompt or overwrite the block reason');
             assert(!window.requests.some(r=>r.url==='/api/withdraw'),'the blocked code request never submits a withdrawal');
+            recovery.open=true;
             document.getElementById('wallet-external-transfer-signature').value='5ZFcewhLpwFiS3VXCcNKkBereHczY5B9fsKSqospYcfNu1FzXskzfoB5i3Bq23ecSVypc9KgP2qRyQfqSbP82QZx';
             document.getElementById('wallet-external-transfer-recipient').value=address;
             document.getElementById('wallet-external-transfer-confirm').checked=true;
@@ -211,11 +217,14 @@ class AccountBrowserTests(unittest.TestCase):
                 'withdrawal needs no personal PIN or passkey');
             assert(!status.hidden&&status.textContent.includes('confirmed on Solana'),
                 'completed withdrawal status is shown in the wallet');
+            assert(status.textContent.includes('5 USDC')&&status.textContent.includes('Telegram receipt sent'),
+                'completed status shows the exact sent amount and Telegram receipt state');
             const txLink=document.getElementById('withdraw-tx-link');
             assert(!txLink.hidden&&txLink.href==='https://solscan.io/tx/'+'1'.repeat(88),
                 'confirmed withdrawal exposes a direct Solscan transaction link');
             assert(document.getElementById('btn-check-withdrawal').hidden,
                 'completed withdrawal does not show a pending status-check action');
+            window.latestAccountStats=null;
             txLink.dataset.state='UNKNOWN';
             txLink.hidden=false;
             document.getElementById('btn-check-withdrawal').hidden=false;

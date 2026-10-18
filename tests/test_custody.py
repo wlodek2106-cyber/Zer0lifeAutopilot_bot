@@ -816,6 +816,29 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Core: OFF. Sniper: OFF.", message["text"])
         self.assertEqual(self.ledger.recovery_notifications(int(time.time()) + 100000), [])
 
+    async def test_confirmed_withdrawal_sends_amount_and_solscan_receipt_once(self):
+        operation, signature = self.pending_withdraw()
+        self.assertEqual(self.ledger.withdrawal_notifications(int(time.time())), [])
+
+        self.ledger.finalize(operation["id"], 4_000_000, 5000)
+        self.ledger.finalize(operation["id"], 4_000_000, 5000)
+        events = self.ledger.withdrawal_notifications(int(time.time()))
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["uid"], 101)
+
+        self.service.notification_token = "test-only-token"
+        session = NotificationSession()
+        await self.service.deliver_withdrawal_notifications(session)
+        await self.service.deliver_withdrawal_notifications(session)
+        self.assertEqual(len(session.calls), 1)
+        message = session.calls[0][1]["json"]
+        self.assertEqual(message["chat_id"], 101)
+        self.assertIn("Withdrawal confirmed on Solana", message["text"])
+        self.assertIn("Sent: 4 USDC", message["text"])
+        self.assertIn(f"Recipient: {self.recipient}", message["text"])
+        self.assertIn(f"https://solscan.io/tx/{signature}", message["text"])
+        self.assertEqual(self.ledger.withdrawal_notifications(int(time.time()) + 100000), [])
+
     async def test_telegram_rate_limit_retains_event_and_respects_retry_after(self):
         buy = await self.recovered_notification()
         self.service.notification_token = "test-only-token"

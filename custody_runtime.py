@@ -1080,6 +1080,7 @@ class CustodyRuntime(WalletRuntime):
                     raise WalletError("Неожиданное изменение SOL при swap.")
                 fee = trade_sol - native_delta - self.wrapped_delta(tx, self.wallet)
             self.ledger.finalize(row["id"], spent, fee, received)
+        await self.deliver_withdrawal_notifications(session)
 
     @staticmethod
     def token_data(account):
@@ -1587,7 +1588,9 @@ class CustodyRuntime(WalletRuntime):
         positions = self.ledger.positions(uid)
         with self.ledger.db() as db:
             operations = [dict(r) for r in db.execute(
-                "SELECT * FROM custody_operations WHERE uid=? ORDER BY created_at DESC LIMIT 20", (uid,))]
+                """SELECT o.*, n.delivered_at AS telegram_notice_delivered_at
+                   FROM custody_operations o LEFT JOIN custody_withdrawal_notifications n
+                   ON n.operation_id=o.id WHERE o.uid=? ORDER BY o.created_at DESC LIMIT 20""", (uid,))]
             invoices = [dict(r) for r in db.execute(
                 "SELECT * FROM custody_invoices WHERE uid=? AND state='CREDITED' ORDER BY created_at DESC LIMIT 20", (uid,))]
             tx_deposits = [dict(r) for r in db.execute(
@@ -1614,7 +1617,8 @@ class CustodyRuntime(WalletRuntime):
             if row["kind"] == "WITHDRAW":
                 history.append({"type": "WITHDRAW", "amount": display_raw(row["raw"], 6 if row["asset"] == USDC else 9) +
                     (" USDC" if row["asset"] == USDC else " SOL"), "tx": row["signature"],
-                    "time": datetime.fromtimestamp(row["created_at"], timezone.utc).isoformat(), "status": row["state"]})
+                    "time": datetime.fromtimestamp(row["created_at"], timezone.utc).isoformat(),
+                    "status": row["state"], "telegram_notified": bool(row["telegram_notice_delivered_at"])})
         for inv in invoices:
             history.append({"type": "DEPOSIT", "amount": display_raw(inv["raw"], 6 if inv["asset"] == USDC else 9) +
                 (" USDC" if inv["asset"] == USDC else " SOL"), "tx": inv["signature"],
@@ -1911,11 +1915,58 @@ class CustodyRuntime(WalletRuntime):
                 if not delivered:
                     self.log("Recovery notification pending; delivery will be retried.")
 
+    async def deliver_withdrawal_notifications(self, session):
+        async with self._notification_lock:
+            for event in self.ledger.withdrawal_notifications(int(time.time())):
+                payload = json.loads(event["payload"])
+                asset = payload["asset"]
+                symbol = "USDC" if asset == USDC else "SOL" if asset == SOL else ""
+                if not symbol:
+                    self.ledger.withdrawal_notification_result(
+                        event["operation_id"], int(time.time()), False, 3600,
+                        "Unsupported withdrawal asset")
+                    continue
+                amount = display_raw(payload["raw"], 6 if asset == USDC else 9)
+                signature = payload["signature"]
+                text = (
+                    "Zer0Life AI Trader\n"
+                    "Withdrawal confirmed on Solana.\n"
+                    f"Sent: {amount} {symbol}\n"
+                    f"Recipient: {payload['recipient']}\n"
+                    f"Transaction: https://solscan.io/tx/{signature}")
+                delivered, error = False, "Telegram delivery unavailable"
+                retry_after = min(3600, 60 * 2 ** min(event["attempts"], 6))
+                try:
+                    if not self.notification_token:
+                        raise WalletError("Telegram notification token is not configured.")
+                    async with session.post(
+                            f"https://api.telegram.org/bot{self.notification_token}/sendMessage",
+                            json={"chat_id": event["uid"], "text": text,
+                                  "disable_web_page_preview": True},
+                            timeout=aiohttp.ClientTimeout(total=8)) as response:
+                        result = await response.json()
+                        delivered = (response.status == 200 and result.get("ok") is True
+                                     and isinstance(result.get("result"), dict)
+                                     and type(result["result"].get("message_id")) is int)
+                        if not delivered:
+                            error = f"Telegram delivery rejected (HTTP {response.status})"
+                            delay = result.get("parameters", {}).get("retry_after")
+                            if type(delay) is int and delay > 0:
+                                retry_after = max(retry_after, delay)
+                except Exception:
+                    # Never log exception text: HTTP errors can include the bot token.
+                    pass
+                self.ledger.withdrawal_notification_result(
+                    event["operation_id"], int(time.time()), delivered, retry_after, error)
+                if not delivered:
+                    self.log("Withdrawal notification pending; delivery will be retried.")
+
     async def recovery_notification_worker(self):
         while True:
             try:
                 async with aiohttp.ClientSession() as session:
                     await self.deliver_recovery_notifications(session)
+                    await self.deliver_withdrawal_notifications(session)
             except Exception:
                 self.log("Recovery notification worker unavailable; queued alerts are retained.")
             await asyncio.sleep(20)
