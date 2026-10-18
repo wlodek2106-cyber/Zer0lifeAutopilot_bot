@@ -375,7 +375,9 @@ class CustodyRuntime(WalletRuntime):
         backing = await self.balances(session)
         for asset, liability in self.ledger.liabilities().items():
             if liability > backing.get(asset, {}).get("raw", 0):
-                raise WalletError("Операции приостановлены: остатки кошелька не покрывают реестр.")
+                raise WalletError(
+                    "Withdrawals and trading are paused because wallet funds do not cover recorded account balances. "
+                    "No transfer was sent.")
         return backing
 
     @staticmethod
@@ -705,6 +707,133 @@ class CustodyRuntime(WalletRuntime):
             for row in operations
         ]})
 
+    async def admin_balance_check(self, request, session):
+        if self.uid(request) != self.owner_id:
+            raise WalletError("Только администратор.", 403)
+        self.ledger.audit()
+        backing = await self.balances(session)
+        liabilities = self.ledger.liabilities()
+        assets = {}
+        for asset, decimals in ((USDC, 6), (SOL, 9)):
+            actual = int(backing.get(asset, {}).get("raw", 0))
+            owed = int(liabilities.get(asset, 0))
+            assets["USDC" if asset == USDC else "SOL"] = {
+                "wallet": display_raw(actual, decimals),
+                "ledger": display_raw(owed, decimals),
+                "difference": display_raw(actual - owed, decimals),
+            }
+        return web.json_response({"success": True, "assets": assets, "read_only": True})
+
+    async def admin_record_external_withdrawal(self, request, session):
+        uid = self.uid(request)
+        if uid != self.owner_id:
+            raise WalletError("Только администратор.", 403)
+        body = await request.json()
+        if body.get("confirm") is not True:
+            raise WalletError("Confirm this already completed transfer before recording it.", 400)
+        signature = str(body.get("signature", "")).strip()
+        try:
+            Signature.from_string(signature)
+            recipient = str(Pubkey.from_string(str(body.get("recipient_address", "")).strip()))
+        except Exception as exc:
+            raise WalletError("Enter a valid Solana transaction signature and recipient address.", 400) from exc
+        if recipient == self.wallet:
+            raise WalletError("The recipient must be different from the shared custody wallet.", 400)
+        if await self.rpc(session, "getGenesisHash") != GENESIS:
+            raise WalletError("External payout verification is available only on Solana mainnet.", 503)
+        statuses = await self.rpc(session, "getSignatureStatuses",
+                                  [[signature], {"searchTransactionHistory": True}])
+        status = (statuses.get("value") or [None])[0]
+        if not status or status.get("confirmationStatus") != "finalized" or status.get("err") is not None:
+            raise WalletError("The transaction is not finalized successfully. No ledger entry was made.", 409)
+        tx = await self.rpc(session, "getTransaction", [signature, {
+            "encoding": "jsonParsed", "commitment": "finalized", "maxSupportedTransactionVersion": 0}])
+        if not tx or not tx.get("meta") or tx["meta"].get("err") is not None:
+            raise WalletError("Could not verify the finalized transaction. No ledger entry was made.", 409)
+        meta = tx["meta"]
+        message = tx.get("transaction", {}).get("message", {})
+        keys = [key.get("pubkey") if isinstance(key, dict) else key
+                for key in message.get("accountKeys", [])]
+        if not keys or keys[0] != self.wallet:
+            raise WalletError("The shared custody wallet was not the transaction fee payer. No ledger entry was made.", 409)
+        token_accounts = {}
+        for side in ("preTokenBalances", "postTokenBalances"):
+            for entry in meta.get(side, []) or []:
+                index = entry.get("accountIndex")
+                if isinstance(index, int) and 0 <= index < len(keys):
+                    token_accounts[(keys[index], side)] = entry
+        instructions = list(message.get("instructions", []) or [])
+        for group in meta.get("innerInstructions", []) or []:
+            instructions.extend(group.get("instructions", []) or [])
+        matching = []
+        outgoing = []
+        for instruction in instructions:
+            parsed = instruction.get("parsed") if isinstance(instruction, dict) else None
+            info = parsed.get("info", {}) if isinstance(parsed, dict) else {}
+            amount_info = info.get("tokenAmount", {}) if isinstance(info, dict) else {}
+            if not isinstance(parsed, dict) or parsed.get("type") not in ("transfer", "transferChecked"):
+                continue
+            source = info.get("source")
+            destination = info.get("destination")
+            before = token_accounts.get((source, "preTokenBalances")) if source else None
+            after = token_accounts.get((source, "postTokenBalances")) if source else None
+            if before and before.get("owner") == self.wallet and before.get("mint") == USDC:
+                outgoing.append((source, destination))
+            if (parsed.get("type") != "transferChecked" or info.get("mint") != USDC
+                    or not source or not destination or amount_info.get("decimals") != 6):
+                continue
+            recipient_before = token_accounts.get((destination, "preTokenBalances"))
+            recipient_after = token_accounts.get((destination, "postTokenBalances"))
+            source_after = token_accounts.get((source, "postTokenBalances"))
+            if not before or not source_after or not recipient_after:
+                continue
+            if (before.get("owner") != self.wallet or source_after.get("owner") != self.wallet
+                    or recipient_after.get("owner") != recipient):
+                continue
+            if (before.get("mint") != USDC or source_after.get("mint") != USDC
+                    or recipient_after.get("mint") != USDC):
+                continue
+            if recipient_before and (recipient_before.get("owner") != recipient
+                                     or recipient_before.get("mint") != USDC):
+                continue
+            try:
+                raw = int(amount_info["amount"])
+                source_delta = (int(before["uiTokenAmount"]["amount"])
+                                - int(source_after["uiTokenAmount"]["amount"]))
+                destination_delta = (int(recipient_after["uiTokenAmount"]["amount"])
+                                     - int(recipient_before["uiTokenAmount"]["amount"])
+                                     if recipient_before else raw)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if raw > 0 and source_delta == raw and destination_delta == raw:
+                matching.append(raw)
+        if len(outgoing) != 1 or len(matching) != 1:
+            raise WalletError(
+                "The transaction must contain exactly one finalized USDC payout from the shared wallet "
+                "to the stated recipient, with no other outgoing USDC transfer. No ledger entry was made.", 409)
+        try:
+            fee_lamports = int(meta.get("fee", 0))
+        except (TypeError, ValueError) as exc:
+            raise WalletError("The transaction fee could not be verified. No ledger entry was made.", 409) from exc
+        if fee_lamports > FEE_CAP:
+            raise WalletError("The transaction fee exceeds the operator reserve cap. No ledger entry was made.", 409)
+        block_time = tx.get("blockTime")
+        if not isinstance(block_time, int):
+            raise WalletError("The transaction has no verified block time. No ledger entry was made.", 409)
+        async with self.lock:
+            self.ledger.audit()
+            operation, created = self.ledger.record_external_withdrawal(
+                uid, signature, USDC, matching[0], recipient, fee_lamports, block_time)
+            self.ledger.audit()
+        return web.json_response({
+            "success": True, "recorded": created, "state": operation["state"],
+            "asset": "USDC", "amount": display_raw(matching[0], 6),
+            "recipient_address": recipient, "tx_signature": signature,
+            "available_usdc": display_raw(self.ledger.balance(uid, USDC), 6),
+            "message": "Recorded an already finalized transfer. No new Solana transaction was sent."
+            if created else "This transfer was already recorded. No duplicate ledger entry was added."
+        })
+
     async def recover_expired_operation(self, request, session):
         uid = self.uid(request)
         body = await request.json()
@@ -759,11 +888,11 @@ class CustodyRuntime(WalletRuntime):
             if not current or current["state"] != "FAILED" or not audited:
                 raise WalletError("The operation changed during verification; refresh status before trying again.", 409)
             if row["kind"] == "BUY":
-                recovery = "the reserved purchase funds were released back to your available balance"
+                recovery = "the purchase amount is available again"
             elif row["kind"] == "SELL":
-                recovery = "the reserved asset was restored to the open position"
+                recovery = "the asset was restored to your open position"
             elif row["kind"] == "WITHDRAW":
-                recovery = "the reserved withdrawal funds were released back to your available balance"
+                recovery = "the withdrawal amount is available again"
             else:
                 recovery = "the affiliate commission was returned to its pending payout queue"
         return web.json_response({"success": True, "state": "FAILED",
@@ -1194,12 +1323,38 @@ class CustodyRuntime(WalletRuntime):
         state = row["state"]
         return web.json_response({"success": state != "FAILED", "state": state,
             "operation_id": row["id"], "tx_signature": row["signature"],
-            "message": "Confirmed on Solana." if state == "COMPLETED" else
-                "Withdrawal failed. Reserved funds returned." if state == "FAILED" else
-                "Solana RPC accepted the withdrawal. Waiting for confirmation; do not repeat it."
+            "message": "Withdrawal confirmed on Solana." if state == "COMPLETED" else
+                "Withdrawal failed. The amount is available again." if state == "FAILED" else
+                "Withdrawal sent to Solana and waiting for confirmation. Do not submit it again."
                 if state == "SUBMITTED" else
-                "RPC did not confirm submission. Checking the outcome; funds remain reserved. Do not repeat it."
+                "The network result is unclear. We are checking it; do not submit this withdrawal again."
         }, status=200 if state == "COMPLETED" else 409 if state == "FAILED" else 202)
+
+    async def request_withdrawal_code(self, request, session):
+        uid = self.uid(request)
+        self.admit(uid)
+        if not getattr(self, "accounts", None):
+            raise WalletError("Telegram withdrawal confirmation is unavailable.", 503)
+        body = await request.json()
+        payload, _ = self.accounts.withdrawal_intent(uid, body)
+        request_id = payload["request_id"]
+        asset = USDC if payload["token"] == "USDC" else SOL
+        raw = int(payload["raw"])
+        async with self.lock:
+            previous = self.ledger.find_request(uid, request_id)
+            if previous:
+                if (previous["kind"], previous["asset"], previous["raw"], previous["recipient"]) != (
+                        "WITHDRAW", asset, raw, payload["recipient_address"]):
+                    raise WalletError("This request ID belongs to a different transfer.", 409)
+                raise WalletError("This withdrawal already exists. Check its status; do not start another.", 409)
+            await self.reconcile(session)
+            if self.pending():
+                raise WalletError(
+                    "A previous transfer is still being checked. Do not start another withdrawal.", 409)
+            await self.solvent(session)
+            if raw > self.ledger.balance(uid, asset):
+                raise WalletError("The amount exceeds your available balance.", 409)
+            return await self.accounts.send_withdrawal_code(request, session, body)
 
     async def withdraw(self, request, session):
         uid = self.uid(request)
@@ -1215,9 +1370,6 @@ class CustodyRuntime(WalletRuntime):
             raise WalletError("Укажите отдельный кошелёк получателя.", 400)
         request_id = str(body.get("request_id", ""))
         uuid.UUID(request_id)
-        valid, state = self.pin_fn(uid, str(body.get("pin", "")))
-        if not valid:
-            raise WalletError("Неверный PIN или код заблокирован.", 423 if state == "locked" else 401)
         async with self.lock:
             previous = self.ledger.find_request(uid, request_id)
             if previous:
@@ -1227,10 +1379,15 @@ class CustodyRuntime(WalletRuntime):
                 return self.result(previous)
             await self.reconcile(session)
             if self.pending():
-                raise WalletError("Кошелёк ожидает подтверждения. Ваши средства не списаны.", 409)
+                raise WalletError(
+                    "A previous transfer is still being checked. Do not start another withdrawal.", 409)
             await self.solvent(session)
+            if raw > self.ledger.balance(uid, asset):
+                raise WalletError("The amount exceeds your available balance.", 409)
             if getattr(self, "accounts", None):
-                self.accounts.consume(uid, body)
+                self.accounts.consume_withdrawal_code(uid, body)
+            else:
+                raise WalletError("Telegram withdrawal confirmation is unavailable.", 503)
             row = self.ledger.reserve(uid, request_id, "WITHDRAW", asset, raw, {}, str(recipient))
             try:
                 tx = await super().withdraw_transaction(session, self.ready(), token, recipient, raw, row["id"])
@@ -1664,7 +1821,7 @@ class CustodyRuntime(WalletRuntime):
         async with self._notification_lock:
             for event in self.ledger.recovery_notifications(int(time.time())):
                 payload = json.loads(event["payload"])
-                restored = "The reserved asset was restored to the open position."
+                restored = "The asset was restored to the open position."
                 if payload["kind"] == "BUY":
                     asset = payload["asset"]
                     amount = (display_raw(payload["raw"], 9 if asset == SOL else 6)

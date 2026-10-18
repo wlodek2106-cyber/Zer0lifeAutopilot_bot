@@ -3,9 +3,9 @@
 <style>body{background:#080d15;color:#e5edf5;font:16px system-ui;max-width:480px;margin:36px auto;padding:24px}section{background:#121c28;border:1px solid #2b3c4b;padding:24px;border-radius:20px}button,input{box-sizing:border-box;width:100%;padding:15px;margin:10px 0;border-radius:12px;border:1px solid #385066;background:#18293a;color:white;font-size:16px}button{background:#16bc62;color:#03120b;font-weight:750}button:disabled{opacity:.4}p{line-height:1.5;overflow-wrap:anywhere}.muted{color:#9cabbc;font-size:14px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px}label{font-size:14px}</style>
 <section><h1>Secure verification</h1><p class="muted">Use Face ID, Touch ID or your device's verification method. Face photos never leave your device. This page does not send funds.</p>
 <p id="status">Open the verification link from your Telegram account.</p><p id="details"></p>
-<label for="pin">Your withdrawal confirmation code</label><input id="pin" type="password" autocomplete="off" maxlength="128">
-<button id="start">Verify with passkey</button><div id="backup" hidden><h2>Save your recovery codes</h2><p>Save these privately in a password manager. Each code can replace lost passkeys only together with your Telegram account and withdrawal code. Codes are shown once. Losing all passkeys and codes may lock withdrawals.</p><pre id="codes"></pre></div>
-<p class="muted">If passkeys are unavailable inside Telegram, return to the app, hold its verification link to copy it, and open that link in Safari or Chrome. The address bar here no longer contains the secret link. Never share the link, withdrawal code or recovery codes.</p></section>
+<label for="pin">Your account security code</label><input id="pin" type="password" autocomplete="off" maxlength="128">
+<button id="start">Verify with passkey</button><div id="backup" hidden><h2>Save your recovery codes</h2><p>Save these privately in a password manager. Each code can replace lost passkeys only together with your Telegram account and account security code. Codes are shown once. Losing all passkeys and codes may lock browser sign-in.</p><pre id="codes"></pre></div>
+<p class="muted">If passkeys are unavailable inside Telegram, return to the app, hold its verification link to copy it, and open that link in Safari or Chrome. The address bar here no longer contains the secret link. Never share the link, account security code or recovery codes. Withdrawal confirmation codes are sent separately in Telegram.</p></section>
 <script>
 const ticket=new URLSearchParams(location.hash.slice(1)).get('ticket');
 // Remove the capability from the visible address/history; retain it only in memory.
@@ -26,14 +26,10 @@ button.onclick=async()=>{
   if(!pending){
    pending=await post('/passkey/options',{ticket,pin});
    const data=pending;
-   if(data.purpose==='withdraw'){
-   const i=data.intent,decimals=i.token==='SOL'?9:6,units=BigInt(i.raw),scale=10n**BigInt(decimals);
-   const fraction=(units%scale).toString().padStart(decimals,'0').replace(/0+$/,'');
-   const amount=(units/scale).toString()+(fraction?'.'+fraction:'');
-   document.getElementById('details').textContent='Withdrawal: '+amount+' '+i.token+' to '+i.recipient_address;
-   }
+    if(data.purpose==='withdraw')
+     throw Error('Withdrawals now use a one-time code sent in Telegram. Return to the app.');
    statusBox.textContent='Review the details, then tap below. Your device will ask you to verify.';
-   button.textContent=data.phase==='register'?'Create device passkey':data.purpose==='withdraw'?'Approve this withdrawal':data.purpose==='login'?'Approve browser sign-in':'Confirm existing passkey';
+    button.textContent=data.phase==='register'?'Create device passkey':data.purpose==='login'?'Approve browser sign-in':'Confirm existing passkey';
    button.disabled=false;
    return;
   }
@@ -50,9 +46,9 @@ button.onclick=async()=>{
    }
   }
   document.getElementById('pin').value='';
-  statusBox.textContent=data.phase==='enrolled'?'Passkey registered. Return to your account.':data.purpose==='login'?'Sign-in approved. Return to the web terminal tab.':'Withdrawal approved. Return to your account to submit it.';
+   statusBox.textContent=data.phase==='enrolled'?'Passkey registered. Return to your account.':data.purpose==='login'?'Sign-in approved. Return to the web terminal tab.':'Passkey approved. Return to your account.';
   if(data.recovery_codes?.length){document.getElementById('backup').hidden=false;document.getElementById('codes').textContent=data.recovery_codes.join('\n');}
  }catch(e){statusBox.textContent=e.name==='NotAllowedError'?'Cancelled or unavailable. Try again, or open a new link in Safari.':e.message;button.disabled=false;}
 };
-if(ticket)statusBox.textContent='Enter your withdrawal code, then verify on your device.';
+if(ticket)statusBox.textContent='Enter your account security code, then verify on your device.';
 </script></html>

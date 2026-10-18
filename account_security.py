@@ -4,6 +4,7 @@ No facial images, client biometric booleans, email auth, or PIN-only withdrawal 
 External browser capabilities are hashed at rest and never placed in URL paths.
 """
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -11,8 +12,10 @@ import secrets
 import sqlite3
 import time
 import uuid
+from decimal import Decimal
 from urllib.parse import urlsplit
 
+import aiohttp
 from aiohttp import web
 from solders.pubkey import Pubkey
 from webauthn import (generate_registration_options, generate_authentication_options,
@@ -77,8 +80,9 @@ def intent(uid, body, vault=""):
 
 
 class AccountSecurity:
-    def __init__(self, ledger, base_url, pin_fn, vault=""):
+    def __init__(self, ledger, base_url, pin_fn, vault="", notification_token=""):
         self.ledger, self.pin_fn, self.vault = ledger, pin_fn, vault
+        self.notification_token = str(notification_token or "")
         parsed = urlsplit(base_url.rstrip("/"))
         if parsed.scheme != "https" or not parsed.hostname or parsed.path or parsed.query or parsed.fragment or parsed.username:
             raise ValueError("Passkeys require a fixed HTTPS public origin.")
@@ -103,6 +107,12 @@ class AccountSecurity:
                     intent_hash TEXT NOT NULL, recovery_hash TEXT NOT NULL,
                     expires INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
                     used INTEGER NOT NULL DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS app_withdrawal_codes (
+                    id TEXT PRIMARY KEY, uid INTEGER NOT NULL, intent_hash TEXT NOT NULL,
+                    code_hash TEXT NOT NULL, created_at INTEGER NOT NULL, expires INTEGER NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0, used INTEGER NOT NULL DEFAULT 0);
+                CREATE INDEX IF NOT EXISTS app_withdrawal_codes_owner
+                    ON app_withdrawal_codes(uid, created_at DESC);
             """)
             profile_columns = {row[1] for row in db.execute("PRAGMA table_info(app_profiles)")}
             if "partner_terms_accepted_at" not in profile_columns:
@@ -117,7 +127,7 @@ class AccountSecurity:
         return {"success": True, "registered": bool(row), "nickname": row["nickname"] if row else None,
                 "has_passkey": keys > 0, "passkey_count": keys, "recovery_codes_remaining": recovery,
                 "partner_terms_required": bool(referred and (not row or not row["partner_terms_accepted_at"])),
-                "withdrawal_requires_passkey": True}
+                "withdrawal_requires_passkey": False, "withdrawal_requires_telegram_code": True}
 
     def require(self, uid):
         if not self.state(uid)["registered"]:
@@ -152,7 +162,114 @@ class AccountSecurity:
     def pin(self, uid, supplied):
         valid, state = self.pin_fn(uid, str(supplied or ""))
         if not valid:
-            raise WalletError("Invalid withdrawal code or code locked.", 423 if state == "locked" else 401)
+            raise WalletError("Invalid account security code or code locked.", 423 if state == "locked" else 401)
+
+    def withdrawal_intent(self, uid, body):
+        return intent(uid, body, self.vault)
+
+    def _withdrawal_code_hash(self, uid, intent_hash, code):
+        message = f"withdrawal-code:v1:{uid}:{intent_hash}:{code}".encode()
+        return hmac.new(self.notification_token.encode(), message, hashlib.sha256).hexdigest()
+
+    async def send_withdrawal_code(self, request, session, body=None):
+        uid = int(request["telegram_user"]["id"])
+        self.require(uid)
+        if not self.notification_token:
+            raise WalletError("Telegram code delivery is unavailable. No transfer was sent.", 503)
+        if session is None:
+            raise WalletError("Telegram code delivery is unavailable. No transfer was sent.", 503)
+        body = body if body is not None else await request.json()
+        payload, binding = self.withdrawal_intent(uid, body)
+        now = int(time.time())
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        code_id = uuid.uuid4().hex
+        with self.ledger.db() as db:
+            db.execute("DELETE FROM app_withdrawal_codes WHERE created_at<?", (now - 86400,))
+            last = db.execute(
+                "SELECT MAX(created_at) FROM app_withdrawal_codes WHERE uid=?", (uid,)
+            ).fetchone()[0]
+            if last is not None and now - int(last) < 60:
+                raise WalletError("Wait one minute before requesting another Telegram code.", 429)
+            issued = db.execute(
+                "SELECT COUNT(*) FROM app_withdrawal_codes WHERE uid=? AND created_at>?",
+                (uid, now - 3600),
+            ).fetchone()[0]
+            if issued >= 5:
+                raise WalletError("Too many Telegram codes. Try again in one hour.", 429)
+            db.execute("UPDATE app_withdrawal_codes SET used=1 WHERE uid=? AND used=0", (uid,))
+            db.execute("""INSERT INTO app_withdrawal_codes
+                (id,uid,intent_hash,code_hash,created_at,expires)
+                VALUES(?,?,?,?,?,?)""",
+                (code_id, uid, binding, self._withdrawal_code_hash(uid, binding, code), now, now + 300))
+
+        decimals = 9 if payload["token"] == "SOL" else 6
+        amount = format(Decimal(payload["raw"]) / Decimal(10**decimals), "f")
+        amount = amount.rstrip("0").rstrip(".") if "." in amount else amount
+        message = (
+            "Zer0Life AI Trader withdrawal confirmation\n"
+            f"Code: {code}\n"
+            f"Amount: {amount} {payload['token']}\n"
+            f"To: {payload['recipient_address']}\n"
+            "Valid for 5 minutes and one use only. Never share this code."
+        )
+        try:
+            async with session.post(
+                    f"https://api.telegram.org/bot{self.notification_token}/sendMessage",
+                    json={"chat_id": uid, "text": message},
+                    timeout=aiohttp.ClientTimeout(total=8)) as response:
+                result = await response.json(content_type=None)
+                if response.status != 200 or not isinstance(result, dict) or not result.get("ok"):
+                    with self.ledger.db() as db:
+                        db.execute("UPDATE app_withdrawal_codes SET used=1 WHERE id=?", (code_id,))
+                    raise WalletError(
+                        "Telegram could not deliver the code. Open the bot chat and try again.", 503)
+        except WalletError:
+            raise
+        except Exception as exc:
+            # Telegram may have accepted the message before the connection failed.
+            # Keep this one code valid and rate-limit new requests to avoid ambiguity.
+            raise WalletError(
+                "Telegram delivery is unconfirmed. Check the bot chat before requesting another code.", 503
+            ) from exc
+        return web.json_response({"success": True, "expires_in": 300},
+                                 headers={"Cache-Control": "no-store"})
+
+    def consume_withdrawal_code(self, uid, body):
+        self.require(uid)
+        _, binding = self.withdrawal_intent(uid, body)
+        code = str(body.get("telegram_code", "")).strip()
+        now = int(time.time())
+        error = None
+        with self.ledger.db() as db:
+            row = db.execute("""SELECT * FROM app_withdrawal_codes
+                WHERE uid=? AND used=0 ORDER BY created_at DESC LIMIT 1""", (uid,)).fetchone()
+            if not row:
+                error = WalletError("Request a Telegram code for this withdrawal first.", 401)
+            elif row["expires"] <= now:
+                db.execute("UPDATE app_withdrawal_codes SET used=1 WHERE id=?", (row["id"],))
+                error = WalletError("Telegram code expired. Request a new code.", 410)
+            elif row["attempts"] >= 5:
+                db.execute("UPDATE app_withdrawal_codes SET used=1 WHERE id=?", (row["id"],))
+                error = WalletError("Too many incorrect codes. Request a new code.", 423)
+            else:
+                attempts = int(row["attempts"]) + 1
+                valid_code = bool(re.fullmatch(r"\d{6}", code))
+                code_hash = self._withdrawal_code_hash(uid, row["intent_hash"], code)
+                valid = (row["intent_hash"] == binding and valid_code
+                         and hmac.compare_digest(row["code_hash"], code_hash))
+                if not valid:
+                    db.execute("UPDATE app_withdrawal_codes SET attempts=?,used=? WHERE id=?",
+                               (attempts, int(attempts >= 5), row["id"]))
+                    error = WalletError(
+                        "Telegram code or withdrawal details are incorrect. Check the amount and address.", 401)
+                else:
+                    changed = db.execute("""UPDATE app_withdrawal_codes SET attempts=?,used=1
+                        WHERE id=? AND used=0 AND expires>? AND attempts<5""",
+                        (attempts, row["id"], now)).rowcount
+                    if changed != 1:
+                        error = WalletError("Telegram code expired or was already used. Request a new code.", 410)
+        if error:
+            raise error
 
     def ticket(self, db, nonce, uid=None, active=True, attempts_limit=8):
         if not isinstance(nonce, str) or not re.fullmatch(r"[A-Za-z0-9_-]{43}", nonce):

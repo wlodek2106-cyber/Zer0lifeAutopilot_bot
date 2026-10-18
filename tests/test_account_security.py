@@ -39,6 +39,24 @@ class Request(dict):
         return self.body
 
 
+class TelegramResponse:
+    status = 200
+    async def __aenter__(self):
+        return self
+    async def __aexit__(self, *args):
+        return False
+    async def json(self, content_type=None):
+        return {"ok": True, "result": {"message_id": 1}}
+
+
+class TelegramSession:
+    def __init__(self):
+        self.calls = []
+    def post(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return TelegramResponse()
+
+
 def decoded(response):
     return json.loads(response.text)
 
@@ -73,7 +91,8 @@ class AccountSecurityTests(unittest.IsolatedAsyncioTestCase):
         self.temp=tempfile.TemporaryDirectory()
         self.ledger=CustodyLedger(self.temp.name+"/db")
         self.vault=str(Keypair().pubkey())
-        self.accounts=AccountSecurity(self.ledger,ORIGIN,lambda uid,pin:(pin=="test-code","ok"),self.vault)
+        self.accounts=AccountSecurity(self.ledger,ORIGIN,lambda uid,pin:(pin=="test-code","ok"),self.vault,
+                                      notification_token="test-telegram-token")
         self.device=Device()
         self.transfer={"purpose":"withdraw","pin":"test-code","token":"USDC","amount":"1.25",
                        "recipient_address":str(Keypair().pubkey()),"request_id":str(uuid.uuid4())}
@@ -101,6 +120,15 @@ class AccountSecurityTests(unittest.IsolatedAsyncioTestCase):
         ticket=await self.ticket(**{k:v for k,v in self.transfer.items() if k!="pin"})
         self.assertEqual((await self.finish(ticket))["phase"],"approved")
         return ticket
+    def store_withdrawal_code(self,uid,body,code):
+        _,binding=self.accounts.withdrawal_intent(uid,body)
+        now=int(time.time())
+        with self.ledger.db() as db:
+            db.execute("""INSERT INTO app_withdrawal_codes
+                (id,uid,intent_hash,code_hash,created_at,expires)
+                VALUES(?,?,?,?,?,?)""",
+                (uuid.uuid4().hex,uid,binding,
+                 self.accounts._withdrawal_code_hash(uid,binding,code),now,now+300))
 
     async def test_profile_is_server_unique_and_cannot_select_another_uid(self):
         state=await self.register()
@@ -132,6 +160,32 @@ class AccountSecurityTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(WalletError):
             self.accounts.consume(101,{**self.transfer,"passkey_ticket":ticket})
         self.assertTrue(self.ledger.audit())
+
+    async def test_telegram_code_is_delivered_once_and_binds_exact_withdrawal(self):
+        await self.register()
+        body={k:v for k,v in self.transfer.items() if k not in ("purpose","pin")}
+        session=TelegramSession()
+        response=await self.accounts.send_withdrawal_code(Request(body),session,body)
+        self.assertEqual(decoded(response),{"success":True,"expires_in":300})
+        message=session.calls[0][1]["json"]["text"]
+        code=message.split("Code: ",1)[1].splitlines()[0]
+        self.assertEqual(len(code),6)
+        self.assertIn(body["recipient_address"],message)
+        self.assertIn("1.25 USDC",message)
+        with self.ledger.db() as db:
+            row=db.execute("SELECT * FROM app_withdrawal_codes WHERE uid=101").fetchone()
+        self.assertNotIn(code,row["code_hash"])
+        for fields in ({"amount":"1.26"}, {"token":"SOL"},
+                       {"recipient_address":str(Keypair().pubkey())},
+                       {"request_id":str(uuid.uuid4())}):
+            with self.assertRaises(WalletError):
+                self.accounts.consume_withdrawal_code(101,{**body,**fields,"telegram_code":code})
+        with self.ledger.db() as db:
+            self.assertEqual(db.execute("SELECT attempts FROM app_withdrawal_codes WHERE uid=101")
+                             .fetchone()["attempts"],4)
+        self.accounts.consume_withdrawal_code(101,{**body,"telegram_code":code})
+        with self.assertRaises(WalletError):
+            self.accounts.consume_withdrawal_code(101,{**body,"telegram_code":code})
 
     async def test_no_pin_only_or_client_biometric_boolean_bypass(self):
         await self.register()
@@ -264,14 +318,15 @@ class AccountSecurityTests(unittest.IsolatedAsyncioTestCase):
         self.ledger.seed_fees(20_000_000,50_000_000)
         invoice=self.ledger.invoice(101,USDC,2_000_000)
         self.ledger.credit_deposit(invoice["id"],str(Signature.new_unique()),USDC,2_000_000,invoice["created_at"])
+        body={k:v for k,v in self.transfer.items() if k not in ("purpose","pin")}
         with patch.object(WalletRuntime,"withdraw_transaction",new_callable=AsyncMock) as transaction:
             with self.assertRaises(WalletError):
-                await service.withdraw(Request(self.transfer),None)
+                await service.withdraw(Request(body),None)
             self.assertIsNone(self.ledger.find_request(101,self.transfer["request_id"]))
             self.assertEqual(self.ledger.balance(101,USDC),2_000_000)
             transaction.assert_not_awaited()
-            ticket=await self.approved()
-            body={**self.transfer,"passkey_ticket":ticket}
+            self.store_withdrawal_code(101,body,"123456")
+            body={**body,"telegram_code":"123456"}
             await service.withdraw(Request(body),None)
             transaction.assert_awaited_once()
             self.assertEqual(self.ledger.balance(101,USDC),750_000)

@@ -419,6 +419,54 @@ class CustodyLedger:
                              (available(uid), asset)).fetchone()
             return row["raw"] if row else 0
 
+    def record_external_withdrawal(self, uid, signature, asset, raw, recipient, fee_lamports, block_time):
+        if (type(uid) is not int or uid <= 0 or asset != USDC or type(raw) is not int or raw <= 0
+                or type(fee_lamports) is not int or fee_lamports < 0 or not recipient or not signature):
+            raise LedgerError("Invalid verified external withdrawal record.")
+        request_key = "external-withdrawal:" + signature
+        journal_id = "external-withdrawal:" + signature
+        operation_id = str(uuid.uuid4())
+        metadata = json.dumps({
+            "source": "admin_confirmed_finalized_solana_transfer",
+            "network_fee_lamports": fee_lamports,
+            "block_time": int(block_time),
+        }, sort_keys=True, separators=(",", ":"))
+        with self.db() as db:
+            existing = db.execute("SELECT * FROM custody_operations WHERE signature=?", (signature,)).fetchone()
+            if existing:
+                if (existing["uid"] == uid and existing["kind"] == "WITHDRAW"
+                        and existing["asset"] == asset and existing["raw"] == raw
+                        and existing["recipient"] == recipient and existing["state"] == "COMPLETED"):
+                    return dict(existing), False
+                raise LedgerError("This transaction signature is already used for another ledger entry.")
+            if db.execute("SELECT 1 FROM custody_tx_deposits WHERE signature=?", (signature,)).fetchone():
+                raise LedgerError("This signature is already recorded as a deposit.")
+            if db.execute("SELECT 1 FROM custody_invoices WHERE signature=?", (signature,)).fetchone():
+                raise LedgerError("This signature is already attached to a deposit invoice.")
+            if db.execute("SELECT 1 FROM custody_operations WHERE state IN "
+                          "('RESERVED','PREPARED','SUBMITTED','UNKNOWN') LIMIT 1").fetchone():
+                raise LedgerError("Resolve the existing pending operation before recording this transfer.")
+            balance = db.execute("SELECT raw FROM custody_accounts WHERE account=? AND asset=?",
+                                 (available(uid), asset)).fetchone()
+            if not balance or balance["raw"] < raw:
+                raise LedgerError("The confirmed transfer exceeds your available USDC balance.")
+            fee_reserve = db.execute("SELECT raw FROM custody_accounts WHERE account='treasury' AND asset=?",
+                                     (SOL,)).fetchone()
+            if fee_lamports and (not fee_reserve or fee_reserve["raw"] < fee_lamports):
+                raise LedgerError("The operator fee reserve cannot cover this transaction fee.")
+            lines = [(available(uid), asset, -raw), ("external", asset, raw)]
+            if fee_lamports:
+                lines.extend([("treasury", SOL, -fee_lamports), ("external", SOL, fee_lamports)])
+            self.post(db, journal_id, "record already-finalized external withdrawal " + signature, lines)
+            db.execute("""INSERT INTO custody_operations
+                (id,request_key,uid,kind,asset,raw,fee_cap,recipient,position_id,metadata,
+                 signature,wire,state,created_at)
+                VALUES(?,?,?,'WITHDRAW',?,?,?,?,NULL,?,?,NULL,'COMPLETED',?)""",
+                (operation_id, request_key, uid, asset, raw, fee_lamports, recipient,
+                 metadata, signature, int(block_time)))
+            row = db.execute("SELECT * FROM custody_operations WHERE id=?", (operation_id,)).fetchone()
+            return dict(row), True
+
     def liabilities(self):
         with self.db() as db:
             return {r["asset"]: r["raw"] for r in db.execute(

@@ -67,7 +67,7 @@ class AccountBrowserTests(unittest.TestCase):
             await createAccount();await refresh();
             assert(document.getElementById('account-signup').style.display==='none','signup hidden after server acceptance');
             assert(accountState.nickname==='ServerChosen','server owns nickname state');
-            assert(document.getElementById('tab-settings').classList.contains('active'),'passkey setup next');
+            assert(document.getElementById('app').style.display==='block','account opens without passkey setup');
             const request=window.requests.find(r=>r.url==='/api/account/register');
             assert(request.body.nickname==='TraderNew'&&request.body.accept_risk===true,'real registration request');
             assert(request.body.accept_partner_terms===true,'commission consent is explicitly sent');
@@ -88,9 +88,8 @@ class AccountBrowserTests(unittest.TestCase):
         }}});
         window.fetch=async(path,options)=>{
             if(path.endsWith('/options')){window.optionsCalls++;return new Response(JSON.stringify({
-                success:true,phase:'auth',purpose:'withdraw',options:{challenge:'YQ',rpId:'example.test',userVerification:'required',allowCredentials:[{id:'YQ',type:'public-key'}]},
-                intent:{token:'SOL',raw:'9223372036854775807',recipient_address:'FullRecipient'}}));}
-            window.verifyCalls++;return new Response(JSON.stringify({success:true,phase:'approved'}));
+                success:true,phase:'auth',purpose:'login',options:{challenge:'YQ',rpId:'example.test',userVerification:'required',allowCredentials:[{id:'YQ',type:'public-key'}]}}));}
+            window.verifyCalls++;return new Response(JSON.stringify({success:true,phase:'approved',purpose:'login'}));
         };
         </script>"""
         page=page.replace("<script>",stub+"<script>",1)
@@ -100,43 +99,72 @@ class AccountBrowserTests(unittest.TestCase):
             document.getElementById('pin').value='test-code';
             await document.getElementById('start').onclick();
             assert(window.optionsCalls===1&&window.authCalls===0,'first click only loads trusted details');
-            assert(document.getElementById('details').textContent.includes('9223372036.854775807 SOL'),'exact BigInt display');
+            assert(document.getElementById('status').textContent.includes('Review the details'),'login details shown before approval');
             await document.getElementById('start').onclick();
             assert(window.authCalls===1&&window.verifyCalls===0,'cancel sends no proof');
             await document.getElementById('start').onclick();
             assert(window.authCalls===2&&window.verifyCalls===1,'cancel retry preserves original options');
-            assert(document.getElementById('status').textContent.includes('Withdrawal approved'),'approval shown without sending funds');
+            assert(document.getElementById('status').textContent.includes('Sign-in approved'),'sign-in approval shown');
             assert(document.getElementById('pin').value==='','code input cleared');
         ""","#ticket="+"a"*43)
 
-    def test_withdraw_approval_link_and_waiting_state_are_visible_in_wallet(self):
+    def test_old_withdrawal_passkey_link_is_rejected_in_favor_of_telegram_code(self):
+        page=(ROOT/"passkey.html").read_text()
+        stub="""<script>
+        window.authCalls=0;
+        Object.defineProperty(navigator,'credentials',{value:{get:async()=>{window.authCalls++;return {};}}});
+        window.fetch=async()=>new Response(JSON.stringify({
+            success:true,phase:'auth',purpose:'withdraw',
+            options:{challenge:'YQ',rpId:'example.test',userVerification:'required',
+                allowCredentials:[{id:'YQ',type:'public-key'}]},
+            intent:{token:'USDC',raw:'5000000',recipient_address:'Recipient'}}));
+        </script>"""
+        page=page.replace("<script>",stub+"<script>",1)
+        self.run_page(page,"""
+            document.getElementById('pin').value='test-code';
+            await document.getElementById('start').onclick();
+            assert(document.getElementById('status').textContent.includes('one-time code sent in Telegram'),
+                'legacy passkey withdrawal link explains the new flow');
+            assert(window.authCalls===0,'legacy link cannot request passkey approval');
+        ""","#ticket="+"a"*43)
+
+    def test_withdrawal_uses_exact_details_telegram_code_without_passkey(self):
         source=ast.parse((ROOT/"main.py").read_text())
         page=next(ast.literal_eval(node.value) for node in source.body if isinstance(node,ast.Assign)
                   and any(isinstance(target,ast.Name) and target.id=="RAW_HTML" for target in node.targets))
         page=re.sub(r'<script src="[^"]+"></script>','',page)
         stub="""<script>
         window.Telegram={WebApp:{initData:'fixture',initDataUnsafe:{user:{id:101,username:'test'}},
-            openLink(url){window.openedPasskeyUrl=url;},expand(){},ready(){}}};
+            expand(){},ready(){}}};
+        window.requests=[];
         window.fetch=async(url,options={})=>{
-            if(url==='/api/account/passkey')return new Response(JSON.stringify({
-                success:true,ticket:'ticket-fixture',url:'https://example.test/passkey#ticket=fixture'
-            }),{headers:{'Content-Type':'application/json'}});
-            if(url.startsWith('/api/account/passkey_status'))return new Response(JSON.stringify({
-                success:true,phase:'approved',expired:false,used:false
-            }),{headers:{'Content-Type':'application/json'}});
-            return new Response(JSON.stringify({success:false}),{headers:{'Content-Type':'application/json'}});
+            window.requests.push({url,body:options.body?JSON.parse(options.body):null});
+            const body=url==='/api/withdraw/code'?{success:true,expires_in:300}:
+                url==='/api/withdraw'?{success:true,state:'COMPLETED',tx_signature:'verified-signature'}:
+                {success:true,user_balance:7,sol_balance:1,withdrawable:7,wallet_history:[],trades:[],
+                 logs:[],trading_settings:{},wallet_status:{},pending_operations:[]};
+            return new Response(JSON.stringify(body),{headers:{'Content-Type':'application/json'}});
         };
         </script>"""
         page=page.replace("</head>",stub+"</head>")
         self.run_page(page,"""
-            const ticket=await passkeyTicket({purpose:'withdraw'});
-            const link=document.getElementById('withdraw-approval-link');
+            const address='ETX5mgkeGphNzucEKKM1NKvLQFKr5wdbjJt4J7kVmS';
+            document.getElementById('withdraw-address').value=address;
+            document.getElementById('withdraw-amount').value='5.000749';
+            await requestWithdrawalCode();
+            const codeRequest=window.requests.find(r=>r.url==='/api/withdraw/code');
+            assert(codeRequest.body.recipient_address===address&&codeRequest.body.amount==='5.000749',
+                'code request is bound to exact recipient and amount');
+            const codeInput=document.getElementById('withdraw-code');
+            codeInput.value='123456';
+            await secureWithdraw();
+            const transfer=window.requests.find(r=>r.url==='/api/withdraw');
             const status=document.getElementById('withdraw-progress');
-            assert(ticket==='ticket-fixture','withdrawal ticket returned');
-            assert(link.style.display==='block'&&link.href==='https://example.test/passkey#ticket=fixture',
-                'current approval link is visible directly in wallet');
-            assert(window.openedPasskeyUrl===link.href,'app opens the current secure approval');
-            assert(!status.hidden&&status.textContent.includes('transfer has not been sent yet'),
-                'status does not claim the transaction was sent before passkey approval');
-            await waitPasskey(ticket,'approved');
+            assert(transfer.body.telegram_code==='123456','withdrawal sends the Telegram code');
+            assert(transfer.body.recipient_address===address&&transfer.body.amount==='5.000749',
+                'final transfer retains the approved amount and recipient');
+            assert(!('pin' in transfer.body)&&!('passkey_ticket' in transfer.body),
+                'withdrawal needs no personal PIN or passkey');
+            assert(!status.hidden&&status.textContent.includes('confirmed on Solana'),
+                'completed withdrawal status is shown in the wallet');
         """)

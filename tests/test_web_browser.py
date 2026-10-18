@@ -73,7 +73,8 @@ class WebBrowserTests(unittest.TestCase):
         window.fetch=async()=>new Response(JSON.stringify({success:false,message:'fixture'}));
         </script>""")
         self.assertIn("['BUY', 'SELL', 'WITHDRAW', 'PARTNER_PAYOUT'].includes(op.kind)", page)
-        self.assertIn("Reserved: ", page)
+        self.assertIn("Amount: ", page)
+        self.assertNotIn("Reserved: ", page)
         browser.AccountBrowserTests().run_page(page,"""
             document.getElementById('app').style.display='block';
             document.getElementById('nav').style.display='flex';
@@ -89,8 +90,10 @@ class WebBrowserTests(unittest.TestCase):
             const modal=document.getElementById('recovery-confirm-modal');
             assert(modal.style.display==='flex','tap opens in-page confirmation without native dialog');
             const confirm=document.querySelector('#recovery-confirm-modal button:last-child');
-            assert(document.querySelector('#recovery-confirm-modal p').textContent.includes('BUY or WITHDRAW releases its reserved funds'),
-                'confirmation explains when a pending withdrawal can release funds');
+            assert(document.querySelector('#recovery-confirm-modal p').textContent.includes('BUY or WITHDRAW returns the amount to available balance'),
+                'confirmation explains the verified recovery outcome');
+            assert(!/\breserved\b/i.test(document.querySelector('#recovery-confirm-modal p').textContent),
+                'internal ledger terminology is not shown in the confirmation');
             const confirmBox=confirm.getBoundingClientRect();
             assert(document.elementFromPoint(confirmBox.x+confirmBox.width/2,confirmBox.y+confirmBox.height/2)===confirm,
                 'confirm button is the topmost touch target');

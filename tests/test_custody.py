@@ -33,6 +33,7 @@ class Request(dict):
         super().__init__(telegram_user={"id": uid, "username": "user" + str(uid)})
         self.body = body or {}
         self.match_info = {}
+        self.method = "POST"
 
     async def json(self):
         return self.body
@@ -59,6 +60,15 @@ class NotificationSession:
 
     async def json(self):
         return self.result
+
+
+class TestWithdrawalAccounts:
+    def require(self, uid):
+        if uid not in (101, 202):
+            raise legacy.WalletError("Create your account first.", 409)
+    def consume_withdrawal_code(self, uid, body):
+        if body.get("telegram_code") != "123456":
+            raise legacy.WalletError("Invalid Telegram withdrawal code.", 401)
 
 
 class LedgerTests(unittest.TestCase):
@@ -102,6 +112,24 @@ class LedgerTests(unittest.TestCase):
         invoice, sig = self.credit(101, SOL, 1_000_000)
         self.ledger.credit_deposit(invoice["id"], sig, SOL, 1_000_000, invoice["created_at"])
         self.assertEqual(self.ledger.balance(101, SOL), 1_000_000)
+
+    def test_confirmed_external_withdrawal_debits_user_and_fee_once(self):
+        signature = str(Signature.new_unique())
+        before_sol = self.ledger.liabilities()[SOL]
+        operation, created = self.ledger.record_external_withdrawal(
+            101, signature, USDC, 5_000_749, "recipient", 79_938, int(time.time()))
+        self.assertTrue(created)
+        self.assertEqual(operation["state"], "COMPLETED")
+        self.assertEqual(operation["signature"], signature)
+        self.assertEqual(self.ledger.balance(101, USDC), 4_999_251)
+        self.assertEqual(self.ledger.liabilities()[USDC], 34_999_251)
+        self.assertEqual(self.ledger.liabilities()[SOL], before_sol - 79_938)
+        duplicate, created = self.ledger.record_external_withdrawal(
+            101, signature, USDC, 5_000_749, "recipient", 79_938, int(time.time()))
+        self.assertFalse(created)
+        self.assertEqual(duplicate["id"], operation["id"])
+        self.assertEqual(self.ledger.balance(101, USDC), 4_999_251)
+        self.assertTrue(self.ledger.audit())
 
     def test_same_signature_cannot_credit_two_accounts(self):
         invoice, sig = self.credit(101, SOL, 1_000_000)
@@ -502,7 +530,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.ledger.submitted(operation["id"], False)
         return operation, signature
 
-    async def test_expired_pending_buy_releases_reserved_funds_only_after_proof(self):
+    async def test_expired_pending_buy_restores_available_amount_only_after_proof(self):
         buy, signature = self.pending_buy()
         available_before = self.ledger.balance(101, USDC)
         self.ledger.settings(101, enabled=True, sniper_enabled=True)
@@ -514,7 +542,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         result = json.loads(response.text)
         self.assertTrue(result["success"])
         self.assertIn("BUY", result["message"])
-        self.assertIn("reserved purchase funds", result["message"])
+        self.assertIn("purchase amount is available again", result["message"])
         self.assertEqual(self.ledger.operation(buy["id"])["state"], "FAILED")
         self.assertEqual(self.ledger.balance(101, USDC), available_before + 1_000_000)
         self.assertFalse(self.ledger.settings(101)["trading"])
@@ -541,7 +569,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                 Request(101, {"signature": signature, "confirm_expired": True}), None)
         result = json.loads(response.text)
         self.assertTrue(result["success"])
-        self.assertIn("withdrawal funds", result["message"])
+        self.assertIn("withdrawal amount is available again", result["message"])
         self.assertEqual(self.ledger.operation(operation["id"])["state"], "FAILED")
         self.assertEqual(self.ledger.balance(101, USDC), available_before + 4_000_000)
         self.assertFalse(self.ledger.settings(101)["trading"])
@@ -824,6 +852,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             AsyncMock(return_value={}), {"SOL": {"mint": runtime.WRAPPED_SOL, "decimals": 9}},
             lambda msg: None, base_url="https://example.invalid")
         self.service.public_enabled = True
+        self.service.accounts = TestWithdrawalAccounts()
         storage = patch.object(legacy, "durable", return_value=True)
         storage.start()
         self.addCleanup(storage.stop)
@@ -986,12 +1015,97 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.service.send_reserved.assert_not_called()
         self.assertFalse(self.ledger.pending())
 
-    async def test_invalid_pin_never_reserves(self):
+    async def test_invalid_telegram_code_never_reserves(self):
+        invoice = self.ledger.invoice(101, USDC, 1_000_000)
+        self.ledger.credit_deposit(invoice["id"], str(Signature.new_unique()), USDC, 1_000_000, invoice["created_at"])
         body = {"token": "USDC", "amount": "1", "recipient_address": str(self.recipient),
-                "pin": "bad", "request_id": str(uuid.uuid4())}
+                "telegram_code": "bad", "request_id": str(uuid.uuid4())}
         response = await self.service.handle(Request(101, body), self.service.withdraw)
         self.assertEqual(response.status, 401)
         self.assertFalse(self.ledger.pending())
+
+    async def test_admin_external_withdrawal_records_only_finalized_exact_transfer(self):
+        invoice = self.ledger.invoice(101, USDC, 10_000_000)
+        self.ledger.credit_deposit(invoice["id"], str(Signature.new_unique()), USDC, 10_000_000,
+                                   invoice["created_at"])
+        source = str(Keypair().pubkey())
+        destination = str(Keypair().pubkey())
+        recipient = str(self.recipient)
+        signature = str(Signature.new_unique())
+        transfer_raw = 5_000_749
+        tx = {
+            "blockTime": int(time.time()),
+            "transaction": {"message": {
+                "accountKeys": [
+                    {"pubkey": self.service.wallet, "signer": True},
+                    {"pubkey": source, "signer": False},
+                    {"pubkey": destination, "signer": False},
+                ],
+                "instructions": [{
+                    "program": "spl-token",
+                    "parsed": {"type": "transferChecked", "info": {
+                        "source": source, "destination": destination, "mint": USDC,
+                        "tokenAmount": {"amount": str(transfer_raw), "decimals": 6},
+                    }},
+                }],
+            }},
+            "meta": {"err": None, "fee": 79_938,
+                "preTokenBalances": [
+                    {"accountIndex": 1, "owner": self.service.wallet, "mint": USDC,
+                     "uiTokenAmount": {"amount": "30037105"}},
+                    {"accountIndex": 2, "owner": recipient, "mint": USDC,
+                     "uiTokenAmount": {"amount": "34003491"}},
+                ],
+                "postTokenBalances": [
+                    {"accountIndex": 1, "owner": self.service.wallet, "mint": USDC,
+                     "uiTokenAmount": {"amount": "25036356"}},
+                    {"accountIndex": 2, "owner": recipient, "mint": USDC,
+                     "uiTokenAmount": {"amount": "39004240"}},
+                ],
+            },
+        }
+        async def rpc(session, method, params=None):
+            if method == "getGenesisHash":
+                return legacy.GENESIS
+            if method == "getSignatureStatuses":
+                return {"value": [{"confirmationStatus": "finalized", "err": None}]}
+            if method == "getTransaction":
+                return tx
+            raise AssertionError("Unexpected RPC: " + method)
+        self.service.rpc = rpc
+        body = {"signature": signature, "recipient_address": recipient, "confirm": True}
+        response = await self.service.handle(Request(101, body), self.service.admin_record_external_withdrawal)
+        self.assertEqual(response.status, 200, response.text)
+        result = json.loads(response.text)
+        self.assertEqual(result["amount"], "5.000749")
+        self.assertEqual(result["available_usdc"], "4.999251")
+        self.assertEqual(self.ledger.balance(101, USDC), 4_999_251)
+        self.assertEqual(self.ledger.liabilities()[SOL], 20_000_000 - 79_938)
+        duplicate = await self.service.handle(Request(101, body), self.service.admin_record_external_withdrawal)
+        self.assertEqual(json.loads(duplicate.text)["recorded"], False)
+        self.assertEqual(self.ledger.balance(101, USDC), 4_999_251)
+        wrong_recipient = {**body, "signature": str(Signature.new_unique()),
+                           "recipient_address": str(Keypair().pubkey())}
+        rejected = await self.service.handle(Request(101, wrong_recipient),
+                                             self.service.admin_record_external_withdrawal)
+        self.assertEqual(rejected.status, 409)
+        self.assertEqual(self.ledger.balance(101, USDC), 4_999_251)
+        self.assertTrue(self.ledger.audit())
+
+    async def test_admin_balance_check_shows_shortfall_without_mutating_ledger(self):
+        invoice = self.ledger.invoice(101, USDC, 1_000_000)
+        self.ledger.credit_deposit(invoice["id"], str(Signature.new_unique()), USDC, 1_000_000,
+                                   invoice["created_at"])
+        self.service.balances = AsyncMock(return_value={
+            USDC: {"raw": 900_000, "decimals": 6},
+            SOL: {"raw": 50_000_000, "decimals": 9},
+        })
+        before = self.ledger.liabilities()
+        response = await self.service.admin_balance_check(Request(101), None)
+        result = json.loads(response.text)
+        self.assertEqual(result["assets"]["USDC"]["difference"], "-0.1")
+        self.assertEqual(self.ledger.liabilities(), before)
+        self.assertTrue(result["read_only"])
 
     async def test_user_cannot_allocate_fees_or_import_opening(self):
         for action in (self.service.reserve_fees, self.service.release_fee_reserve,
@@ -1309,7 +1423,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             return base64.b64encode(bytes(transaction)).decode()
         self.service.safe_simulation = simulate
         request = Request(101, {"token": "USDC", "amount": "1", "recipient_address": str(self.recipient),
-            "pin": "123456", "request_id": str(uuid.uuid4())})
+            "telegram_code": "123456", "request_id": str(uuid.uuid4())})
         response = await self.service.handle(request, self.service.withdraw)
         self.assertEqual(response.status, 202)
         submitted = json.loads(response.text)

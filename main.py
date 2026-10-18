@@ -1777,15 +1777,18 @@ RAW_HTML = r"""<!DOCTYPE html>
 
                 <div id="section-withdraw" style="display: none;">
                     <div id="chain-withdraw-balances" style="font-size:12px; margin-bottom:8px;">Loading balance...</div>
+                    <p class="muted">The Telegram code confirms this exact amount and recipient address.</p>
                     <div class="token-selector">
                         <button class="token-btn active" id="wtoken-usdc" onclick="selectWithdrawToken('USDC')">USDC</button>
                         <button class="token-btn" id="wtoken-sol" onclick="selectWithdrawToken('SOL')">Solana (SOL)</button>
                     </div>
-                    <input id="withdraw-address" class="sig-input" placeholder="Recipient wallet address">
-                    <input id="withdraw-amount" type="number" step="any" class="sig-input" placeholder="Amount">
+                    <input id="withdraw-address" class="sig-input" placeholder="Recipient wallet address" oninput="clearWithdrawalCode()">
+                    <input id="withdraw-amount" type="number" step="any" class="sig-input" placeholder="Amount" oninput="clearWithdrawalCode()">
+                    <button class="btn-copy" id="btn-withdraw-code" onclick="requestWithdrawalCode()">Send code in Telegram</button>
+                    <input id="withdraw-code" class="sig-input" type="text" inputmode="numeric" autocomplete="one-time-code"
+                        maxlength="6" pattern="[0-9]{6}" placeholder="6-digit Telegram code">
+                    <p id="withdraw-code-status" class="status-output" role="status" aria-live="polite"></p>
                     <p id="withdraw-progress" class="status-output" role="status" aria-live="polite" hidden></p>
-                    <a id="withdraw-approval-link" class="btn-copy" style="display:none;text-align:center;text-decoration:none;"
-                       target="_blank" rel="noopener noreferrer">Open current withdrawal approval</a>
                     <button class="btn-green-main" id="btn-withdraw-action" onclick="secureWithdraw()">Withdraw</button>
                 </div>
             </div>
@@ -1801,6 +1804,20 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div id="legacy-operation-details" style="font-size:12px;overflow-wrap:anywhere;white-space:pre-wrap;margin-top:8px;"></div>
                 <button class="btn-copy" onclick="checkSharedPendingOperations()">Check current shared-wallet lock (read-only)</button>
                 <div id="shared-pending-operation-details" style="font-size:12px;overflow-wrap:anywhere;white-space:pre-wrap;margin-top:8px;"></div>
+                <button class="btn-copy" onclick="checkBalanceCoverage()">Check wallet funds against account balances (read-only)</button>
+                <div id="balance-coverage-details" class="status-output" role="status"></div>
+                <details>
+                    <summary>Record an already completed USDC transfer</summary>
+                    <p class="muted">For a transfer already sent from this shared wallet. This only updates the ledger; it will not send another transaction.</p>
+                    <input id="external-transfer-signature" class="sig-input" placeholder="Finalized Solana transaction signature">
+                    <input id="external-transfer-recipient" class="sig-input" placeholder="Exact recipient wallet address">
+                    <label style="display:flex;gap:10px;align-items:flex-start;font-size:12px;">
+                        <input id="external-transfer-confirm" type="checkbox" style="width:auto;flex:0 0 auto;">
+                        I confirm this is my completed USDC transfer from the AI Trader wallet.
+                    </label>
+                    <button class="btn-copy" onclick="recordExternalTransfer()">Record verified transfer (no new send)</button>
+                    <div id="external-transfer-result" class="status-output" role="status"></div>
+                </details>
                 <h3>Fee reserve · SOL</h3>
                 <div id="fee-status" class="status-output">Reserve not checked yet.</div>
                 <p class="muted">Allocation reduces your available SOL balance. No on-chain transfer. Only your funds may be allocated.</p>
@@ -1841,16 +1858,16 @@ RAW_HTML = r"""<!DOCTYPE html>
         </div>
         <div id="tab-settings" class="tab-panel">
             <header class="page-heading"><div><p class="eyebrow">Account preferences</p><h1>Settings</h1></div></header>
-            <div class="card" id="passkey-settings"><h3>Withdrawal protection</h3>
-                <p id="passkey-state" class="status-output">Passkey not checked.</p>
-                <button class="btn-copy" onclick="setupPasskey()">Set up / add passkey</button>
+            <div class="card" id="passkey-settings"><h3>Account protection</h3>
+                <p id="passkey-state" class="status-output">Withdrawals use a one-time Telegram code. A passkey is required for standalone browser sign-in.</p>
+                <button class="btn-copy" onclick="setupPasskey()">Set up / add browser passkey</button>
                 <button class="btn-copy" onclick="setupPasskey(true)">Recover using a saved code</button>
                 <p id="passkey-progress" class="status-output" role="status"></p>
                 <a id="passkey-browser-link" hidden target="_blank" rel="noopener noreferrer">Open verification · hold to copy link</a>
-                <details><summary>Face ID &amp; account recovery</summary>
+                <details><summary>Passkeys &amp; account recovery</summary>
                     <p class="muted">Your device verifies you using Face ID, Touch ID or another system verification method. We verify the passkey signature, not a face photo. Face-only verification cannot be enforced on every device.</p>
-                    <p class="muted">Every withdrawal needs your code and a fresh passkey approval bound to its amount, token, recipient and request ID. Changing any field requires another approval.</p>
-                    <p class="muted">Save the one-time recovery codes displayed in the secure browser. Add a backup passkey before losing your device. Recovery requires your Telegram account, withdrawal code and an unused recovery code; it replaces the old passkeys. No PIN-only reset is available.</p>
+                    <p class="muted">Each withdrawal is approved by a one-time code sent to your Telegram account. The code is tied to the exact amount, token and recipient address. Passkeys are used for standalone browser sign-in and account recovery, not for withdrawals.</p>
+                    <p class="muted">Save recovery codes shown in the secure browser. Recovery requires your Telegram account, account security code and an unused recovery code; it replaces old passkeys.</p>
                 </details>
             </div>
             <div class="card"><h3 style="margin-top:0">Order sizes</h3>
@@ -1934,7 +1951,7 @@ RAW_HTML = r"""<!DOCTYPE html>
     <div id="recovery-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="recovery-confirm-title" style="display:none;position:fixed;inset:0;z-index:20000;background:rgba(0,0,0,.78);align-items:center;justify-content:center;padding:20px;box-sizing:border-box;">
         <div style="width:100%;max-width:420px;padding:20px;border:1px solid #334155;border-radius:18px;background:#101923;color:#e2e8f0;box-shadow:0 20px 60px rgba(0,0,0,.55);">
             <h2 id="recovery-confirm-title" style="margin:0 0 12px;font-size:18px;">Verify the pending operation</h2>
-            <p style="font-size:14px;line-height:1.5;color:#cbd5e1;">This performs read-only Solana checks. Only if the network proves the signature absent and expired: a BUY or WITHDRAW releases its reserved funds, or a SELL restores its reserved asset to the open position; both trading modes are switched OFF and the audit is preserved. This check does not send or resend a transaction. If proof is incomplete or unavailable, the operation stays pending and funds remain reserved.</p>
+            <p style="font-size:14px;line-height:1.5;color:#cbd5e1;">This performs read-only Solana checks. Only after the network confirms the signature is absent and the transaction has expired: a BUY or WITHDRAW returns the amount to available balance, or a SELL restores the asset to its open position. Both trading modes switch OFF and the audit is preserved. This check never sends or repeats a transfer. If evidence is incomplete, the operation stays pending and the amount remains unavailable.</p>
             <div style="display:flex;gap:10px;margin-top:18px;">
                 <button type="button" onclick="closeRecoveryConfirm()" style="flex:1;min-height:46px;border:1px solid #475569;border-radius:12px;background:#172338;color:#e2e8f0;font-weight:700;touch-action:manipulation;">Cancel</button>
                 <button type="button" onclick="confirmRecoveryAction()" style="flex:1;min-height:46px;border:1px solid #34d399;border-radius:12px;background:#34d399;color:#052e20;font-weight:800;touch-action:manipulation;">Verify and unlock</button>
@@ -2209,6 +2226,46 @@ RAW_HTML = r"""<!DOCTYPE html>
                 box.textContent = e.message || 'Could not read the current shared-wallet lock.';
             }
         }
+        async function checkBalanceCoverage() {
+            const box=document.getElementById('balance-coverage-details');
+            box.textContent='Reading finalized wallet balances and the ledger…';
+            try {
+                const response=await apiFetch('/api/admin/balance_check');
+                const result=await response.json();
+                if(!response.ok||!result.success)throw new Error(result.message||'Balance check unavailable.');
+                box.textContent=['USDC: wallet '+result.assets.USDC.wallet+
+                    ' · account balances '+result.assets.USDC.ledger+
+                    ' · difference '+result.assets.USDC.difference,
+                    'SOL: wallet '+result.assets.SOL.wallet+
+                    ' · account balances '+result.assets.SOL.ledger+
+                    ' · difference '+result.assets.SOL.difference,
+                    'Read-only: no ledger or on-chain balance was changed.'].join('\n');
+            } catch(e) { box.textContent=e.message||'Could not read wallet coverage.'; }
+        }
+        async function recordExternalTransfer() {
+            const signature=document.getElementById('external-transfer-signature').value.trim();
+            const recipient=document.getElementById('external-transfer-recipient').value.trim();
+            const confirmRecord=document.getElementById('external-transfer-confirm').checked;
+            const box=document.getElementById('external-transfer-result');
+            if(!signature||!recipient||!confirmRecord) {
+                box.textContent='Enter the finalized transaction signature and exact recipient, then confirm this transfer was already sent.';
+                return;
+            }
+            if(!confirm('This will reduce your app balance for the already completed transfer. No Solana transaction will be sent. Continue?'))return;
+            box.textContent='Verifying the finalized transaction on Solana…';
+            try {
+                const response=await apiFetch('/api/admin/record_external_withdrawal',{method:'POST',
+                    headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({signature,recipient_address:recipient,confirm:true})});
+                const result=await response.json();
+                if(!response.ok||!result.success)throw new Error(result.message||'Could not record the transfer.');
+                box.textContent=result.message+'\nAmount: '+result.amount+' USDC\nAvailable USDC: '+result.available_usdc+
+                    '\nSignature: '+result.tx_signature;
+                document.getElementById('external-transfer-confirm').checked=false;
+                await checkBalanceCoverage();
+                await refresh();
+            } catch(e) { box.textContent=e.message||'Could not verify the transfer.'; }
+        }
         async function retireLegacyOperation(signature) {
             if (!confirm('For a legacy personal operation only. The server checks transaction absence, blockhash expiry and nonce history. Without evidence nothing changes. The record stays unconfirmed; this is not a refund or a successful trade. Continue?')) return;
             const pin = prompt('Enter your confirmation PIN:');
@@ -2322,9 +2379,9 @@ RAW_HTML = r"""<!DOCTYPE html>
             const response=await apiFetch('/api/account'),data=await response.json();
             if(!response.ok||!data.success)throw Error(data.message||'Could not verify account.');
             accountState=data;
-            document.getElementById('passkey-state').textContent=data.has_passkey?
-                'Enabled · '+data.passkey_count+' passkey(s) · '+data.recovery_codes_remaining+' recovery codes remaining.':
-                'Not configured. Set up a passkey before withdrawing.';
+            document.getElementById('passkey-state').textContent='Telegram code required for withdrawals. '+
+                (data.has_passkey?'Browser passkey active · '+data.passkey_count+' key(s) · '+data.recovery_codes_remaining+' recovery codes remaining.':
+                    'No browser passkey set up. Telegram withdrawals remain available.');
             return data;
         }
         async function openTerminal() {
@@ -2364,15 +2421,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
         async function finishAccount(){
             try{
-                const res = await apiFetch('/api/security_status');
-                const state = await res.json();
-                if (!res.ok || !state.success) throw new Error(state.message || 'Could not check account security.');
-                if (!state.has_pin && !(await setupPasswordProtection())) return;
                 proceedToTerminal();
-                if(!accountState?.has_passkey){
-                    gotoTab('settings',document.querySelectorAll('.nav-btn')[3]);
-                    document.getElementById('passkey-progress').textContent='Next: set up your device passkey for secure withdrawals.';
-                }
             } catch (e) {
                 alert(e.message || "Could not verify authorization. Reopen the app through Telegram.");
             }
@@ -2383,14 +2432,6 @@ RAW_HTML = r"""<!DOCTYPE html>
             const data=await response.json();if(!response.ok||!data.success)throw Error(data.message||'Could not start verification.');
             const link=document.getElementById('passkey-browser-link');link.href=data.url;link.hidden=false;
             document.getElementById('passkey-progress').textContent='Complete verification in the browser, then return here. No funds are sent by the browser.';
-            if(body.purpose==='withdraw'){
-                const walletStatus=document.getElementById('withdraw-progress');
-                const walletLink=document.getElementById('withdraw-approval-link');
-                walletStatus.hidden=false;
-                walletStatus.textContent='Complete Face ID / Passkey in the browser, then return here. The USDC transfer has not been sent yet.';
-                walletLink.href=data.url;
-                walletLink.style.display='block';
-            }
             if(tg?.openLink)tg.openLink(data.url);else window.open(data.url,'_blank','noopener,noreferrer');
             return data.ticket;
         }
@@ -2407,7 +2448,9 @@ RAW_HTML = r"""<!DOCTYPE html>
         let passkeySetupBusy=false;
         async function setupPasskey(recover=false){
             if(passkeySetupBusy)return;
-            const pin=prompt('Enter your withdrawal confirmation code:');if(!pin)return;
+            const security=await apiFetch('/api/security_status').then(r=>r.json());
+            if(!security.has_pin && !(await setupPasswordProtection()))return;
+            const pin=prompt('Enter your account security code:');if(!pin)return;
             const recovery_code=recover?prompt('Enter one unused recovery code saved during passkey registration:'):null;
             if(recover&&!recovery_code)return;
             passkeySetupBusy=true;
@@ -2421,7 +2464,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         async function setupPasswordProtection() {
-            const pwd = prompt("Create a withdrawal confirmation code (at least 6 characters):");
+            const pwd = prompt("Create an account security code for optional passkey management (at least 6 characters):");
             if (!pwd || pwd.length < 6) {
                 alert("The code must contain at least 6 characters.");
                 return false;
@@ -2434,7 +2477,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 });
                 const data = await res.json();
                 if (!res.ok || !data.success) throw new Error(data.message || 'Could not save your code.');
-                alert("Withdrawal code saved.");
+                alert("Account security code saved.");
                 return true;
             } catch (e) {
                 alert(e.message || "Could not save your code.");
@@ -2470,6 +2513,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             currentWithdrawToken = token;
             document.getElementById('wtoken-usdc').className = token === 'USDC' ? 'token-btn active' : 'token-btn';
             document.getElementById('wtoken-sol').className = token === 'SOL' ? 'token-btn active' : 'token-btn';
+            clearWithdrawalCode();
         }
 
         async function closeAllPositions() {
@@ -2487,75 +2531,102 @@ RAW_HTML = r"""<!DOCTYPE html>
             } catch (e) { alert("Connection error."); }
         }
 
-        async function secureWithdraw() {
-            if (withdrawSending) return;
-            const addr = document.getElementById('withdraw-address').value.trim();
-            const amount = document.getElementById('withdraw-amount').value.trim();
-            if (!addr || !amount) { alert('Enter an address and amount.'); return; }
-            if (!confirm('Send real funds: ' + amount + ' ' + currentWithdrawToken + ' to ' + addr + '?')) return;
-            const enteredPin = prompt("Enter your withdrawal confirmation code:");
-            if (!enteredPin) return;
-            await submitWithdraw(enteredPin);
-        }
-
-        async function submitWithdraw(enteredPin) {
+        let withdrawalCodeBinding = '';
+        function withdrawalContext() {
             const token = currentWithdrawToken;
             const addr = document.getElementById('withdraw-address').value.trim();
             const amount = document.getElementById('withdraw-amount').value.trim();
-            if (!addr || !amount) { alert("Enter an address and amount."); return; }
-            if (withdrawSending) return;
-            withdrawSending = true;
-            const intent = JSON.stringify({token, recipient_address: addr, amount});
+            const intent = JSON.stringify({token, recipient_address:addr, amount});
             const old = JSON.parse(localStorage.getItem('withdraw_intent') || 'null');
             const requestId = old && old.intent === intent ? old.id : crypto.randomUUID();
-            localStorage.setItem('withdraw_intent', JSON.stringify({intent, id: requestId}));
+            localStorage.setItem('withdraw_intent', JSON.stringify({intent, id:requestId}));
+            return {token, addr, amount, intent, requestId};
+        }
+        function clearWithdrawalCode() {
+            const input=document.getElementById('withdraw-code');
+            if(input)input.value='';
+            withdrawalCodeBinding='';
+            const status=document.getElementById('withdraw-code-status');
+            if(status)status.textContent='';
+        }
+        async function requestWithdrawalCode() {
+            if(withdrawSending)return;
+            const context=withdrawalContext();
+            const status=document.getElementById('withdraw-code-status');
+            const button=document.getElementById('btn-withdraw-code');
+            if(!context.addr||!context.amount){status.textContent='Enter the recipient address and amount first.';return;}
+            button.disabled=true;button.textContent='Checking balance…';
+            status.textContent='Checking the wallet and requesting a Telegram code…';
+            try {
+                const response=await apiFetch('/api/withdraw/code',{method:'POST',
+                    headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({token:context.token,recipient_address:context.addr,
+                        amount:context.amount,request_id:context.requestId})});
+                const data=await response.json();
+                if(!response.ok||!data.success)throw Error(data.message||'Could not send a Telegram code.');
+                withdrawalCodeBinding=context.intent;
+                status.textContent='Code sent to the bot. It is valid for 5 minutes and confirms only this amount and address.';
+                document.getElementById('withdraw-code').focus();
+            } catch(e) {
+                status.textContent=e.message||'Could not request a Telegram code.';
+            } finally {
+                button.disabled=false;button.textContent='Send code in Telegram';
+            }
+        }
 
+        async function secureWithdraw() {
+            if (withdrawSending) return;
+            const context=withdrawalContext();
+            const code=document.getElementById('withdraw-code').value.trim();
+            const progress=document.getElementById('withdraw-progress');
+            if(!context.addr||!context.amount){progress.hidden=false;progress.textContent='Enter the recipient address and amount.';return;}
+            if(!/^\d{6}$/.test(code)){progress.hidden=false;progress.textContent='Enter the 6-digit code sent in Telegram.';return;}
+            if(withdrawalCodeBinding!==context.intent){progress.hidden=false;progress.textContent='Request a new Telegram code for these exact transfer details.';return;}
+            await submitWithdraw(code,context);
+        }
+
+        async function submitWithdraw(telegramCode, context) {
+            if (withdrawSending) return;
+            const {token,addr,amount,requestId}=context;
+            withdrawSending = true;
             const btn = document.getElementById('btn-withdraw-action');
+            const codeButton=document.getElementById('btn-withdraw-code');
             const progress = document.getElementById('withdraw-progress');
-            const approvalLink = document.getElementById('withdraw-approval-link');
             progress.hidden = false;
-            progress.textContent = 'Opening secure withdrawal approval…';
-            approvalLink.style.display = 'none';
-            approvalLink.removeAttribute('href');
-            btn.innerText = "Waiting for Passkey…";
-            btn.disabled = true;
+            progress.textContent = 'Checking the transfer and sending it to Solana…';
+            btn.disabled=true;codeButton.disabled=true;
 
             try {
-                const ticket=await passkeyTicket({purpose:'withdraw',token,recipient_address:addr,
-                    amount,pin:enteredPin,request_id:requestId});
-                btn.innerText = "Confirm Face ID in browser…";
-                await waitPasskey(ticket,'approved');
-                approvalLink.style.display = 'none';
-                progress.textContent = 'Passkey approved. Sending the withdrawal to Solana…';
-                btn.innerText = "Sending to Solana…";
                 const res = await apiFetch('/api/withdraw', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ token, recipient_address: addr, amount: amount, pin: enteredPin, request_id: requestId, passkey_ticket:ticket })
+                    body: JSON.stringify({token,recipient_address:addr,amount,request_id:requestId,
+                        telegram_code:telegramCode})
                 });
                 const d = await res.json();
                 const signatureText=d.tx_signature ? '\nSignature: '+d.tx_signature : '';
-                alert((d.message||'Withdrawal status received.')+signatureText);
                 if (d.success) {
                     progress.textContent=d.state==='COMPLETED'
-                        ? 'Withdrawal confirmed on Solana.'
-                        : 'Withdrawal submitted; waiting for network confirmation.'+signatureText;
-                    document.getElementById('withdraw-address').value = '';
-                    document.getElementById('withdraw-amount').value = '';
+                        ? 'Withdrawal confirmed on Solana.'+signatureText
+                        : (d.message||'Withdrawal is awaiting network confirmation.')+signatureText;
+                    document.getElementById('withdraw-code').value='';
+                    withdrawalCodeBinding='';
                     refresh();
                 }
-                if(!d.success)progress.textContent=d.message||'Withdrawal failed before completion.';
-                if (d.state === 'COMPLETED' || d.state === 'FAILED') localStorage.removeItem('withdraw_intent');
+                if(!d.success)progress.textContent=d.message||'Withdrawal failed; no new transfer was sent.';
+                if (d.state === 'COMPLETED' || d.state === 'FAILED') {
+                    localStorage.removeItem('withdraw_intent');
+                    document.getElementById('withdraw-code').value='';
+                    withdrawalCodeBinding='';
+                }
             } catch (e) {
                 progress.hidden = false;
-                progress.textContent = e.message || "Could not confirm withdrawal status.";
-                if (/expired|replaced|timed out/i.test(progress.textContent)) approvalLink.style.display = 'none';
-                alert(e.message || "Network error.");
+                progress.textContent = e.message || "Could not check the withdrawal status. Do not repeat it until history is refreshed.";
             }
             finally {
                 withdrawSending = false;
                 btn.innerText = "Withdraw 🚀";
-                btn.disabled = false;
+                btn.disabled = false;codeButton.disabled=false;
             }
         }
 
@@ -2755,7 +2826,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                         !flags.wallet_configured ? 'Server key does not match the wallet address.' :
                         !flags.persistent_storage ? 'Operations blocked: Persistent Disk /var/data required.' :
                         !flags.finance_allowed ? 'Public deposits are not open yet.' :
-                        s.operation_pending ? 'Your operation is pending. Do not resend.' :
+                        s.operation_pending ? 'A transfer is awaiting confirmation. Do not submit it again.' :
                         'Personal funds. Trading carries risk.';
                     const pendingDetails = document.getElementById('account-pending-operation-details');
                     const pendingOperations = s.pending_operations || [];
@@ -2767,10 +2838,10 @@ RAW_HTML = r"""<!DOCTYPE html>
                                 const created = Number.isFinite(seconds) && seconds > 0
                                     ? new Date(seconds * 1000).toLocaleString() : 'unknown';
                                 return 'Operation: ' + (op.kind || 'unknown') + ' / ' + (op.state || 'unknown')
-                                    + '\nReserved: ' + (op.reserved_amount || 'unknown') + ' ' + (op.reserved_asset || '')
+                                    + '\nAmount: ' + (op.reserved_amount || 'unknown') + ' ' + (op.reserved_asset || '')
                                     + '\nCreated: ' + created
                                     + '\nSignature: ' + (op.signature || 'not recorded');
-                            }).join('\n\n') + '\n\nDo not resend this operation.';
+                            }).join('\n\n') + '\n\nDo not submit another withdrawal until this status is resolved.';
                         } else {
                             pendingDetails.textContent = '';
                             pendingDetails.style.display = 'none';
@@ -3349,7 +3420,8 @@ async def main():
         get_signer_keypair, verify_user_pin, get_token_prices, WATCHLIST, add_log,
         base_url=RENDER_URL, notification_token=TELEGRAM_TOKEN)
     runtime.recent_logs = lambda: RECENT_LOGS
-    runtime.accounts = AccountSecurity(runtime.ledger, RENDER_URL, verify_user_pin, runtime.wallet)
+    runtime.accounts = AccountSecurity(runtime.ledger, RENDER_URL, verify_user_pin, runtime.wallet,
+        notification_token=TELEGRAM_TOKEN)
     runtime.web_access = WebAccess(runtime)
     app["wallet_runtime"] = runtime
     def wallet_handler(action):
@@ -3400,12 +3472,15 @@ async def main():
     app.router.add_post('/api/deposit_invoice', wallet_handler(runtime.create_invoice))
     app.router.add_get('/api/admin/status', wallet_handler(runtime.admin_status))
     app.router.add_get('/api/admin/pending_operations', wallet_handler(runtime.admin_pending_operations))
+    app.router.add_get('/api/admin/balance_check', wallet_handler(runtime.admin_balance_check))
+    app.router.add_post('/api/admin/record_external_withdrawal', wallet_handler(runtime.admin_record_external_withdrawal))
     app.router.add_post('/api/admin/retire_legacy', wallet_handler(runtime.retire_legacy))
     app.router.add_post('/api/admin/fee_reserve', wallet_handler(runtime.reserve_fees))
     app.router.add_post('/api/admin/release_fee_reserve', wallet_handler(runtime.release_fee_reserve))
     app.router.add_post('/api/admin/opening_balance', wallet_handler(runtime.opening_balance))
     app.router.add_post('/api/close_all', wallet_handler(runtime.close_all))
     app.router.add_post('/api/withdraw', wallet_handler(runtime.withdraw))
+    app.router.add_post('/api/withdraw/code', wallet_handler(runtime.request_withdrawal_code))
     app.router.add_get('/api/security_status', api_security_status)
     app.router.add_get('/api/account', wallet_handler(runtime.accounts.status))
     app.router.add_post('/api/account/register', wallet_handler(runtime.accounts.register))
