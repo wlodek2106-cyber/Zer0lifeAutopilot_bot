@@ -2569,14 +2569,42 @@ RAW_HTML = r"""<!DOCTYPE html>
 
         let withdrawalCodeBinding = '';
         let activeWithdrawalSignature = '';
+        function newWithdrawalRequestId() {
+            const cryptoApi = window.crypto;
+            if (cryptoApi && typeof cryptoApi.randomUUID === 'function') {
+                return cryptoApi.randomUUID();
+            }
+            if (cryptoApi && typeof cryptoApi.getRandomValues === 'function') {
+                const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
+                bytes[6] = (bytes[6] & 0x0f) | 0x40;
+                bytes[8] = (bytes[8] & 0x3f) | 0x80;
+                const hex = Array.from(bytes, byte => ('0' + byte.toString(16)).slice(-2)).join('');
+                return hex.slice(0,8) + '-' + hex.slice(8,12) + '-' +
+                    hex.slice(12,16) + '-' + hex.slice(16,20) + '-' + hex.slice(20);
+            }
+            throw new Error('Secure request IDs are unavailable. Reopen AI Trader in Telegram.');
+        }
         function withdrawalContext() {
             const token = currentWithdrawToken;
             const addr = document.getElementById('withdraw-address').value.trim();
             const amount = document.getElementById('withdraw-amount').value.trim();
             const intent = JSON.stringify({token, recipient_address:addr, amount});
-            const old = JSON.parse(localStorage.getItem('withdraw_intent') || 'null');
-            const requestId = old && old.intent === intent ? old.id : crypto.randomUUID();
-            localStorage.setItem('withdraw_intent', JSON.stringify({intent, id:requestId}));
+            let storage, old;
+            try {
+                storage = window.localStorage;
+                old = JSON.parse(storage.getItem('withdraw_intent') || 'null');
+            } catch (e) {
+                throw new Error('Browser storage is unavailable. Reopen the Mini App in Telegram; no code or transfer was sent.');
+            }
+            const oldIdIsUuid = old && typeof old.id === 'string' &&
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(old.id);
+            const requestId = old && old.intent === intent && oldIdIsUuid
+                ? old.id : newWithdrawalRequestId();
+            try {
+                storage.setItem('withdraw_intent', JSON.stringify({intent, id:requestId}));
+            } catch (e) {
+                throw new Error('Browser storage is unavailable. Reopen the Mini App in Telegram; no code or transfer was sent.');
+            }
             return {token, addr, amount, intent, requestId};
         }
         function clearWithdrawalCode() {
@@ -2601,15 +2629,18 @@ RAW_HTML = r"""<!DOCTYPE html>
             activeWithdrawalSignature='';
         }
         async function requestWithdrawalCode() {
-            if(withdrawSending)return;
-            const context=withdrawalContext();
             const status=document.getElementById('withdraw-code-status');
             const button=document.getElementById('btn-withdraw-code');
             clearTerminalWithdrawalResult();
-            if(!context.addr||!context.amount){status.textContent='Enter the recipient address and amount first.';return;}
+            if(withdrawSending){
+                status.textContent='A withdrawal is already processing. Wait for its status; do not submit it again.';
+                return;
+            }
             button.disabled=true;button.textContent='Checking balance…';
             status.textContent='Checking the wallet and requesting a Telegram code…';
             try {
+                const context=withdrawalContext();
+                if(!context.addr||!context.amount)throw Error('Enter the recipient address and amount first.');
                 const response=await apiFetch('/api/withdraw/code',{method:'POST',
                     headers:{'Content-Type':'application/json'},
                     body:JSON.stringify({token:context.token,recipient_address:context.addr,
@@ -2630,11 +2661,20 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         async function secureWithdraw() {
-            if (withdrawSending) return;
-            const context=withdrawalContext();
-            const code=document.getElementById('withdraw-code').value.trim();
             const status=document.getElementById('withdraw-code-status');
+            if (withdrawSending) {
+                status.textContent='A withdrawal is already processing. Wait for its status; do not submit it again.';
+                return;
+            }
             clearTerminalWithdrawalResult();
+            let context;
+            try {
+                context=withdrawalContext();
+            } catch(e) {
+                status.textContent=e.message||'Could not prepare the withdrawal request.';
+                return;
+            }
+            const code=document.getElementById('withdraw-code').value.trim();
             if(!context.addr||!context.amount){status.textContent='Enter the recipient address and amount.';return;}
             if(!/^\d{6}$/.test(code)){
                 if(!status.textContent.startsWith('Withdrawal paused:'))status.textContent='Request a Telegram code first.';
@@ -2648,7 +2688,12 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         async function submitWithdraw(telegramCode, context) {
-            if (withdrawSending) return;
+            if (withdrawSending) {
+                const progress=document.getElementById('withdraw-progress');
+                progress.hidden=false;
+                progress.textContent='A withdrawal is already processing. Do not submit it again.';
+                return;
+            }
             const {token,addr,amount,requestId}=context;
             withdrawSending = true;
             const btn = document.getElementById('btn-withdraw-action');
