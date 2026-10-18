@@ -133,6 +133,7 @@ class PartnerProgramTests(unittest.TestCase):
         migrated = CustodyLedger(self.db_path)
         self.assertEqual(migrated.balance(404, USDC), amount)
         self.assertEqual(migrated.balance(404, SOL), 0)
+        self.assertEqual(migrated.withdrawal_entitlement(404, USDC), amount)
         self.assertEqual(migrated.credit_safe_partner_earnings(), 0)
         with self.ledger.db() as db:
             self.assertEqual(db.execute("SELECT raw FROM custody_accounts WHERE account=? AND asset=?",

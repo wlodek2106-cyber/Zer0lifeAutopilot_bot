@@ -108,6 +108,43 @@ class LedgerTests(unittest.TestCase):
             self.reserve(raw=11_000_000)
         self.assertEqual(self.ledger.balance(202, USDC), 30_000_000)
 
+    def test_withdrawal_entitlement_includes_verified_capital_realized_profit_and_partner_income(self):
+        backing = self.ledger.liabilities()[USDC] + 2_000_000
+        self.ledger.opening(101, USDC, 2_000_000, backing)
+
+        def close_trade(uid, buy_raw, sell_raw):
+            buy = self.ledger.reserve(uid, str(uuid.uuid4()), "BUY", USDC, buy_raw,
+                {"output_asset": SOL, "symbol": "SOL", "decimals": 9})
+            self.ledger.prepared(buy["id"], str(Signature.new_unique()), "offline-wire")
+            self.ledger.finalize(buy["id"], buy_raw, 0, 1_000_000_000)
+            sell = self.ledger.reserve(uid, str(uuid.uuid4()), "SELL", SOL, 1_000_000_000,
+                {"output_asset": USDC}, position_id=buy["id"])
+            self.ledger.prepared(sell["id"], str(Signature.new_unique()), "offline-wire")
+            self.ledger.finalize(sell["id"], 1_000_000_000, 0, sell_raw)
+
+        close_trade(101, 2_000_000, 4_000_000)
+        with self.ledger.db() as db:
+            db.execute("INSERT INTO custody_referrals(uid,parent_uid,created_at) VALUES(202,101,?)",
+                       (int(time.time()),))
+        close_trade(202, 2_000_000, 3_000_000)
+
+        expected = 10_000_000 + 2_000_000 + 2_000_000 + 10_000
+        self.assertEqual(self.ledger.withdrawal_entitlement(101, USDC), expected)
+        self.assertEqual(self.ledger.withdrawal_capacity(101, USDC), expected)
+        self.assertEqual(self.ledger.withdrawal_capacity(101, SOL), 0)
+
+        self.ledger.record_external_withdrawal(
+            101, str(Signature.new_unique()), USDC, 1_000_000, "owner-wallet", 0, int(time.time()))
+        self.assertEqual(self.ledger.withdrawal_entitlement(101, USDC), expected - 1_000_000)
+        self.assertEqual(self.ledger.withdrawal_capacity(101, USDC), expected - 1_000_000)
+
+        open_buy = self.ledger.reserve(101, str(uuid.uuid4()), "BUY", USDC, 1_000_000,
+            {"output_asset": SOL, "symbol": "SOL", "decimals": 9})
+        self.ledger.prepared(open_buy["id"], str(Signature.new_unique()), "offline-wire")
+        self.ledger.finalize(open_buy["id"], 1_000_000, 0, 1_000_000_000)
+        self.assertEqual(self.ledger.withdrawal_entitlement(101, USDC), expected - 1_000_000)
+        self.assertEqual(self.ledger.withdrawal_capacity(101, USDC), expected - 2_000_000)
+
     def test_deposit_replay_once(self):
         invoice, sig = self.credit(101, SOL, 1_000_000)
         self.ledger.credit_deposit(invoice["id"], sig, SOL, 1_000_000, invoice["created_at"])
@@ -348,6 +385,7 @@ class LedgerTests(unittest.TestCase):
     def test_opening_is_backed_explicit_single_time(self):
         self.ledger.opening(101, USDC, 5_000_000, 45_000_000)
         self.assertEqual(self.ledger.balance(101, USDC), 15_000_000)
+        self.assertEqual(self.ledger.withdrawal_entitlement(101, USDC), 15_000_000)
         with self.assertRaises(LedgerError):
             self.ledger.opening(101, USDC, 1, 100_000_000)
         with self.assertRaises(LedgerError):
@@ -361,8 +399,67 @@ class LedgerTests(unittest.TestCase):
         again = CustodyLedger(self.path)
         again.user(303)
         self.assertEqual(again.balance(303, USDC), 0)
+        self.assertEqual(again.withdrawal_entitlement(303, USDC), 0)
         with closing(sqlite3.connect(self.path)) as db:
             self.assertEqual(db.execute("SELECT balance_usdc FROM users").fetchone()[0], 999999)
+
+    def test_legacy_real_balance_import_is_atomic_and_skips_new_custody_activity(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        ledger = CustodyLedger(temp.name + "/legacy.db")
+        with ledger.db() as db:
+            db.execute("CREATE TABLE users(telegram_id INTEGER PRIMARY KEY, username TEXT, balance_usdc REAL)")
+            db.executemany("INSERT INTO users VALUES(?,?,?)", [
+                (501, "legacy-clear", 3.5),
+                (502, "new-custody-activity", 5.0),
+                (503, "invalid-negative", -1.0),
+            ])
+        ledger.user(502)
+        invoice = ledger.invoice(502, USDC, 1_000_000)
+        signature = str(Signature.new_unique())
+        ledger.credit_deposit(invoice["id"], signature, USDC, 1_000_000, invoice["created_at"])
+
+        preview = ledger.preview_legacy_balances(4_500_000)
+        self.assertTrue(preview["can_import"])
+        self.assertEqual(preview["candidate_count"], 1)
+        self.assertEqual(preview["candidate_raw"], 3_500_000)
+        self.assertEqual(preview["skipped"]["new_custody_activity"], 1)
+        self.assertEqual(preview["skipped"]["invalid_or_excess_precision"], 1)
+
+        result = ledger.import_legacy_balances(preview["digest"], 4_500_000)
+        self.assertEqual(result, {"imported_count": 1, "amount_raw": 3_500_000})
+        self.assertEqual(ledger.balance(501, USDC), 3_500_000)
+        self.assertEqual(ledger.withdrawal_entitlement(501, USDC), 3_500_000)
+        self.assertEqual(ledger.balance(502, USDC), 1_000_000)
+        self.assertTrue(ledger.audit())
+
+    def test_legacy_real_balance_import_requires_full_backing_and_fresh_preview(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        ledger = CustodyLedger(temp.name + "/legacy.db")
+        with ledger.db() as db:
+            db.execute("CREATE TABLE users(telegram_id INTEGER PRIMARY KEY, username TEXT, balance_usdc REAL)")
+            db.execute("INSERT INTO users VALUES(601,'legacy-user',12.5)")
+
+        underfunded = ledger.preview_legacy_balances(10_000_000)
+        self.assertFalse(underfunded["can_import"])
+        self.assertFalse(underfunded["backed"])
+        with self.assertRaises(LedgerError):
+            ledger.import_legacy_balances(underfunded["digest"], 10_000_000)
+        self.assertEqual(ledger.balance(601, USDC), 0)
+
+        stale = ledger.preview_legacy_balances(13_000_000)
+        with ledger.db() as db:
+            db.execute("UPDATE users SET balance_usdc=12.25 WHERE telegram_id=601")
+        with self.assertRaises(LedgerError):
+            ledger.import_legacy_balances(stale["digest"], 13_000_000)
+        self.assertEqual(ledger.balance(601, USDC), 0)
+
+        current = ledger.preview_legacy_balances(13_000_000)
+        result = ledger.import_legacy_balances(current["digest"], 13_000_000)
+        self.assertEqual(result["amount_raw"], 12_250_000)
+        self.assertEqual(ledger.withdrawal_capacity(601, USDC), 12_250_000)
+        self.assertTrue(ledger.audit())
 
     def test_first_migration_creates_consistent_legacy_backup(self):
         import os
@@ -1014,6 +1111,91 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 409)
         self.service.send_reserved.assert_not_called()
         self.assertFalse(self.ledger.pending())
+
+    async def test_withdrawal_code_and_send_reject_amount_above_verified_entitlement(self):
+        invoice = self.ledger.invoice(101, USDC, 10_000_000)
+        self.ledger.credit_deposit(invoice["id"], str(Signature.new_unique()), USDC,
+                                   10_000_000, invoice["created_at"])
+        with self.ledger.db() as db:
+            self.ledger.post(db, "test-unverified-credit", "unverified balance fixture", [
+                ("external", USDC, -5_000_000), (available(101), USDC, 5_000_000)])
+        self.assertEqual(self.ledger.balance(101, USDC), 15_000_000)
+        self.assertEqual(self.ledger.withdrawal_capacity(101, USDC), 10_000_000)
+
+        class TrackingAccounts(TestWithdrawalAccounts):
+            def __init__(self):
+                self.code_sent = False
+                self.code_consumed = False
+
+            def withdrawal_intent(self, uid, body):
+                raw = runtime.amount_raw(body["amount"], 6 if body["token"] == "USDC" else 9)
+                return {"request_id": body["request_id"], "token": body["token"], "raw": raw,
+                        "recipient_address": body["recipient_address"]}, None
+
+            async def send_withdrawal_code(self, request, session, body):
+                self.code_sent = True
+                return web.json_response({"success": True})
+
+            def consume_withdrawal_code(self, uid, body):
+                self.code_consumed = True
+                super().consume_withdrawal_code(uid, body)
+
+        accounts = TrackingAccounts()
+        self.service.accounts = accounts
+        logs = []
+        self.service.log = logs.append
+        self.service.reconcile = AsyncMock()
+        self.service.solvent = AsyncMock()
+        self.service.send_reserved = AsyncMock()
+        body = {"token": "USDC", "amount": "10.000001", "recipient_address": str(self.recipient),
+                "request_id": str(uuid.uuid4()), "telegram_code": "123456"}
+
+        code_response = await self.service.handle(
+            Request(101, body), self.service.request_withdrawal_code)
+        withdraw_response = await self.service.handle(Request(101, body), self.service.withdraw)
+        self.assertEqual(code_response.status, 409, code_response.text + " logs=" + repr(logs))
+        self.assertEqual(withdraw_response.status, 409, withdraw_response.text)
+        self.assertFalse(accounts.code_sent)
+        self.assertFalse(accounts.code_consumed)
+        self.service.send_reserved.assert_not_called()
+        self.assertFalse(self.ledger.pending())
+
+    async def test_owner_can_preview_and_apply_only_the_current_backed_legacy_preview(self):
+        with self.ledger.db() as db:
+            db.execute("CREATE TABLE users(telegram_id INTEGER PRIMARY KEY,username TEXT,balance_usdc REAL)")
+            db.execute("INSERT INTO users VALUES(303,'legacy-user',5.0)")
+        self.service.reconcile = AsyncMock()
+        self.service.solvent = AsyncMock(return_value={
+            USDC: {"raw": 5_000_000, "decimals": 6},
+            SOL: {"raw": 50_000_000, "decimals": 9},
+            runtime.WRAPPED_SOL: {"raw": 50_000_000, "decimals": 9},
+        })
+        self.service.send_reserved = AsyncMock()
+
+        denied = await self.service.handle(Request(202), self.service.preview_legacy_balances)
+        self.assertEqual(denied.status, 403)
+        preview_response = await self.service.handle(Request(101), self.service.preview_legacy_balances)
+        self.assertEqual(preview_response.status, 200, preview_response.text)
+        preview = json.loads(preview_response.text)
+        self.assertEqual(preview["eligible_count"], 1)
+        self.assertEqual(preview["eligible_usdc"], "5")
+        self.assertTrue(preview["can_import"])
+
+        missing_confirmation = await self.service.handle(
+            Request(101, {"confirm": False, "preview_digest": preview["digest"]}),
+            self.service.import_legacy_balances)
+        self.assertEqual(missing_confirmation.status, 400)
+        imported = await self.service.handle(
+            Request(101, {"confirm": True, "preview_digest": preview["digest"]}),
+            self.service.import_legacy_balances)
+        result = json.loads(imported.text)
+        self.assertEqual(imported.status, 200, imported.text)
+        self.assertEqual(result["imported_count"], 1)
+        self.assertEqual(result["amount_usdc"], "5")
+        self.assertEqual(self.ledger.withdrawal_capacity(303, USDC), 5_000_000)
+        self.service.reconcile.assert_not_awaited()
+        self.service.send_reserved.assert_not_called()
+        self.assertFalse(any(method == "sendTransaction" for method, _ in self.calls))
 
     async def test_invalid_telegram_code_never_reserves(self):
         invoice = self.ledger.invoice(101, USDC, 1_000_000)

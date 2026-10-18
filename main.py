@@ -1789,6 +1789,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                         maxlength="6" pattern="[0-9]{6}" placeholder="6-digit Telegram code">
                     <p id="withdraw-code-status" class="status-output" role="status" aria-live="polite"></p>
                     <p id="withdraw-progress" class="status-output" role="status" aria-live="polite" hidden></p>
+                    <a id="withdraw-tx-link" class="tx-link" hidden target="_blank" rel="noopener noreferrer">Verify transaction on Solscan ↗</a>
+                    <button class="btn-copy" id="btn-check-withdrawal" onclick="checkWithdrawalStatus()" hidden>Check transaction status</button>
                     <button class="btn-green-main" id="btn-withdraw-action" onclick="secureWithdraw()">Withdraw</button>
                 </div>
             </div>
@@ -1831,6 +1833,13 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <button id="fee-release-submit" class="btn-copy" onclick="releaseExcessFeeReserve()">Return excess fee reserve</button>
                 <div id="fee-release-result" class="status-output" role="status"></div>
                 <button class="btn-copy" onclick="importOwnOpeningBalance()">Import my legacy balance</button>
+                <details style="margin-top:14px;">
+                    <summary>Import backed old customer balances</summary>
+                    <p class="muted">One-time USDC ledger migration. Preview checks old balances, new-ledger activity, and unassigned on-chain backing. Accounts with ambiguous new activity are skipped. This updates the internal ledger only; it never sends a Solana transaction.</p>
+                    <button id="legacy-balance-preview-button" class="btn-copy" onclick="previewLegacyBalances()">Preview eligible balances (read-only)</button>
+                    <div id="legacy-balance-migration-status" class="status-output" role="status">No legacy balance preview has been run.</div>
+                    <button id="legacy-balance-import-button" class="btn-copy" onclick="importLegacyBalances()" hidden disabled>Import eligible balances</button>
+                </details>
             </div>
         </div>
         <div id="tab-trading" class="tab-panel">
@@ -2347,6 +2356,68 @@ RAW_HTML = r"""<!DOCTYPE html>
             if (!amount || !confirm('Confirm this amount contains no other users’ funds. Import is allowed only before public opening, once per asset.')) return;
             await adminLedgerAction('/api/admin/opening_balance', {token, amount, confirm_own_unassigned:true});
         }
+        let legacyBalancePreview = null;
+        async function previewLegacyBalances() {
+            const button=document.getElementById('legacy-balance-preview-button');
+            const importButton=document.getElementById('legacy-balance-import-button');
+            const box=document.getElementById('legacy-balance-migration-status');
+            button.disabled=true;
+            importButton.hidden=true;
+            importButton.disabled=true;
+            legacyBalancePreview=null;
+            box.textContent='Checking legacy records and on-chain backing. No balances are being changed…';
+            try {
+                const response=await apiFetch('/api/admin/legacy_balances/preview');
+                const result=await response.json();
+                if(!response.ok||!result.success)throw new Error(result.message||'Preview failed.');
+                legacyBalancePreview=result.can_import?result:null;
+                const skipped=Object.entries(result.skipped||{})
+                    .map(([reason,count])=>reason+': '+count).join(' · ')||'none';
+                box.textContent=[
+                    'Candidate old accounts: '+result.candidate_count,
+                    'Eligible accounts: '+result.eligible_count,
+                    'Eligible amount: '+result.eligible_usdc+' USDC',
+                    'Candidate old balance: '+result.candidate_usdc+' USDC',
+                    'Unassigned on-chain backing: '+result.backing_available_usdc+' USDC',
+                    'Skipped: '+skipped,
+                    result.backed?'Backing check passed.':'Not enough unassigned USDC backing; nothing can be imported.',
+                    'Preview only. No balance or transaction was changed.'
+                ].join('\n');
+                importButton.hidden=!result.can_import;
+                importButton.disabled=!result.can_import;
+            } catch(e) {
+                box.textContent=e.message||'Could not preview old balances. No balances were changed.';
+            } finally {
+                button.disabled=false;
+            }
+        }
+        async function importLegacyBalances() {
+            const button=document.getElementById('legacy-balance-import-button');
+            const box=document.getElementById('legacy-balance-migration-status');
+            const preview=legacyBalancePreview;
+            if(!preview?.can_import||button.disabled)return;
+            if(!confirm('Import '+preview.eligible_usdc+' USDC for '+preview.eligible_count+
+                ' accounts from the exact preview? This changes the internal ledger only; no Solana transaction will be sent.'))return;
+            button.disabled=true;
+            box.textContent='Rechecking the preview and on-chain backing before the internal ledger update…';
+            try {
+                const response=await apiFetch('/api/admin/legacy_balances/import',{method:'POST',
+                    headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({confirm:true,preview_digest:preview.digest})});
+                const result=await response.json();
+                if(!response.ok||!result.success)throw new Error(result.message||'Import was not confirmed.');
+                legacyBalancePreview=null;
+                button.hidden=true;
+                box.textContent=result.message+'\nImported accounts: '+result.imported_count+
+                    '\nTotal: '+result.amount_usdc+' USDC.';
+                await refresh();
+            } catch(e) {
+                box.textContent=(e.message||'Import could not be verified.')+
+                    '\nNo Solana transaction was sent. Run a fresh preview before trying again.';
+            } finally {
+                button.disabled=!legacyBalancePreview?.can_import;
+            }
+        }
         async function adminLedgerAction(url, body) {
             try {
                 const response = await apiFetch(url, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -2592,8 +2663,10 @@ RAW_HTML = r"""<!DOCTYPE html>
             const btn = document.getElementById('btn-withdraw-action');
             const codeButton=document.getElementById('btn-withdraw-code');
             const progress = document.getElementById('withdraw-progress');
+            const txLink = document.getElementById('withdraw-tx-link');
+            const checkButton = document.getElementById('btn-check-withdrawal');
             progress.hidden = false;
-            progress.textContent = 'Checking the transfer and sending it to Solana…';
+            progress.textContent = 'Checking your withdrawal limit and sending the transfer to Solana…';
             btn.disabled=true;codeButton.disabled=true;
 
             try {
@@ -2605,13 +2678,24 @@ RAW_HTML = r"""<!DOCTYPE html>
                 });
                 const d = await res.json();
                 const signatureText=d.tx_signature ? '\nSignature: '+d.tx_signature : '';
+                if (typeof d.tx_signature === 'string' && d.tx_signature.length > 20) {
+                    txLink.dataset.signature=d.tx_signature;
+                    txLink.href='https://solscan.io/tx/'+encodeURIComponent(d.tx_signature);
+                    txLink.hidden=false;
+                    checkButton.hidden=d.state==='COMPLETED'||d.state==='FAILED';
+                } else {
+                    txLink.hidden=true;
+                    checkButton.hidden=true;
+                }
                 if (d.success) {
                     progress.textContent=d.state==='COMPLETED'
                         ? 'Withdrawal confirmed on Solana.'+signatureText
                         : (d.message||'Withdrawal is awaiting network confirmation.')+signatureText;
                     document.getElementById('withdraw-code').value='';
                     withdrawalCodeBinding='';
-                    refresh();
+                    window.latestAccountStats=null;
+                    await refresh();
+                    if(d.tx_signature)syncWithdrawalStatusFromStats(d.tx_signature);
                 }
                 if(!d.success)progress.textContent=d.message||'Withdrawal failed; no new transfer was sent.';
                 if (d.state === 'COMPLETED' || d.state === 'FAILED') {
@@ -2627,6 +2711,48 @@ RAW_HTML = r"""<!DOCTYPE html>
                 withdrawSending = false;
                 btn.innerText = "Withdraw 🚀";
                 btn.disabled = false;codeButton.disabled=false;
+            }
+        }
+
+        function syncWithdrawalStatusFromStats(signature) {
+            const operation=(window.latestAccountStats?.wallet_history||[])
+                .find(row=>row.type==='WITHDRAW'&&row.tx===signature);
+            if(!operation)return false;
+            const progress=document.getElementById('withdraw-progress');
+            const checkButton=document.getElementById('btn-check-withdrawal');
+            const terminal=operation.status==='COMPLETED'||operation.status==='FAILED';
+            checkButton.hidden=terminal;
+            progress.hidden=false;
+            progress.textContent=operation.status==='COMPLETED'
+                ? 'Withdrawal confirmed on Solana (finalized).'
+                : operation.status==='FAILED'
+                    ? 'Withdrawal failed on Solana. The amount was returned to your balance.'
+                    : operation.status==='UNKNOWN'
+                        ? 'The network result is still unknown. Do not resend this withdrawal.'
+                        : 'The transaction is still awaiting Solana finality. Do not resend it.';
+            return true;
+        }
+
+        async function checkWithdrawalStatus() {
+            if (withdrawSending) return;
+            const button=document.getElementById('btn-check-withdrawal');
+            const progress=document.getElementById('withdraw-progress');
+            const txSignature=document.getElementById('withdraw-tx-link').dataset.signature;
+            button.disabled=true;
+            const oldLabel=button.textContent;
+            button.textContent='Checking Solana…';
+            progress.hidden=false;
+            progress.textContent='Checking the transaction against Solana finality. Do not submit it again.';
+            try {
+                window.latestAccountStats=null;
+                await refresh();
+                if(!syncWithdrawalStatusFromStats(txSignature))
+                    progress.textContent='Status refreshed. See Transactions below; do not resend a pending transfer.';
+            } catch (e) {
+                progress.textContent=e.message||'Could not verify the transaction right now. Do not resend it while its status is pending or unknown.';
+            } finally {
+                button.disabled=false;
+                button.textContent=oldLabel;
             }
         }
 
@@ -2813,8 +2939,16 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const customNick = accountState?.nickname || user.username;
                 const params = new URLSearchParams({ username: customNick });
                 const s = await apiFetch('/api/stats?' + params.toString()).then(r => r.json());
+                window.latestAccountStats=s;
                 
                 if (s.success) {
+                    const withdrawalBalance=document.getElementById('chain-withdraw-balances');
+                    if(withdrawalBalance)withdrawalBalance.textContent =
+                        'Balance: ' + Number(s.user_balance||0).toFixed(6) + ' USDC | ' +
+                        Number(s.sol_balance||0).toFixed(9) + ' SOL. Max withdrawal: ' +
+                        Number(s.withdrawable||0).toFixed(6) + ' USDC | ' +
+                        Number(s.withdrawable_sol||0).toFixed(9) +
+                        ' SOL. Network fees paid by operator reserve.';
                     await loadPartnerProgram();
                     if(!window.ZRL_WEB&&!s.is_admin){
                         document.querySelectorAll('.nav-btn')[1].style.display='none';
@@ -2914,7 +3048,6 @@ RAW_HTML = r"""<!DOCTYPE html>
                     if(!settingsOrderDirty&&document.activeElement!==settingsInput)settingsInput.value=currentTradingSettings.order_usdc;
                     document.getElementById('settings-budget').textContent='Saved: '+currentTradingSettings.order_usdc+' USDC · up to '+(currentTradingSettings.max_positions||5)+' positions, limited by available funds.';
                     document.getElementById('worker-status').textContent=s.worker_error?'Last worker error: '+s.worker_error:'Autopilot: '+(s.trading_active?'ON':'OFF')+'. Readiness check is in Trading.';
-                    document.getElementById('chain-withdraw-balances').textContent = 'Available: ' + s.user_balance.toFixed(6) + ' USDC | ' + s.sol_balance.toFixed(9) + ' SOL. Fees paid by operator reserve.';
                     const userEl = document.getElementById('display-username');
                     if (userEl) userEl.innerText = "@" + s.username;
                     
@@ -2945,7 +3078,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                             const color = isDep ? '#4ade80' : '#f87171';
                             const sign = isDep ? '+' : '-';
                             const txLink = (h.tx && h.tx !== 'SIMULATED_TX' && h.tx.length > 20) 
-                                ? `<a href="https://solscan.io/tx/${h.tx}" target="_blank" style="color: #60a5fa; text-decoration: none; font-size: 11px;">Tx ↗</a>` 
+                                ? `<a href="https://solscan.io/tx/${encodeURIComponent(h.tx)}" target="_blank" rel="noopener noreferrer" style="color: #60a5fa; text-decoration: none; font-size: 11px;">Tx ↗</a>`
                                 : `<span style="color: #64748b; font-size: 10px;">${h.status}</span>`;
                             
                             return `
@@ -2955,7 +3088,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                                         <div style="font-size: 10px; color: #64748b; margin-top: 2px;">${h.time}</div>
                                     </div>
                                     <div style="text-align: right;">
-                                        <div style="font-size: 10px; color: ${h.status === 'VERIFIED' || h.status === 'COMPLETED' ? '#4ade80' : '#facc15'}; margin-bottom: 2px;">${h.status}</div>
+                                        <div style="font-size: 10px; color: ${h.status === 'FAILED' ? '#f87171' : h.status === 'VERIFIED' || h.status === 'COMPLETED' ? '#4ade80' : '#facc15'}; margin-bottom: 2px;">${h.status}</div>
                                         ${txLink}
                                     </div>
                                 </div>
@@ -3478,6 +3611,8 @@ async def main():
     app.router.add_post('/api/admin/fee_reserve', wallet_handler(runtime.reserve_fees))
     app.router.add_post('/api/admin/release_fee_reserve', wallet_handler(runtime.release_fee_reserve))
     app.router.add_post('/api/admin/opening_balance', wallet_handler(runtime.opening_balance))
+    app.router.add_get('/api/admin/legacy_balances/preview', wallet_handler(runtime.preview_legacy_balances))
+    app.router.add_post('/api/admin/legacy_balances/import', wallet_handler(runtime.import_legacy_balances))
     app.router.add_post('/api/close_all', wallet_handler(runtime.close_all))
     app.router.add_post('/api/withdraw', wallet_handler(runtime.withdraw))
     app.router.add_post('/api/withdraw/code', wallet_handler(runtime.request_withdrawal_code))

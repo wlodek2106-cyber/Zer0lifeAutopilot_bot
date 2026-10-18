@@ -1,4 +1,5 @@
-"""Integer, double-entry custody ledger. No legacy virtual balance migration."""
+"""Integer, double-entry custody ledger with owner-confirmed backed legacy imports."""
+import hashlib
 import json
 import os
 import secrets
@@ -6,6 +7,7 @@ import sqlite3
 import time
 import uuid
 from contextlib import contextmanager
+from decimal import Decimal, InvalidOperation
 
 USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 SOL = "SOL"
@@ -418,6 +420,210 @@ class CustodyLedger:
             row = db.execute("SELECT raw FROM custody_accounts WHERE account=? AND asset=?",
                              (available(uid), asset)).fetchone()
             return row["raw"] if row else 0
+
+    @staticmethod
+    def _withdrawal_entitlement(db, uid, asset):
+        """Return the user's lifetime withdrawable entitlement for one settlement asset."""
+        deposits = db.execute("""SELECT COALESCE(SUM(raw),0) FROM custody_invoices
+            WHERE uid=? AND asset=? AND state='CREDITED'""", (uid, asset)).fetchone()[0]
+        for row in db.execute(
+                "SELECT amounts FROM custody_tx_deposits WHERE uid=?", (uid,)).fetchall():
+            try:
+                amounts = json.loads(row["amounts"])
+                amount = amounts.get(asset, 0) if isinstance(amounts, dict) else None
+            except (TypeError, ValueError) as exc:
+                raise LedgerError("Could not verify a recorded deposit for the withdrawal limit.") from exc
+            if type(amount) is not int or amount < 0:
+                raise LedgerError("Could not verify a recorded deposit for the withdrawal limit.")
+            deposits += amount
+
+        # Owner-confirmed balances and individually reviewed legacy balances are
+        # carry-forward capital; neither is inferred from an unverified old balance.
+        opening = db.execute("""SELECT COALESCE(SUM(delta),0) FROM custody_entries
+            WHERE account=? AND asset=? AND
+                  (journal=? OR journal LIKE ?)""",
+            (available(uid), asset, "opening:" + asset, "legacy-opening:" + asset + ":%")).fetchone()[0]
+        realized_profit = db.execute("""SELECT COALESCE(SUM(
+                COALESCE(p.proceeds_raw,p.proceeds_usdc,0)
+                - COALESCE(p.cost_raw,p.cost_usdc,0)
+                - COALESCE((SELECT SUM(e.amount_raw) FROM custody_partner_earnings e
+                            WHERE e.position_id=p.id),0)),0)
+            FROM custody_positions p
+            WHERE p.uid=? AND p.funding_asset=? AND p.state='CLOSED'""",
+            (uid, asset)).fetchone()[0]
+        partner_income = db.execute("""SELECT COALESCE(SUM(amount_raw),0)
+            FROM custody_partner_earnings
+            WHERE partner_uid=? AND asset=? AND state IN ('CREDITED','PAID')""",
+            (uid, asset)).fetchone()[0]
+        completed_withdrawals = db.execute("""SELECT COALESCE(SUM(raw),0)
+            FROM custody_operations WHERE uid=? AND asset=?
+            AND kind IN ('WITHDRAW','PARTNER_PAYOUT') AND state='COMPLETED'""",
+            (uid, asset)).fetchone()[0]
+        return max(0, deposits + opening + realized_profit + partner_income - completed_withdrawals)
+
+    def withdrawal_entitlement(self, uid, asset):
+        if type(uid) is not int or uid <= 0 or asset not in (USDC, SOL):
+            raise LedgerError("Invalid withdrawal entitlement request.")
+        with self.db() as db:
+            return self._withdrawal_entitlement(db, uid, asset)
+
+    def withdrawal_capacity(self, uid, asset):
+        """Limit a withdrawal to both actual available funds and verified lifetime entitlement."""
+        if type(uid) is not int or uid <= 0 or asset not in (USDC, SOL):
+            raise LedgerError("Invalid withdrawal capacity request.")
+        with self.db() as db:
+            balance = _balance(db, available(uid), asset)
+            entitlement = self._withdrawal_entitlement(db, uid, asset)
+            return min(balance, entitlement)
+
+    @staticmethod
+    def _legacy_usdc_raw(value):
+        try:
+            amount = Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError):
+            return None
+        if not amount.is_finite() or amount < 0:
+            return None
+        raw = amount * Decimal(1_000_000)
+        if raw != raw.to_integral_value() or raw > Decimal(2**63 - 1):
+            return None
+        return int(raw)
+
+    @staticmethod
+    def _legacy_has_custody_activity(db, uid):
+        tables = {row["name"] for row in db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        checks = (
+            ("custody_invoices", "uid"),
+            ("custody_tx_deposits", "uid"),
+            ("custody_positions", "uid"),
+            ("custody_operations", "uid"),
+        )
+        for table, column in checks:
+            if table in tables and db.execute(
+                    "SELECT 1 FROM " + table + " WHERE " + column + "=? LIMIT 1", (uid,)).fetchone():
+                return True
+        if "custody_partner_earnings" in tables and db.execute(
+                "SELECT 1 FROM custody_partner_earnings WHERE partner_uid=? OR trader_uid=? LIMIT 1",
+                (uid, uid)).fetchone():
+            return True
+        if "custody_entries" in tables and db.execute(
+                "SELECT 1 FROM custody_entries WHERE account=? LIMIT 1", (available(uid),)).fetchone():
+            return True
+        return False
+
+    @classmethod
+    def _legacy_balance_snapshot(cls, db, backing_raw):
+        if type(backing_raw) is not int or backing_raw < 0:
+            raise LedgerError("Invalid on-chain USDC backing for legacy balance preview.")
+        tables = {row["name"] for row in db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        source_rows = []
+        eligible = []
+        skipped = {}
+
+        def skip(reason):
+            skipped[reason] = skipped.get(reason, 0) + 1
+
+        if "users" not in tables:
+            skip("legacy_table_missing")
+        else:
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(users)")}
+            if not {"telegram_id", "balance_usdc"}.issubset(columns):
+                skip("legacy_schema_unrecognized")
+            else:
+                seen = set()
+                duplicate_ids = set()
+                rows = db.execute(
+                    "SELECT telegram_id,balance_usdc FROM users ORDER BY telegram_id").fetchall()
+                for row in rows:
+                    source_rows.append([repr(row["telegram_id"]), repr(row["balance_usdc"])])
+                    try:
+                        uid = int(row["telegram_id"])
+                    except (TypeError, ValueError, OverflowError):
+                        skip("invalid_user_id")
+                        continue
+                    if uid <= 0:
+                        skip("invalid_user_id")
+                        continue
+                    if uid in seen:
+                        duplicate_ids.add(uid)
+                        continue
+                    seen.add(uid)
+                    raw = cls._legacy_usdc_raw(row["balance_usdc"])
+                    if raw is None:
+                        skip("invalid_or_excess_precision")
+                    elif raw == 0:
+                        continue
+                    elif db.execute("SELECT 1 FROM custody_journals WHERE id=?",
+                                    ("legacy-opening:" + USDC + ":" + str(uid),)).fetchone():
+                        skip("already_imported")
+                    elif _balance(db, available(uid), USDC) != 0 or cls._legacy_has_custody_activity(db, uid):
+                        skip("new_custody_activity")
+                    else:
+                        eligible.append((uid, raw))
+                if duplicate_ids:
+                    duplicate_count = 0
+                    for uid in sorted(duplicate_ids):
+                        eligible = [item for item in eligible if item[0] != uid]
+                        duplicate_count += 2
+                    skipped["duplicate_user_id"] = duplicate_count
+
+        eligible.sort()
+        liabilities = db.execute(
+            "SELECT COALESCE(SUM(raw),0) FROM custody_accounts WHERE asset=? AND account!='external'",
+            (USDC,)).fetchone()[0]
+        free_backing = max(0, backing_raw - liabilities)
+        candidate_raw = sum(raw for _, raw in eligible)
+        backed = candidate_raw <= free_backing
+        snapshot = {
+            "source_rows": source_rows,
+            "eligible": eligible,
+            "skipped": sorted(skipped.items()),
+            "backing_raw": backing_raw,
+            "liabilities_raw": liabilities,
+            "free_backing_raw": free_backing,
+        }
+        digest = hashlib.sha256(json.dumps(
+            snapshot, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        return {
+            "digest": digest,
+            "candidate_count": len(eligible),
+            "candidate_raw": candidate_raw,
+            "eligible_count": len(eligible) if backed else 0,
+            "amount_raw": candidate_raw if backed else 0,
+            "backed": backed,
+            "backing_available_raw": free_backing,
+            "skipped": skipped,
+            "can_import": bool(eligible) and backed,
+            "_eligible": eligible,
+        }
+
+    def preview_legacy_balances(self, backing_raw):
+        """Read-only preview of unambiguous, fully backed legacy USDC balances."""
+        with self.db() as db:
+            return self._legacy_balance_snapshot(db, backing_raw)
+
+    def import_legacy_balances(self, expected_digest, backing_raw):
+        """Atomically import the exact previewed balances without sending a transaction."""
+        if not isinstance(expected_digest, str) or len(expected_digest) != 64:
+            raise LedgerError("A fresh owner-confirmed preview is required.")
+        with self.db() as db:
+            preview = self._legacy_balance_snapshot(db, backing_raw)
+            if preview["digest"] != expected_digest:
+                raise LedgerError("Legacy balances or wallet backing changed. Preview again before importing.")
+            if not preview["can_import"]:
+                raise LedgerError("No unambiguous, fully backed legacy balances are available to import.")
+            imported = 0
+            amount = 0
+            for uid, raw in preview["_eligible"]:
+                journal_id = "legacy-opening:" + USDC + ":" + str(uid)
+                if not self.post(db, journal_id, "owner-confirmed backed legacy real balance", [
+                        ("external", USDC, -raw), (available(uid), USDC, raw)]):
+                    raise LedgerError("A legacy balance was already imported; refresh the preview.")
+                imported += 1
+                amount += raw
+            return {"imported_count": imported, "amount_raw": amount}
 
     def record_external_withdrawal(self, uid, signature, asset, raw, recipient, fee_lamports, block_time):
         if (type(uid) is not int or uid <= 0 or asset != USDC or type(raw) is not int or raw <= 0

@@ -136,13 +136,23 @@ class AccountBrowserTests(unittest.TestCase):
         stub="""<script>
         window.Telegram={WebApp:{initData:'fixture',initDataUnsafe:{user:{id:101,username:'test'}},
             expand(){},ready(){}}};
+        window.confirm=()=>true;
         window.requests=[];
         window.fetch=async(url,options={})=>{
             window.requests.push({url,body:options.body?JSON.parse(options.body):null});
-            const body=url==='/api/withdraw/code'?{success:true,expires_in:300}:
-                url==='/api/withdraw'?{success:true,state:'COMPLETED',tx_signature:'verified-signature'}:
-                {success:true,user_balance:7,sol_balance:1,withdrawable:7,wallet_history:[],trades:[],
-                 logs:[],trading_settings:{},wallet_status:{},pending_operations:[]};
+            const body=url==='/api/admin/legacy_balances/preview'?{
+                    success:true,can_import:true,backed:true,eligible_count:2,eligible_usdc:'5',
+                    candidate_count:2,candidate_usdc:'5',backing_available_usdc:'10',skipped:{},
+                    digest:'a'.repeat(64)}:
+                url==='/api/admin/legacy_balances/import'?{
+                    success:true,message:'Confirmed legacy balances were imported into the ledger. No Solana transactions were sent.',
+                    imported_count:2,amount_usdc:'5'}:
+                url==='/api/withdraw/code'?{success:true,expires_in:300}:
+                url==='/api/withdraw'?{success:true,state:'SUBMITTED',tx_signature:'1'.repeat(88)}:
+                {success:true,user_balance:7,sol_balance:1,withdrawable:7,
+                 wallet_history:[{type:'WITHDRAW',amount:'5 USDC',tx:'1'.repeat(88),status:'COMPLETED'}],trades:[],
+                  logs:[],is_admin:true,trading_settings:{order_usdc:1,order_sol:0.05,assets:[],max_positions:5},
+                  wallet_status:{},pending_operations:[]};
             return new Response(JSON.stringify(body),{headers:{'Content-Type':'application/json'}});
         };
         </script>"""
@@ -167,4 +177,25 @@ class AccountBrowserTests(unittest.TestCase):
                 'withdrawal needs no personal PIN or passkey');
             assert(!status.hidden&&status.textContent.includes('confirmed on Solana'),
                 'completed withdrawal status is shown in the wallet');
+            const txLink=document.getElementById('withdraw-tx-link');
+            assert(!txLink.hidden&&txLink.href==='https://solscan.io/tx/'+'1'.repeat(88),
+                'confirmed withdrawal exposes a direct Solscan transaction link');
+            assert(document.getElementById('btn-check-withdrawal').hidden,
+                'completed withdrawal does not show a pending status-check action');
+            assert(document.getElementById('chain-withdraw-balances').textContent.includes('Max withdrawal:'),
+                'wallet shows the capped withdrawal amount: '+
+                document.getElementById('chain-withdraw-balances').textContent+
+                ' requests='+window.requests.map(r=>r.url).join(','));
+            assert(document.getElementById('admin-custody-panel').style.display==='block',
+                'bulk legacy import controls are restricted to administrator view');
+            await previewLegacyBalances();
+            assert(!document.getElementById('legacy-balance-import-button').hidden&&
+                document.getElementById('legacy-balance-migration-status').textContent.includes('Eligible amount: 5 USDC'),
+                'read-only preview shows the backed bulk import summary before approval');
+            await importLegacyBalances();
+            const migration=window.requests.find(r=>r.url==='/api/admin/legacy_balances/import');
+            assert(migration.body.confirm===true&&migration.body.preview_digest==='a'.repeat(64),
+                'bulk import requires explicit confirmation tied to the exact preview');
+            assert(document.getElementById('legacy-balance-migration-status').textContent.includes('No Solana transactions were sent'),
+                'import result clearly states that it changes only the internal ledger');
         """)

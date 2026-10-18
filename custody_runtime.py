@@ -669,6 +669,45 @@ class CustodyRuntime(WalletRuntime):
             self.ledger.opening(uid, asset, raw, backing[asset]["raw"])
         return web.json_response({"success": True, "message": "Подтверждённый личный остаток перенесён в ваш счёт. Старые виртуальные балансы не использовались."})
 
+    async def preview_legacy_balances(self, request, session):
+        if self.uid(request) != self.owner_id:
+            raise WalletError("Administrator only.", 403)
+        self.ready()
+        async with self.lock:
+            if self.legacy_pending():
+                raise WalletError("A legacy wallet operation is still pending; no balances were changed.", 409)
+            if self.pending():
+                raise WalletError("Finish checking the current operation first; no legacy balances were changed.", 409)
+            backing = await self.solvent(session)
+            result = self.ledger.preview_legacy_balances(backing[USDC]["raw"])
+        result.pop("_eligible", None)
+        result["candidate_usdc"] = display_raw(result.pop("candidate_raw"), 6)
+        result["eligible_usdc"] = display_raw(result.pop("amount_raw"), 6)
+        result["backing_available_usdc"] = display_raw(result.pop("backing_available_raw"), 6)
+        return web.json_response({"success": True, **result})
+
+    async def import_legacy_balances(self, request, session):
+        if self.uid(request) != self.owner_id:
+            raise WalletError("Administrator only.", 403)
+        self.ready()
+        body = await request.json()
+        if body.get("confirm") is not True:
+            raise WalletError("Explicitly confirm the exact preview report.", 400)
+        digest = body.get("preview_digest")
+        async with self.lock:
+            if self.legacy_pending():
+                raise WalletError("A legacy wallet operation is still pending; no balances were changed.", 409)
+            if self.pending():
+                raise WalletError("Finish checking the current operation first; no legacy balances were changed.", 409)
+            backing = await self.solvent(session)
+            result = self.ledger.import_legacy_balances(digest, backing[USDC]["raw"])
+        return web.json_response({
+            "success": True,
+            "message": "Confirmed legacy balances were imported into the ledger. No Solana transactions were sent.",
+            "imported_count": result["imported_count"],
+            "amount_usdc": display_raw(result["amount_raw"], 6),
+        })
+
     async def admin_status(self, request, session):
         if self.uid(request) != self.owner_id:
             raise WalletError("Только администратор.", 403)
@@ -1338,7 +1377,8 @@ class CustodyRuntime(WalletRuntime):
         body = await request.json()
         payload, _ = self.accounts.withdrawal_intent(uid, body)
         request_id = payload["request_id"]
-        asset = USDC if payload["token"] == "USDC" else SOL
+        token = payload["token"]
+        asset = USDC if token == "USDC" else SOL
         raw = int(payload["raw"])
         async with self.lock:
             previous = self.ledger.find_request(uid, request_id)
@@ -1352,8 +1392,12 @@ class CustodyRuntime(WalletRuntime):
                 raise WalletError(
                     "A previous transfer is still being checked. Do not start another withdrawal.", 409)
             await self.solvent(session)
-            if raw > self.ledger.balance(uid, asset):
-                raise WalletError("The amount exceeds your available balance.", 409)
+            withdrawable = self.ledger.withdrawal_capacity(uid, asset)
+            if raw > withdrawable:
+                decimals = 6 if asset == USDC else 9
+                raise WalletError(
+                    "The amount exceeds your verified withdrawal limit. Maximum available: "
+                    + display_raw(withdrawable, decimals) + " " + token + ".", 409)
             return await self.accounts.send_withdrawal_code(request, session, body)
 
     async def withdraw(self, request, session):
@@ -1382,8 +1426,12 @@ class CustodyRuntime(WalletRuntime):
                 raise WalletError(
                     "A previous transfer is still being checked. Do not start another withdrawal.", 409)
             await self.solvent(session)
-            if raw > self.ledger.balance(uid, asset):
-                raise WalletError("The amount exceeds your available balance.", 409)
+            withdrawable = self.ledger.withdrawal_capacity(uid, asset)
+            if raw > withdrawable:
+                decimals = 6 if asset == USDC else 9
+                raise WalletError(
+                    "The amount exceeds your verified withdrawal limit. Maximum available: "
+                    + display_raw(withdrawable, decimals) + " " + token + ".", 409)
             if getattr(self, "accounts", None):
                 self.accounts.consume_withdrawal_code(uid, body)
             else:
@@ -1579,6 +1627,8 @@ class CustodyRuntime(WalletRuntime):
         history.sort(key=lambda row: row["time"], reverse=True)
         history.sort(key=lambda r: r["time"], reverse=True)
         user_usdc, user_sol = self.ledger.balance(uid, USDC) / 1e6, self.ledger.balance(uid, SOL) / 1e9
+        withdrawable_usdc = self.ledger.withdrawal_capacity(uid, USDC) / 1e6
+        withdrawable_sol = self.ledger.withdrawal_capacity(uid, SOL) / 1e9
         profit = sum(t["profit_usdc"] for t in trades)
         settings = self.ledger.settings(uid)
         own_pending = [r for r in operations if r["state"] in ("RESERVED", "PREPARED", "SUBMITTED", "UNKNOWN")]
@@ -1597,8 +1647,8 @@ class CustodyRuntime(WalletRuntime):
                 "reserved_amount": reserved_amount, "reserved_asset": reserved_asset,
             }
         return web.json_response({"success": True, "username": request["telegram_user"].get("username", "user"),
-            "user_balance": user_usdc, "sol_balance": user_sol, "withdrawable": user_usdc,
-            "withdrawable_sol": user_sol, "total_deposited": (sum(i["raw"] for i in invoices if i["asset"] == USDC)
+            "user_balance": user_usdc, "sol_balance": user_sol, "withdrawable": withdrawable_usdc,
+            "withdrawable_sol": withdrawable_sol, "total_deposited": (sum(i["raw"] for i in invoices if i["asset"] == USDC)
                 + sum(json.loads(r["amounts"]).get(USDC, 0) for r in tx_deposits))/1e6,
             "total_pnl": profit, "profit_usdc": profit, "total_roi": 0,
             "closed_count": sum(p["state"] == "CLOSED" for p in positions), "trades": trades,
