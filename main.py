@@ -1778,7 +1778,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div id="section-withdraw" style="display: none;">
                     <div class="banner-limit">
                         <div style="color:#4ade80;font-weight:800;">USDC / SOL · Solana mainnet</div>
-                        <div style="font-size:11px;margin-top:6px;">Verified on Solana · receipt sent in Telegram after confirmation.</div>
+                        <div style="font-size:11px;margin-top:6px;">Confirm withdrawals with a one-time Telegram code.</div>
                     </div>
                     <div id="chain-withdraw-balances" style="font-size:12px; margin-bottom:8px;">Loading balance...</div>
                     <div class="token-selector">
@@ -1792,20 +1792,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                         maxlength="6" pattern="[0-9]{6}" placeholder="6-digit Telegram code">
                     <p id="withdraw-code-status" class="status-output" role="status" aria-live="polite"></p>
                     <p id="withdraw-progress" class="status-output" role="status" aria-live="polite" hidden></p>
-                    <a id="withdraw-tx-link" class="tx-link" hidden target="_blank" rel="noopener noreferrer">Open Solscan ↗</a>
-                    <button class="btn-copy" id="btn-check-withdrawal" onclick="checkWithdrawalStatus()" hidden>Verify on Solana</button>
                     <button class="btn-verify" id="btn-withdraw-action" onclick="secureWithdraw()">Withdraw</button>
-                    <details id="wallet-external-reconcile" hidden>
-                        <summary>Verify previous USDC transfer</summary>
-                        <input id="wallet-external-transfer-signature" class="sig-input" placeholder="Transaction signature">
-                        <input id="wallet-external-transfer-recipient" class="sig-input" placeholder="Recipient wallet address">
-                        <label style="display:flex;gap:10px;align-items:flex-start;font-size:12px;">
-                            <input id="wallet-external-transfer-confirm" type="checkbox" style="width:auto;flex:0 0 auto;">
-                            Confirm this transfer was already sent.
-                        </label>
-                        <button class="btn-copy" onclick="recordExternalTransfer('wallet-external-transfer')">Verify TX</button>
-                        <div id="wallet-external-transfer-result" class="status-output" role="status"></div>
-                    </details>
                 </div>
             </div>
 
@@ -2253,30 +2240,6 @@ RAW_HTML = r"""<!DOCTYPE html>
                     'Read-only: no ledger or on-chain balance was changed.'].join('\n');
             } catch(e) { box.textContent=e.message||'Could not read wallet coverage.'; }
         }
-        async function recordExternalTransfer(prefix='external-transfer') {
-            const signature=document.getElementById(prefix+'-signature').value.trim();
-            const recipient=document.getElementById(prefix+'-recipient').value.trim();
-            const confirmRecord=document.getElementById(prefix+'-confirm').checked;
-            const box=document.getElementById(prefix+'-result');
-            if(!signature||!recipient||!confirmRecord) {
-                box.textContent='Enter the transaction signature and exact recipient, then confirm this transfer was already sent.';
-                return;
-            }
-            if(!confirm('This will reduce your app balance for the already completed transfer. No Solana transaction will be sent. Continue?'))return;
-            box.textContent='Verifying the finalized transaction on Solana…';
-            try {
-                const response=await apiFetch('/api/admin/record_external_withdrawal',{method:'POST',
-                    headers:{'Content-Type':'application/json'},
-                    body:JSON.stringify({signature,recipient_address:recipient,confirm:true})});
-                const result=await response.json();
-                if(!response.ok||!result.success)throw new Error(result.message||'Could not record the transfer.');
-                box.textContent=result.message+'\nAmount: '+result.amount+' USDC\nAvailable USDC: '+result.available_usdc+
-                    '\nSignature: '+result.tx_signature;
-                document.getElementById(prefix+'-confirm').checked=false;
-                await checkBalanceCoverage();
-                await refresh();
-            } catch(e) { box.textContent=e.message||'Could not verify the transfer.'; }
-        }
         async function retireLegacyOperation(signature) {
             if (!confirm('For a legacy personal operation only. The server checks transaction absence, blockhash expiry and nonce history. Without evidence nothing changes. The record stays unconfirmed; this is not a refund or a successful trade. Continue?')) return;
             const pin = prompt('Enter your confirmation PIN:');
@@ -2605,6 +2568,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         let withdrawalCodeBinding = '';
+        let activeWithdrawalSignature = '';
         function withdrawalContext() {
             const token = currentWithdrawToken;
             const addr = document.getElementById('withdraw-address').value.trim();
@@ -2624,27 +2588,17 @@ RAW_HTML = r"""<!DOCTYPE html>
             clearTerminalWithdrawalResult();
         }
         function clearTerminalWithdrawalResult() {
-            const txLink=document.getElementById('withdraw-tx-link');
-            const checkButton=document.getElementById('btn-check-withdrawal');
             const progress=document.getElementById('withdraw-progress');
-            if(!txLink)return;
-            const txHref=txLink.href||'';
-            const signature=txLink.dataset.signature||
-                (txHref.includes('solscan.io/tx/')?decodeURIComponent(txHref.split('/').pop()):'');
+            if(!progress||!activeWithdrawalSignature)return;
             const history=(window.latestAccountStats?.wallet_history||[])
-                .find(row=>row.type==='WITHDRAW'&&row.tx===signature);
+                .find(row=>row.type==='WITHDRAW'&&row.tx===activeWithdrawalSignature);
             const pending=(window.latestAccountStats?.pending_operations||[])
-                .find(row=>row.signature===signature);
-            const state=history?.status||pending?.state||txLink.dataset.state;
-            if(state)txLink.dataset.state=state;
+                .find(row=>row.signature===activeWithdrawalSignature);
+            const state=history?.status||pending?.state;
             if(!['COMPLETED','FAILED'].includes(state))return;
-            txLink.hidden=true;
-            txLink.removeAttribute('href');
-            delete txLink.dataset.signature;
-            delete txLink.dataset.state;
-            delete txLink.dataset.intent;
-            if(checkButton)checkButton.hidden=true;
-            if(progress){progress.hidden=true;progress.textContent='';}
+            progress.hidden=true;
+            progress.textContent='';
+            activeWithdrawalSignature='';
         }
         async function requestWithdrawalCode() {
             if(withdrawSending)return;
@@ -2700,8 +2654,6 @@ RAW_HTML = r"""<!DOCTYPE html>
             const btn = document.getElementById('btn-withdraw-action');
             const codeButton=document.getElementById('btn-withdraw-code');
             const progress = document.getElementById('withdraw-progress');
-            const txLink = document.getElementById('withdraw-tx-link');
-            const checkButton = document.getElementById('btn-check-withdrawal');
             progress.hidden = false;
             progress.textContent = 'Checking your withdrawal limit and sending the transfer to Solana…';
             btn.disabled=true;codeButton.disabled=true;
@@ -2714,29 +2666,22 @@ RAW_HTML = r"""<!DOCTYPE html>
                         telegram_code:telegramCode})
                 });
                 const d = await res.json();
-                const signatureText=d.tx_signature ? '\nSignature: '+d.tx_signature : '';
                 if (typeof d.tx_signature === 'string' && d.tx_signature.length > 20) {
-                    txLink.dataset.signature=d.tx_signature;
-                    txLink.dataset.state=d.state||'UNKNOWN';
-                    txLink.dataset.intent=context.intent;
-                    txLink.href='https://solscan.io/tx/'+encodeURIComponent(d.tx_signature);
-                    txLink.hidden=false;
-                    checkButton.hidden=d.state==='COMPLETED'||d.state==='FAILED';
-                } else if(!['SUBMITTED','UNKNOWN','PREPARED'].includes(txLink.dataset.state)) {
-                    txLink.hidden=true;
-                    checkButton.hidden=true;
+                    activeWithdrawalSignature=d.tx_signature;
                 }
                 if (d.success) {
                     progress.textContent=d.state==='COMPLETED'
-                        ? context.amount+' '+context.token+' sent and confirmed on Solana.'+signatureText
-                        : (d.message||'Withdrawal is awaiting network confirmation.')+signatureText;
+                        ? context.amount+' '+context.token+' sent and confirmed on Solana.'
+                        : (d.message||'Withdrawal submitted. Status is checked automatically; do not submit it again.');
                     document.getElementById('withdraw-code').value='';
                     withdrawalCodeBinding='';
                     window.latestAccountStats=null;
                     await refresh();
                     if(d.tx_signature)syncWithdrawalStatusFromStats(d.tx_signature);
                 }
-                if(!d.success)progress.textContent=d.message||'Withdrawal failed; no new transfer was sent.';
+                if(!d.success)progress.textContent=d.tx_signature
+                    ? 'Withdrawal status is being checked automatically. Do not submit it again.'
+                    : (d.message||'Withdrawal failed; no new transfer was sent.');
                 if (d.state === 'COMPLETED' || d.state === 'FAILED') {
                     localStorage.removeItem('withdraw_intent');
                     document.getElementById('withdraw-code').value='';
@@ -2754,48 +2699,28 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         function syncWithdrawalStatusFromStats(signature) {
-            const operation=(window.latestAccountStats?.wallet_history||[])
-                .find(row=>row.type==='WITHDRAW'&&row.tx===signature);
+            const history=window.latestAccountStats?.wallet_history||[];
+            const pending=window.latestAccountStats?.pending_operations||[];
+            const operation=signature
+                ? history.find(row=>row.type==='WITHDRAW'&&row.tx===signature) ||
+                    pending.find(row=>row.kind==='WITHDRAW'&&row.signature===signature)
+                : pending.slice().reverse().find(row=>row.kind==='WITHDRAW'&&
+                    ['PREPARED','SUBMITTED','UNKNOWN'].includes(row.state));
             if(!operation)return false;
+            const state=operation.status||operation.state;
+            activeWithdrawalSignature=operation.tx||operation.signature||activeWithdrawalSignature;
             const progress=document.getElementById('withdraw-progress');
-            const checkButton=document.getElementById('btn-check-withdrawal');
-            const terminal=operation.status==='COMPLETED'||operation.status==='FAILED';
-            const txLink=document.getElementById('withdraw-tx-link');
-            if(txLink)txLink.dataset.state=operation.status;
-            checkButton.hidden=terminal;
+            if(!progress)return false;
             progress.hidden=false;
-            progress.textContent=operation.status==='COMPLETED'
+            progress.textContent=state==='COMPLETED'
                 ? operation.amount+' sent · confirmed on Solana · Telegram receipt '+
                     (operation.telegram_notified?'sent.':'pending.')
-                : operation.status==='FAILED'
+                : state==='FAILED'
                     ? 'Withdrawal failed on Solana. The amount was returned to your balance.'
-                    : operation.status==='UNKNOWN'
-                        ? 'The network result is still unknown. Do not resend this withdrawal.'
-                        : 'The transaction is still awaiting Solana finality. Do not resend it.';
+                    : state==='UNKNOWN'
+                        ? 'Withdrawal status is unclear. Do not submit it again; the server is checking automatically.'
+                        : 'Withdrawal is awaiting network confirmation. Do not submit it again.';
             return true;
-        }
-
-        async function checkWithdrawalStatus() {
-            if (withdrawSending) return;
-            const button=document.getElementById('btn-check-withdrawal');
-            const progress=document.getElementById('withdraw-progress');
-            const txSignature=document.getElementById('withdraw-tx-link').dataset.signature;
-            button.disabled=true;
-            const oldLabel=button.textContent;
-            button.textContent='Verifying…';
-            progress.hidden=false;
-            progress.textContent='Checking the transaction against Solana finality. Do not submit it again.';
-            try {
-                window.latestAccountStats=null;
-                await refresh();
-                if(!syncWithdrawalStatusFromStats(txSignature))
-                    progress.textContent='Status refreshed. See Transactions below; do not resend a pending transfer.';
-            } catch (e) {
-                progress.textContent=e.message||'Could not verify the transaction right now. Do not resend it while its status is pending or unknown.';
-            } finally {
-                button.disabled=false;
-                button.textContent=oldLabel;
-            }
         }
 
         async function toggleTrading() {
@@ -2982,6 +2907,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const params = new URLSearchParams({ username: customNick });
                 const s = await apiFetch('/api/stats?' + params.toString()).then(r => r.json());
                 window.latestAccountStats=s;
+                if(s.success)syncWithdrawalStatusFromStats(activeWithdrawalSignature||'');
                 
                 if (s.success) {
                     const withdrawalBalance=document.getElementById('chain-withdraw-balances');
@@ -3035,8 +2961,6 @@ RAW_HTML = r"""<!DOCTYPE html>
                             : 'Verify expired operation and unlock';
                     }
                     document.getElementById('admin-custody-panel').style.display = s.is_admin ? 'block' : 'none';
-                    const walletExternalReconcile=document.getElementById('wallet-external-reconcile');
-                    if(walletExternalReconcile)walletExternalReconcile.hidden=!s.is_admin;
                     if(s.is_admin)renderFeeStatus(s.operator_fees);
                     document.getElementById('operator-settings').style.display=s.is_admin?'block':'none';
                     updateToggleUI(s.trading_active);
