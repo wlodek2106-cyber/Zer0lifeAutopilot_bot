@@ -1792,6 +1792,18 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <a id="withdraw-tx-link" class="tx-link" hidden target="_blank" rel="noopener noreferrer">Verify transaction on Solscan ↗</a>
                     <button class="btn-copy" id="btn-check-withdrawal" onclick="checkWithdrawalStatus()" hidden>Check transaction status</button>
                     <button class="btn-green-main" id="btn-withdraw-action" onclick="secureWithdraw()">Withdraw</button>
+                    <details id="wallet-external-reconcile" hidden>
+                        <summary>Verify a USDC transfer already sent</summary>
+                        <p class="muted">Owner-only recovery for a transfer already sent from the AI Trader wallet. The server verifies it on Solana and updates the ledger once; it will not send another transfer.</p>
+                        <input id="wallet-external-transfer-signature" class="sig-input" placeholder="Solana transaction signature">
+                        <input id="wallet-external-transfer-recipient" class="sig-input" placeholder="Exact recipient wallet address">
+                        <label style="display:flex;gap:10px;align-items:flex-start;font-size:12px;">
+                            <input id="wallet-external-transfer-confirm" type="checkbox" style="width:auto;flex:0 0 auto;">
+                            I confirm this USDC transfer was already completed from the AI Trader wallet.
+                        </label>
+                        <button class="btn-copy" onclick="recordExternalTransfer('wallet-external-transfer')">Verify and update account (no new send)</button>
+                        <div id="wallet-external-transfer-result" class="status-output" role="status"></div>
+                    </details>
                 </div>
             </div>
 
@@ -1808,18 +1820,6 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div id="shared-pending-operation-details" style="font-size:12px;overflow-wrap:anywhere;white-space:pre-wrap;margin-top:8px;"></div>
                 <button class="btn-copy" onclick="checkBalanceCoverage()">Check wallet funds against account balances (read-only)</button>
                 <div id="balance-coverage-details" class="status-output" role="status"></div>
-                <details>
-                    <summary>Record an already completed USDC transfer</summary>
-                    <p class="muted">For a transfer already sent from this shared wallet. This only updates the ledger; it will not send another transaction.</p>
-                    <input id="external-transfer-signature" class="sig-input" placeholder="Finalized Solana transaction signature">
-                    <input id="external-transfer-recipient" class="sig-input" placeholder="Exact recipient wallet address">
-                    <label style="display:flex;gap:10px;align-items:flex-start;font-size:12px;">
-                        <input id="external-transfer-confirm" type="checkbox" style="width:auto;flex:0 0 auto;">
-                        I confirm this is my completed USDC transfer from the AI Trader wallet.
-                    </label>
-                    <button class="btn-copy" onclick="recordExternalTransfer()">Record verified transfer (no new send)</button>
-                    <div id="external-transfer-result" class="status-output" role="status"></div>
-                </details>
                 <h3>Fee reserve · SOL</h3>
                 <div id="fee-status" class="status-output">Reserve not checked yet.</div>
                 <p class="muted">Allocation reduces your available SOL balance. No on-chain transfer. Only your funds may be allocated.</p>
@@ -2251,13 +2251,13 @@ RAW_HTML = r"""<!DOCTYPE html>
                     'Read-only: no ledger or on-chain balance was changed.'].join('\n');
             } catch(e) { box.textContent=e.message||'Could not read wallet coverage.'; }
         }
-        async function recordExternalTransfer() {
-            const signature=document.getElementById('external-transfer-signature').value.trim();
-            const recipient=document.getElementById('external-transfer-recipient').value.trim();
-            const confirmRecord=document.getElementById('external-transfer-confirm').checked;
-            const box=document.getElementById('external-transfer-result');
+        async function recordExternalTransfer(prefix='external-transfer') {
+            const signature=document.getElementById(prefix+'-signature').value.trim();
+            const recipient=document.getElementById(prefix+'-recipient').value.trim();
+            const confirmRecord=document.getElementById(prefix+'-confirm').checked;
+            const box=document.getElementById(prefix+'-result');
             if(!signature||!recipient||!confirmRecord) {
-                box.textContent='Enter the finalized transaction signature and exact recipient, then confirm this transfer was already sent.';
+                box.textContent='Enter the transaction signature and exact recipient, then confirm this transfer was already sent.';
                 return;
             }
             if(!confirm('This will reduce your app balance for the already completed transfer. No Solana transaction will be sent. Continue?'))return;
@@ -2270,7 +2270,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 if(!response.ok||!result.success)throw new Error(result.message||'Could not record the transfer.');
                 box.textContent=result.message+'\nAmount: '+result.amount+' USDC\nAvailable USDC: '+result.available_usdc+
                     '\nSignature: '+result.tx_signature;
-                document.getElementById('external-transfer-confirm').checked=false;
+                document.getElementById(prefix+'-confirm').checked=false;
                 await checkBalanceCoverage();
                 await refresh();
             } catch(e) { box.textContent=e.message||'Could not verify the transfer.'; }
@@ -2619,12 +2619,27 @@ RAW_HTML = r"""<!DOCTYPE html>
             withdrawalCodeBinding='';
             const status=document.getElementById('withdraw-code-status');
             if(status)status.textContent='';
+            clearTerminalWithdrawalResult();
+        }
+        function clearTerminalWithdrawalResult() {
+            const txLink=document.getElementById('withdraw-tx-link');
+            const checkButton=document.getElementById('btn-check-withdrawal');
+            const progress=document.getElementById('withdraw-progress');
+            if(!txLink||!['COMPLETED','FAILED'].includes(txLink.dataset.state))return;
+            txLink.hidden=true;
+            txLink.removeAttribute('href');
+            delete txLink.dataset.signature;
+            delete txLink.dataset.state;
+            delete txLink.dataset.intent;
+            if(checkButton)checkButton.hidden=true;
+            if(progress){progress.hidden=true;progress.textContent='';}
         }
         async function requestWithdrawalCode() {
             if(withdrawSending)return;
             const context=withdrawalContext();
             const status=document.getElementById('withdraw-code-status');
             const button=document.getElementById('btn-withdraw-code');
+            clearTerminalWithdrawalResult();
             if(!context.addr||!context.amount){status.textContent='Enter the recipient address and amount first.';return;}
             button.disabled=true;button.textContent='Checking balance…';
             status.textContent='Checking the wallet and requesting a Telegram code…';
@@ -2639,7 +2654,13 @@ RAW_HTML = r"""<!DOCTYPE html>
                 status.textContent='Code sent to the bot. It is valid for 5 minutes and confirms only this amount and address.';
                 document.getElementById('withdraw-code').focus();
             } catch(e) {
-                status.textContent=e.message||'Could not request a Telegram code.';
+                const message=e.message||'Could not request a Telegram code.';
+                const noCodeSent=' No Telegram code was sent and no new transfer was made.';
+                status.textContent=message.toLowerCase().includes('wallet funds do not cover recorded account balances')
+                    ? message+noCodeSent : message;
+                const recovery=document.getElementById('wallet-external-reconcile');
+                if(recovery&&!recovery.hidden&&message.toLowerCase().includes('wallet funds do not cover recorded account balances'))
+                    recovery.open=true;
             } finally {
                 button.disabled=false;button.textContent='Send code in Telegram';
             }
@@ -2680,10 +2701,12 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const signatureText=d.tx_signature ? '\nSignature: '+d.tx_signature : '';
                 if (typeof d.tx_signature === 'string' && d.tx_signature.length > 20) {
                     txLink.dataset.signature=d.tx_signature;
+                    txLink.dataset.state=d.state||'UNKNOWN';
+                    txLink.dataset.intent=context.intent;
                     txLink.href='https://solscan.io/tx/'+encodeURIComponent(d.tx_signature);
                     txLink.hidden=false;
                     checkButton.hidden=d.state==='COMPLETED'||d.state==='FAILED';
-                } else {
+                } else if(!['SUBMITTED','UNKNOWN','PREPARED'].includes(txLink.dataset.state)) {
                     txLink.hidden=true;
                     checkButton.hidden=true;
                 }
@@ -2721,6 +2744,8 @@ RAW_HTML = r"""<!DOCTYPE html>
             const progress=document.getElementById('withdraw-progress');
             const checkButton=document.getElementById('btn-check-withdrawal');
             const terminal=operation.status==='COMPLETED'||operation.status==='FAILED';
+            const txLink=document.getElementById('withdraw-tx-link');
+            if(txLink)txLink.dataset.state=operation.status;
             checkButton.hidden=terminal;
             progress.hidden=false;
             progress.textContent=operation.status==='COMPLETED'
@@ -2993,6 +3018,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                             : 'Verify expired operation and unlock';
                     }
                     document.getElementById('admin-custody-panel').style.display = s.is_admin ? 'block' : 'none';
+                    const walletExternalReconcile=document.getElementById('wallet-external-reconcile');
+                    if(walletExternalReconcile)walletExternalReconcile.hidden=!s.is_admin;
                     if(s.is_admin)renderFeeStatus(s.operator_fees);
                     document.getElementById('operator-settings').style.display=s.is_admin?'block':'none';
                     updateToggleUI(s.trading_active);

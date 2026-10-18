@@ -68,6 +68,8 @@ class AccountBrowserTests(unittest.TestCase):
             assert(document.getElementById('account-signup').style.display==='none','signup hidden after server acceptance');
             assert(accountState.nickname==='ServerChosen','server owns nickname state');
             assert(document.getElementById('app').style.display==='block','account opens without passkey setup');
+            assert(document.getElementById('wallet-external-reconcile').hidden,
+                'the external-transfer recovery control is owner-only');
             const request=window.requests.find(r=>r.url==='/api/account/register');
             assert(request.body.nickname==='TraderNew'&&request.body.accept_risk===true,'real registration request');
             assert(request.body.accept_partner_terms===true,'commission consent is explicitly sent');
@@ -138,8 +140,13 @@ class AccountBrowserTests(unittest.TestCase):
             expand(){},ready(){}}};
         window.confirm=()=>true;
         window.requests=[];
+        window.withdrawCodeAttempt=0;
         window.fetch=async(url,options={})=>{
             window.requests.push({url,body:options.body?JSON.parse(options.body):null});
+            if(url==='/api/withdraw/code'&&window.withdrawCodeAttempt++===0)
+                return new Response(JSON.stringify({success:false,message:
+                    'Withdrawals and trading are paused because wallet funds do not cover recorded account balances. No transfer was sent.'}),
+                    {status:409,headers:{'Content-Type':'application/json'}});
             const body=url==='/api/admin/legacy_balances/preview'?{
                     success:true,can_import:true,backed:true,eligible_count:2,eligible_usdc:'5',
                     candidate_count:2,candidate_usdc:'5',backing_available_usdc:'10',skipped:{},
@@ -147,6 +154,13 @@ class AccountBrowserTests(unittest.TestCase):
                 url==='/api/admin/legacy_balances/import'?{
                     success:true,message:'Confirmed legacy balances were imported into the ledger. No Solana transactions were sent.',
                     imported_count:2,amount_usdc:'5'}:
+                url==='/api/admin/record_external_withdrawal'?{
+                    success:true,recorded:true,state:'COMPLETED',amount:'5.000749',available_usdc:'4.999251',
+                    tx_signature:options.body?JSON.parse(options.body).signature:'x'.repeat(88),
+                    message:'Recorded an already finalized transfer. No new Solana transaction was sent.'}:
+                url==='/api/admin/balance_check'?{
+                    success:true,read_only:true,assets:{USDC:{wallet:'25.036356',ledger:'25.036256',difference:'0.0001'},
+                        SOL:{wallet:'0.117571682',ledger:'0.103458998',difference:'0.014112684'}}}:
                 url==='/api/withdraw/code'?{success:true,expires_in:300}:
                 url==='/api/withdraw'?{success:true,state:'SUBMITTED',tx_signature:'1'.repeat(88)}:
                 {success:true,user_balance:7,sol_balance:1,withdrawable:7,
@@ -158,11 +172,31 @@ class AccountBrowserTests(unittest.TestCase):
         </script>"""
         page=page.replace("</head>",stub+"</head>")
         self.run_page(page,"""
+            await refresh();
             const address='ETX5mgkeGphNzucEKKM1NKvLQFKr5wdbjJt4J7kVmS';
             document.getElementById('withdraw-address').value=address;
             document.getElementById('withdraw-amount').value='5.000749';
             await requestWithdrawalCode();
+            const recovery=document.getElementById('wallet-external-reconcile');
+            assert(recovery.open,'an owner balance-coverage block opens the TX verification form');
+            assert(document.getElementById('withdraw-code-status').textContent.includes('No Telegram code was sent'),
+                'the blocked request clearly says no code or transfer was sent');
+            assert(!window.requests.some(r=>r.url==='/api/withdraw'),'the blocked code request never submits a withdrawal');
+            document.getElementById('wallet-external-transfer-signature').value='5ZFcewhLpwFiS3VXCcNKkBereHczY5B9fsKSqospYcfNu1FzXskzfoB5i3Bq23ecSVypc9KgP2qRyQfqSbP82QZx';
+            document.getElementById('wallet-external-transfer-recipient').value=address;
+            document.getElementById('wallet-external-transfer-confirm').checked=true;
+            await recordExternalTransfer('wallet-external-transfer');
+            const reconciliation=window.requests.find(r=>r.url==='/api/admin/record_external_withdrawal');
+            assert(reconciliation.body.signature.startsWith('5ZFcewhL')&&
+                reconciliation.body.recipient_address===address&&reconciliation.body.confirm===true,
+                'wallet recovery submits the exact signature, recipient and explicit confirmation');
+            assert(document.getElementById('wallet-external-transfer-result').textContent.includes('No new Solana transaction'),
+                'verified recovery confirms it did not send another transaction');
             const codeRequest=window.requests.find(r=>r.url==='/api/withdraw/code');
+            await requestWithdrawalCode();
+            const successfulCodeRequest=window.requests.filter(r=>r.url==='/api/withdraw/code')[1];
+            assert(successfulCodeRequest.body.recipient_address===address&&successfulCodeRequest.body.amount==='5.000749',
+                'after reconciliation, the new Telegram code remains bound to the exact recipient and amount');
             assert(codeRequest.body.recipient_address===address&&codeRequest.body.amount==='5.000749',
                 'code request is bound to exact recipient and amount');
             const codeInput=document.getElementById('withdraw-code');
@@ -182,6 +216,21 @@ class AccountBrowserTests(unittest.TestCase):
                 'confirmed withdrawal exposes a direct Solscan transaction link');
             assert(document.getElementById('btn-check-withdrawal').hidden,
                 'completed withdrawal does not show a pending status-check action');
+            txLink.dataset.state='UNKNOWN';
+            txLink.hidden=false;
+            document.getElementById('btn-check-withdrawal').hidden=false;
+            status.hidden=false;
+            status.textContent='The network result is unclear. Do not submit this withdrawal again.';
+            clearWithdrawalCode();
+            assert(!txLink.hidden&&!document.getElementById('btn-check-withdrawal').hidden&&
+                status.textContent.includes('Do not submit'),
+                'editing details never hides a pending transaction or its no-resend warning');
+            txLink.dataset.state='COMPLETED';
+            document.getElementById('withdraw-address').value='57S7TryAMhxRq5sMSyZxTkyCmzT8tPFKfXjzZwmv5';
+            clearWithdrawalCode();
+            assert(txLink.hidden&&document.getElementById('btn-check-withdrawal').hidden,
+                'changing details hides an old terminal Solscan link instead of presenting it as current');
+            assert(codeInput.value==='', 'changing transfer details clears an old Telegram code');
             assert(document.getElementById('chain-withdraw-balances').textContent.includes('Max withdrawal:'),
                 'wallet shows the capped withdrawal amount: '+
                 document.getElementById('chain-withdraw-balances').textContent+
