@@ -65,40 +65,19 @@ class WebBrowserTests(unittest.TestCase):
             assert(sol.textContent==='+0.002000000 SOL','positive SOL formatting');
         """)
 
-    def test_pending_operation_recovery_opens_touchable_confirmation(self):
+    def test_pending_operation_recovery_is_automatic_and_operation_specific(self):
         page=self.page("""<script>
-        window.pendingRecoverySignature='fixture-signature';
-        window.pendingRecoveryKind='BUY';
         window.confirm=()=>{throw Error('Native confirm should not be used in Telegram iOS');};
         window.fetch=async()=>new Response(JSON.stringify({success:false,message:'fixture'}));
         </script>""")
-        self.assertIn("['BUY', 'SELL', 'WITHDRAW', 'PARTNER_PAYOUT'].includes(op.kind)", page)
+        self.assertNotIn('recover-pending-operation', page)
+        self.assertNotIn('recovery-confirm-modal', page)
+        self.assertNotIn('/api/recover_expired_operation', page)
         self.assertIn("Amount: ", page)
         self.assertNotIn("Reserved: ", page)
-        browser.AccountBrowserTests().run_page(page,"""
-            document.getElementById('app').style.display='block';
-            document.getElementById('nav').style.display='flex';
-            document.getElementById('web-login').hidden=true;
-            document.getElementById('splash-screen').style.display='none';
-            const button=document.getElementById('recover-pending-operation');
-            button.style.display='block';
-            assert(button.textContent.includes('Verify expired operation'),'generic recovery control is available');
-            const box=button.getBoundingClientRect();
-            assert(document.elementFromPoint(box.x+box.width/2,box.y+box.height/2)===button,
-                'recovery button is the topmost touch target');
-            button.click();
-            const modal=document.getElementById('recovery-confirm-modal');
-            assert(modal.style.display==='flex','tap opens in-page confirmation without native dialog');
-            const confirm=document.querySelector('#recovery-confirm-modal button:last-child');
-            assert(document.querySelector('#recovery-confirm-modal p').textContent.includes('BUY or WITHDRAW returns the amount to available balance'),
-                'confirmation explains the verified recovery outcome');
-            assert(!/\breserved\b/i.test(document.querySelector('#recovery-confirm-modal p').textContent),
-                'internal ledger terminology is not shown in the confirmation');
-            const confirmBox=confirm.getBoundingClientRect();
-            assert(document.elementFromPoint(confirmBox.x+confirmBox.width/2,confirmBox.y+confirmBox.height/2)===confirm,
-                'confirm button is the topmost touch target');
-            assert(modal.getAttribute('aria-modal')==='true','confirmation is announced as modal');
-        """)
+        self.assertIn("Do not sell this position again.", page)
+        self.assertIn("The server checks the result automatically.", page)
+        self.assertNotIn("Do not submit another withdrawal until this status is resolved.", page)
 
     def test_signin_two_click_native_gesture_with_server_cookie_not_telegram_header(self):
         page=self.page("""<script>

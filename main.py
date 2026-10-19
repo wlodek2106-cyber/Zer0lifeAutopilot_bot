@@ -1649,7 +1649,6 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div style="color:#4ade80; font-size:13px; font-weight:800;">Your account · USDC / SOL</div>
                 <div id="wallet-runtime-status" style="color:#cbd5e1; font-size:11px; margin-top:4px;">Personal funds. Trading carries risk.</div>
                 <div id="account-pending-operation-details" role="status" style="display:none;color:#cbd5e1;font-size:11px;margin-top:8px;overflow-wrap:anywhere;white-space:pre-wrap;"></div>
-                <button id="recover-pending-operation" type="button" onclick="openRecoveryConfirm()" style="display:none;width:100%;margin-top:8px;padding:12px;border:1px solid #64748b;border-radius:12px;background:#172338;color:#e2e8f0;font-weight:700;touch-action:manipulation;cursor:pointer;">Verify expired operation and unlock</button>
             </div>
             <div class="control-bar">
                 <button id="btn-toggle" class="btn-ctl btn-toggle-off" onclick="toggleTrading()">
@@ -1947,17 +1946,6 @@ RAW_HTML = r"""<!DOCTYPE html>
         <button class="nav-btn" onclick="gotoTab('trading', this)"><span>↗</span>Trading</button>
         <button class="nav-btn" onclick="gotoTab('deposit', this)"><span>⇄</span>Wallet</button>
         <button class="nav-btn" onclick="gotoTab('settings', this)"><span>⚙</span>Settings</button>
-    </div>
-
-    <div id="recovery-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="recovery-confirm-title" style="display:none;position:fixed;inset:0;z-index:20000;background:rgba(0,0,0,.78);align-items:center;justify-content:center;padding:20px;box-sizing:border-box;">
-        <div style="width:100%;max-width:420px;padding:20px;border:1px solid #334155;border-radius:18px;background:#101923;color:#e2e8f0;box-shadow:0 20px 60px rgba(0,0,0,.55);">
-            <h2 id="recovery-confirm-title" style="margin:0 0 12px;font-size:18px;">Verify the pending operation</h2>
-            <p style="font-size:14px;line-height:1.5;color:#cbd5e1;">This performs read-only Solana checks. Only after the network confirms the signature is absent and the transaction has expired: a BUY or WITHDRAW returns the amount to available balance, or a SELL restores the asset to its open position. Both trading modes switch OFF and the audit is preserved. This check never sends or repeats a transfer. If evidence is incomplete, the operation stays pending and the amount remains unavailable.</p>
-            <div style="display:flex;gap:10px;margin-top:18px;">
-                <button type="button" onclick="closeRecoveryConfirm()" style="flex:1;min-height:46px;border:1px solid #475569;border-radius:12px;background:#172338;color:#e2e8f0;font-weight:700;touch-action:manipulation;">Cancel</button>
-                <button type="button" onclick="confirmRecoveryAction()" style="flex:1;min-height:46px;border:1px solid #34d399;border-radius:12px;background:#34d399;color:#052e20;font-weight:800;touch-action:manipulation;">Verify and unlock</button>
-            </div>
-        </div>
     </div>
 
     <script>
@@ -2873,47 +2861,6 @@ RAW_HTML = r"""<!DOCTYPE html>
             }, 500);
         }
 
-        function openRecoveryConfirm() {
-            if (!window.pendingRecoverySignature) return;
-            const modal = document.getElementById('recovery-confirm-modal');
-            if (modal) modal.style.display = 'flex';
-        }
-
-        function closeRecoveryConfirm() {
-            const modal = document.getElementById('recovery-confirm-modal');
-            if (modal) modal.style.display = 'none';
-        }
-
-        function confirmRecoveryAction() {
-            closeRecoveryConfirm();
-            recoverPendingOperation();
-        }
-
-        async function recoverPendingOperation() {
-            const signature = window.pendingRecoverySignature;
-            if (!signature) return;
-            const button = document.getElementById('recover-pending-operation');
-            if (button) button.disabled = true;
-            try {
-                const response = await apiFetch('/api/recover_expired_operation', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({signature, confirm_expired: true})
-                });
-                const result = await response.json();
-                if (!response.ok || !result.success) throw new Error(result.message || 'Recovery proof failed; operation was not changed.');
-                if (tg?.showAlert) await new Promise(resolve => tg.showAlert(result.message, resolve));
-                else window.alert(result.message);
-                await refresh();
-            } catch (error) {
-                const message = error.message || 'Recovery proof failed; operation was not changed.';
-                if (tg?.showAlert) await new Promise(resolve => tg.showAlert(message, resolve));
-                else window.alert(message);
-            } finally {
-                if (button) button.disabled = false;
-            }
-        }
-
         function toggleDepositDetails() {
             document.getElementById('deposit-details').style.display = 'block';
             document.getElementById('btn-show-addr').style.display = 'none';
@@ -3003,7 +2950,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                         !flags.wallet_configured ? 'Server key does not match the wallet address.' :
                         !flags.persistent_storage ? 'Operations blocked: Persistent Disk /var/data required.' :
                         !flags.finance_allowed ? 'Public deposits are not open yet.' :
-                        s.operation_pending ? 'A transfer is awaiting confirmation. Do not submit it again.' :
+                        s.operation_pending ? 'An operation is awaiting Solana confirmation. The server checks it automatically; do not repeat it.' :
                         'Personal funds. Trading carries risk.';
                     const pendingDetails = document.getElementById('account-pending-operation-details');
                     const pendingOperations = s.pending_operations || [];
@@ -3014,26 +2961,19 @@ RAW_HTML = r"""<!DOCTYPE html>
                                 const seconds = Number(op.created_at);
                                 const created = Number.isFinite(seconds) && seconds > 0
                                     ? new Date(seconds * 1000).toLocaleString() : 'unknown';
+                                const instruction = op.kind === 'SELL' ? 'Do not sell this position again.' :
+                                    op.kind === 'WITHDRAW' ? 'Do not submit this withdrawal again.' :
+                                    op.kind === 'BUY' ? 'Do not repeat this purchase.' : 'Do not repeat this operation.';
                                 return 'Operation: ' + (op.kind || 'unknown') + ' / ' + (op.state || 'unknown')
                                     + '\nAmount: ' + (op.reserved_amount || 'unknown') + ' ' + (op.reserved_asset || '')
                                     + '\nCreated: ' + created
-                                    + '\nSignature: ' + (op.signature || 'not recorded');
-                            }).join('\n\n') + '\n\nDo not submit another withdrawal until this status is resolved.';
+                                    + '\nSignature: ' + (op.signature || 'not recorded')
+                                    + '\n' + instruction + ' The server checks the result automatically.';
+                            }).join('\n\n');
                         } else {
                             pendingDetails.textContent = '';
                             pendingDetails.style.display = 'none';
                         }
-                    }
-                    const recoverButton = document.getElementById('recover-pending-operation');
-                    const pendingRecovery = pendingOperations.find(op =>
-                        ['BUY', 'SELL', 'WITHDRAW', 'PARTNER_PAYOUT'].includes(op.kind) && ['PREPARED', 'SUBMITTED', 'UNKNOWN'].includes(op.state) && op.signature);
-                    window.pendingRecoverySignature = pendingRecovery ? pendingRecovery.signature : '';
-                    window.pendingRecoveryKind = pendingRecovery ? pendingRecovery.kind : '';
-                    if (recoverButton) {
-                        recoverButton.style.display = pendingRecovery ? 'block' : 'none';
-                        recoverButton.textContent = pendingRecovery
-                            ? 'Verify expired ' + pendingRecovery.kind + ' and unlock'
-                            : 'Verify expired operation and unlock';
                     }
                     document.getElementById('admin-custody-panel').style.display = s.is_admin ? 'block' : 'none';
                     if(s.is_admin)renderFeeStatus(s.operator_fees);

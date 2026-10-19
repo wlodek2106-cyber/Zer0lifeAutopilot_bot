@@ -966,10 +966,12 @@ class CustodyLedger:
                     (signature,operation_id,actor_id,state_before,evidence) VALUES(?,?,?,?,?)""",
                     (row["signature"], oid, recovery_audit["actor_id"], row["state"],
                      json.dumps(recovery_audit["evidence"])))
-                # Pause, release, audit and enqueue atomically. A Telegram failure
-                # must never roll back recovery or permit trading to resume.
-                db.execute("UPDATE custody_users SET trading=0,sniper_trading=0,close_requested=0 WHERE uid=?",
-                           (row["uid"],))
+                # Pause automated modes while preserving an explicitly requested
+                # close-all queue after a safely expired SELL. A Telegram failure
+                # must never roll back recovery or permit autonomous trading.
+                db.execute("""UPDATE custody_users SET trading=0,sniper_trading=0,
+                    close_requested=CASE WHEN ?='SELL' THEN close_requested ELSE 0 END
+                    WHERE uid=?""", (row["kind"], row["uid"]))
                 db.execute("""INSERT INTO custody_recovery_notifications(operation_id,uid,payload)
                     VALUES(?,?,?)""", (oid, row["uid"], json.dumps({
                         "kind": row["kind"], "asset": row["asset"], "raw": row["raw"],
@@ -1116,7 +1118,9 @@ class CustodyLedger:
 
     def restart_pause(self):
         with self.db() as db:
-            db.execute("UPDATE custody_users SET trading=0,sniper_trading=0,close_requested=0")
+            # Automated modes pause on restart. An explicit close-all request is
+            # a queued user action and remains until all positions are closed.
+            db.execute("UPDATE custody_users SET trading=0,sniper_trading=0")
             # RESERVED has never been broadcast, by contract; PREPARED is ambiguous.
             unsent = [r[0] for r in db.execute("SELECT id FROM custody_operations WHERE state='RESERVED'")]
         for oid in unsent:

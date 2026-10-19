@@ -359,9 +359,11 @@ class LedgerTests(unittest.TestCase):
 
     def test_restart_pauses_and_refunds_unsent_not_prepared(self):
         self.ledger.settings(101, enabled=True)
+        self.ledger.settings(101, close=True)
         op = self.reserve()
         self.ledger.restart_pause()
         self.assertFalse(self.ledger.settings(101)["trading"])
+        self.assertTrue(self.ledger.settings(101)["close_requested"])
         self.assertEqual(self.ledger.operation(op["id"])["state"], "FAILED")
         op2 = self.reserve()
         self.ledger.prepared(op2["id"], "signature", "wire")
@@ -749,6 +751,31 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.ledger.audit())
         self.assertNotIn("sendTransaction", [c.args[1] for c in self.service.rpc.call_args_list])
 
+    async def test_worker_recovers_expired_sell_without_resend_and_keeps_close_queue(self):
+        sell, signature, position_id = self.pending_sell()
+        with self.ledger.db() as db:
+            db.execute("UPDATE custody_operations SET created_at=created_at-300 WHERE id=?", (sell["id"],))
+        self.service.rpc = AsyncMock(side_effect=lambda session, method, params=None:
+            legacy.GENESIS if method == "getGenesisHash" else {"value": [None]})
+        self.ledger.settings(101, enabled=True, sniper_enabled=True)
+        self.ledger.settings(101, close=True)
+        with patch.object(runtime, "prove_retirement", AsyncMock(return_value={
+                "signature": signature,
+                "expiry_proof": "signed_non_nonce_blockhash_finalized_expired"})) as proof:
+            await self.service.reconcile(None)
+            await self.service.reconcile(None)
+        proof.assert_awaited_once()
+        self.assertTrue(proof.call_args.args[2]["signed_wire"])
+        self.assertEqual(self.ledger.operation(sell["id"])["state"], "FAILED")
+        position = next(p for p in self.ledger.positions(101) if p["id"] == position_id)
+        self.assertEqual(position["state"], "OPEN")
+        settings = self.ledger.settings(101)
+        self.assertFalse(settings["trading"])
+        self.assertFalse(settings["sniper_trading"])
+        self.assertTrue(settings["close_requested"])
+        self.assertNotIn("sendTransaction", [call.args[1] for call in self.service.rpc.call_args_list])
+        self.assertTrue(self.ledger.audit())
+
     async def test_worker_recovers_expired_withdraw_without_resending(self):
         operation, signature = self.pending_withdraw()
         with self.ledger.db() as db:
@@ -939,6 +966,9 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_expired_pending_sell_is_audited_and_restored_only_after_proof(self):
         sell, signature, position_id = self.pending_sell()
+        self.ledger.settings(101, enabled=True)
+        self.ledger.settings(101, sniper_enabled=True)
+        self.ledger.settings(101, close=True)
         with patch.object(runtime, "prove_retirement", AsyncMock(return_value={
                 "signature": signature, "expiry_proof": "isBlockhashValid_false",
                 "outcome": "UNKNOWN", "refund": False})):
@@ -950,6 +980,10 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         position = next(p for p in self.ledger.positions(101) if p["id"] == position_id)
         self.assertEqual(position["state"], "OPEN")
         self.assertEqual(position["raw"], 1_000_000)
+        settings = self.ledger.settings(101)
+        self.assertFalse(settings["trading"])
+        self.assertFalse(settings["sniper_trading"])
+        self.assertTrue(settings["close_requested"])
         with self.ledger.db() as db:
             audit = db.execute("SELECT actor_id,state_before,evidence FROM custody_operation_recovery_audit WHERE signature=?",
                                (signature,)).fetchone()
