@@ -790,6 +790,9 @@ RAW_HTML = r"""<!DOCTYPE html>
         #app .btn-copy { background:#172334;border:1px solid #2a3a50;border-radius:13px; padding:14px;font-size:13px; }
         #app .btn-green-main { background:#3bd19a;color:#061b12;font-weight:750;border-radius:14px; }
         #app .btn-sell-all { background:transparent;color:#e49b9b;border:1px solid #694343;border-radius:12px;font-size:12px; }
+        #app .position-close { width:100%; margin-top:10px; padding:11px 14px; border-radius:11px;
+            border:1px solid #684146; background:#281a1c; color:#f1b3b8; font-size:12px; font-weight:700; cursor:pointer; }
+        #app .position-close:disabled { opacity:.65; cursor:wait; }
         .bottom-nav { box-sizing:border-box;background:#0c1420;border-color:#243247;gap:6px;padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px)); }
         .nav-btn { flex:1;padding:10px 3px;border-radius:12px;font-size:11px; }
         .nav-btn span { display:block;margin-bottom:4px;font-size:19px; }
@@ -2567,6 +2570,33 @@ RAW_HTML = r"""<!DOCTYPE html>
             } catch (e) { alert("Connection error."); }
         }
 
+        async function closePosition(position, button) {
+            if (!position || position.status !== 'OPEN' || !position.position_id) {
+                alert('This position is no longer open. Refresh and check its status.');
+                return;
+            }
+            const quantity=Number(position.amount_tokens).toLocaleString(undefined,{maximumFractionDigits:8});
+            const symbol=position.symbol||position.token_symbol||'token';
+            const funding=position.funding_currency||'account currency';
+            if (!confirm('Sell only this position: '+quantity+' '+symbol+' for '+funding+
+                '? This sends a real Solana transaction; the final amount can vary with price and slippage.')) return;
+            button.disabled=true;
+            button.textContent='Submitting sell…';
+            try {
+                const response=await apiFetch('/api/close_position',{
+                    method:'POST',headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({position_id:position.position_id,confirm:true})
+                });
+                const data=await response.json();
+                if(!response.ok||!data.success)throw new Error(data.message||'Could not submit the sale.');
+                alert(data.message||'Sale submitted; waiting for Solana confirmation. Do not submit again.');
+                await refresh();
+            } catch(e) {
+                alert(e.message||'Could not submit the sale.');
+                await refresh();
+            }
+        }
+
         let withdrawalCodeBinding = '';
         let activeWithdrawalSignature = '';
         function newWithdrawalRequestId() {
@@ -3114,15 +3144,16 @@ RAW_HTML = r"""<!DOCTYPE html>
                     if (s.trades && s.trades.length > 0) {
                         document.getElementById('history-box').innerHTML = s.trades.map(t => {
                             const isClosed = t.status === 'CLOSED';
+                            const isOpen = t.status === 'OPEN';
+                            const isPending = !isClosed && !isOpen;
                             const pnlColor = Number(t.profit_units??t.profit_usdc) >= 0 ? '#4ade80' : '#f87171';
-                            const tPnlSign = Number(t.profit_units??t.profit_usdc) >= 0 ? '+' : '';
 
                             return `
                                 <div class="order-card">
                                     <div class="order-top">
                                         <div style="font-weight: 800; color: #fff; font-size: 13px;">${t.token_symbol} / ${t.funding_currency||'USDC'}</div>
                                         <div class="order-badge ${isClosed ? 'badge-closed' : 'badge-open'}">
-                                            ${isClosed ? 'CLOSED' : 'OPEN'}
+                                            ${isClosed ? 'CLOSED' : isPending ? 'SELL PENDING' : 'OPEN'}
                                         </div>
                                     </div>
                                     <div class="order-grid">
@@ -3134,16 +3165,21 @@ RAW_HTML = r"""<!DOCTYPE html>
                                     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px; padding-top: 6px; border-top: 1px solid #141b2a;">
                                         <div style="font-size: 11px; color: #64748b;">Result:</div>
                                         <div style="font-weight: 800; font-size: 13px; color: ${isClosed ? pnlColor : '#60a5fa'};">
-                                            ${isClosed ? (Number(t.profit_units??t.profit_usdc).toFixed(t.funding_currency==='SOL'?9:2)+' '+(t.funding_currency||'USDC')+' ('+t.profit_pct.toFixed(2)+'%)') : 'Open position'}
+                                            ${isClosed ? (Number(t.profit_units??t.profit_usdc).toFixed(t.funding_currency==='SOL'?9:2)+' '+(t.funding_currency||'USDC')+' ('+t.profit_pct.toFixed(2)+'%)') : isPending ? 'Sale awaiting confirmation' : 'Open position'}
                                         </div>
                                     </div>
                                     <div class="order-tx-row">
                                         ${t.buy_tx ? '<a class="tx-link" href="https://solscan.io/tx/' + t.buy_tx + '" target="_blank">↗ Buy transaction</a>' : ''}
                                         ${t.sell_tx ? '<a class="tx-link" style="color: #4ade80;" href="https://solscan.io/tx/' + t.sell_tx + '" target="_blank">↗ Sell transaction</a>' : ''}
                                     </div>
+                                    ${isOpen && t.position_id ? '<button type="button" class="position-close" data-position-id="' + t.position_id + '">Sell this position</button>' : ''}
                                 </div>
                             `;
                         }).join('');
+                        document.getElementById('history-box').querySelectorAll('.position-close').forEach(button => {
+                            const position=s.trades.find(trade=>trade.position_id===button.dataset.positionId);
+                            button.addEventListener('click',()=>closePosition(position,button));
+                        });
                     }
                 }
             } catch(e) {}
@@ -3627,6 +3663,7 @@ async def main():
     app.router.add_get('/api/admin/legacy_balances/preview', wallet_handler(runtime.preview_legacy_balances))
     app.router.add_post('/api/admin/legacy_balances/import', wallet_handler(runtime.import_legacy_balances))
     app.router.add_post('/api/close_all', wallet_handler(runtime.close_all))
+    app.router.add_post('/api/close_position', wallet_handler(runtime.close_position))
     app.router.add_post('/api/withdraw', wallet_handler(runtime.withdraw))
     app.router.add_post('/api/withdraw/code', wallet_handler(runtime.request_withdrawal_code))
     app.router.add_get('/api/security_status', api_security_status)

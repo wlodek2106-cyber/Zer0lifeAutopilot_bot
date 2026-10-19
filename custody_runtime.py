@@ -1391,6 +1391,16 @@ class CustodyRuntime(WalletRuntime):
 
     def result(self, row):
         state = row["state"]
+        kind = row.get("kind")
+        if kind == "SELL":
+            message = ("Sale confirmed on Solana." if state == "COMPLETED" else
+                "Sale failed; the position remains open." if state == "FAILED" else
+                "Sale submitted to Solana and waiting for confirmation. Do not submit it again."
+                if state == "SUBMITTED" else
+                "The sale result is unclear. We are checking it; do not submit it again.")
+            return web.json_response({"success": state != "FAILED", "state": state,
+                "operation_id": row["id"], "tx_signature": row["signature"], "message": message},
+                status=200 if state == "COMPLETED" else 409 if state == "FAILED" else 202)
         return web.json_response({"success": state != "FAILED", "state": state,
             "operation_id": row["id"], "tx_signature": row["signature"],
             "message": "Withdrawal confirmed on Solana." if state == "COMPLETED" else
@@ -1642,7 +1652,8 @@ class CustodyRuntime(WalletRuntime):
                 "partner_commission": p["partner_commission_raw"] / scale,
                 "funding_currency": "SOL" if native else "USDC", "profit_pct": profit / cost * 100,
                 "timestamp": datetime.fromtimestamp(p["created_at"], timezone.utc).isoformat(),
-                "buy_tx": p["buy_tx"], "sell_tx": p["sell_tx"], "status": p["state"]})
+                "buy_tx": p["buy_tx"], "sell_tx": p["sell_tx"], "status": p["state"],
+                "position_id": p["id"]})
         for row in operations:
             if row["kind"] == "WITHDRAW":
                 history.append({"type": "WITHDRAW", "amount": display_raw(row["raw"], 6 if row["asset"] == USDC else 9) +
@@ -1831,6 +1842,30 @@ class CustodyRuntime(WalletRuntime):
             raise WalletError("Подтвердите закрытие только своих позиций.", 400)
         self.ledger.settings(uid, enabled=False, sniper_enabled=False, close=True)
         return web.json_response({"success": True, "message": "Закрытие ваших подтверждённых позиций поставлено в очередь."})
+
+    async def close_position(self, request, session):
+        uid = self.uid(request)
+        self.admit(uid)
+        body = await request.json()
+        if body.get("confirm") is not True:
+            raise WalletError("Confirm the sale of the selected position.", 400)
+        position_id = body.get("position_id")
+        if not isinstance(position_id, str) or not position_id or len(position_id) > 128:
+            raise WalletError("Invalid position.", 400)
+        position = next((row for row in self.ledger.positions(uid)
+                         if row["id"] == position_id), None)
+        if not position:
+            raise WalletError("Open position was not found for your account.", 404)
+        if position["state"] != "OPEN":
+            raise WalletError("A sale for this position is already pending. Do not submit it again.", 409)
+        metadata = {
+            "output_asset": position["funding_asset"],
+            "symbol": position["symbol"],
+            "decimals": position["decimals"],
+            "manual_close": True,
+        }
+        return await self.trade(session, uid, position["asset"], position["funding_asset"],
+            position["raw"], "SELL", metadata, position_id=position_id, manual=True)
 
     async def scan_deposits(self, session):
         with self.ledger.db() as db:

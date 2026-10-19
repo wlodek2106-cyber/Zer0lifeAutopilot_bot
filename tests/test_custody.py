@@ -602,6 +602,17 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ledger.operation(operation["id"])["state"], "PREPARED")
         self.assertEqual(self.calls, [])
 
+    def open_position_for_close(self, uid=101):
+        invoice = self.ledger.invoice(uid, USDC, 2_000_000)
+        self.ledger.credit_deposit(invoice["id"], str(Signature.new_unique()),
+            USDC, 2_000_000, invoice["created_at"])
+        buy = self.ledger.reserve(uid, "single-close-buy-" + str(uuid.uuid4()), "BUY",
+            USDC, 1_000_000, {"output_asset": SOL, "symbol": "BOME", "decimals": 9},
+            str(self.recipient))
+        self.ledger.prepared(buy["id"], str(Signature.new_unique()), "offline-wire")
+        self.ledger.finalize(buy["id"], 1_000_000, 5000, 10_000_000)
+        return self.ledger.positions(uid, "OPEN")[0]
+
     def pending_sell(self, uid=101, signer=None):
         invoice = self.ledger.invoice(uid, USDC, 2_000_000)
         self.ledger.credit_deposit(invoice["id"], str(Signature.new_unique()),
@@ -1120,6 +1131,56 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.service.admit(202)
         response = await self.service.handle(Request(202), self.service.admin_status)
         self.assertEqual(response.status, 403)
+
+    async def test_stats_exposes_position_id_for_account_positions(self):
+        position = self.open_position_for_close()
+        response = await self.service.handle(Request(101), self.service.stats)
+        data = json.loads(response.text)
+        self.assertEqual(data["trades"][0]["status"], "OPEN")
+        self.assertEqual(data["trades"][0]["position_id"], position["id"])
+
+    async def test_single_position_close_requires_explicit_confirmation(self):
+        position = self.open_position_for_close()
+        self.service.trade = AsyncMock()
+        response = await self.service.handle(Request(101, {
+            "position_id": position["id"], "confirm": False}), self.service.close_position)
+        self.assertEqual(response.status, 400)
+        self.service.trade.assert_not_awaited()
+        self.assertEqual(self.ledger.positions(101, "OPEN")[0]["id"], position["id"])
+
+    async def test_single_position_close_targets_only_owned_position(self):
+        owned = self.open_position_for_close(101)
+        other = self.open_position_for_close(202)
+        self.service.trade = AsyncMock(return_value=web.json_response({
+            "success": True, "state": "SUBMITTED"}))
+        response = await self.service.handle(Request(101, {
+            "position_id": owned["id"], "confirm": True}), self.service.close_position)
+        self.assertEqual(response.status, 200)
+        args = self.service.trade.await_args.args
+        kwargs = self.service.trade.await_args.kwargs
+        self.assertEqual(args[1:6], (101, owned["asset"], owned["funding_asset"],
+                                    owned["raw"], "SELL"))
+        self.assertEqual(args[6]["output_asset"], owned["funding_asset"])
+        self.assertEqual(kwargs, {"position_id": owned["id"], "manual": True})
+        self.service.trade.reset_mock()
+
+        response = await self.service.handle(Request(101, {
+            "position_id": other["id"], "confirm": True}), self.service.close_position)
+        self.assertEqual(response.status, 404)
+        self.service.trade.assert_not_awaited()
+        self.assertEqual(self.ledger.positions(202, "OPEN")[0]["id"], other["id"])
+
+    async def test_single_position_close_does_not_retry_a_reserved_position(self):
+        position = self.open_position_for_close()
+        self.ledger.reserve(101, "single-close-pending", "SELL", position["asset"],
+            position["raw"], {"output_asset": position["funding_asset"]},
+            position_id=position["id"])
+        self.service.trade = AsyncMock()
+        response = await self.service.handle(Request(101, {
+            "position_id": position["id"], "confirm": True}), self.service.close_position)
+        self.assertEqual(response.status, 409)
+        self.service.trade.assert_not_awaited()
+        self.assertEqual(self.ledger.positions(101)[0]["state"], "RESERVED")
 
     async def test_toggle_and_close_only_current_user(self):
         self.service.trading_preflight = AsyncMock()

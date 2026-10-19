@@ -85,7 +85,7 @@ class WebAccess:
         # close_requested is deliberately preserved: explicit user-requested exits.
 
     def require(self, uid, kind="BUY", position_id=None, manual=False):
-        if manual and kind == "SELL" and self.ledger.settings(uid)["close_requested"]:
+        if manual and kind == "SELL":
             if any(p["id"] == position_id and p["state"] in ("OPEN", "RESERVED")
                    for p in self.ledger.positions(uid)):
                 return

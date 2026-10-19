@@ -254,6 +254,7 @@ class WebAccessTests(unittest.IsolatedAsyncioTestCase):
         self.ledger.prepared(row["id"],str(Keypair().sign_message(b"opened")),"offline")
         self.ledger.finalize(row["id"],1_000_000,5000,10_000_000)
         position = self.ledger.positions(101,"OPEN")[0]
+        self.access.require(101,"SELL",position["id"],manual=True)
         self.ledger.settings(101,close=True)
         self.access.require(101,"SELL",position["id"],manual=True)
         self.ledger.reserve(101,"close-fixture","SELL",SOL,position["raw"],
