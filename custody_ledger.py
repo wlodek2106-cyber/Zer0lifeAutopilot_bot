@@ -151,6 +151,7 @@ class CustodyLedger:
                     fee_cap INTEGER NOT NULL, recipient TEXT NOT NULL DEFAULT '',
                     position_id TEXT, metadata TEXT NOT NULL,
                     signature TEXT UNIQUE, wire TEXT, state TEXT NOT NULL,
+                    failure_reason TEXT NOT NULL DEFAULT '',
                     created_at INTEGER NOT NULL);
                 CREATE UNIQUE INDEX IF NOT EXISTS custody_one_active_operation
                     ON custody_operations((1)) WHERE state IN ('RESERVED','PREPARED','SUBMITTED','UNKNOWN');
@@ -189,6 +190,7 @@ class CustodyLedger:
                 "custody_positions": {
                     "funding_asset": "TEXT NOT NULL DEFAULT '" + USDC + "'",
                     "cost_raw": "INTEGER", "proceeds_raw": "INTEGER"},
+                "custody_operations": {"failure_reason": "TEXT NOT NULL DEFAULT ''"},
             }.items():
                 columns = {row[1] for row in db.execute("PRAGMA table_info(" + table + ")")}
                 for name, definition in additions.items():
@@ -914,7 +916,7 @@ class CustodyLedger:
             db.execute("UPDATE custody_operations SET state=? WHERE id=? AND state='PREPARED'",
                        ("SUBMITTED" if known else "UNKNOWN", oid))
 
-    def fail(self, oid, network_proven=False, fee=0, recovery_audit=None):
+    def fail(self, oid, network_proven=False, fee=0, recovery_audit=None, failure_reason=""):
         with self.db() as db:
             row = db.execute("SELECT * FROM custody_operations WHERE id=?", (oid,)).fetchone()
             if not row or row["state"] in ("FAILED", "COMPLETED"):
@@ -947,7 +949,8 @@ class CustodyLedger:
                     attempts=attempts+1,next_attempt=?,operation_id=NULL
                     WHERE operation_id=? AND state='SUBMITTED'""",
                     (int(time.time()) + 60 * (2 ** min(earning["attempts"], 6)), oid))
-            db.execute("UPDATE custody_operations SET state='FAILED' WHERE id=?", (oid,))
+            db.execute("UPDATE custody_operations SET state='FAILED',failure_reason=? WHERE id=?",
+                       (str(failure_reason or "")[:300], oid))
             if recovery_audit is not None:
                 db.execute("""CREATE TABLE IF NOT EXISTS custody_operation_recovery_audit(
                     signature TEXT PRIMARY KEY, operation_id TEXT NOT NULL,

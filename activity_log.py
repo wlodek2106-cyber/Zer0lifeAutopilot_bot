@@ -1,6 +1,7 @@
 """Bounded diagnostic history, separate from financial bookkeeping and execution."""
 import json
 import math
+import re
 import time
 from datetime import datetime, timezone
 
@@ -50,8 +51,26 @@ STATES = {
     "SUBMITTED": "submitted; waiting for finalized network confirmation",
     "UNKNOWN": "network outcome unknown; do not resend",
     "COMPLETED": "finalized on Solana",
-    "FAILED": "failed; check the operation result, not an AI decision",
+    "FAILED": "failed; see the recorded failure reason below",
 }
+
+_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b(api[_ -]?key|token|secret|password|authorization)\b\s*([=:])\s*[^\s,;]+")
+_STANDALONE_CREDENTIAL = re.compile(
+    r"(?i)^(?:secret|token|api[_-]?key|password|credential)[_:= -][a-z0-9._~+/-]{4,}$")
+_URL = re.compile(r"(?i)\b(?:https?://|www\.)\S+")
+_BEARER = re.compile(r"(?i)\bbearer\s+\S+")
+
+
+def safe_failure_reason(value):
+    """Keep useful provider/chain errors while removing credentials and URLs."""
+    text = " ".join(str(value or "").split())
+    if _STANDALONE_CREDENTIAL.fullmatch(text):
+        return "[Sensitive error text redacted]"
+    text = _BEARER.sub("Bearer [redacted]", text)
+    text = _SECRET_ASSIGNMENT.sub(r"\1\2[redacted]", text)
+    text = _URL.sub("[URL redacted]", text)
+    return text[:300]
 
 
 def report(runtime, uid):
@@ -83,7 +102,7 @@ def report(runtime, uid):
             """SELECT analysis_id,created_at,message,mode,code FROM custody_activity_events WHERE uid=?
                ORDER BY created_at DESC,rowid DESC LIMIT 50""", (uid,))]
         operations = [dict(r) for r in db.execute(
-            """SELECT kind,state,created_at,signature FROM custody_operations WHERE uid=?
+            """SELECT kind,state,created_at,signature,failure_reason FROM custody_operations WHERE uid=?
                ORDER BY created_at DESC,rowid DESC LIMIT 15""", (uid,))]
         attempted = {r[0] for r in db.execute(
             "SELECT mode FROM custody_ai_attempts WHERE uid=? AND analysis_id=?",
@@ -102,9 +121,14 @@ def report(runtime, uid):
                     f" — {decision['reason']} Decision only; not proof of execution."})
             if mode in attempted:
                 status += f" {mode.upper()}: this analysis was already claimed; it will not be resent."
-    entries += [{"created_at": op["created_at"], "category": "TRANSACTION",
-                 "message": f"{op['kind']}: {op['state']} — {STATES.get(op['state'], 'check operation status')}",
-                 "signature": op["signature"]} for op in operations]
+    for op in operations:
+        message = f"{op['kind']}: {op['state']} — {STATES.get(op['state'], 'check operation status')}"
+        if op["state"] == "FAILED":
+            reason = safe_failure_reason(op.get("failure_reason"))
+            message += (". Cause: " + reason if reason else
+                        ". Cause unavailable: this operation predates failure-detail logging.")
+        entries.append({"created_at": op["created_at"], "category": "TRANSACTION",
+                        "message": message, "signature": op["signature"]})
     entries.sort(key=lambda e: e["created_at"], reverse=True)
     entries = entries[:65]
     if not entries:

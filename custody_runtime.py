@@ -40,6 +40,18 @@ JITO_TIP_LAMPORTS = 50_000
 JUPITER_PRIORITY_FEE_LAMPORTS = 25_000
 
 
+def operation_failure_reason(exc):
+    if isinstance(exc, (WalletError, LedgerError, EntryCostError)):
+        detail = str(exc)
+    elif isinstance(exc, asyncio.TimeoutError):
+        detail = "Network request timed out."
+    elif isinstance(exc, aiohttp.ClientError):
+        detail = f"Network request failed ({type(exc).__name__})."
+    else:
+        detail = f"Execution failed ({type(exc).__name__}); detailed provider response hidden."
+    return activity_log.safe_failure_reason(detail)
+
+
 def asset_for_mint(mint):
     return SOL if mint == WRAPPED_SOL else mint
 
@@ -916,6 +928,7 @@ class CustodyRuntime(WalletRuntime):
             # The ledger atomically pauses both modes and queues an alert on recovery.
             try:
                 self.ledger.fail(row["id"], network_proven=True, fee=0,
+                    failure_reason="Recovery verified that the transaction was absent and expired.",
                     recovery_audit={"actor_id": uid, "evidence": evidence})
             except LedgerError as exc:
                 raise WalletError(str(exc), 409) from None
@@ -1028,6 +1041,7 @@ class CustodyRuntime(WalletRuntime):
                                     "timestamp": datetime.fromtimestamp(
                                         row["created_at"], timezone.utc).isoformat()})
                             self.ledger.fail(row["id"], network_proven=True, fee=0,
+                                failure_reason="Solana history verified that the transaction was absent and expired.",
                                 recovery_audit={"actor_id": row["uid"], "evidence": {
                                     **evidence, "outcome": "PROVEN_ABSENT_AND_EXPIRED",
                                     "ledger_release": True, "transaction_sent": False,
@@ -1045,7 +1059,11 @@ class CustodyRuntime(WalletRuntime):
                 fee = int(tx["meta"]["fee"])
                 if fee > row["fee_cap"]:
                     raise WalletError("Комиссия ошибочной транзакции превышает резерв.")
-                self.ledger.fail(row["id"], network_proven=True, fee=fee)
+                chain_error = json.dumps(status.get("err"), ensure_ascii=True,
+                                         separators=(",", ":"), sort_keys=True)
+                self.ledger.fail(row["id"], network_proven=True, fee=fee,
+                    failure_reason=activity_log.safe_failure_reason(
+                        "Solana finalized the transaction with an error: " + chain_error))
                 continue
             if status.get("confirmationStatus") != "finalized":
                 continue
@@ -1219,9 +1237,9 @@ class CustodyRuntime(WalletRuntime):
                     row["asset"], info["output_asset"], row["raw"], info)
             signature = str(tx.signatures[0])
             self.ledger.prepared(row["id"], signature, wire)
-        except Exception:
+        except Exception as exc:
             # Still RESERVED: no possible broadcast; safe to return its own reservation.
-            self.ledger.fail(row["id"])
+            self.ledger.fail(row["id"], failure_reason=operation_failure_reason(exc))
             raise
         try:
             if row["kind"] in ("BUY", "SELL"):
@@ -1452,8 +1470,8 @@ class CustodyRuntime(WalletRuntime):
             row = self.ledger.reserve(uid, request_id, "WITHDRAW", asset, raw, {}, str(recipient))
             try:
                 tx = await super().withdraw_transaction(session, self.ready(), token, recipient, raw, row["id"])
-            except Exception:
-                self.ledger.fail(row["id"])
+            except Exception as exc:
+                self.ledger.fail(row["id"], failure_reason=operation_failure_reason(exc))
                 raise
             return self.result(await self.send_reserved(session, tx, row, {}))
 
@@ -1586,8 +1604,8 @@ class CustodyRuntime(WalletRuntime):
             transaction = await self.build_swap_transaction(session, instructions_data, tip_account)
             if getattr(self, "web_access", None):
                 self.web_access.require(uid, kind, position_id, manual)
-        except Exception:
-            self.ledger.fail(row["id"])
+        except Exception as exc:
+            self.ledger.fail(row["id"], failure_reason=operation_failure_reason(exc))
             raise
         return await self.send_reserved(session, transaction, row, info)
 
@@ -2140,8 +2158,8 @@ class CustodyRuntime(WalletRuntime):
         except EntryCostError as exc:
             activity_log.record(self, uid, snapshot, mode, "entry_cost_skip", str(exc))
             return None
-        except Exception:
+        except Exception as exc:
             activity_log.record(self, uid, snapshot, mode, "execution_error",
-                "EXECUTION INTERRUPTED: a safety check or execution step failed. Check readiness and transaction "
-                "status below; do not resend an unknown transaction.")
+                "EXECUTION INTERRUPTED: " + operation_failure_reason(exc) +
+                ". Check the transaction status below; do not resend an unknown transaction.")
             raise

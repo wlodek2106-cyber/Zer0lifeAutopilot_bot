@@ -99,6 +99,30 @@ class LedgerTests(unittest.TestCase):
         self.ledger.prepared(op["id"], str(Signature.new_unique()), "offline-wire")
         self.ledger.finalize(op["id"], spent, fee, received)
 
+    def test_existing_operations_gain_failure_detail_column_without_losing_rows(self):
+        path = self.tmp.name + "/legacy-ledger.db"
+        db = sqlite3.connect(path)
+        db.execute("""CREATE TABLE custody_operations (
+            id TEXT PRIMARY KEY, request_key TEXT NOT NULL UNIQUE, uid INTEGER NOT NULL,
+            kind TEXT NOT NULL, asset TEXT NOT NULL, raw INTEGER NOT NULL,
+            fee_cap INTEGER NOT NULL, recipient TEXT NOT NULL DEFAULT '',
+            position_id TEXT, metadata TEXT NOT NULL, signature TEXT UNIQUE,
+            wire TEXT, state TEXT NOT NULL, created_at INTEGER NOT NULL)""")
+        db.execute("""INSERT INTO custody_operations
+            (id,request_key,uid,kind,asset,raw,fee_cap,metadata,state,created_at)
+            VALUES('old-failure','101:old',101,'SELL','mint',10,5,'{}','FAILED',1)""")
+        db.commit()
+        db.close()
+
+        upgraded = CustodyLedger(path)
+        with upgraded.db() as upgraded_db:
+            columns = {row[1] for row in upgraded_db.execute("PRAGMA table_info(custody_operations)")}
+            old_row = upgraded_db.execute(
+                "SELECT state,failure_reason FROM custody_operations WHERE id='old-failure'").fetchone()
+        self.assertIn("failure_reason", columns)
+        self.assertEqual(old_row["state"], "FAILED")
+        self.assertEqual(old_row["failure_reason"], "")
+
     def test_separate_balances_on_one_wallet(self):
         self.assertEqual(self.ledger.balance(101, USDC), 10_000_000)
         self.assertEqual(self.ledger.balance(202, USDC), 30_000_000)

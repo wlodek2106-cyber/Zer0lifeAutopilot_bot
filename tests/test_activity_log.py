@@ -225,6 +225,38 @@ class ActivityTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("COMPLETED", text)
         self.assertTrue(self.ledger.audit())
 
+    async def test_failed_sell_shows_safe_cause_and_its_own_signature(self):
+        mint = str(Keypair().pubkey())
+        buy = self.ledger.reserve(101, "diagnostic-buy", "BUY", USDC, 1_000_000,
+            {"output_asset": mint, "symbol": "WIF", "decimals": 6})
+        self.ledger.prepared(buy["id"], str(Signature.new_unique()), "offline-wire")
+        self.ledger.finalize(buy["id"], 1_000_000, 0, 2_000_000)
+        position = self.ledger.positions(101, "OPEN")[0]
+        sell = self.ledger.reserve(101, "diagnostic-sell", "SELL", mint, position["raw"],
+            {"output_asset": USDC}, position_id=position["id"])
+        signature = str(Signature.new_unique())
+        self.ledger.prepared(sell["id"], signature, "offline-wire")
+        self.ledger.fail(sell["id"], network_proven=True, fee=5_000,
+                         failure_reason="Solana instruction failed; token=SECRET https://rpc.invalid")
+
+        result = activity_log.report(self.runtime, 101)
+        transaction = next(e for e in result["entries"]
+                           if e["category"] == "TRANSACTION" and e["message"].startswith("SELL: FAILED"))
+        self.assertIn("Cause: Solana instruction failed", transaction["message"])
+        self.assertIn("[redacted]", transaction["message"])
+        self.assertNotIn("SECRET", transaction["message"])
+        self.assertNotIn("https://rpc.invalid", transaction["message"])
+        self.assertEqual(transaction["signature"], signature)
+        self.assertEqual(self.ledger.positions(101, "OPEN")[0]["state"], "OPEN")
+        self.assertTrue(self.ledger.audit())
+
+    async def test_failure_reason_sanitizer_hides_bearer_and_urls(self):
+        reason = activity_log.safe_failure_reason(
+            "Bearer super-secret api_key=abc123 at https://service.example/path")
+        self.assertNotIn("super-secret", reason)
+        self.assertNotIn("abc123", reason)
+        self.assertNotIn("https://", reason)
+
 
 @unittest.skipUnless(shutil.which("chromium"), "Chromium not installed")
 class ActivityBrowserTests(unittest.TestCase):
