@@ -99,7 +99,7 @@ class PolicyTests(unittest.TestCase):
 
     def test_sell_ownership_is_required_but_entry_limits_do_not_block_exit(self):
         position = {"id": "owned", "uid": 101, "asset": SOL, "funding_asset": USDC,
-                    "symbol": "SOL", "raw": 100}
+                    "symbol": "SOL", "raw": 100, "state": "OPEN"}
         changes = dict(kind="SELL", asset=SOL, output_asset=USDC, raw=100,
                        position_id="owned", positions=[position], settings={"trading": False},
                        universes={"main": [], "sniper": []}, balance=0)
@@ -107,6 +107,12 @@ class PolicyTests(unittest.TestCase):
         self.assertFalse(self.order(**{**changes, "uid": 202}).allowed)
         self.assertFalse(self.order(**{**changes, "raw": 99}).allowed)
         self.assertFalse(self.order(**{**changes, "position_id": "other"}).allowed)
+        reserved_position = {**position, "state": "RESERVED"}
+        self.assertFalse(self.order(**{**changes, "positions": [reserved_position]}).allowed)
+        self.assertTrue(self.order(**{**changes, "positions": [reserved_position],
+                                      "reserved": True}).allowed)
+        self.assertFalse(self.order(**{**changes, "positions": [position],
+                                       "reserved": True}).allowed)
 
     def quote_gate(self, **changes):
         values = dict(kind="BUY", value=quote(), input_mint=USDC,
@@ -159,6 +165,21 @@ class RuntimePolicyTests(unittest.IsolatedAsyncioTestCase):
                 "risk_quote": quote(), "quote_received_at": time.time()}
         row = self.ledger.reserve(101, "offline-policy-test", "BUY", USDC, 1_000_000, info)
         return row, info
+
+    async def test_sell_revalidation_accepts_only_its_reserved_position(self):
+        position = fixtures.RuntimeTests.open_position_for_close(self)
+        info = {"output_asset": position["funding_asset"], "symbol": position["symbol"],
+                "decimals": position["decimals"], "manual_close": True}
+        row = self.ledger.reserve(101, "offline-policy-sell-test", "SELL",
+            position["asset"], position["raw"], info, position_id=position["id"])
+        current = next(p for p in self.ledger.positions(101) if p["id"] == position["id"])
+        self.assertEqual(current["state"], "RESERVED")
+        # This is the same ownership and policy check run after simulation and
+        # immediately before preparing/broadcasting the signed transaction.
+        self.service.authorize_execution_order(101, position["asset"],
+            position["funding_asset"], position["raw"], "SELL", info,
+            position_id=position["id"], reserved=True)
+        self.assertEqual(self.ledger.operation(row["id"])["state"], "RESERVED")
 
     async def blocked_send(self, change):
         row, info = self.reserved_buy()

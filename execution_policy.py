@@ -108,14 +108,15 @@ def proposal(*, mode, decision, universe, created_at, original, prices, samples,
 
 
 def order(*, uid, kind, asset, output_asset, raw, metadata, position_id,
-          settings, positions, watchlist, universes, balance):
+          settings, positions, watchlist, universes, balance, reserved=False):
     """Runs before reserving and again immediately before preparing the signed wire."""
     if kind not in ("BUY", "SELL") or type(raw) is not int or raw <= 0:
         return deny("order", "BLOCKED: invalid order type or amount.")
     if kind == "SELL":
         position = next((p for p in positions if p["id"] == position_id), None)
         if (not position or position["uid"] != uid or position["asset"] != asset
-                or position["funding_asset"] != output_asset or position["raw"] != raw):
+                or position["funding_asset"] != output_asset or position["raw"] != raw
+                or position["state"] != ("RESERVED" if reserved else "OPEN")):
             return deny("ownership", "BLOCKED: sell does not match this account's owned position.")
         # Entry-efficiency/position-count filters must never prevent an exit.
         return allow()

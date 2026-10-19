@@ -1537,11 +1537,14 @@ class CustodyRuntime(WalletRuntime):
 
     def authorize_execution_order(self, uid, asset, output_asset, raw, kind, info,
                                   position_id=None, reserved=False):
+        positions = (self.ledger.positions(uid) if reserved and kind == "SELL"
+                     else self.ledger.positions(uid, "OPEN"))
         verdict = execution_policy.order(uid=uid, kind=kind, asset=asset,
             output_asset=output_asset, raw=raw, metadata=info, position_id=position_id,
-            settings=self.ledger.settings(uid), positions=self.ledger.positions(uid, "OPEN"),
+            settings=self.ledger.settings(uid), positions=positions,
             watchlist=self.watchlist, universes=self.ai_universes(),
-            balance=self.ledger.balance(uid, asset) + (raw if reserved and kind == "BUY" else 0))
+            balance=self.ledger.balance(uid, asset) + (raw if reserved and kind == "BUY" else 0),
+            reserved=reserved)
         if verdict.allowed and info.get("ai_analysis") and not execution_policy.fresh(
                 info.get("ai_created_at"), time.time(), execution_policy.DECISION_SECONDS):
             verdict = execution_policy.deny("stale", "BLOCKED: AI decision expired before execution.")
