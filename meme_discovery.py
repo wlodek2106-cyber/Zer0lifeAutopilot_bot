@@ -71,6 +71,8 @@ class MemeDiscovery:
         self.ledger, self.rpc, self.excluded = ledger, rpc, set(excluded)
         self.seeds = seeds or {}
         self.aliases = {info["mint"]: code for code, info in self.seeds.items()}
+        self.whale_priorities = {}
+        self.whale_seen = {}
         self.blocked = True
         self.lock = asyncio.Lock()
         self.report = {"source": "DexScreener profiles + meme/pump search", "complete": False,
@@ -79,6 +81,32 @@ class MemeDiscovery:
             db.execute("""CREATE TABLE IF NOT EXISTS custody_meme_assets(
                 code TEXT PRIMARY KEY, mint TEXT NOT NULL UNIQUE, decimals INTEGER NOT NULL,
                 metrics TEXT NOT NULL, checked_at INTEGER NOT NULL)""")
+
+    def queue_whale_mint(self, mint, now=None):
+        now = int(time.time() if now is None else now)
+        if not valid_mint(mint) or mint in self.excluded or mint in self.aliases:
+            return False
+        for old_mint, checked_at in list(self.whale_seen.items()):
+            if now - checked_at >= 600:
+                self.whale_seen.pop(old_mint, None)
+        last_seen = self.whale_seen.get(mint)
+        if last_seen is not None and now - last_seen < 600:
+            return False
+        self.whale_seen[mint] = now
+        self.whale_priorities[mint] = now
+        while len(self.whale_seen) > 5000:
+            self.whale_seen.pop(next(iter(self.whale_seen)))
+        while len(self.whale_priorities) > 90:
+            self.whale_priorities.pop(next(iter(self.whale_priorities)))
+        return True
+
+    def pending_whale_mints(self, now=None):
+        now = int(time.time() if now is None else now)
+        for mint, queued_at in list(self.whale_priorities.items()):
+            if now - queued_at >= 1800:
+                self.whale_priorities.pop(mint, None)
+        return [mint for mint, _ in sorted(
+            self.whale_priorities.items(), key=lambda item: item[1])[:30]]
 
     async def fetch(self, session, path):
         async with session.get("https://api.dexscreener.com" + path,
@@ -103,6 +131,7 @@ class MemeDiscovery:
 
     async def scan(self, session):
         async with self.lock:
+            whale_mints = self.pending_whale_mints()
             meta_paths = []
             try:
                 metas = await self.fetch(session, "/metas/trending/v1")
@@ -120,7 +149,7 @@ class MemeDiscovery:
                 *[self.fetch(session, "/latest/dex/search?q=" + term) for term in ("BONK", "POPCAT", "BOME")],
                 *[self.fetch(session, path) for path in meta_paths],
                 return_exceptions=True)
-            mints, failures, sources = list(self.aliases), 0, []
+            mints, failures, sources = list(dict.fromkeys([*whale_mints, *self.aliases])), 0, []
             for result in results:
                 if isinstance(result, BaseException):
                     failures += 1
@@ -184,9 +213,13 @@ class MemeDiscovery:
                     db.execute("""INSERT INTO custody_meme_assets VALUES(?,?,?,?,?)
                         ON CONFLICT(code) DO UPDATE SET metrics=excluded.metrics,checked_at=excluded.checked_at""",
                         (item["code"], item["mint"], item["decimals"], json.dumps(item), now))
+            for mint in whale_mints:
+                self.whale_priorities.pop(mint, None)
             self.report = {"source": "DexScreener profiles + meme meta feeds + bounded searches", "complete": False,
                 "checked_at": now, "scanned": len(mints), "eligible": len(accepted), "source_failures": failures,
-                "message": "Bounded Solana candidate sample, not every project or a profit forecast. Profiles alone do not establish meme status. Paid boosts are not buy signals.",
+                "whale_prioritized": len([mint for mint in whale_mints if mint in mints]),
+                "whale_candidates": sum(1 for item in accepted if item["mint"] in whale_mints),
+                "message": "Bounded Solana candidate sample, not every project or a profit forecast. Whale signals are leads only; all candidates still pass the existing screen.",
                 "candidates": accepted}
             self.blocked = False
             return self.report

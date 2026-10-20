@@ -32,6 +32,7 @@ import execution_policy
 import activity_log
 from entry_costs import EntryCostError, quote_amounts
 from meme_discovery import MemeDiscovery
+from whale_stream import HeliusWhaleStream
 
 WRAPPED_SOL = "So11111111111111111111111111111111111111112"
 JITO_BUNDLE_SEND_URL = "https://mainnet.block-engine.jito.wtf/api/v1/transactions?bundleOnly=true"
@@ -165,6 +166,9 @@ class CustodyRuntime(WalletRuntime):
         self.discovery_task = None
         self.discovery_due = 0
         self.discovery_started = 0
+        self.whale_stream = HeliusWhaleStream(
+            os.getenv("HELIUS_API_KEY", ""), self.on_whale_signal)
+        self.whale_stream_task = None
         self._jito_tip_accounts = []
         self._jito_tip_accounts_expiry = 0
         self._close_retry_after = {}
@@ -191,7 +195,19 @@ class CustodyRuntime(WalletRuntime):
         except Exception:
             self.discovery.fail()
         finally:
-            self.discovery_due = time.time() + 900
+            self.discovery_due = time.time() + (
+                60 if self.discovery.pending_whale_mints() else 900)
+
+    def on_whale_signal(self, event):
+        """Queue confirmed whale-buy mints for screening; never place an order."""
+        if not self.discovery.queue_whale_mint(event.get("mint")):
+            return False
+        now = time.time()
+        next_scan = max(now, self.discovery_started + 60)
+        if self.discovery_task and not self.discovery_task.done():
+            next_scan = max(next_scan, now + 60)
+        self.discovery_due = min(self.discovery_due or next_scan, next_scan)
+        return True
 
     def poll_discovery(self):
         if self.discovery_task and self.discovery_task.done():
@@ -265,7 +281,8 @@ class CustodyRuntime(WalletRuntime):
                 "sniper_assets": self.ai_universes()["sniper"],
                 "asset_labels": {s: info.get("label", s) + (" · "+info["mint"][:4]+"…"+info["mint"][-4:]
                                  if s.startswith("M_") else "") for s, info in self.watchlist.items()},
-                "discovery": self.discovery.report if getattr(self, "discovery", None) else None}
+                "discovery": self.discovery.report if getattr(self, "discovery", None) else None,
+                "whale_stream": self.whale_stream.snapshot() if getattr(self, "whale_stream", None) else None}
 
     async def ai_preview(self, request, session):
         uid = self.uid(request)
@@ -2162,6 +2179,10 @@ class CustodyRuntime(WalletRuntime):
     async def worker(self):
         # Settings are paused on restart. Explicit close queues run before market scans.
         while True:
+            stream = getattr(self, "whale_stream", None)
+            stream_task = getattr(self, "whale_stream_task", None)
+            if stream and stream.enabled and (stream_task is None or stream_task.done()):
+                self.whale_stream_task = asyncio.create_task(stream.run())
             try:
                 async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=35)) as session:
                     await self.worker_cycle(session)

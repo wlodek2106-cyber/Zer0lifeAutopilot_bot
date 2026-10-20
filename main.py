@@ -1698,6 +1698,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div id="discovery-status" class="section-note">Candidate scan pending.</div>
                 <button class="action-btn" id="scan-candidates" onclick="scanCandidates()">Scan candidates</button>
                 <details><summary>Candidate shortlist</summary><div id="candidate-list" class="section-note" style="white-space:pre-line">No verified shortlist yet.</div></details>
+                <details><summary>Whale buys · 1–10 SOL</summary><div id="whale-signal-status" class="section-note" style="white-space:pre-line">Checking Helius stream...</div></details>
                 <p id="sniper-pnl" class="section-note">Realized SOL PnL: loading...</p>
             </div>
 
@@ -3016,10 +3017,24 @@ RAW_HTML = r"""<!DOCTYPE html>
                     const discovery=ai.discovery||{};
                     document.getElementById('discovery-status').textContent=discovery.entry_paused?discovery.message:
                         discovery.checked_at?(discovery.eligible||0)+' screened · '+(discovery.scanned||0)+' scanned · refreshed '+new Date(discovery.checked_at*1000).toLocaleTimeString('en-GB'):discovery.message||'Candidate scan pending.';
+                    if(discovery.whale_prioritized)document.getElementById('discovery-status').textContent+=' · whale mints screened: '+discovery.whale_prioritized+' ('+(discovery.whale_candidates||0)+' eligible)';
                     document.getElementById('candidate-list').textContent=(ai.sniper_assets||[]).map(code=>{
                         const row=(discovery.candidates||[]).find(item=>item.code===code);
                         return ((ai.asset_labels||{})[code]||code)+(row?' · liquidity $'+Math.round(row.liquidity_usd).toLocaleString('en-US'):' · held asset');
                     }).join('\n')||'No verified shortlist yet.';
+                    const whale=ai.whale_stream||{};
+                    const whaleRows=(whale.recent_signals||[]).slice(0,8).map(event=>{
+                        const mint=String(event.mint||'');
+                        const shortMint=mint.length>14?mint.slice(0,6)+'…'+mint.slice(-5):mint;
+                        const sol=Number(event.sol||0);
+                        const seen=Number(event.seen_at||0);
+                        return (seen?new Date(seen*1000).toLocaleTimeString('en-GB'):'Time unavailable')
+                            +' · '+(Number.isFinite(sol)?sol.toFixed(2):'—')+' SOL · '+(event.program||'DEX')
+                            +' · '+shortMint;
+                    });
+                    document.getElementById('whale-signal-status').textContent=(whale.message||'Whale stream status unavailable.')
+                        +'\nSupported programs only; signals are screened before AI may consider a trade.'
+                        +(whaleRows.length?'\n'+whaleRows.join('\n'):'\nNo qualifying signals received yet.');
                     const sniper=s.sniper_settings||{order_sol:.005};
                     document.getElementById('sniper-order-size').textContent=sniper.order_sol+' SOL';
                     const sniperInput=document.getElementById('settings-sniper-order');

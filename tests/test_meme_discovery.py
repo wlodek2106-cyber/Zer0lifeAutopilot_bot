@@ -98,6 +98,15 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(matches),1)
         self.assertEqual(matches[0]["code"],"WIF")
 
+    async def test_whale_buy_prioritizes_a_mint_but_keeps_existing_candidate_screen(self):
+        self.assertTrue(self.discovery.queue_whale_mint(MINT))
+        self.assertFalse(self.discovery.queue_whale_mint(MINT))
+        report=await self.discovery.scan(None)
+        self.assertEqual(report["whale_prioritized"],1)
+        self.assertEqual(report["whale_candidates"],1)
+        self.assertTrue(self.discovery.entry_allowed(report["candidates"][0]["code"]))
+        self.assertEqual(self.discovery.pending_whale_mints(),[])
+
     async def test_identity_collision_does_not_rebind_an_old_mint(self):
         code="M_"+hashlib.sha256(MINT.encode()).hexdigest()[:16]
         with self.ledger.db() as db:
