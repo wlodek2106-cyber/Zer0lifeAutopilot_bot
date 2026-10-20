@@ -8,7 +8,7 @@ import random
 import time
 import uuid
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_CEILING
 
 import aiohttp
 from aiohttp import web
@@ -37,7 +37,11 @@ from whale_stream import HeliusWhaleStream
 WRAPPED_SOL = "So11111111111111111111111111111111111111112"
 JITO_BUNDLE_SEND_URL = "https://mainnet.block-engine.jito.wtf/api/v1/transactions?bundleOnly=true"
 JITO_TIP_ACCOUNTS_URL = "https://mainnet.block-engine.jito.wtf/api/v1/bundles"
-JITO_TIP_LAMPORTS = 50_000
+JITO_TIP_FLOOR_URL = "https://bundles.jito.wtf/api/v1/bundles/tip_floor"
+JITO_TIP_MIN_LAMPORTS = 50_000
+JITO_TIP_MAX_LAMPORTS = 150_000
+JITO_TIP_CACHE_SECONDS = 15
+JITO_TIP_MAX_AGE_SECONDS = 120
 JUPITER_PRIORITY_FEE_LAMPORTS = 25_000
 WHALE_AI_COOLDOWN_SECONDS = 60
 
@@ -109,10 +113,11 @@ def parse_jupiter_instruction(value):
 def operator_tip_lamports(info):
     tip = info.get("jito_tip_lamports", 0)
     route = info.get("execution_route")
-    if (type(tip) is not int or tip < 0 or tip > JITO_TIP_LAMPORTS
-            or (route == "jito_bundle_only" and tip != JITO_TIP_LAMPORTS)
+    if (type(tip) is not int or tip < 0 or tip > JITO_TIP_MAX_LAMPORTS
+            or (route == "jito_bundle_only"
+                and not JITO_TIP_MIN_LAMPORTS <= tip <= JITO_TIP_MAX_LAMPORTS)
             or (tip and route != "jito_bundle_only")):
-        raise WalletError("The recorded Jito tip does not match the approved limit.")
+        raise WalletError("The recorded Jito tip is outside the approved 50,000–150,000 lamport range.")
     return tip
 
 
@@ -1424,7 +1429,10 @@ class CustodyRuntime(WalletRuntime):
                 returned = await self.send_via_jito(session, wire, signature)
                 activity_log.record_jito_stage(self, {**row, "signature": signature},
                     "jito_submission_acknowledged",
-                    "Jito acknowledged the private submission; this is not proof of Solana inclusion.")
+                    "Jito acknowledged the private submission with a "
+                    f"{info.get('jito_tip_lamports', 0)} lamport tip "
+                    f"({info.get('jito_tip_source', 'unknown source')}); "
+                    "this is not proof of Solana inclusion.")
             else:
                 returned = await self.rpc(session, "sendTransaction", [wire, {
                     "encoding": "base64", "skipPreflight": False,
@@ -1452,6 +1460,64 @@ class CustodyRuntime(WalletRuntime):
             pass
         return self.ledger.operation(row["id"])
 
+    async def get_jito_tip_quote(self, session, *, allow_max_fallback=False):
+        now = time.monotonic()
+        cached = getattr(self, "_jito_tip_cache", None)
+        if cached and now < cached["expires_at"]:
+            return {"lamports": cached["lamports"], "source": "recent_95th_percentile"}
+        lock = getattr(self, "_jito_tip_lock", None)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._jito_tip_lock = lock
+        async with lock:
+            now = time.monotonic()
+            cached = getattr(self, "_jito_tip_cache", None)
+            if cached and now < cached["expires_at"]:
+                return {"lamports": cached["lamports"], "source": "recent_95th_percentile"}
+            try:
+                async with session.get(
+                        JITO_TIP_FLOOR_URL,
+                        timeout=aiohttp.ClientTimeout(total=5)) as response:
+                    if response.status != 200:
+                        raise WalletError(
+                            "Fresh Jito tip data is unavailable; no swap was sent.")
+                    rows = await response.json()
+                point = rows[-1] if isinstance(rows, list) and rows else None
+                if not isinstance(point, dict):
+                    raise ValueError("missing tip-floor row")
+                observed_raw = point.get("time")
+                if not isinstance(observed_raw, str):
+                    raise ValueError("missing tip-floor timestamp")
+                observed = datetime.fromisoformat(observed_raw.replace("Z", "+00:00"))
+                if observed.tzinfo is None:
+                    raise ValueError("tip-floor timestamp is not timezone-aware")
+                age = (datetime.now(timezone.utc) - observed.astimezone(timezone.utc)).total_seconds()
+                if age < -30 or age > JITO_TIP_MAX_AGE_SECONDS:
+                    raise ValueError("tip-floor data is stale")
+                p95_sol = Decimal(str(point.get("landed_tips_95th_percentile")))
+                if not p95_sol.is_finite() or p95_sol <= 0:
+                    raise ValueError("invalid tip-floor percentile")
+                p95_lamports = int(
+                    (p95_sol * Decimal(1_000_000_000)).to_integral_value(rounding=ROUND_CEILING))
+                tip = min(JITO_TIP_MAX_LAMPORTS,
+                          max(JITO_TIP_MIN_LAMPORTS, p95_lamports))
+            except WalletError:
+                if allow_max_fallback:
+                    return {"lamports": JITO_TIP_MAX_LAMPORTS,
+                            "source": "approved_max_exit_fallback"}
+                raise
+            except Exception:
+                if allow_max_fallback:
+                    return {"lamports": JITO_TIP_MAX_LAMPORTS,
+                            "source": "approved_max_exit_fallback"}
+                raise WalletError(
+                    "Fresh Jito tip data is invalid or unavailable; no swap was sent.") from None
+            self._jito_tip_cache = {
+                "lamports": tip,
+                "expires_at": now + JITO_TIP_CACHE_SECONDS,
+            }
+            return {"lamports": tip, "source": "recent_95th_percentile"}
+
     async def get_jito_tip_account(self, session):
         now = time.monotonic()
         cached = getattr(self, "_jito_tip_accounts", [])
@@ -1475,9 +1541,14 @@ class CustodyRuntime(WalletRuntime):
         self._jito_tip_accounts_expiry = now + 300
         return random.choice(accounts)
 
-    async def build_swap_transaction(self, session, instructions_data, tip_account):
+    async def build_swap_transaction(self, session, instructions_data, tip_account,
+                                     tip_lamports=JITO_TIP_MIN_LAMPORTS):
         if not isinstance(instructions_data, dict):
             raise WalletError("Jupiter returned an incomplete set of swap instructions.")
+        operator_tip_lamports({
+            "execution_route": "jito_bundle_only",
+            "jito_tip_lamports": tip_lamports,
+        })
         instructions = []
         for name in ("computeBudgetInstructions", "setupInstructions"):
             group = instructions_data.get(name, [])
@@ -1508,7 +1579,7 @@ class CustodyRuntime(WalletRuntime):
             instructions.append(transfer(TransferParams(
                 from_pubkey=Pubkey.from_string(self.wallet),
                 to_pubkey=tip_pubkey,
-                lamports=JITO_TIP_LAMPORTS,
+                lamports=tip_lamports,
             )))
         except Exception as exc:
             raise WalletError("Could not validate the Jito tip account.") from exc
@@ -1762,9 +1833,21 @@ class CustodyRuntime(WalletRuntime):
             raise WalletError("Ожидается подтверждение предыдущей операции.", 409)
         await self.solvent(session)
         self.authorize_execution_order(uid, asset, output_asset, raw, kind, metadata, position_id)
+        try:
+            tip_quote = await self.get_jito_tip_quote(
+                session, allow_max_fallback=kind == "SELL")
+        except WalletError:
+            reason = ("BLOCKED: fresh Jito tip statistics unavailable; no new BUY was sent."
+                      if kind == "BUY" else
+                      "BLOCKED: Jito tip statistics unavailable; SELL was not sent.")
+            self.record_execution_check(uid, execution_policy.deny(
+                "jito_tip_stats", reason), "tip_quote", kind, metadata.get("symbol", ""))
+            raise
+        tip_lamports = tip_quote["lamports"]
         metadata = {**metadata, "execution_policy_version": execution_policy.VERSION,
                     "execution_route": "jito_bundle_only",
-                    "jito_tip_lamports": JITO_TIP_LAMPORTS}
+                    "jito_tip_lamports": tip_lamports,
+                    "jito_tip_source": tip_quote["source"]}
         row = self.ledger.reserve(uid, str(uuid.uuid4()), kind, asset, raw, metadata, position_id=position_id)
         try:
             if await self.rpc(session, "getGenesisHash") != GENESIS:
@@ -1801,7 +1884,8 @@ class CustodyRuntime(WalletRuntime):
 
             instructions_data, tip_account = await asyncio.gather(
                 fetch_swap_instructions(), self.get_jito_tip_account(session))
-            transaction = await self.build_swap_transaction(session, instructions_data, tip_account)
+            transaction = await self.build_swap_transaction(
+                session, instructions_data, tip_account, tip_lamports)
             if getattr(self, "web_access", None):
                 self.web_access.require(uid, kind, position_id, manual)
         except Exception as exc:

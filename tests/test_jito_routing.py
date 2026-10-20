@@ -2,6 +2,7 @@ import base64
 import json
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -15,7 +16,10 @@ from solders.transaction import VersionedTransaction
 from custody_runtime import (
     CustodyRuntime,
     JITO_BUNDLE_SEND_URL,
-    JITO_TIP_LAMPORTS,
+    JITO_TIP_FLOOR_URL,
+    JITO_TIP_MIN_LAMPORTS,
+    JITO_TIP_MAX_LAMPORTS,
+    JITO_TIP_MAX_AGE_SECONDS,
     JUPITER_PRIORITY_FEE_LAMPORTS,
     SOL,
     USDC,
@@ -28,7 +32,7 @@ from custody_runtime import (
 class FakeResponse:
     def __init__(self, status=200, payload=None):
         self.status = status
-        self.payload = payload or {}
+        self.payload = {} if payload is None else payload
 
     async def __aenter__(self):
         return self
@@ -49,6 +53,10 @@ class FakeSession:
         self.calls.append((url, kwargs))
         return self.response
 
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return self.response
+
 
 class JitoRoutingTests(unittest.IsolatedAsyncioTestCase):
     def test_jupiter_request_keeps_priority_fee_and_dynamic_compute(self):
@@ -64,24 +72,69 @@ class JitoRoutingTests(unittest.IsolatedAsyncioTestCase):
     def test_tip_is_removed_from_sol_trade_amount_and_charged_to_reserve(self):
         metadata = {
             "execution_route": "jito_bundle_only",
-            "jito_tip_lamports": JITO_TIP_LAMPORTS,
+            "jito_tip_lamports": JITO_TIP_MIN_LAMPORTS,
         }
         spent, received = adjust_swap_amounts_for_operator_tip(
-            1_000_000 + JITO_TIP_LAMPORTS, 0, SOL, "token-mint", metadata)
+            1_000_000 + JITO_TIP_MIN_LAMPORTS, 0, SOL, "token-mint", metadata)
         self.assertEqual((spent, received), (1_000_000, 0))
 
         spent, received = adjust_swap_amounts_for_operator_tip(
-            0, 2_000_000 - JITO_TIP_LAMPORTS, "token-mint", SOL, metadata)
+            0, 2_000_000 - JITO_TIP_MIN_LAMPORTS, "token-mint", SOL, metadata)
         self.assertEqual((spent, received), (0, 2_000_000))
 
     def test_tip_metadata_cannot_exceed_or_bypass_approved_cap(self):
         for metadata in (
-            {"execution_route": "jito_bundle_only", "jito_tip_lamports": JITO_TIP_LAMPORTS + 1},
-            {"jito_tip_lamports": JITO_TIP_LAMPORTS},
+            {"execution_route": "jito_bundle_only", "jito_tip_lamports": JITO_TIP_MAX_LAMPORTS + 1},
+            {"execution_route": "jito_bundle_only", "jito_tip_lamports": JITO_TIP_MIN_LAMPORTS - 1},
+            {"jito_tip_lamports": JITO_TIP_MIN_LAMPORTS},
             {"execution_route": "jito_bundle_only", "jito_tip_lamports": 0},
         ):
             with self.assertRaises(WalletError):
                 adjust_swap_amounts_for_operator_tip(10, 20, SOL, "token-mint", metadata)
+
+    async def test_tip_floor_uses_fresh_95th_percentile_and_clamps_to_approved_range(self):
+        runtime = object.__new__(CustodyRuntime)
+        observed = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        session = FakeSession(FakeResponse(payload=[{
+            "time": observed,
+            "landed_tips_95th_percentile": 0.0001077384,
+        }]))
+        quote = await CustodyRuntime.get_jito_tip_quote(runtime, session)
+        self.assertEqual(quote, {
+            "lamports": 107_739, "source": "recent_95th_percentile"})
+        self.assertEqual(session.calls[0][0], JITO_TIP_FLOOR_URL)
+
+        for percentile, expected in (
+            (0.00001, JITO_TIP_MIN_LAMPORTS),
+            (0.0002, JITO_TIP_MAX_LAMPORTS),
+        ):
+            runtime = object.__new__(CustodyRuntime)
+            session = FakeSession(FakeResponse(payload=[{
+                "time": observed,
+                "landed_tips_95th_percentile": percentile,
+            }]))
+            self.assertEqual(
+                (await CustodyRuntime.get_jito_tip_quote(runtime, session))["lamports"], expected)
+
+    async def test_tip_floor_rejects_stale_stats_without_fallback(self):
+        runtime = object.__new__(CustodyRuntime)
+        stale = (datetime.now(timezone.utc) - timedelta(seconds=JITO_TIP_MAX_AGE_SECONDS + 1)
+                 ).isoformat().replace("+00:00", "Z")
+        session = FakeSession(FakeResponse(payload=[{
+            "time": stale, "landed_tips_95th_percentile": 0.0001,
+        }]))
+        with self.assertRaisesRegex(WalletError, "invalid or unavailable"):
+            await CustodyRuntime.get_jito_tip_quote(runtime, session)
+
+    async def test_exit_uses_approved_maximum_if_tip_stats_are_unavailable(self):
+        runtime = object.__new__(CustodyRuntime)
+        session = FakeSession(FakeResponse(status=503))
+        quote = await CustodyRuntime.get_jito_tip_quote(
+            runtime, session, allow_max_fallback=True)
+        self.assertEqual(quote, {
+            "lamports": JITO_TIP_MAX_LAMPORTS,
+            "source": "approved_max_exit_fallback",
+        })
 
     async def test_composed_swap_puts_the_capped_tip_last(self):
         signer = Keypair()
@@ -113,7 +166,8 @@ class JitoRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tx.message.header.num_required_signatures, 1)
         tip_instruction = tx.message.instructions[-1]
         self.assertEqual(tip_instruction.data[:4], (2).to_bytes(4, "little"))
-        self.assertEqual(int.from_bytes(tip_instruction.data[4:12], "little"), JITO_TIP_LAMPORTS)
+        self.assertEqual(
+            int.from_bytes(tip_instruction.data[4:12], "little"), JITO_TIP_MIN_LAMPORTS)
 
     async def test_swap_submission_uses_jito_endpoint_and_validates_signature(self):
         expected = str(Keypair().pubkey())

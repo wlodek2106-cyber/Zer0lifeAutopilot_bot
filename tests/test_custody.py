@@ -946,7 +946,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         operation = self.ledger.reserve(101, "jito-status-observation", "BUY", USDC, 1_000_000,
             {"output_asset": runtime.WRAPPED_SOL, "symbol": "BOME", "decimals": 9,
              "execution_route": "jito_bundle_only",
-             "jito_tip_lamports": runtime.JITO_TIP_LAMPORTS})
+             "jito_tip_lamports": runtime.JITO_TIP_MIN_LAMPORTS})
         signature = str(Signature.new_unique())
         self.ledger.prepared(operation["id"], signature, "signed-wire")
         self.ledger.submitted(operation["id"], True)

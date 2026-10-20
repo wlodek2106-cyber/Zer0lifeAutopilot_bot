@@ -3,11 +3,12 @@ import json
 import time
 import unittest
 from solders.signature import Signature
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 from entry_costs import assess_entry, quote_amounts, EntryCostError
 from custody_ledger import USDC
-from custody_runtime import WRAPPED_SOL
+from custody_runtime import WRAPPED_SOL, JITO_TIP_MIN_LAMPORTS
+from wallet_runtime import WalletError
 import test_custody as fixtures
 
 JTO = "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL"
@@ -131,14 +132,40 @@ class CostRuntimeTests(unittest.IsolatedAsyncioTestCase):
         session = QuoteSession([quote(), reverse])
         self.service.build_swap_transaction = AsyncMock()
         self.service.send_via_jito = AsyncMock()
+        self.service.get_jito_tip_quote = AsyncMock(return_value={
+            "lamports": JITO_TIP_MIN_LAMPORTS,
+            "source": "recent_95th_percentile",
+        })
         with self.assertRaises(EntryCostError):
             await self.service.trade(session, 101, USDC, JTO, 30_000_000, "BUY",
                                      {"output_asset": JTO, "symbol": "JTO", "decimals": 9})
         self.assertEqual(self.ledger.balance(101, USDC), initial)
         self.assertEqual(self.ledger.pending(), [])
+        self.service.get_jito_tip_quote.assert_awaited_once()
         self.service.build_swap_transaction.assert_not_awaited()
         self.service.send_via_jito.assert_not_awaited()
         self.assertTrue(self.ledger.audit())
+
+    async def test_buy_tip_stats_failure_is_logged_before_reserving_funds(self):
+        self.service.admit = Mock()
+        self.service.reconcile = AsyncMock()
+        self.service.pending = Mock(return_value=False)
+        self.service.solvent = AsyncMock()
+        self.service.authorize_execution_order = Mock()
+        self.service.get_jito_tip_quote = AsyncMock(
+            side_effect=WalletError("Fresh Jito tip data is unavailable."))
+        self.service.record_execution_check = Mock()
+
+        with self.assertRaisesRegex(WalletError, "Fresh Jito tip data"):
+            await self.service.trade(
+                None, 101, USDC, JTO, 1_000_000, "BUY", {"symbol": "JTO"})
+
+        self.assertEqual(self.ledger.pending(), [])
+        self.service.record_execution_check.assert_called_once()
+        verdict = self.service.record_execution_check.call_args.args[1]
+        self.assertFalse(verdict.allowed)
+        self.assertEqual(verdict.code, "jito_tip_stats")
+        self.assertIn("no new BUY was sent", verdict.reason)
 
     async def test_new_pairs_in_real_core_catalog_and_not_sniper(self):
         import main
