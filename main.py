@@ -24,6 +24,7 @@ from solders.message import Message
 from solders.hash import Hash
 from solders.instruction import Instruction, AccountMeta
 from custody_runtime import CustodyRuntime
+from market_context import fetch_main_market_context
 from english_text import english_json_middleware
 from account_security import AccountSecurity
 from web_access import WebAccess
@@ -3570,7 +3571,9 @@ async def main():
     app = web.Application(middlewares=[english_json_middleware, telegram_auth_middleware])
     runtime = CustodyRuntime(DB_FILE, SOLANA_RPC, ADMIN_TELEGRAM_ID, SHARED_DEPOSIT_WALLET,
         get_signer_keypair, verify_user_pin, get_token_prices, WATCHLIST, add_log,
-        base_url=RENDER_URL, notification_token=TELEGRAM_TOKEN)
+        base_url=RENDER_URL, notification_token=TELEGRAM_TOKEN,
+        market_context_fn=lambda session: fetch_main_market_context(
+            session, WATCHLIST, [symbol for symbol in WATCHLIST if symbol != "WIF"]))
     runtime.recent_logs = lambda: RECENT_LOGS
     runtime.accounts = AccountSecurity(runtime.ledger, RENDER_URL, verify_user_pin, runtime.wallet,
         notification_token=TELEGRAM_TOKEN)

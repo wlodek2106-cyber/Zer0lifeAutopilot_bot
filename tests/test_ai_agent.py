@@ -239,6 +239,9 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.service.trade.assert_not_awaited()
 
     async def test_whale_ai_bypasses_scheduled_cache_but_respects_one_minute_quota(self):
+        self.service.market_context_fn = AsyncMock(return_value={
+            "SOL": {"change_m5_pct": 1.2}
+        })
         decisions = {
             "main": {"action": "HOLD", "symbol": None, "reason": "No clear USDC signal."},
             "sniper": {"action": "HOLD", "symbol": "WIF", "reason": "Wait for more market data."},
@@ -251,6 +254,7 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
                 await self.service.ai_snapshot(None, self.prices, whale_symbols=["WIF"])
 
         analyze.assert_awaited_once()
+        self.service.market_context_fn.assert_not_awaited()
         self.service.trade.assert_not_awaited()
 
     async def test_removed_candidate_position_can_still_exit_and_other_users_are_untouched(self):
@@ -322,12 +326,48 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
                 outer.payload = kwargs["json"]
                 return Response()
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-not-real"}):
-            await ai_decisions.analyze(Session(), {"SOL": [100]*5, "WIF": [2]*5}, self.service.ai_universes())
+            await ai_decisions.analyze(Session(), {"SOL": [100]*5, "WIF": [2]*5},
+                self.service.ai_universes(), main_context={
+                    "SOL": {"change_m5_pct": 0.8, "change_h1_pct": 2.1, "buys_h1": 12},
+                    "WIF": {"change_h1_pct": 999},
+                    "UNKNOWN": {"change_h1_pct": 500},
+                    "SOL_BAD": {"change_h1_pct": float("nan")},
+                })
         content = json.dumps(self.payload)
         self.assertNotIn(self.service.wallet, content)
         self.assertNotIn("telegram", content.lower())
         self.assertNotIn("test-key-not-real", content)
         self.assertFalse(self.payload["store"])
+        user_payload = json.loads(self.payload["messages"][1]["content"])
+        self.assertEqual(user_payload["main_dex_market_context_numeric"], {
+            "SOL": {"change_m5_pct": 0.8, "change_h1_pct": 2.1, "buys_h1": 12}
+        })
+        self.assertEqual(user_payload["main_dex_context_applies_only_to"],
+                         "main (USDC), never sniper (SOL)")
+        self.assertIn("Consider token/SOL relative changes for sniper.",
+                      self.payload["messages"][0]["content"])
+
+    async def test_ai_snapshot_fetches_and_persists_only_main_market_context(self):
+        context = {
+            "SOL": {"change_m5_pct": 0.8, "liquidity_usd": 200_000},
+            "WIF": {"change_m5_pct": 50},
+        }
+        self.service.market_context_fn = AsyncMock(return_value=context)
+        decisions = {
+            "main": {"action": "HOLD", "symbol": None, "reason": "No clear USDC signal."},
+            "sniper": {"action": "HOLD", "symbol": None, "reason": "No signal."},
+        }
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-not-real"}), patch(
+                "ai_decisions.analyze", AsyncMock(return_value=decisions)) as analyze:
+            snapshot = await self.service.ai_snapshot(None, self.prices)
+
+        self.service.market_context_fn.assert_awaited_once_with(None)
+        self.assertEqual(analyze.await_args.args[4], {
+            "SOL": {"change_m5_pct": 0.8, "liquidity_usd": 200_000},
+        })
+        self.assertEqual(snapshot["main_market_context"], {
+            "SOL": {"change_m5_pct": 0.8, "liquidity_usd": 200_000},
+        })
 
     async def test_model_failure_does_not_consume_user_funds(self):
         before = self.service.ledger.balance(101, SOL)

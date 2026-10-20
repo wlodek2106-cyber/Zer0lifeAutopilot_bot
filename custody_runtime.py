@@ -144,9 +144,10 @@ def memo_invoice(tx):
 
 
 class CustodyRuntime(WalletRuntime):
-    def __init__(self, *args, base_url, notification_token="", **kwargs):
+    def __init__(self, *args, base_url, notification_token="", market_context_fn=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.notification_token = notification_token
+        self.market_context_fn = market_context_fn
         self._notification_lock = asyncio.Lock()
         self.legacy_runtime = WalletRuntime(*args, **kwargs)
         self.ledger = CustodyLedger(self.db_file)
@@ -305,11 +306,22 @@ class CustodyRuntime(WalletRuntime):
                 "liquidity_usd", "volume_24h_usd", "transactions_24h", "age_hours",
                 "change_m5_pct", "change_h1_pct") if key in row}
                 for symbol, row in screening_rows.items()}
+            main_context = {}
+            if self.market_context_fn and not whale_triggered:
+                try:
+                    raw_context = await self.market_context_fn(session)
+                    if isinstance(raw_context, dict):
+                        main_context = {
+                            symbol: metrics for symbol, metrics in raw_context.items()
+                            if symbol in universes["main"] and isinstance(metrics, dict)
+                        }
+                except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+                    main_context = {}
             if whale_triggered and any(symbol not in market for symbol in whale_symbols):
                 raise WalletError("Whale candidate has no fresh market price; AI analysis was not sent.", 409)
             try:
                 aid = self.ledger.ai_allow_call(min_interval, config["max_calls_per_day"])
-                decisions = await ai_decisions.analyze(session, market, universes, screening)
+                decisions = await ai_decisions.analyze(session, market, universes, screening, main_context)
             except LedgerError:
                 raise WalletError("AI analysis request limit or cooldown blocked this call.", 503) from None
             except ai_decisions.AIError as exc:
@@ -318,6 +330,7 @@ class CustodyRuntime(WalletRuntime):
                 raise WalletError("Нет безопасного ответа AI API. Новые входы остановлены.", 503) from None
             record = {"decisions": decisions, "universes": universes, "prices": {s: h[-1] for s, h in market.items()},
                       "samples": {s: len(h) for s, h in market.items()},
+                      "main_market_context": ai_decisions.sanitize_main_context(main_context, universes["main"]),
                       "trigger": "whale_signal" if whale_triggered else "scheduled",
                       "whale_symbols": whale_symbols if whale_triggered else []}
             self.ledger.ai_record(aid, record)

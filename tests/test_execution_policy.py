@@ -1,3 +1,4 @@
+import base64
 import time
 import unittest
 from dataclasses import FrozenInstanceError
@@ -6,7 +7,10 @@ from unittest.mock import AsyncMock
 
 import execution_policy as policy
 from custody_ledger import USDC, SOL
+from solders.hash import Hash
+from solders.message import MessageV0
 from solders.signature import Signature
+from solders.transaction import VersionedTransaction
 import test_custody as fixtures
 
 
@@ -213,13 +217,20 @@ class RuntimePolicyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_valid_reserved_buy_reaches_private_sender_exactly_once(self):
         row, info = self.reserved_buy()
-        signature = Signature.new_unique()
-        self.service.send_via_jito.return_value = str(signature)
+        tx = VersionedTransaction(
+            MessageV0.try_compile(self.signer.pubkey(), [], [], Hash.new_unique()),
+            [self.signer])
+        signature = str(tx.signatures[0])
+        self.service.refresh_swap_blockhash = AsyncMock(return_value=tx)
+        self.service.send_via_jito.return_value = signature
         result = await self.service.send_reserved(
-            None, SimpleNamespace(signatures=[signature]), row, info)
+            None, tx, row, info)
         self.assertEqual(result["state"], "SUBMITTED")
-        self.service.send_via_jito.assert_awaited_once_with(None, "offline-wire", str(signature))
-        self.assertTrue(all(call.args[1] == "getSlot" for call in self.service.rpc.await_args_list))
+        self.service.refresh_swap_blockhash.assert_awaited_once_with(None, tx)
+        self.service.send_via_jito.assert_awaited_once_with(
+            None, base64.b64encode(bytes(tx)).decode(), signature)
+        methods = [call.args[1] for call in self.service.rpc.await_args_list]
+        self.assertTrue(all(method == "getSlot" for method in methods))
         self.assertEqual(self.ledger.execution_report(101)["status"], "ALLOW")
         self.assertEqual(self.ledger.balance(101, USDC), 0)
         self.assertTrue(self.ledger.audit())

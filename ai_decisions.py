@@ -10,6 +10,20 @@ class AIError(ValueError):
     pass
 
 
+MAIN_CONTEXT_LIMITS = {
+    "change_m5_pct": (-5000, 5000),
+    "change_h1_pct": (-5000, 5000),
+    "change_h6_pct": (-5000, 5000),
+    "change_h24_pct": (-5000, 5000),
+    "liquidity_usd": (0, 1_000_000_000_000),
+    "volume_24h_usd": (0, 1_000_000_000_000),
+    "buys_m5": (0, 1_000_000_000),
+    "sells_m5": (0, 1_000_000_000),
+    "buys_h1": (0, 1_000_000_000),
+    "sells_h1": (0, 1_000_000_000),
+}
+
+
 def configuration():
     return {
         "configured": bool(os.getenv("OPENAI_API_KEY")),
@@ -17,6 +31,26 @@ def configuration():
         "interval_seconds": max(300, int(os.getenv("AI_INTERVAL_SECONDS", "900"))),
         "max_calls_per_day": max(1, min(288, int(os.getenv("AI_MAX_CALLS_PER_DAY", "96")))),
     }
+
+
+def sanitize_main_context(context, permitted_symbols):
+    if not isinstance(context, dict):
+        return {}
+    sanitized = {}
+    for symbol, metrics in context.items():
+        if symbol not in permitted_symbols or not isinstance(metrics, dict):
+            continue
+        clean_metrics = {}
+        for name, (minimum, maximum) in MAIN_CONTEXT_LIMITS.items():
+            value = metrics.get(name)
+            if type(value) not in (int, float):
+                continue
+            number = float(value)
+            if math.isfinite(number) and minimum <= number <= maximum:
+                clean_metrics[name] = int(number) if name.startswith(("buys_", "sells_")) else number
+        if clean_metrics:
+            sanitized[symbol] = clean_metrics
+    return sanitized
 
 
 def validate_decisions(value, universes):
@@ -35,7 +69,7 @@ def validate_decisions(value, universes):
     return value
 
 
-async def analyze(session, market, universes, screening=None):
+async def analyze(session, market, universes, screening=None, main_context=None):
     config = configuration()
     if not config["configured"]:
         raise AIError("Добавьте OPENAI_API_KEY в Environment сервиса Render.")
@@ -74,7 +108,10 @@ async def analyze(session, market, universes, screening=None):
                 "Only the independent risk controller may execute any decision.")},
             {"role": "user", "content": json.dumps({
                 "prices_usd_recent_samples": market, "permitted_symbols": universes,
-                "sample_interval_seconds": 20, "sniper_screening_numeric": screening or {},
+                "sample_interval_seconds": 20,
+                "main_dex_market_context_numeric": sanitize_main_context(main_context, universes["main"]),
+                "main_dex_context_applies_only_to": "main (USDC), never sniper (SOL)",
+                "sniper_screening_numeric": screening or {},
                 "main_funding": "USDC", "sniper_funding": "SOL"})},
         ],
     }
