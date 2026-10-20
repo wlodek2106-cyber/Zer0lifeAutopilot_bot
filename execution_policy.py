@@ -47,8 +47,19 @@ def positive(value):
     return (type(value) in (int, float) and math.isfinite(value) and value > 0)
 
 
+def risk_exit_reason(price, entry):
+    if not positive(price) or not positive(entry):
+        return None
+    change = price / entry - 1
+    if change >= .035:
+        return "TAKE_PROFIT"
+    if change <= -.020:
+        return "STOP_LOSS"
+    return None
+
+
 def risk_exit(price, entry):
-    return positive(price) and positive(entry) and (price / entry - 1 >= .035 or price / entry - 1 <= -.020)
+    return risk_exit_reason(price, entry) is not None
 
 
 def fresh(created_at, now, maximum):

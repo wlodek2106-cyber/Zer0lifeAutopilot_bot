@@ -1235,6 +1235,7 @@ class CustodyRuntime(WalletRuntime):
             activity_log.record_jito_stage(self, row, "jito_finalized_success",
                 "Solana finalized the swap and the ledger reconciled its actual amounts and fees.")
         await self.deliver_withdrawal_notifications(session)
+        await self.deliver_trade_notifications(session)
 
     @staticmethod
     def token_data(account):
@@ -2233,6 +2234,94 @@ class CustodyRuntime(WalletRuntime):
                 if not delivered:
                     self.log("Withdrawal notification pending; delivery will be retried.")
 
+    @staticmethod
+    def trade_notification_text(payload):
+        kind = payload.get("kind")
+        symbol = "".join(c for c in str(payload.get("symbol", "TOKEN"))
+                         if c.isalnum() or c in "-_")[:24] or "TOKEN"
+        if kind == "STOP_LOSS_FAILED":
+            signature = payload.get("signature")
+            text = (f"Zer0Life AI Trader\nStop-loss triggered for {symbol}, "
+                    "but the sale was not confirmed. The position remains open.")
+            if (isinstance(signature, str) and 64 <= len(signature) <= 100
+                    and all(c in "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+                            for c in signature)):
+                text += f"\nTransaction: https://solscan.io/tx/{signature}"
+            return text
+        funding_asset = payload.get("funding_asset")
+        funding_name = "USDC" if funding_asset == USDC else "SOL" if funding_asset == SOL else None
+        raw, decimals = payload.get("token_raw"), payload.get("token_decimals")
+        funding_raw = payload.get("funding_raw")
+        signature = payload.get("signature")
+        valid_signature = (isinstance(signature, str) and 64 <= len(signature) <= 100
+            and all(c in "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+                    for c in signature))
+        if (kind not in ("BUY", "SELL") or funding_name is None
+                or type(raw) is not int or raw <= 0
+                or type(decimals) is not int or not 0 <= decimals <= 18
+                or type(funding_raw) is not int or funding_raw <= 0
+                or not valid_signature):
+            raise WalletError("Trade notification data failed validation.")
+        token_amount = display_raw(raw, decimals)
+        funding_amount = display_raw(funding_raw, 6 if funding_asset == USDC else 9)
+        if kind == "BUY":
+            header = "Purchase confirmed on Solana."
+            details = f"Bought: {token_amount} {symbol}\nSpent: {funding_amount} {funding_name}"
+        else:
+            reason = payload.get("exit_reason")
+            if reason == "STOP_LOSS":
+                header = "Stop-loss triggered — sale confirmed on Solana."
+            elif reason == "TAKE_PROFIT":
+                header = "Take-profit reached — sale confirmed on Solana."
+            else:
+                header = "Sale confirmed on Solana."
+            details = f"Sold: {token_amount} {symbol}\nCredited: {funding_amount} {funding_name}"
+        return ("Zer0Life AI Trader\n" + header + "\n" + details
+                + f"\nTransaction: https://solscan.io/tx/{signature}")
+
+    async def deliver_trade_notifications(self, session):
+        if not self.notification_token:
+            return
+        async with self._notification_lock:
+            for event in self.ledger.trade_notifications(int(time.time())):
+                oid = event["operation_id"]
+                now = int(time.time())
+                if not self.ledger.claim_trade_notification(oid, now):
+                    continue
+                outcome, retry_after = "UNKNOWN", 60
+                error = "Delivery outcome unknown; not retried to avoid a duplicate push."
+                try:
+                    text = self.trade_notification_text(json.loads(event["payload"]))
+                    async with session.post(
+                            f"https://api.telegram.org/bot{self.notification_token}/sendMessage",
+                            json={"chat_id": event["uid"], "text": text,
+                                  "disable_web_page_preview": True},
+                            timeout=aiohttp.ClientTimeout(total=8)) as response:
+                        result = await response.json()
+                        if (response.status == 200 and result.get("ok") is True
+                                and isinstance(result.get("result"), dict)
+                                and type(result["result"].get("message_id")) is int):
+                            outcome, error = "DELIVERED", None
+                        elif response.status == 429 and result.get("ok") is False:
+                            outcome = "RETRY"
+                            error = "Telegram rate limited the notification."
+                            delay = result.get("parameters", {}).get("retry_after")
+                            if type(delay) is int and delay > 0:
+                                retry_after = min(delay, 3600)
+                        elif response.status < 500 and result.get("ok") is False:
+                            outcome = "FAILED"
+                            error = f"Telegram rejected the notification (HTTP {response.status})."
+                except WalletError:
+                    outcome, error = "FAILED", "Trade notification data failed validation."
+                except Exception:
+                    # A lost response is ambiguous: do not send another push.
+                    outcome = "UNKNOWN"
+                self.ledger.trade_notification_result(
+                    oid, int(time.time()), outcome, retry_after=retry_after, error=error)
+                if outcome in ("FAILED", "UNKNOWN"):
+                    self.log("Trade notification " + outcome.lower()
+                             + "; the confirmed trade remains recorded.")
+
     async def recovery_notification_worker(self):
         while True:
             try:
@@ -2330,12 +2419,19 @@ class CustodyRuntime(WalletRuntime):
                     self.web_access.pause_expired(uid)
                 current = self.ledger.settings(uid)
                 positions = self.ledger.positions(uid, "OPEN")
-                target = next((p for p in positions if (
-                    (current["sniper_trading"] if p["funding_asset"] == SOL else current["trading"])
-                    and self.exit_triggered(p, prices))), None)
+                target = None
+                target_reason = None
+                for position in positions:
+                    mode_enabled = (current["sniper_trading"] if position["funding_asset"] == SOL
+                                    else current["trading"])
+                    reason = self.exit_reason(position, prices) if mode_enabled else None
+                    if reason:
+                        target, target_reason = position, reason
+                        break
                 if target:
                     await self.trade(session, uid, target["asset"], target["funding_asset"],
-                        target["raw"], "SELL", {"output_asset": target["funding_asset"]},
+                        target["raw"], "SELL", {"output_asset": target["funding_asset"],
+                            "exit_reason": target_reason, "symbol": target["symbol"]},
                         target["id"], manual=False)
                 elif snapshot:
                     await self.apply_ai_decision(session, uid, current, positions, prices, snapshot)
@@ -2359,19 +2455,22 @@ class CustodyRuntime(WalletRuntime):
                 self.last_error = ""
             await asyncio.sleep(20)
 
-    def exit_triggered(self, position, prices):
+    def exit_reason(self, position, prices):
         price = prices.get(position["symbol"], 0)
         if not math.isfinite(price) or price <= 0:
-            return False
+            return None
         native = position["funding_asset"] == SOL
         if native:
             if not math.isfinite(prices.get("SOL", 0)) or prices.get("SOL", 0) <= 0:
-                return False
+                return None
             price /= prices["SOL"]
             if not math.isfinite(price) or price <= 0:
-                return False
+                return None
         entry = position["cost_raw"] / (1e9 if native else 1e6) / (position["raw"]/10**position["decimals"])
-        return execution_policy.risk_exit(price, entry)
+        return execution_policy.risk_exit_reason(price, entry)
+
+    def exit_triggered(self, position, prices):
+        return self.exit_reason(position, prices) is not None
 
     async def verify_sniper_mint(self, session, symbol):
         watch = self.watchlist[symbol]

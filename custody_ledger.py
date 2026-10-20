@@ -153,6 +153,19 @@ class CustodyLedger:
                     signature TEXT UNIQUE, wire TEXT, state TEXT NOT NULL,
                     failure_reason TEXT NOT NULL DEFAULT '',
                     created_at INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS custody_trade_notifications (
+                    operation_id TEXT PRIMARY KEY REFERENCES custody_operations(id),
+                    uid INTEGER NOT NULL REFERENCES custody_users(uid),
+                    payload TEXT NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'QUEUED'
+                        CHECK(state IN ('QUEUED','SENDING','DELIVERED','FAILED','UNKNOWN')),
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    next_attempt INTEGER NOT NULL DEFAULT 0,
+                    last_attempt_at INTEGER NOT NULL DEFAULT 0,
+                    delivered_at INTEGER,
+                    last_error TEXT);
+                CREATE INDEX IF NOT EXISTS custody_trade_notifications_queue
+                    ON custody_trade_notifications(state,next_attempt,operation_id);
                 CREATE UNIQUE INDEX IF NOT EXISTS custody_one_active_operation
                     ON custody_operations((1)) WHERE state IN ('RESERVED','PREPARED','SUBMITTED','UNKNOWN');
                 CREATE TABLE IF NOT EXISTS custody_positions (
@@ -951,6 +964,16 @@ class CustodyLedger:
                     (int(time.time()) + 60 * (2 ** min(earning["attempts"], 6)), oid))
             db.execute("UPDATE custody_operations SET state='FAILED',failure_reason=? WHERE id=?",
                        (str(failure_reason or "")[:300], oid))
+            if row["kind"] == "SELL" and recovery_audit is None:
+                info = json.loads(row["metadata"])
+                if info.get("exit_reason") == "STOP_LOSS":
+                    db.execute("""INSERT OR IGNORE INTO custody_trade_notifications
+                        (operation_id,uid,payload) VALUES(?,?,?)""",
+                        (oid, row["uid"], json.dumps({
+                            "kind": "STOP_LOSS_FAILED",
+                            "symbol": info.get("symbol", "TOKEN"),
+                            "signature": row["signature"],
+                        }, separators=(",", ":"))))
             if recovery_audit is not None:
                 db.execute("""CREATE TABLE IF NOT EXISTS custody_operation_recovery_audit(
                     signature TEXT PRIMARY KEY, operation_id TEXT NOT NULL,
@@ -1023,6 +1046,48 @@ class CustodyLedger:
                 (now if delivered else None, now + retry_after,
                  None if delivered else error, oid))
 
+    def trade_notifications(self, now):
+        with self.db() as db:
+            # A process crash during send has an ambiguous Telegram outcome. Do not
+            # resend it automatically; that could create a duplicate phone push.
+            db.execute("""UPDATE custody_trade_notifications SET state='UNKNOWN',
+                last_error='Delivery outcome unknown after interrupted send'
+                WHERE state='SENDING' AND last_attempt_at<=?""", (now - 60,))
+            return [dict(row) for row in db.execute("""
+                SELECT * FROM custody_trade_notifications
+                WHERE state='QUEUED' AND next_attempt<=?
+                ORDER BY next_attempt,operation_id LIMIT 10""", (now,))]
+
+    def claim_trade_notification(self, oid, now):
+        with self.db() as db:
+            return db.execute("""UPDATE custody_trade_notifications
+                SET state='SENDING',attempts=attempts+1,last_attempt_at=?
+                WHERE operation_id=? AND state='QUEUED' AND next_attempt<=?""",
+                (now, oid, now)).rowcount == 1
+
+    def trade_notification_result(self, oid, now, outcome, retry_after=60, error=None):
+        if outcome not in ("DELIVERED", "RETRY", "FAILED", "UNKNOWN"):
+            raise LedgerError("Invalid trade-notification outcome.")
+        with self.db() as db:
+            row = db.execute("""SELECT attempts FROM custody_trade_notifications
+                WHERE operation_id=? AND state='SENDING'""", (oid,)).fetchone()
+            if not row:
+                return
+            if outcome == "DELIVERED":
+                db.execute("""UPDATE custody_trade_notifications SET state='DELIVERED',
+                    delivered_at=?,last_error=NULL WHERE operation_id=? AND state='SENDING'""",
+                    (now, oid))
+            elif outcome == "RETRY" and row["attempts"] < 6:
+                db.execute("""UPDATE custody_trade_notifications SET state='QUEUED',
+                    next_attempt=?,last_error=? WHERE operation_id=? AND state='SENDING'""",
+                    (now + max(1, min(int(retry_after), 3600)),
+                     str(error or "Telegram temporarily rejected the message.")[:160], oid))
+            else:
+                state = "FAILED" if outcome in ("RETRY", "FAILED") else "UNKNOWN"
+                db.execute("""UPDATE custody_trade_notifications SET state=?,last_error=?
+                    WHERE operation_id=? AND state='SENDING'""",
+                    (state, str(error or "Delivery outcome is unknown.")[:160], oid))
+
     def finalize(self, oid, spent, fee, received=0):
         with self.db() as db:
             row = db.execute("SELECT * FROM custody_operations WHERE id=?", (oid,)).fetchone()
@@ -1043,6 +1108,7 @@ class CustodyLedger:
                 (account, SOL, -(row["fee_cap"] - fee)), ("treasury", SOL, row["fee_cap"] - fee)]
             if row["raw"] > spent:
                 lines += [(account, row["asset"], -(row["raw"] - spent)), (source, row["asset"], row["raw"] - spent)]
+            commission_total = 0
             if row["kind"] in ("BUY", "SELL"):
                 if received <= 0:
                     raise LedgerError("Нет подтверждённого результата swap.")
@@ -1086,6 +1152,27 @@ class CustodyLedger:
                     (operation_id,uid,payload) VALUES(?,?,?)""", (oid, row["uid"], json.dumps({
                         "asset": row["asset"], "raw": spent, "recipient": row["recipient"],
                         "signature": row["signature"]})))
+            elif row["kind"] in ("BUY", "SELL"):
+                if row["kind"] == "BUY":
+                    notification = {
+                        "kind": "BUY", "symbol": info["symbol"],
+                        "token_raw": received, "token_decimals": info["decimals"],
+                        "funding_asset": row["asset"], "funding_raw": spent,
+                        "signature": row["signature"],
+                    }
+                else:
+                    exit_reason = info.get("exit_reason")
+                    if exit_reason not in ("STOP_LOSS", "TAKE_PROFIT"):
+                        exit_reason = None
+                    notification = {
+                        "kind": "SELL", "symbol": position["symbol"],
+                        "token_raw": spent, "token_decimals": position["decimals"],
+                        "funding_asset": output, "funding_raw": received - commission_total,
+                        "exit_reason": exit_reason, "signature": row["signature"],
+                    }
+                db.execute("""INSERT OR IGNORE INTO custody_trade_notifications
+                    (operation_id,uid,payload) VALUES(?,?,?)""",
+                    (oid, row["uid"], json.dumps(notification, separators=(",", ":"))))
 
     def positions(self, uid, state=None):
         with self.db() as db:

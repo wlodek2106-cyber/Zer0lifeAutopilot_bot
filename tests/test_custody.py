@@ -337,6 +337,66 @@ class LedgerTests(unittest.TestCase):
             self.ledger.finalize(op["id"], 1_000_001, 5000)
         self.assertEqual(self.ledger.operation(op["id"])["state"], "PREPARED")
 
+    def test_finalized_buy_notification_is_account_scoped_and_idempotent(self):
+        op = self.reserve(uid=101, kind="BUY", asset=USDC, raw=1_000_000,
+            info={"output_asset": "test-mint", "symbol": "BOME", "decimals": 6})
+        self.complete(op, spent=1_000_000, fee=0, received=2_500_000)
+        self.ledger.finalize(op["id"], 1_000_000, 0, 2_500_000)
+
+        events = self.ledger.trade_notifications(int(time.time()))
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["uid"], 101)
+        self.assertEqual(events[0]["operation_id"], op["id"])
+        payload = json.loads(events[0]["payload"])
+        self.assertEqual(payload["kind"], "BUY")
+        self.assertEqual(payload["symbol"], "BOME")
+        self.assertEqual(payload["token_raw"], 2_500_000)
+        self.assertEqual(payload["funding_raw"], 1_000_000)
+        self.assertTrue(self.ledger.audit())
+
+    def test_stop_loss_notification_is_created_only_for_finalized_sale(self):
+        buy = self.reserve(uid=101, kind="BUY", asset=USDC, raw=1_000_000,
+            info={"output_asset": "test-mint", "symbol": "BOME", "decimals": 6})
+        self.complete(buy, spent=1_000_000, fee=0, received=2_500_000)
+        position = self.ledger.positions(101, "OPEN")[0]
+        sale = self.reserve(uid=101, kind="SELL", asset="test-mint", raw=position["raw"],
+            info={"output_asset": USDC, "exit_reason": "STOP_LOSS"}, position=position["id"])
+        self.ledger.prepared(sale["id"], str(Signature.new_unique()), "offline-wire")
+        self.assertFalse(any(row["operation_id"] == sale["id"]
+            for row in self.ledger.trade_notifications(int(time.time()))))
+        self.ledger.finalize(sale["id"], position["raw"], 0, 900_000)
+
+        event = next(row for row in self.ledger.trade_notifications(int(time.time()))
+                     if row["operation_id"] == sale["id"])
+        payload = json.loads(event["payload"])
+        self.assertEqual(event["uid"], 101)
+        self.assertEqual(payload["kind"], "SELL")
+        self.assertEqual(payload["exit_reason"], "STOP_LOSS")
+        self.assertEqual(payload["token_raw"], position["raw"])
+        self.assertEqual(payload["funding_raw"], 900_000)
+        self.assertIn("Stop-loss triggered",
+                      runtime.CustodyRuntime.trade_notification_text(payload))
+        self.assertEqual(self.ledger.positions(101)[0]["state"], "CLOSED")
+        self.assertTrue(self.ledger.audit())
+
+    def test_failed_stop_loss_notification_says_position_remains_open(self):
+        buy = self.reserve(uid=101, kind="BUY", asset=USDC, raw=1_000_000,
+            info={"output_asset": "test-mint", "symbol": "BOME", "decimals": 6})
+        self.complete(buy, spent=1_000_000, fee=0, received=2_500_000)
+        position = self.ledger.positions(101, "OPEN")[0]
+        sale = self.reserve(uid=101, kind="SELL", asset="test-mint", raw=position["raw"],
+            info={"output_asset": USDC, "exit_reason": "STOP_LOSS", "symbol": "BOME"},
+            position=position["id"])
+        self.ledger.fail(sale["id"], failure_reason="Sale could not be prepared.")
+
+        event = next(row for row in self.ledger.trade_notifications(int(time.time()))
+                     if row["operation_id"] == sale["id"])
+        payload = json.loads(event["payload"])
+        self.assertEqual(payload["kind"], "STOP_LOSS_FAILED")
+        self.assertIn("The position remains open.",
+                      runtime.CustodyRuntime.trade_notification_text(payload))
+        self.assertEqual(self.ledger.positions(101, "OPEN")[0]["id"], position["id"])
+
     def test_request_id_scoped_to_user_and_idempotent(self):
         key = str(uuid.uuid4())
         first = self.ledger.reserve(101, key, "WITHDRAW", USDC, 1_000_000, {})
@@ -516,6 +576,78 @@ class LedgerTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_trade_pushes_are_account_scoped_and_not_resent_after_success(self):
+        self.service.notification_token = "test-notification-token"
+        for uid, symbol in ((101, "ALPHA"), (202, "BETA")):
+            invoice = self.ledger.invoice(uid, USDC, 1_000_000)
+            self.ledger.credit_deposit(invoice["id"], str(Signature.new_unique()),
+                                       USDC, 1_000_000, invoice["created_at"])
+            op = self.ledger.reserve(uid, "push-" + symbol, "BUY", USDC, 1_000_000,
+                {"output_asset": "mint-" + symbol, "symbol": symbol, "decimals": 6})
+            self.ledger.prepared(op["id"], str(Signature.new_unique()), "offline-wire")
+            self.ledger.finalize(op["id"], 1_000_000, 0, 2_000_000)
+
+        session = NotificationSession()
+        await self.service.deliver_trade_notifications(session)
+        messages = {kwargs["json"]["chat_id"]: kwargs["json"]["text"]
+                    for _, kwargs in session.calls}
+        self.assertEqual(set(messages), {101, 202})
+        self.assertIn("ALPHA", messages[101])
+        self.assertNotIn("BETA", messages[101])
+        self.assertIn("BETA", messages[202])
+        self.assertNotIn("ALPHA", messages[202])
+        self.assertIn("Purchase confirmed", messages[101])
+        self.assertIn("https://solscan.io/tx/", messages[101])
+
+        await self.service.deliver_trade_notifications(session)
+        self.assertEqual(len(session.calls), 2)
+        with self.ledger.db() as db:
+            states = [row["state"] for row in db.execute(
+                "SELECT state FROM custody_trade_notifications ORDER BY uid")]
+        self.assertEqual(states, ["DELIVERED", "DELIVERED"])
+
+    async def test_ambiguous_telegram_response_is_not_retried(self):
+        self.service.notification_token = "test-notification-token"
+        invoice = self.ledger.invoice(101, USDC, 1_000_000)
+        self.ledger.credit_deposit(invoice["id"], str(Signature.new_unique()),
+                                   USDC, 1_000_000, invoice["created_at"])
+        op = self.ledger.reserve(101, "ambiguous-push", "BUY", USDC, 1_000_000,
+            {"output_asset": "test-mint", "symbol": "TEST", "decimals": 6})
+        self.ledger.prepared(op["id"], str(Signature.new_unique()), "offline-wire")
+        self.ledger.finalize(op["id"], 1_000_000, 0, 2_000_000)
+
+        session = NotificationSession(error=asyncio.TimeoutError())
+        await self.service.deliver_trade_notifications(session)
+        await self.service.deliver_trade_notifications(session)
+        self.assertEqual(len(session.calls), 1)
+        with self.ledger.db() as db:
+            state = db.execute(
+                "SELECT state FROM custody_trade_notifications WHERE operation_id=?",
+                (op["id"],)).fetchone()[0]
+        self.assertEqual(state, "UNKNOWN")
+
+    async def test_telegram_rate_limit_retries_after_retry_after(self):
+        self.service.notification_token = "test-notification-token"
+        invoice = self.ledger.invoice(101, USDC, 1_000_000)
+        self.ledger.credit_deposit(invoice["id"], str(Signature.new_unique()),
+                                   USDC, 1_000_000, invoice["created_at"])
+        op = self.ledger.reserve(101, "rate-limited-push", "BUY", USDC, 1_000_000,
+            {"output_asset": "test-mint", "symbol": "TEST", "decimals": 6})
+        self.ledger.prepared(op["id"], str(Signature.new_unique()), "offline-wire")
+        self.ledger.finalize(op["id"], 1_000_000, 0, 2_000_000)
+
+        session = NotificationSession(status=429, result={
+            "ok": False, "parameters": {"retry_after": 120}})
+        await self.service.deliver_trade_notifications(session)
+        await self.service.deliver_trade_notifications(session)
+        self.assertEqual(len(session.calls), 1)
+        with self.ledger.db() as db:
+            event = db.execute("""SELECT state,attempts,next_attempt
+                FROM custody_trade_notifications WHERE operation_id=?""", (op["id"],)).fetchone()
+        self.assertEqual(event["state"], "QUEUED")
+        self.assertEqual(event["attempts"], 1)
+        self.assertGreater(event["next_attempt"], int(time.time()))
+
     async def test_personal_trade_size_saved_without_enabling_or_spending(self):
         self.ledger.credit_deposit(self.ledger.invoice(101, USDC, 3_000_000)["id"],
             str(Signature.new_unique()), USDC, 3_000_000, int(time.time()))

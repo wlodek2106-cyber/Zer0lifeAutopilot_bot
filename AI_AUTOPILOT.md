@@ -45,6 +45,11 @@ First analysis can HOLD while prices warm up; AI refresh interval is 15 minutes.
 
 - Strict structured response and server-side BUY/SELL/HOLD and symbol validation.
 - AI cannot choose an owner, destination, amount, API credentials or transaction.
+- Finalized BUY/SELL operations enqueue one account-scoped Telegram push containing
+  the actual fill amounts and Solscan link; automated exits are labeled stop-loss
+  or take-profit. A safely failed stop-loss close alerts that the position remains
+  open. Telegram 429 responses are retried; ambiguous delivery outcomes are not
+  resent automatically to avoid duplicate pushes.
 - Core-only signal guidance compares recent price samples, DEX momentum, relative
   strength versus SOL, and reported buy/sell pressure. It considers one strongest
   USDC candidate when momentum plus relative strength or buyer pressure align, and

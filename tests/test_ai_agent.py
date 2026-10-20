@@ -408,6 +408,8 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.service.exit_triggered(position, {"WIF": 2, "SOL": 100}))
         self.assertTrue(self.service.exit_triggered(position, {"WIF": 2.08, "SOL": 100}))
         self.assertTrue(self.service.exit_triggered(position, {"WIF": 1.94, "SOL": 100}))
+        self.assertEqual(self.service.exit_reason(position, {"WIF": 2.08, "SOL": 100}), "TAKE_PROFIT")
+        self.assertEqual(self.service.exit_reason(position, {"WIF": 1.94, "SOL": 100}), "STOP_LOSS")
 
     async def test_native_realized_profit_is_sol_not_fabricated_usdc(self):
         ledger = self.service.ledger
