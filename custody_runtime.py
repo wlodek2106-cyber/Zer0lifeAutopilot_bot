@@ -1129,6 +1129,9 @@ class CustodyRuntime(WalletRuntime):
             statuses = await self.rpc(session, "getSignatureStatuses", [[row["signature"]], {"searchTransactionHistory": True}])
             status = statuses["value"][0]
             if status is None:
+                activity_log.record_jito_stage(self, row, "jito_signature_not_seen",
+                    "No Solana signature status is visible yet; this is inconclusive. "
+                    "The reservation remains locked; do not resend.")
                 # A missing signature can be recovered only with independent
                 # rooted-expiry evidence; never resend an unresolved operation.
                 if (row["kind"] in ("BUY", "SELL", "WITHDRAW") and row.get("wire")
@@ -1151,10 +1154,17 @@ class CustodyRuntime(WalletRuntime):
                                     **evidence, "outcome": "PROVEN_ABSENT_AND_EXPIRED",
                                     "ledger_release": True, "transaction_sent": False,
                                     "automatic": True}})
+                            activity_log.record_jito_stage(self, row, "jito_absent_expired",
+                                "Independent Solana history verified the signature absent and "
+                                "the blockhash expired; the reservation was released safely.")
                         except (WalletError, LedgerError, asyncio.TimeoutError, aiohttp.ClientError):
                             # Missing proof is not a failed transaction. Retain its lock.
                             pass
                 continue
+            confirmation = status.get("confirmationStatus")
+            if confirmation in ("processed", "confirmed", "finalized"):
+                activity_log.record_jito_stage(self, row, "jito_chain_" + confirmation,
+                    f"Solana reports the swap signature at {confirmation} commitment.")
             if status.get("err") is not None:
                 # Failed transactions still pay a fee. Fetch it, charge only operator treasury.
                 tx = await self.rpc(session, "getTransaction", [row["signature"], {
@@ -1169,6 +1179,8 @@ class CustodyRuntime(WalletRuntime):
                 self.ledger.fail(row["id"], network_proven=True, fee=fee,
                     failure_reason=activity_log.safe_failure_reason(
                         "Solana finalized the transaction with an error: " + chain_error))
+                activity_log.record_jito_stage(self, row, "jito_finalized_error",
+                    "Solana finalized the swap with an error: " + chain_error)
                 if row["kind"] == "SELL" and self.ledger.settings(row["uid"])["close_requested"]:
                     symbol = json.loads(row["metadata"]).get("symbol", "")
                     self.schedule_close_retry(row["uid"],
@@ -1207,6 +1219,8 @@ class CustodyRuntime(WalletRuntime):
                     raise WalletError("Неожиданное изменение SOL при swap.")
                 fee = trade_sol - native_delta - self.wrapped_delta(tx, self.wallet)
             self.ledger.finalize(row["id"], spent, fee, received)
+            activity_log.record_jito_stage(self, row, "jito_finalized_success",
+                "Solana finalized the swap and the ledger reconciled its actual amounts and fees.")
         await self.deliver_withdrawal_notifications(session)
 
     @staticmethod
@@ -1394,6 +1408,9 @@ class CustodyRuntime(WalletRuntime):
         try:
             if row["kind"] in ("BUY", "SELL"):
                 returned = await self.send_via_jito(session, wire, signature)
+                activity_log.record_jito_stage(self, {**row, "signature": signature},
+                    "jito_submission_acknowledged",
+                    "Jito acknowledged the private submission; this is not proof of Solana inclusion.")
             else:
                 returned = await self.rpc(session, "sendTransaction", [wire, {
                     "encoding": "base64", "skipPreflight": False,
@@ -1401,6 +1418,12 @@ class CustodyRuntime(WalletRuntime):
             self.ledger.submitted(row["id"], returned == signature)
         except Exception as exc:
             self.ledger.submitted(row["id"], False)
+            if row["kind"] in ("BUY", "SELL"):
+                detail = activity_log.safe_failure_reason(str(exc)) or type(exc).__name__
+                activity_log.record_jito_stage(self, {**row, "signature": signature},
+                    "jito_submission_unknown",
+                    "Jito did not return a verified acknowledgement (" + detail +
+                    "); the transaction outcome is unknown. Do not resend.")
             if row["kind"] == "WITHDRAW":
                 self.log("Withdrawal RPC outcome unknown; reserve retained (" + type(exc).__name__ + ").")
         if row["kind"] == "WITHDRAW":

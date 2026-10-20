@@ -66,6 +66,24 @@ class ActivityTests(unittest.IsolatedAsyncioTestCase):
     def codes(self):
         return {e.get("code") for e in self.entries()}
 
+    async def test_jito_stage_is_account_scoped_idempotent_and_includes_elapsed_time(self):
+        signature = str(Signature.new_unique())
+        operation = {
+            "id": "jito-op-fixture", "uid": 101, "kind": "BUY",
+            "metadata": json.dumps({"execution_route": "jito_bundle_only"}),
+            "created_at": int(time.time()) - 4, "signature": signature,
+        }
+
+        activity_log.record_jito_stage(self.runtime, operation, "jito_submission_unknown",
+            "Jito acknowledgement is missing; the outcome is unknown.")
+        activity_log.record_jito_stage(self.runtime, operation, "jito_submission_unknown",
+            "Duplicate observation must not create another event.")
+
+        matching = [entry for entry in self.entries() if entry.get("code") == "jito_submission_unknown"]
+        self.assertEqual(len(matching), 1)
+        self.assertIn("Elapsed 4s since reservation", matching[0]["message"])
+        self.assertIn(signature[:10], matching[0]["message"])
+
     def open_position(self, uid=101):
         buy = self.ledger.reserve(uid, "close-test-" + str(uuid.uuid4()), "BUY", USDC,
             1_000_000, {"output_asset": self.runtime.watchlist["WIF"]["mint"],

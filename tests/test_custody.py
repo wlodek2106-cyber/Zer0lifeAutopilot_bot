@@ -807,6 +807,29 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("sendTransaction", [call.args[1] for call in self.service.rpc.call_args_list])
         self.assertTrue(self.ledger.audit())
 
+    async def test_jito_signature_progress_is_logged_without_resubmitting(self):
+        invoice = self.ledger.invoice(101, USDC, 2_000_000)
+        self.ledger.credit_deposit(invoice["id"], str(Signature.new_unique()),
+                                   USDC, 2_000_000, invoice["created_at"])
+        operation = self.ledger.reserve(101, "jito-status-observation", "BUY", USDC, 1_000_000,
+            {"output_asset": runtime.WRAPPED_SOL, "symbol": "BOME", "decimals": 9,
+             "execution_route": "jito_bundle_only",
+             "jito_tip_lamports": runtime.JITO_TIP_LAMPORTS})
+        signature = str(Signature.new_unique())
+        self.ledger.prepared(operation["id"], signature, "signed-wire")
+        self.ledger.submitted(operation["id"], True)
+        self.status = {"confirmationStatus": "processed", "err": None}
+
+        await self.service.reconcile(None)
+
+        entries = activity_log.report(self.service, 101)["entries"]
+        progress = next(entry for entry in entries if entry.get("code") == "jito_chain_processed")
+        self.assertIn("Solana reports the swap signature at processed commitment", progress["message"])
+        self.assertIn("Elapsed", progress["message"])
+        self.assertEqual(self.ledger.operation(operation["id"])["state"], "SUBMITTED")
+        self.assertNotIn("sendTransaction", [method for method, _ in self.calls])
+        self.assertTrue(self.ledger.audit())
+
     async def test_worker_recovers_expired_withdraw_without_resending(self):
         operation, signature = self.pending_withdraw()
         with self.ledger.db() as db:

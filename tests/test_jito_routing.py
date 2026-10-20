@@ -1,7 +1,9 @@
 import base64
+import json
+import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from solders.hash import Hash
 from solders.instruction import Instruction
@@ -201,16 +203,55 @@ class JitoRoutingTests(unittest.IsolatedAsyncioTestCase):
             rpc=AsyncMock(),
             reconcile=AsyncMock(),
         )
-        result = await CustodyRuntime.send_reserved(
-            runtime, None, tx,
-            {"id": "op1", "kind": "BUY", "uid": 101, "asset": SOL, "raw": 1},
-            {"output_asset": USDC})
+        row = {"id": "op1", "kind": "BUY", "uid": 101, "asset": SOL, "raw": 1,
+               "created_at": int(time.time()),
+               "metadata": json.dumps({"execution_route": "jito_bundle_only"})}
+        with patch("custody_runtime.activity_log.record_jito_stage") as record_stage:
+            result = await CustodyRuntime.send_reserved(
+                runtime, None, tx, row, {"output_asset": USDC})
 
         self.assertEqual(result, {"state": "UNKNOWN"})
         runtime.send_via_jito.assert_awaited_once()
         runtime.refresh_swap_blockhash.assert_awaited_once()
         runtime.rpc.assert_not_awaited()
         ledger.submitted.assert_called_once_with("op1", False)
+        self.assertEqual(record_stage.call_args.args[2], "jito_submission_unknown")
+        self.assertIn("do not resend", record_stage.call_args.args[3].lower())
+
+    async def test_jito_ack_is_logged_as_submission_not_chain_confirmation(self):
+        signer = Keypair()
+        tx = VersionedTransaction(
+            MessageV0.try_compile(signer.pubkey(), [], [], Hash.new_unique()), [signer])
+        signature = str(tx.signatures[0])
+        ledger = SimpleNamespace(
+            prepared=Mock(),
+            submitted=Mock(),
+            operation=Mock(return_value={"state": "SUBMITTED"}),
+        )
+        runtime = SimpleNamespace(
+            safe_simulation=AsyncMock(return_value="signed-base64"),
+            authorize_execution_order=Mock(),
+            authorize_execution_quote=AsyncMock(),
+            refresh_swap_blockhash=AsyncMock(return_value=tx),
+            web_access=None,
+            ledger=ledger,
+            send_via_jito=AsyncMock(return_value=signature),
+            reconcile=AsyncMock(),
+        )
+        row = {"id": "op-ack", "kind": "BUY", "uid": 101, "asset": SOL, "raw": 1,
+               "created_at": int(time.time()),
+               "metadata": json.dumps({"execution_route": "jito_bundle_only"})}
+
+        with patch("custody_runtime.activity_log.record_jito_stage") as record_stage:
+            result = await CustodyRuntime.send_reserved(
+                runtime, None, tx, row, {"output_asset": USDC})
+
+        self.assertEqual(result, {"state": "SUBMITTED"})
+        ledger.submitted.assert_called_once_with("op-ack", True)
+        record_stage.assert_called_once()
+        self.assertEqual(record_stage.call_args.args[2], "jito_submission_acknowledged")
+        self.assertIn("not proof of Solana inclusion", record_stage.call_args.args[3])
+        runtime.reconcile.assert_awaited_once()
 
     async def test_non_swap_operations_still_use_configured_rpc(self):
         signature = str(Keypair().pubkey())

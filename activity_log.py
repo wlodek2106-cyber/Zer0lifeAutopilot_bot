@@ -44,6 +44,27 @@ def record_event(runtime, uid, event_id, code, message):
             pass
 
 
+def record_jito_stage(runtime, operation, code, message):
+    """Record one idempotent, account-scoped lifecycle observation for a Jito swap."""
+    try:
+        if operation.get("kind") not in ("BUY", "SELL"):
+            return
+        metadata = json.loads(operation.get("metadata") or "{}")
+        if metadata.get("execution_route") != "jito_bundle_only":
+            return
+        uid = operation["uid"]
+        operation_id = operation["id"]
+        elapsed = max(0, int(time.time()) - int(operation["created_at"]))
+        signature = str(operation.get("signature") or "")
+        tx_ref = f" Tx {signature[:10]}…" if signature else ""
+        safe_message = safe_failure_reason(message)
+        record_event(runtime, uid, f"jito-operation:{operation_id}", code,
+                     f"{safe_message} Elapsed {elapsed}s since reservation.{tx_ref}")
+    except Exception:
+        # Telemetry must never alter the outcome of a financial operation.
+        return
+
+
 def label(runtime, symbol):
     if not symbol:
         return ""
