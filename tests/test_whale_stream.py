@@ -10,6 +10,8 @@ from whale_stream import (
     MAX_WHALE_LAMPORTS,
     MIN_WHALE_LAMPORTS,
     HeliusWhaleStream,
+    HeliusStreamError,
+    parse_log_notification,
     parse_whale_buy,
 )
 
@@ -19,6 +21,7 @@ MINT = str(Pubkey.from_bytes(hashlib.sha256(b"whale-token").digest()))
 OTHER_MINT = str(Pubkey.from_bytes(hashlib.sha256(b"other-whale-token").digest()))
 TOKEN_ACCOUNT = str(Pubkey.from_bytes(hashlib.sha256(b"token-account").digest()))
 SIGNATURE = str(Signature.default())
+SIGNATURE_2 = str(Signature.from_bytes(hashlib.sha512(b"whale-tx-2").digest()))
 PUMP = DEX_PROGRAMS["Pump.fun"]
 
 
@@ -68,6 +71,49 @@ def notification(sol_spend=2_000_000_000, *, program=PUMP, mint=MINT, pre_amount
     }
 
 
+def logs_notification(signature=SIGNATURE, *, logs=None, err=None):
+    return {
+        "jsonrpc": "2.0",
+        "method": "logsNotification",
+        "params": {"result": {
+            "context": {"slot": 123},
+            "value": {
+                "signature": signature,
+                "err": err,
+                "logs": logs if logs is not None else ["Program log: Instruction: Buy"],
+            },
+        }},
+    }
+
+
+class FakeHttpResponse:
+    def __init__(self, payload, status=200):
+        self.payload = payload
+        self.status = status
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def json(self, content_type=None):
+        return self.payload
+
+
+class FakeHttpSession:
+    def __init__(self, payload, status=200):
+        self.payload = payload
+        self.status = status
+        self.url = None
+        self.request = None
+
+    def post(self, url, *, json, timeout):
+        self.url = url
+        self.request = json
+        return FakeHttpResponse(self.payload, self.status)
+
+
 class WhaleSignalTests(unittest.IsolatedAsyncioTestCase):
     def test_valid_confirmed_program_buy_in_1_to_10_sol_range(self):
         event = parse_whale_buy(notification(sol_spend=2_500_000_000), observed_at=100)
@@ -99,16 +145,56 @@ class WhaleSignalTests(unittest.IsolatedAsyncioTestCase):
         del payload["params"]["result"]["meta"]["err"]
         self.assertIsNone(parse_whale_buy(payload))
 
-    async def test_free_stream_config_subscribes_only_to_supported_programs_and_confirmed_data(self):
+    async def test_free_stream_uses_standard_logs_subscriptions_for_supported_programs(self):
         stream = HeliusWhaleStream("unit-test-key")
-        payload = stream.subscription()
-        self.assertEqual(payload["method"], "transactionSubscribe")
-        self.assertEqual(payload["params"][0]["accountInclude"], list(DEX_PROGRAMS.values()))
-        self.assertEqual(payload["params"][1]["commitment"], "confirmed")
-        self.assertEqual(payload["params"][1]["encoding"], "jsonParsed")
-        self.assertNotIn("api-key", str(payload))
+        requests = stream.subscriptions()
+        self.assertEqual(len(requests), len(DEX_PROGRAMS))
+        self.assertTrue(all(request["method"] == "logsSubscribe" for request in requests))
+        self.assertEqual(
+            [request["params"][0]["mentions"][0] for request in requests],
+            list(DEX_PROGRAMS.values()),
+        )
+        self.assertTrue(all(request["params"][1]["commitment"] == "confirmed" for request in requests))
         for address in DEX_PROGRAMS.values():
             self.assertEqual(str(Pubkey.from_string(address)), address)
+
+    def test_log_parser_accepts_only_confirmed_buy_or_swap_signatures(self):
+        self.assertEqual(parse_log_notification(logs_notification()), {"signature": SIGNATURE, "slot": 123})
+        self.assertIsNone(parse_log_notification(logs_notification(logs=["Program log: Initialize"])))
+        self.assertIsNone(parse_log_notification(logs_notification(err={"InstructionError": [0, "failed"]})))
+        self.assertIsNone(parse_log_notification(logs_notification(signature="bad")))
+
+    async def test_logs_are_deduplicated_and_queue_overflow_keeps_newer_events(self):
+        stream = HeliusWhaleStream("unit-test-key")
+        stream._transaction_queue = asyncio.Queue(maxsize=1)
+        self.assertTrue(await stream.handle_logs_notification(logs_notification()))
+        self.assertFalse(await stream.handle_logs_notification(logs_notification()))
+        self.assertTrue(await stream.handle_logs_notification(logs_notification(SIGNATURE_2)))
+        self.assertEqual(stream.snapshot()["queued_lookups"], 1)
+        self.assertEqual(stream.snapshot()["dropped_lookups"], 1)
+        self.assertEqual(stream._transaction_queue.get_nowait()[0], SIGNATURE_2)
+
+    async def test_transaction_lookup_uses_confirmed_standard_rpc_and_parses_the_result(self):
+        signal = []
+        stream = HeliusWhaleStream("unit-test-key", on_signal=signal.append)
+        tx = notification()["params"]["result"]
+        session = FakeHttpSession({"jsonrpc": "2.0", "result": tx})
+        await stream._fetch_transaction(session, SIGNATURE)
+        self.assertEqual(session.request["method"], "getTransaction")
+        self.assertEqual(session.request["params"][1]["commitment"], "confirmed")
+        self.assertEqual(session.request["params"][1]["encoding"], "jsonParsed")
+        self.assertTrue(session.url.endswith("?api-key=unit-test-key"))
+        self.assertEqual(signal[0]["mint"], MINT)
+        self.assertEqual(stream.snapshot()["transaction_lookups"], 1)
+
+    async def test_transaction_lookup_auth_failure_has_sanitized_diagnostic(self):
+        stream = HeliusWhaleStream("unit-test-key")
+        with self.assertRaises(HeliusStreamError) as raised:
+            await stream._fetch_transaction(FakeHttpSession({}, status=403), SIGNATURE)
+        self.assertEqual(raised.exception.code, "AuthRejected")
+        stream.state = "connected"
+        stream.last_error = raised.exception.code
+        self.assertIn("check the Render secret", stream.snapshot()["message"])
 
     def test_lookup_table_program_address_is_resolved_before_filtering(self):
         payload = notification(sol_spend=2_000_000_000)

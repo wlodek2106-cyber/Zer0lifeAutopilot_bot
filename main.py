@@ -3032,8 +3032,12 @@ RAW_HTML = r"""<!DOCTYPE html>
                             +' · '+(Number.isFinite(sol)?sol.toFixed(2):'—')+' SOL · '+(event.program||'DEX')
                             +' · '+shortMint;
                     });
+                    const whaleQueue='RPC checks '+(whale.transaction_lookups||0)
+                        +' · queued '+(whale.queued_lookups||0)
+                        +(whale.dropped_lookups?' · dropped '+whale.dropped_lookups:'');
                     document.getElementById('whale-signal-status').textContent=(whale.message||'Whale stream status unavailable.')
                         +'\nSupported programs only; signals are screened before AI may consider a trade.'
+                        +'\n'+whaleQueue
                         +(whaleRows.length?'\n'+whaleRows.join('\n'):'\nNo qualifying signals received yet.');
                     const sniper=s.sniper_settings||{order_sol:.005};
                     document.getElementById('sniper-order-size').textContent=sniper.order_sol+' SOL';

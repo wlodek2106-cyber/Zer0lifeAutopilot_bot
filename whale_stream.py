@@ -14,6 +14,10 @@ SOL_MINT = "So11111111111111111111111111111111111111112"
 MIN_WHALE_LAMPORTS = 1_000_000_000
 MAX_WHALE_LAMPORTS = 10_000_000_000
 HELIUS_WS = "wss://mainnet.helius-rpc.com/"
+HELIUS_RPC = "https://mainnet.helius-rpc.com/"
+LOOKUP_INTERVAL_SECONDS = 0.5  # Reserve most of the free-tier 10 RPS for the rest of the bot.
+STALE_LOOKUP_SECONDS = 30
+MAX_LOOKUP_QUEUE = 32
 
 # Curated mainnet programs, sourced from the official Pump, Raydium, Meteora,
 # and Orca repositories. This is supported DEX coverage, not every Solana DEX.
@@ -89,6 +93,29 @@ def _message_parts(notification):
     if not _signature(signature) or type(slot) is not int or slot <= 0:
         return None
     return value, transaction, message, meta, signature, slot
+
+
+def parse_log_notification(notification):
+    """Extract signatures for likely DEX buys/swaps from standard logsSubscribe."""
+    if not isinstance(notification, dict) or notification.get("method") != "logsNotification":
+        return None
+    params = notification.get("params") or {}
+    result = params.get("result") if isinstance(params, dict) else None
+    if not isinstance(result, dict):
+        return None
+    context = result.get("context") or {}
+    value = result.get("value") or {}
+    if not isinstance(value, dict) or value.get("err") is not None:
+        return None
+    signature, slot = value.get("signature"), context.get("slot")
+    logs = value.get("logs") or []
+    if (not _signature(signature) or type(slot) is not int or slot <= 0
+            or not isinstance(logs, list)):
+        return None
+    joined_logs = " ".join(line for line in logs if isinstance(line, str)).lower()
+    if not any(term in joined_logs for term in ("buy", "swap")):
+        return None
+    return {"signature": signature, "slot": slot}
 
 
 def _program_ids(message, meta, account_keys):
@@ -217,6 +244,12 @@ def parse_whale_buy(notification, observed_at=None):
     }
 
 
+class HeliusStreamError(Exception):
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+
 class HeliusWhaleStream:
     """One reconnecting Helius subscription. It never submits or signs trades."""
 
@@ -227,10 +260,16 @@ class HeliusWhaleStream:
         self.last_error = ""
         self.reconnects = 0
         self.total_signals = 0
+        self.transaction_lookups = 0
+        self.dropped_lookups = 0
         self.last_signal_at = None
         self.recent_signals = deque(maxlen=12)
         self._seen_order = deque()
         self._seen = set()
+        self._requested_order = deque()
+        self._requested = set()
+        self._transaction_queue = asyncio.Queue(maxsize=MAX_LOOKUP_QUEUE)
+        self._last_lookup_at = 0.0
         self._connected_at = None
         self.message = self._state_message()
 
@@ -242,38 +281,45 @@ class HeliusWhaleStream:
         if not self.api_key:
             return ("Waiting for HELIUS_API_KEY in Render. The stream is off; "
                     "no paid-plan upgrade or trade is triggered.")
-        if self.state == "connected" and self.last_error == "SignalHandlerError":
-            return "Connected to Helius, but a signal could not be queued for screening."
+        details = {
+            "AuthRejected": "Helius rejected the API key (401/403); check the Render secret.",
+            "SubscriptionRejected": "Helius rejected a standard logs subscription.",
+            "SubscriptionTimeout": "Helius did not confirm the logs subscriptions.",
+            "RateLimited": "The free RPC limit was reached; some transaction checks may be dropped.",
+            "TransactionUnavailable": "A transaction lookup returned no confirmed transaction.",
+            "StaleTransaction": "The lookup queue was too busy; an old signal was dropped.",
+            "ProviderUnavailable": "Helius RPC is temporarily unavailable.",
+            "SignalHandlerError": "A signal could not be queued for screening.",
+            "TransactionFetchError": "A transaction lookup failed unexpectedly.",
+        }
+        detail = details.get(self.last_error, "")
         if self.state == "connected":
-            return ("Connected to Helius confirmed-transaction WebSocket. "
-                    "Signals go through the existing candidate screen; a signal does not submit a trade.")
+            if detail:
+                return "Connected to standard logsSubscribe. " + detail
+            return ("Connected to Helius standard logsSubscribe. Likely buys/swaps use capped getTransaction lookups; "
+                    "all signals still require existing screening and never submit a trade.")
         if self.state == "retrying":
-            return ("Helius stream disconnected; reconnecting with bounded backoff. "
-                    "New entries still require the existing screening and execution guard.")
+            reason = (" " + detail) if detail else ""
+            return ("Helius standard stream disconnected; reconnecting with bounded backoff."
+                    + reason + " No signal submits a trade.")
         if self.state == "stopped":
             return "Helius stream stopped."
-        return "Connecting to Helius confirmed-transaction WebSocket."
+        return "Connecting to Helius standard logsSubscribe stream."
 
-    def subscription(self):
-        return {
+    def subscriptions(self):
+        return [{
             "jsonrpc": "2.0",
-            "id": 1,
-            "method": "transactionSubscribe",
+            "id": index,
+            "method": "logsSubscribe",
             "params": [
-                {"accountInclude": list(DEX_PROGRAMS.values())},
-                {
-                    "commitment": "confirmed",
-                    "encoding": "jsonParsed",
-                    "transactionDetails": "full",
-                    "showRewards": False,
-                    "maxSupportedTransactionVersion": 1,
-                },
+                {"mentions": [program_id]},
+                {"commitment": "confirmed"},
             ],
-        }
+        } for index, program_id in enumerate(DEX_PROGRAMS.values(), start=1)]
 
     def snapshot(self):
         return {
-            "provider": "Helius Enhanced WebSocket",
+            "provider": "Helius standard WebSocket",
             "state": self.state,
             "enabled": self.enabled,
             "message": self._state_message(),
@@ -282,11 +328,97 @@ class HeliusWhaleStream:
             "last_error": self.last_error,
             "last_signal_at": self.last_signal_at,
             "signals_seen": self.total_signals,
+            "transaction_lookups": self.transaction_lookups,
+            "queued_lookups": self._transaction_queue.qsize(),
+            "dropped_lookups": self.dropped_lookups,
+            "lookup_limit_per_second": 2,
             "recent_signals": [
                 {**event, "sol": event["sol_lamports"] / 1_000_000_000}
                 for event in self.recent_signals
             ],
         }
+
+    def _remember_requested(self, signature):
+        self._requested.add(signature)
+        self._requested_order.append(signature)
+        if len(self._requested_order) > 5000:
+            self._requested.discard(self._requested_order.popleft())
+
+    async def handle_logs_notification(self, payload):
+        event = parse_log_notification(payload)
+        if not event or event["signature"] in self._requested or event["signature"] in self._seen:
+            return False
+        if self._transaction_queue.full():
+            self._transaction_queue.get_nowait()
+            self._transaction_queue.task_done()
+            self.dropped_lookups += 1
+        self._remember_requested(event["signature"])
+        self._transaction_queue.put_nowait(
+            (event["signature"], event["slot"], int(time.time())))
+        return True
+
+    async def _fetch_transaction(self, session, signature):
+        self.transaction_lookups += 1
+        url = HELIUS_RPC + "?api-key=" + quote(self.api_key, safe="")
+        body = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getTransaction",
+            "params": [signature, {
+                "commitment": "confirmed",
+                "encoding": "jsonParsed",
+                "maxSupportedTransactionVersion": 0,
+            }],
+        }
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with session.post(url, json=body, timeout=timeout) as response:
+            if response.status in (401, 403):
+                raise HeliusStreamError("AuthRejected")
+            if response.status == 429:
+                raise HeliusStreamError("RateLimited")
+            if response.status >= 500:
+                raise HeliusStreamError("ProviderUnavailable")
+            if response.status >= 400:
+                raise HeliusStreamError("TransactionFetchError")
+            result = await response.json(content_type=None)
+        if not isinstance(result, dict):
+            raise HeliusStreamError("TransactionFetchError")
+        if result.get("error"):
+            error = result["error"]
+            code = error.get("code") if isinstance(error, dict) else None
+            raise HeliusStreamError("RateLimited" if code in (-32005, -32007) else "TransactionFetchError")
+        transaction = result.get("result")
+        if not isinstance(transaction, dict):
+            raise HeliusStreamError("TransactionUnavailable")
+        self.last_error = ""
+        await self.handle_notification({"result": transaction})
+
+    async def _lookup_worker(self, session):
+        loop = asyncio.get_running_loop()
+        while True:
+            signature, slot, queued_at = await self._transaction_queue.get()
+            try:
+                if time.time() - queued_at > STALE_LOOKUP_SECONDS:
+                    self.dropped_lookups += 1
+                    self.last_error = "StaleTransaction"
+                    continue
+                delay = LOOKUP_INTERVAL_SECONDS - (loop.time() - self._last_lookup_at)
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                if time.time() - queued_at > STALE_LOOKUP_SECONDS:
+                    self.dropped_lookups += 1
+                    self.last_error = "StaleTransaction"
+                    continue
+                self._last_lookup_at = loop.time()
+                await self._fetch_transaction(session, signature)
+            except asyncio.CancelledError:
+                raise
+            except HeliusStreamError as exc:
+                self.last_error = exc.code
+            except Exception:
+                self.last_error = "TransactionFetchError"
+            finally:
+                self._transaction_queue.task_done()
 
     async def handle_notification(self, payload):
         event = parse_whale_buy(payload)
@@ -317,25 +449,63 @@ class HeliusWhaleStream:
             async with session.ws_connect(
                 url, heartbeat=30, timeout=15, max_msg_size=4 * 1024 * 1024
             ) as socket:
+                requests = self.subscriptions()
+                pending = {request["id"] for request in requests}
+                for request in requests:
+                    await socket.send_json(request)
+                deadline = asyncio.get_running_loop().time() + 15
+                while pending:
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        raise HeliusStreamError("SubscriptionTimeout")
+                    try:
+                        message = await socket.receive(timeout=remaining)
+                    except asyncio.TimeoutError as exc:
+                        raise HeliusStreamError("SubscriptionTimeout") from exc
+                    if message.type == aiohttp.WSMsgType.ERROR:
+                        raise HeliusStreamError("ProviderUnavailable")
+                    if message.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSE):
+                        raise HeliusStreamError("ProviderUnavailable")
+                    if message.type != aiohttp.WSMsgType.TEXT:
+                        continue
+                    try:
+                        payload = json.loads(message.data)
+                    except (TypeError, json.JSONDecodeError):
+                        continue
+                    if not isinstance(payload, dict):
+                        continue
+                    request_id = payload.get("id")
+                    if request_id in pending:
+                        if payload.get("error") or type(payload.get("result")) is not int:
+                            raise HeliusStreamError("SubscriptionRejected")
+                        pending.remove(request_id)
+                    elif payload.get("method") == "logsNotification":
+                        await self.handle_logs_notification(payload)
+
                 self.state = "connected"
                 self.last_error = ""
                 self._connected_at = time.time()
                 self.message = self._state_message()
-                await socket.send_json(self.subscription())
-                async for message in socket:
-                    if message.type == aiohttp.WSMsgType.TEXT:
-                        try:
-                            payload = json.loads(message.data)
-                        except (TypeError, json.JSONDecodeError):
-                            continue
-                        if isinstance(payload, dict) and payload.get("error"):
-                            raise ConnectionError("Helius subscription rejected")
-                        await self.handle_notification(payload)
-                    elif message.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSE):
-                        break
-                    elif message.type == aiohttp.WSMsgType.ERROR:
-                        raise ConnectionError("Helius WebSocket transport error")
-        raise ConnectionError("Helius WebSocket closed")
+                lookup_task = asyncio.create_task(self._lookup_worker(session))
+                try:
+                    async for message in socket:
+                        if message.type == aiohttp.WSMsgType.TEXT:
+                            try:
+                                payload = json.loads(message.data)
+                            except (TypeError, json.JSONDecodeError):
+                                continue
+                            if isinstance(payload, dict) and payload.get("method") == "logsNotification":
+                                await self.handle_logs_notification(payload)
+                            elif isinstance(payload, dict) and payload.get("error"):
+                                self.last_error = "SubscriptionRejected"
+                        elif message.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSE):
+                            break
+                        elif message.type == aiohttp.WSMsgType.ERROR:
+                            raise HeliusStreamError("ProviderUnavailable")
+                finally:
+                    lookup_task.cancel()
+                    await asyncio.gather(lookup_task, return_exceptions=True)
+        raise HeliusStreamError("ProviderUnavailable")
 
     async def run(self):
         if not self.enabled:
@@ -352,13 +522,30 @@ class HeliusWhaleStream:
                 self.state = "stopped"
                 self.message = self._state_message()
                 raise
+            except HeliusStreamError as exc:
+                connected_at = self._connected_at
+                if connected_at and time.time() - connected_at >= 60:
+                    delay = 1
+                self.reconnects += 1
+                self.state = "retrying"
+                self.last_error = exc.code
+                self.message = self._state_message()
+                await asyncio.sleep(delay)
+                delay = min(300, delay * 2)
+            except aiohttp.WSServerHandshakeError as exc:
+                self.reconnects += 1
+                self.state = "retrying"
+                self.last_error = "AuthRejected" if exc.status in (401, 403) else "ProviderUnavailable"
+                self.message = self._state_message()
+                await asyncio.sleep(delay)
+                delay = min(300, delay * 2)
             except Exception as exc:
                 connected_at = self._connected_at
                 if connected_at and time.time() - connected_at >= 60:
                     delay = 1
                 self.reconnects += 1
                 self.state = "retrying"
-                self.last_error = type(exc).__name__
+                self.last_error = "ProviderUnavailable"
                 self.message = self._state_message()
                 await asyncio.sleep(delay)
                 delay = min(300, delay * 2)
