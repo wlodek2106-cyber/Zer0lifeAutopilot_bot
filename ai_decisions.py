@@ -113,7 +113,8 @@ def validate_decisions(value, universes):
         if decision["symbol"] not in universes[mode] and not (
                 decision["action"] == "HOLD" and decision["symbol"] is None):
             raise AIError("AI выбрал актив вне разрешённого списка.")
-        if not isinstance(decision["reason"], str) or not 1 <= len(decision["reason"]) <= 350:
+        if (not isinstance(decision["reason"], str)
+                or not 1 <= len(decision["reason"].strip()) <= 350):
             raise AIError("AI не указал допустимую причину решения.")
     return value
 
@@ -135,7 +136,7 @@ async def analyze(session, market, universes, screening=None, main_context=None)
             "properties": {
                 "action": {"type": "string", "enum": ["BUY", "SELL", "HOLD"]},
                 "symbol": {"type": ["string", "null"], "enum": [None] + list(symbols)},
-                "reason": {"type": "string"},
+                "reason": {"type": "string", "minLength": 1, "maxLength": 350},
             },
         } for mode, symbols in universes.items()},
     }
@@ -151,6 +152,8 @@ async def analyze(session, market, universes, screening=None, main_context=None)
                 "Main uses USDC; sniper uses SOL. Consider token/SOL relative changes for sniper. "
                 "Never invent prices, guarantees, wallet commands, transfer destinations or order sizes. "
                 "Prefer HOLD when data is missing, insufficient, flat or ambiguous. "
+                "Every decision must include a concise, non-empty English reason of at most 350 characters; "
+                "give HOLD decisions a short factual reason instead of leaving it blank. "
                 "These are short snapshots, not a complete predictive model. Explain briefly in English. "
                 "Screening scores reflect liquidity/activity, not expected profit. "
                 "They do not establish that a project is safe or truly a meme. "

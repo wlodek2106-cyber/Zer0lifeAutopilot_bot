@@ -306,7 +306,10 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.service.trade.assert_not_awaited()
 
     async def test_invalid_model_commands_fail_closed(self):
-        for edit in [{"action": "WITHDRAW"}, {"amount": 1000}, {"symbol": "UNKNOWN"}, {"wallet": "foreign"}]:
+        for edit in [
+                {"action": "WITHDRAW"}, {"amount": 1000}, {"symbol": "UNKNOWN"},
+                {"wallet": "foreign"}, {"reason": ""}, {"reason": "   "},
+                {"reason": "x" * 351}, {"reason": None}]:
             value = copy.deepcopy(self.snapshot["decisions"])
             value["main"].update(edit)
             with self.assertRaises(ai_decisions.AIError):
@@ -346,6 +349,11 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
                          "main (USDC), never sniper (SOL)")
         self.assertIn("Consider token/SOL relative changes for sniper.",
                       self.payload["messages"][0]["content"])
+        for mode in ("main", "sniper"):
+            reason_schema = self.payload["response_format"]["json_schema"]["schema"][
+                "properties"][mode]["properties"]["reason"]
+            self.assertEqual(reason_schema["minLength"], 1)
+            self.assertEqual(reason_schema["maxLength"], 350)
         self.assertIn("main (USDC) only", self.payload["messages"][1]["content"])
         self.assertIn("unvalidated signal heuristics", self.payload["messages"][1]["content"])
         self.assertEqual(user_payload["main_usdc_signal_evidence_numeric"]["SOL"]["change_m5_pct"], 0.8)
