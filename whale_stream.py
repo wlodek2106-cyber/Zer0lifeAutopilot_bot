@@ -31,6 +31,11 @@ DEX_PROGRAMS = {
     "Orca Whirlpools": "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",
 }
 PROGRAM_NAMES = {program_id: name for name, program_id in DEX_PROGRAMS.items()}
+# Standard logsSubscribe is a broad firehose on a free RPC plan. Keep the live
+# signal feed to the two memecoin launch programs and only explicit buy logs.
+WHALE_SIGNAL_PROGRAMS = {
+    name: DEX_PROGRAMS[name] for name in ("Pump.fun", "PumpSwap")
+}
 
 
 def _pubkey(value):
@@ -96,7 +101,7 @@ def _message_parts(notification):
 
 
 def parse_log_notification(notification):
-    """Extract signatures for likely DEX buys/swaps from standard logsSubscribe."""
+    """Extract only explicit BUY signatures from standard logsSubscribe."""
     if not isinstance(notification, dict) or notification.get("method") != "logsNotification":
         return None
     params = notification.get("params") or {}
@@ -113,7 +118,7 @@ def parse_log_notification(notification):
             or not isinstance(logs, list)):
         return None
     joined_logs = " ".join(line for line in logs if isinstance(line, str)).lower()
-    if not any(term in joined_logs for term in ("buy", "swap")):
+    if "instruction: buy" not in joined_logs and "event: buy" not in joined_logs:
         return None
     return {"signature": signature, "slot": slot}
 
@@ -296,8 +301,8 @@ class HeliusWhaleStream:
         if self.state == "connected":
             if detail:
                 return "Connected to standard logsSubscribe. " + detail
-            return ("Connected to Helius standard logsSubscribe. Likely buys/swaps use capped getTransaction lookups; "
-                    "all signals still require existing screening and never submit a trade.")
+            return ("Connected to Helius standard logsSubscribe for explicit Pump.fun/PumpSwap BUY logs. "
+                    "Other DEXs are excluded on the free stream; candidates still pass screening.")
         if self.state == "retrying":
             reason = (" " + detail) if detail else ""
             return ("Helius standard stream disconnected; reconnecting with bounded backoff."
@@ -315,7 +320,7 @@ class HeliusWhaleStream:
                 {"mentions": [program_id]},
                 {"commitment": "confirmed"},
             ],
-        } for index, program_id in enumerate(DEX_PROGRAMS.values(), start=1)]
+        } for index, program_id in enumerate(WHALE_SIGNAL_PROGRAMS.values(), start=1)]
 
     def snapshot(self):
         return {
@@ -323,7 +328,7 @@ class HeliusWhaleStream:
             "state": self.state,
             "enabled": self.enabled,
             "message": self._state_message(),
-            "supported_programs": list(DEX_PROGRAMS),
+            "supported_programs": list(WHALE_SIGNAL_PROGRAMS),
             "reconnects": self.reconnects,
             "last_error": self.last_error,
             "last_signal_at": self.last_signal_at,

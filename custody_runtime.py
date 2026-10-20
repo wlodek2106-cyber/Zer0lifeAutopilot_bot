@@ -39,6 +39,7 @@ JITO_BUNDLE_SEND_URL = "https://mainnet.block-engine.jito.wtf/api/v1/transaction
 JITO_TIP_ACCOUNTS_URL = "https://mainnet.block-engine.jito.wtf/api/v1/bundles"
 JITO_TIP_LAMPORTS = 50_000
 JUPITER_PRIORITY_FEE_LAMPORTS = 25_000
+WHALE_AI_COOLDOWN_SECONDS = 60
 
 
 def operation_failure_reason(exc):
@@ -166,6 +167,10 @@ class CustodyRuntime(WalletRuntime):
         self.discovery_task = None
         self.discovery_due = 0
         self.discovery_started = 0
+        self.whale_analysis_status = {
+            "state": "idle", "checked_at": None, "symbols": [],
+            "message": "Waiting for a screened whale candidate.",
+        }
         self.whale_stream = HeliusWhaleStream(
             os.getenv("HELIUS_API_KEY", ""), self.on_whale_signal)
         self.whale_stream_task = None
@@ -188,12 +193,29 @@ class CustodyRuntime(WalletRuntime):
                 "SELECT DISTINCT symbol FROM custody_positions WHERE state='OPEN' AND funding_asset=?", (SOL,))]
 
     async def background_discovery(self):
+        whale_mints = set()
         try:
-            async with aiohttp.ClientSession() as session:
+            whale_mints = set(self.discovery.pending_whale_mints())
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=75)) as session:
                 await self.discovery.scan(session)
-            self.restore_catalog()
+                self.restore_catalog()
+                accepted = self.discovery.report.get("candidates", [])
+                whale_symbols = [row["code"] for row in accepted if
+                                 row.get("mint") in whale_mints and isinstance(row.get("code"), str)]
+                if whale_symbols:
+                    await self.analyze_whale_candidates(session, whale_symbols)
+                elif whale_mints:
+                    self.whale_analysis_status = {
+                        "state": "screened_out", "checked_at": int(time.time()), "symbols": [],
+                        "message": "No whale-triggered mint passed the existing candidate screen; no AI call or order was made.",
+                    }
         except Exception:
             self.discovery.fail()
+            if whale_mints:
+                self.whale_analysis_status = {
+                    "state": "error", "checked_at": int(time.time()), "symbols": [],
+                    "message": "Candidate screening failed; AI analysis was not run and no order was sent.",
+                }
         finally:
             self.discovery_due = time.time() + (
                 60 if self.discovery.pending_whale_mints() else 900)
@@ -203,6 +225,10 @@ class CustodyRuntime(WalletRuntime):
         if not self.discovery.queue_whale_mint(event.get("mint")):
             return False
         now = time.time()
+        self.whale_analysis_status = {
+            "state": "queued", "checked_at": int(now), "symbols": [],
+            "message": "Confirmed whale buy queued for candidate screening; no order is sent.",
+        }
         next_scan = max(now, self.discovery_started + 60)
         if self.discovery_task and not self.discovery_task.done():
             next_scan = max(next_scan, now + 60)
@@ -226,62 +252,123 @@ class CustodyRuntime(WalletRuntime):
             "Recent scan available; manual refresh has a 60-second cooldown. No trade is submitted.",
                                   "discovery": self.discovery.report})
 
-    async def current_prices(self, session):
+    async def current_prices(self, session, extra_symbols=()):
         prices = await self.prices_fn(session)
         if getattr(self, "discovery", None):
             try:
-                prices.update(await self.discovery.prices(session, self.held_sniper_symbols()))
+                prices.update(await self.discovery.prices(
+                    session, [*self.held_sniper_symbols(), *extra_symbols]))
             except Exception:
                 self.discovery.fail()
         return prices
 
-    def ai_universes(self):
+    def ai_universes(self, whale_symbols=None):
         discovery = getattr(self, "discovery", None)
+        candidates = discovery.candidates() if discovery else []
+        current_codes = {row["code"] for row in candidates}
+        preferred = [symbol for symbol in whale_symbols or ()
+                     if symbol in current_codes or discovery and discovery.entry_allowed(symbol)]
+        sniper_assets = list(dict.fromkeys(preferred + [row["code"] for row in candidates]))[:8]
+        sniper_assets += sorted(self.held_sniper_symbols())[:32]
         return {"main": getattr(self, "main_symbols", [s for s in self.watchlist if s not in self.sniper_symbols]),
-                "sniper": list(dict.fromkeys(
-                    [row["code"] for row in discovery.candidates()] + sorted(self.held_sniper_symbols())[:32]
-                )) if discovery else self.sniper_symbols}
+                "sniper": list(dict.fromkeys(sniper_assets)) if discovery else self.sniper_symbols}
 
-    async def ai_snapshot(self, session, prices):
+    async def ai_snapshot(self, session, prices, whale_symbols=None):
         config = ai_decisions.configuration()
         if not config["configured"]:
             raise WalletError("Добавьте OPENAI_API_KEY в Environment на Render. AI-торговля пока не запущена.", 503)
+        whale_symbols = list(dict.fromkeys(symbol for symbol in (whale_symbols or ())
+                                           if isinstance(symbol, str)))[:8]
+        whale_triggered = bool(whale_symbols)
+        min_interval = WHALE_AI_COOLDOWN_SECONDS if whale_triggered else config["interval_seconds"]
         async with self.ai_lock:
             latest = self.ledger.ai_latest()
-            if latest and time.time() - latest["created_at"] < config["interval_seconds"]:
+            if latest and time.time() - latest["created_at"] < min_interval:
+                if whale_triggered:
+                    raise WalletError("Whale-triggered AI analysis is waiting for its 60-second request limit.", 429)
                 record = json.loads(latest["decisions"])
                 ai_decisions.validate_decisions(record["decisions"], record.get("universes", self.ai_universes()))
                 return {**latest, **record}
-            universes = self.ai_universes()
+            universes = self.ai_universes(whale_symbols=whale_symbols)
             wanted = set(universes["main"] + universes["sniper"]) | {"SOL"}
             market = {symbol: ((self.history.get(symbol) if
                       time.time()-getattr(self, "history_seen", {}).get(symbol, 0) <= 90 else None)
                       or [prices[symbol]])[-30:]
                       for symbol in wanted if prices.get(symbol, 0) > 0}
-            screening = {row["code"]: {key: row[key] for key in (
+            screening_rows = {}
+            if getattr(self, "discovery", None):
+                for row in [*self.discovery.candidates(),
+                            *(self.discovery.report.get("candidates", []) or [])]:
+                    if isinstance(row, dict) and row.get("code") in universes["sniper"]:
+                        screening_rows[row["code"]] = row
+            screening = {symbol: {key: row[key] for key in (
                 "liquidity_usd", "volume_24h_usd", "transactions_24h", "age_hours",
-                "change_m5_pct", "change_h1_pct")} for row in self.discovery.candidates()
-                } if getattr(self, "discovery", None) else {}
+                "change_m5_pct", "change_h1_pct") if key in row}
+                for symbol, row in screening_rows.items()}
+            if whale_triggered and any(symbol not in market for symbol in whale_symbols):
+                raise WalletError("Whale candidate has no fresh market price; AI analysis was not sent.", 409)
             try:
-                aid = self.ledger.ai_allow_call(config["interval_seconds"], config["max_calls_per_day"])
+                aid = self.ledger.ai_allow_call(min_interval, config["max_calls_per_day"])
                 decisions = await ai_decisions.analyze(session, market, universes, screening)
-            except (ai_decisions.AIError, LedgerError) as exc:
+            except LedgerError:
+                raise WalletError("AI analysis request limit or cooldown blocked this call.", 503) from None
+            except ai_decisions.AIError as exc:
                 raise WalletError(str(exc), 503) from None
             except (aiohttp.ClientError, asyncio.TimeoutError):
                 raise WalletError("Нет безопасного ответа AI API. Новые входы остановлены.", 503) from None
             record = {"decisions": decisions, "universes": universes, "prices": {s: h[-1] for s, h in market.items()},
-                      "samples": {s: len(h) for s, h in market.items()}}
+                      "samples": {s: len(h) for s, h in market.items()},
+                      "trigger": "whale_signal" if whale_triggered else "scheduled",
+                      "whale_symbols": whale_symbols if whale_triggered else []}
             self.ledger.ai_record(aid, record)
             return {"id": aid, "created_at": int(time.time()), **record}
 
+    async def analyze_whale_candidates(self, session, symbols):
+        symbols = list(dict.fromkeys(symbol for symbol in symbols if isinstance(symbol, str)))[:8]
+        self.whale_analysis_status = {
+            "state": "running", "checked_at": int(time.time()), "symbols": symbols,
+            "message": "A confirmed whale buy passed the candidate screen; AI analysis is running. No order is sent by the signal.",
+        }
+        try:
+            prices = await self.current_prices(session, extra_symbols=symbols)
+            eligible = [symbol for symbol in symbols
+                        if self.discovery.entry_allowed(symbol)
+                        and isinstance(prices.get(symbol), (int, float))
+                        and math.isfinite(prices[symbol]) and prices[symbol] > 0]
+            if not eligible:
+                raise WalletError("No whale candidate has a fresh screen and market price; no AI call was made.", 409)
+            snapshot = await self.ai_snapshot(session, prices, whale_symbols=eligible)
+        except (WalletError, LedgerError) as exc:
+            message = str(exc)
+            limited = "limit" in message.lower() or "interval" in message.lower()
+            self.whale_analysis_status = {
+                "state": "limited" if limited else "error",
+                "checked_at": int(time.time()), "symbols": symbols, "message": message,
+            }
+            return None
+        except Exception:
+            self.whale_analysis_status = {
+                "state": "error", "checked_at": int(time.time()), "symbols": symbols,
+                "message": "Whale-triggered AI analysis failed safely; no signal submitted an order.",
+            }
+            return None
+        self.whale_analysis_status = {
+            "state": "complete", "checked_at": snapshot["created_at"], "symbols": eligible,
+            "message": "Fresh AI analysis completed after screening; no order was sent by the signal.",
+        }
+        return snapshot
+
     def ai_status(self):
         latest = self.ledger.ai_latest()
+        latest_record = json.loads(latest["decisions"]) if latest else {}
         return {**ai_decisions.configuration(), "last_analyzed_at": latest["created_at"] if latest else None,
-                "last_decisions": json.loads(latest["decisions"])["decisions"] if latest else None,
+                "last_decisions": latest_record.get("decisions") if latest else None,
+                "last_trigger": latest_record.get("trigger", "scheduled") if latest else None,
                 "sniper_assets": self.ai_universes()["sniper"],
                 "asset_labels": {s: info.get("label", s) + (" · "+info["mint"][:4]+"…"+info["mint"][-4:]
                                  if s.startswith("M_") else "") for s, info in self.watchlist.items()},
                 "discovery": self.discovery.report if getattr(self, "discovery", None) else None,
+                "whale_analysis": getattr(self, "whale_analysis_status", {"state": "idle"}),
                 "whale_stream": self.whale_stream.snapshot() if getattr(self, "whale_stream", None) else None}
 
     async def ai_preview(self, request, session):

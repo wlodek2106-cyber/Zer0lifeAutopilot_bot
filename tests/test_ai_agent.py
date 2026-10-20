@@ -190,6 +190,69 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.service.trade.assert_not_awaited()
         self.service.verify_sniper_mint.assert_not_awaited()
 
+    async def test_confirmed_whale_candidate_triggers_ai_after_screen_without_trade(self):
+        code, mint = self.new_candidate()
+        with self.service.ledger.db() as db:
+            row = json.loads(db.execute(
+                "SELECT metrics FROM custody_meme_assets WHERE code=?", (code,)).fetchone()["metrics"])
+        row["mint"] = mint
+        self.assertTrue(self.service.on_whale_signal({"mint": mint}))
+
+        async def screened_scan(_session):
+            self.service.discovery.blocked = False
+            self.service.discovery.report = {"candidates": [row], "eligible": 1, "scanned": 1}
+
+        self.service.discovery.scan = AsyncMock(side_effect=screened_scan)
+        self.service.current_prices = AsyncMock(return_value={**self.prices, code: .01})
+        decisions = {
+            "main": {"action": "HOLD", "symbol": None, "reason": "No clear USDC signal."},
+            "sniper": {"action": "HOLD", "symbol": code, "reason": "Wait for more market data."},
+        }
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-not-real"}), patch(
+                "ai_decisions.analyze", AsyncMock(return_value=decisions)) as analyze:
+            await self.service.background_discovery()
+
+        analyze.assert_awaited_once()
+        self.assertIn(code, analyze.await_args.args[2]["sniper"])
+        self.assertIn(code, analyze.await_args.args[3])
+        self.assertEqual(self.service.whale_analysis_status["state"], "complete")
+        self.assertEqual(self.service.ai_status()["last_trigger"], "whale_signal")
+        self.service.trade.assert_not_awaited()
+
+    async def test_whale_signal_that_fails_screen_never_calls_ai(self):
+        mint = str(Keypair().pubkey())
+        self.assertTrue(self.service.on_whale_signal({"mint": mint}))
+
+        async def empty_scan(_session):
+            self.service.discovery.blocked = False
+            self.service.discovery.report = {"candidates": [], "eligible": 0, "scanned": 1}
+
+        self.service.discovery.scan = AsyncMock(side_effect=empty_scan)
+        self.service.current_prices = AsyncMock(return_value=self.prices)
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-not-real"}), patch(
+                "ai_decisions.analyze", AsyncMock()) as analyze:
+            await self.service.background_discovery()
+
+        analyze.assert_not_awaited()
+        self.service.current_prices.assert_not_awaited()
+        self.assertEqual(self.service.whale_analysis_status["state"], "screened_out")
+        self.service.trade.assert_not_awaited()
+
+    async def test_whale_ai_bypasses_scheduled_cache_but_respects_one_minute_quota(self):
+        decisions = {
+            "main": {"action": "HOLD", "symbol": None, "reason": "No clear USDC signal."},
+            "sniper": {"action": "HOLD", "symbol": "WIF", "reason": "Wait for more market data."},
+        }
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-not-real"}), patch(
+                "ai_decisions.analyze", AsyncMock(return_value=decisions)) as analyze:
+            snapshot = await self.service.ai_snapshot(None, self.prices, whale_symbols=["WIF"])
+            self.assertEqual(snapshot["trigger"], "whale_signal")
+            with self.assertRaises(WalletError):
+                await self.service.ai_snapshot(None, self.prices, whale_symbols=["WIF"])
+
+        analyze.assert_awaited_once()
+        self.service.trade.assert_not_awaited()
+
     async def test_removed_candidate_position_can_still_exit_and_other_users_are_untouched(self):
         code,mint=self.new_candidate()
         row=self.service.ledger.reserve(101,"dynamic-buy","BUY",SOL,5_000_000,

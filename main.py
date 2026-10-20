@@ -3010,9 +3010,16 @@ RAW_HTML = r"""<!DOCTYPE html>
                     const ai=s.ai_status||{};
                     aiConfigured=!!ai.configured;
                     updateMemeToggleUI(s.sniper_active);
-                    document.getElementById('ai-status').textContent=aiConfigured?
-                        ai.model+' · '+Math.round(ai.interval_seconds/60)+' min interval'+(ai.last_analyzed_at?' · analyzed':' · connection unverified'):
-                        'AI not connected. Operator setup required.';
+                    const whaleAI=ai.whale_analysis||{};
+                    const whaleAIState=whaleAI.state&&whaleAI.state!=='idle'
+                        ? '\nWhale-triggered analysis: '+whaleAI.state
+                          +((whaleAI.symbols||[]).length?' · '+whaleAI.symbols.map(code=>(ai.asset_labels||{})[code]||code).join(', '):'')
+                          +(whaleAI.message?' · '+whaleAI.message:'')
+                        : '';
+                    document.getElementById('ai-status').textContent=(aiConfigured?
+                        ai.model+' · '+Math.round(ai.interval_seconds/60)+' min interval'+(ai.last_analyzed_at?' · analyzed':' · connection unverified')
+                          +(ai.last_trigger==='whale_signal'?' · whale-triggered':''):
+                        'AI not connected. Operator setup required.')+whaleAIState;
                     if(ai.last_decisions)document.getElementById('ai-decisions').textContent='Last analysis: '+new Date(ai.last_analyzed_at*1000).toLocaleString('en-GB')+'\n'+Object.entries(ai.last_decisions).map(([mode,d])=>(mode==='main'?'USDC':'SOL')+': '+d.action+' '+((ai.asset_labels||{})[d.symbol]||d.symbol||'')+' — '+d.reason).join('\n');
                     const discovery=ai.discovery||{};
                     document.getElementById('discovery-status').textContent=discovery.entry_paused?discovery.message:
@@ -3036,7 +3043,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                         +' · queued '+(whale.queued_lookups||0)
                         +(whale.dropped_lookups?' · dropped '+whale.dropped_lookups:'');
                     document.getElementById('whale-signal-status').textContent=(whale.message||'Whale stream status unavailable.')
-                        +'\nSupported programs only; signals are screened before AI may consider a trade.'
+                        +'\nPump.fun/PumpSwap explicit BUY logs only; other DEXs are excluded on the free stream.'
+                        +'\nA signal is not an order; eligible candidates must pass the existing screen.'
                         +'\n'+whaleQueue
                         +(whaleRows.length?'\n'+whaleRows.join('\n'):'\nNo qualifying signals received yet.');
                     const sniper=s.sniper_settings||{order_sol:.005};

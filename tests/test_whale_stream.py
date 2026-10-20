@@ -11,6 +11,7 @@ from whale_stream import (
     MIN_WHALE_LAMPORTS,
     HeliusWhaleStream,
     HeliusStreamError,
+    WHALE_SIGNAL_PROGRAMS,
     parse_log_notification,
     parse_whale_buy,
 )
@@ -145,22 +146,24 @@ class WhaleSignalTests(unittest.IsolatedAsyncioTestCase):
         del payload["params"]["result"]["meta"]["err"]
         self.assertIsNone(parse_whale_buy(payload))
 
-    async def test_free_stream_uses_standard_logs_subscriptions_for_supported_programs(self):
+    async def test_free_stream_uses_only_pump_buy_program_subscriptions(self):
         stream = HeliusWhaleStream("unit-test-key")
         requests = stream.subscriptions()
-        self.assertEqual(len(requests), len(DEX_PROGRAMS))
+        self.assertEqual(len(requests), len(WHALE_SIGNAL_PROGRAMS))
         self.assertTrue(all(request["method"] == "logsSubscribe" for request in requests))
         self.assertEqual(
             [request["params"][0]["mentions"][0] for request in requests],
-            list(DEX_PROGRAMS.values()),
+            list(WHALE_SIGNAL_PROGRAMS.values()),
         )
         self.assertTrue(all(request["params"][1]["commitment"] == "confirmed" for request in requests))
+        self.assertEqual(stream.snapshot()["supported_programs"], ["Pump.fun", "PumpSwap"])
         for address in DEX_PROGRAMS.values():
             self.assertEqual(str(Pubkey.from_string(address)), address)
 
-    def test_log_parser_accepts_only_confirmed_buy_or_swap_signatures(self):
+    def test_log_parser_accepts_only_explicit_successful_buy_signatures(self):
         self.assertEqual(parse_log_notification(logs_notification()), {"signature": SIGNATURE, "slot": 123})
         self.assertIsNone(parse_log_notification(logs_notification(logs=["Program log: Initialize"])))
+        self.assertIsNone(parse_log_notification(logs_notification(logs=["Program log: Instruction: Swap"])))
         self.assertIsNone(parse_log_notification(logs_notification(err={"InstructionError": [0, "failed"]})))
         self.assertIsNone(parse_log_notification(logs_notification(signature="bad")))
 
