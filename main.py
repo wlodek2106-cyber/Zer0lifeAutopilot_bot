@@ -129,6 +129,25 @@ def verify_telegram_init_data(raw_init_data: str) -> dict:
         raise TelegramAuthError("Malformed Telegram auth data.") from exc
 
 @web.middleware
+async def security_headers_middleware(request, handler):
+    """Apply browser protections consistently, including JSON and error responses."""
+    try:
+        response = await handler(request)
+    except web.HTTPException as exc:
+        response = exc
+
+    response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault(
+        "Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    if request.path == "/health" or request.path.startswith(("/api/", "/web-auth/")):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@web.middleware
 async def telegram_auth_middleware(request, handler):
     if not request.path.startswith("/api/"):
         return await handler(request)
@@ -3570,7 +3589,8 @@ async def set_telegram_webhook():
 
 async def main():
     init_db()
-    app = web.Application(middlewares=[english_json_middleware, telegram_auth_middleware])
+    app = web.Application(middlewares=[
+        security_headers_middleware, english_json_middleware, telegram_auth_middleware])
     runtime = CustodyRuntime(DB_FILE, SOLANA_RPC, ADMIN_TELEGRAM_ID, SHARED_DEPOSIT_WALLET,
         get_signer_keypair, verify_user_pin, get_token_prices, WATCHLIST, add_log,
         base_url=RENDER_URL, notification_token=TELEGRAM_TOKEN,
