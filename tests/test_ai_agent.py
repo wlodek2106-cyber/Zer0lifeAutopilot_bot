@@ -338,7 +338,7 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("telegram", content.lower())
         self.assertNotIn("test-key-not-real", content)
         self.assertFalse(self.payload["store"])
-        user_payload = json.loads(self.payload["messages"][1]["content"])
+        user_payload = json.loads(self.payload["messages"][2]["content"])
         self.assertEqual(user_payload["main_dex_market_context_numeric"], {
             "SOL": {"change_m5_pct": 0.8, "change_h1_pct": 2.1, "buys_h1": 12}
         })
@@ -346,6 +346,30 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
                          "main (USDC), never sniper (SOL)")
         self.assertIn("Consider token/SOL relative changes for sniper.",
                       self.payload["messages"][0]["content"])
+        self.assertIn("main (USDC) only", self.payload["messages"][1]["content"])
+        self.assertIn("unvalidated signal heuristics", self.payload["messages"][1]["content"])
+        self.assertEqual(user_payload["main_usdc_signal_evidence_numeric"]["SOL"]["change_m5_pct"], 0.8)
+        self.assertNotIn("WIF", user_payload["main_usdc_signal_evidence_numeric"])
+
+    async def test_main_usdc_signal_evidence_compares_recent_trend_and_buy_pressure(self):
+        evidence = ai_decisions.main_usdc_signal_evidence(
+            {"SOL": [100.0] * 15 + [101.0], "JUP": [100.0] * 15 + [103.0]},
+            {"JUP": {
+                "change_m5_pct": 1.2, "change_h1_pct": 2.5,
+                "buys_m5": 14, "sells_m5": 8,
+                "liquidity_usd": 250_000, "volume_24h_usd": 80_000,
+            }},
+            ["SOL", "JUP"],
+        )
+        self.assertAlmostEqual(evidence["JUP"]["recent_sample_change_pct"], 3.0)
+        self.assertAlmostEqual(evidence["JUP"]["relative_change_vs_SOL_pct"], 2.0)
+        self.assertTrue(evidence["JUP"]["buyers_exceed_sellers_m5"])
+        self.assertTrue(evidence["JUP"]["momentum_positive"])
+        self.assertTrue(evidence["JUP"]["buyer_pressure_positive"])
+        self.assertTrue(evidence["JUP"]["relative_strength_positive"])
+        self.assertEqual(evidence["JUP"]["liquidity_usd"], 250_000)
+        self.assertNotIn("buyers_exceed_sellers_h1", evidence["JUP"])
+        self.assertNotIn("buyers_exceed_sellers_m5", evidence["SOL"])
 
     async def test_ai_snapshot_fetches_and_persists_only_main_market_context(self):
         context = {

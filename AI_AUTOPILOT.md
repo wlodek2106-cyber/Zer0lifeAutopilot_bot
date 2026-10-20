@@ -45,6 +45,13 @@ First analysis can HOLD while prices warm up; AI refresh interval is 15 minutes.
 
 - Strict structured response and server-side BUY/SELL/HOLD and symbol validation.
 - AI cannot choose an owner, destination, amount, API credentials or transaction.
+- Core-only signal guidance compares recent price samples, DEX momentum, relative
+  strength versus SOL, and reported buy/sell pressure. It considers one strongest
+  USDC candidate when momentum plus relative strength or buyer pressure align, and
+  avoids recent/DEX 5-minute moves above 3%, 1-hour moves above 10%, and 6-hour
+  declines below 5%. These signal heuristics are not backtested and do not promise
+  trades or profits; Sniper's screening, signals, order size, and execution policy
+  are unchanged.
 - Purchases require at least five samples at analysis time, a decision no more than
   120 seconds old, no more than 1% subsequent price movement (SOL-relative for
   sniper), enough personal available capital, and the position-count limit.

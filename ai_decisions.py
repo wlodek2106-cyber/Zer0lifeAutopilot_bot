@@ -53,6 +53,55 @@ def sanitize_main_context(context, permitted_symbols):
     return sanitized
 
 
+def main_usdc_signal_evidence(market, context, permitted_symbols):
+    """Summarize only numeric, Core-specific momentum evidence; never alter Sniper inputs."""
+    clean_context = sanitize_main_context(context, permitted_symbols)
+
+    def change(samples, intervals):
+        if not isinstance(samples, list) or len(samples) <= intervals:
+            return None
+        start, end = samples[-1 - intervals], samples[-1]
+        if start <= 0 or not math.isfinite(start) or not math.isfinite(end):
+            return None
+        return round((end / start - 1) * 100, 6)
+
+    sol_move = change(market.get("SOL", []), 15)
+    evidence = {}
+    for symbol in permitted_symbols:
+        samples = market.get(symbol, [])
+        metrics = clean_context.get(symbol, {})
+        recent_move = change(samples, 15)
+        item = {
+            "recent_sample_change_pct": recent_move,
+            "relative_change_vs_SOL_pct": (
+                round(recent_move - sol_move, 6)
+                if recent_move is not None and sol_move is not None else None
+            ),
+        }
+        for name in ("change_m5_pct", "change_h1_pct", "change_h6_pct",
+                     "change_h24_pct", "liquidity_usd", "volume_24h_usd"):
+            if name in metrics:
+                item[name] = metrics[name]
+        for window in ("m5", "h1"):
+            buys, sells = metrics.get("buys_" + window), metrics.get("sells_" + window)
+            if type(buys) is int and type(sells) is int:
+                item["buyers_exceed_sellers_" + window] = buys > sells
+        dex_short = metrics.get("change_m5_pct")
+        dex_hour = metrics.get("change_h1_pct")
+        item["momentum_positive"] = bool(
+            (recent_move is not None and recent_move > 0
+             and any(type(value) in (int, float) and value > 0 for value in (dex_short, dex_hour)))
+            or (type(dex_short) in (int, float) and dex_short > 0
+                and type(dex_hour) in (int, float) and dex_hour > 0)
+        )
+        item["buyer_pressure_positive"] = any(
+            item.get("buyers_exceed_sellers_" + window) is True for window in ("m5", "h1"))
+        relative = item["relative_change_vs_SOL_pct"]
+        item["relative_strength_positive"] = relative is not None and relative > 0
+        evidence[symbol] = item
+    return evidence
+
+
 def validate_decisions(value, universes):
     if not isinstance(value, dict) or set(value) != {"main", "sniper"}:
         raise AIError("AI вернул неверный набор режимов.")
@@ -106,11 +155,26 @@ async def analyze(session, market, universes, screening=None, main_context=None)
                 "Screening scores reflect liquidity/activity, not expected profit. "
                 "They do not establish that a project is safe or truly a meme. "
                 "Only the independent risk controller may execute any decision.")},
+            {"role": "system", "content": (
+                "Additional strategy guidance for main (USDC) only; do not apply it to sniper (SOL), "
+                "whose existing decision policy remains unchanged. Compare all permitted main assets using "
+                "main_usdc_signal_evidence_numeric. A broad flat market is not by itself a reason to HOLD if "
+                "one permitted asset has confirmed relative strength. Consider BUY for the best-supported "
+                "single asset when at least two evidence categories align: momentum_positive, "
+                "buyer_pressure_positive, and relative_strength_positive. Require momentum plus at least "
+                "one of the latter two categories; two price-change measurements alone are not independent "
+                "confirmation. Do not chase an extended move (recent-sample or DEX 5-minute change above 3%, "
+                "or DEX 1-hour change above 10%); avoid candidates with DEX 6-hour change below -5%. "
+                "Missing or conflicting "
+                "evidence still means HOLD. These are unvalidated signal heuristics, not a profit forecast; "
+                "never force a trade when no candidate qualifies.")},
             {"role": "user", "content": json.dumps({
                 "prices_usd_recent_samples": market, "permitted_symbols": universes,
                 "sample_interval_seconds": 20,
                 "main_dex_market_context_numeric": sanitize_main_context(main_context, universes["main"]),
                 "main_dex_context_applies_only_to": "main (USDC), never sniper (SOL)",
+                "main_usdc_signal_evidence_numeric": main_usdc_signal_evidence(
+                    market, main_context, universes["main"]),
                 "sniper_screening_numeric": screening or {},
                 "main_funding": "USDC", "sniper_funding": "SOL"})},
         ],
