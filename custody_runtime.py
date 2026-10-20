@@ -167,6 +167,7 @@ class CustodyRuntime(WalletRuntime):
         self.discovery_started = 0
         self._jito_tip_accounts = []
         self._jito_tip_accounts_expiry = 0
+        self._close_retry_after = {}
         self.history_seen = {}
         self.restore_catalog()
 
@@ -1064,6 +1065,10 @@ class CustodyRuntime(WalletRuntime):
                 self.ledger.fail(row["id"], network_proven=True, fee=fee,
                     failure_reason=activity_log.safe_failure_reason(
                         "Solana finalized the transaction with an error: " + chain_error))
+                if row["kind"] == "SELL" and self.ledger.settings(row["uid"])["close_requested"]:
+                    symbol = json.loads(row["metadata"]).get("symbol", "")
+                    self.schedule_close_retry(row["uid"],
+                        "Solana finalized this sale with an error: " + chain_error, symbol)
                 continue
             if status.get("confirmationStatus") != "finalized":
                 continue
@@ -1843,7 +1848,25 @@ class CustodyRuntime(WalletRuntime):
         body = await request.json()
         if body.get("confirm") is not True:
             raise WalletError("Подтвердите закрытие только своих позиций.", 400)
-        self.ledger.settings(uid, enabled=False, sniper_enabled=False, close=True)
+        was_queued = bool(self.ledger.settings(uid)["close_requested"])
+        positions = self.ledger.positions(uid, "OPEN")
+        pending_sell = any(op["uid"] == uid and op["kind"] == "SELL"
+                           for op in self.ledger.pending())
+        should_queue = bool(positions or pending_sell)
+        self.ledger.settings(uid, enabled=False, sniper_enabled=False, close=should_queue)
+        if not should_queue:
+            self._close_retry_after.pop(uid, None)
+            activity_log.record_event(self, uid, f"close-empty-{uuid.uuid4()}",
+                "close_queue_empty", "Close request checked: no confirmed open positions remain. No transaction was sent.")
+            return web.json_response({"success": True,
+                "message": "No confirmed open positions remain. No transaction was sent."})
+        if not was_queued:
+            self._close_retry_after.pop(uid, None)
+            waiting = " An existing sell is awaiting confirmation." if pending_sell else ""
+            activity_log.record_event(self, uid, f"close-queued-{uuid.uuid4()}",
+                "close_queue_queued",
+                f"Close-all request queued for {len(positions)} open position(s). "
+                f"Core and Sniper are OFF.{waiting} No new transaction was sent by this request.")
         return web.json_response({"success": True, "message": "Закрытие ваших подтверждённых позиций поставлено в очередь."})
 
     async def close_position(self, request, session):
@@ -2039,56 +2062,116 @@ class CustodyRuntime(WalletRuntime):
                 self.log("Recovery notification worker unavailable; queued alerts are retained.")
             await asyncio.sleep(20)
 
+    async def process_close_queues(self, session):
+        queued = [user for user in self.ledger.active_users() if user["close_requested"]]
+        if not queued:
+            return False
+        if self.pending():
+            return True
+        for queued_user in queued:
+            uid = queued_user["uid"]
+            retry = self._close_retry_after.get(uid, {})
+            if retry.get("until", 0) > time.monotonic():
+                continue
+            async with self.lock:
+                if self.pending():
+                    return True
+                if getattr(self, "web_access", None):
+                    self.web_access.pause_expired(uid)
+                current = self.ledger.settings(uid)
+                if not current["close_requested"]:
+                    continue
+                positions = self.ledger.positions(uid, "OPEN")
+                if not positions:
+                    self.ledger.settings(uid, close=False)
+                    self._close_retry_after.pop(uid, None)
+                    activity_log.record_event(self, uid, f"close-complete-{uuid.uuid4()}",
+                        "close_queue_complete", "Close-all complete: no open position remains.")
+                    continue
+                target = positions[0]
+                try:
+                    await self.trade(session, uid, target["asset"], target["funding_asset"],
+                        target["raw"], "SELL", {"output_asset": target["funding_asset"]},
+                        target["id"], manual=True)
+                    self._close_retry_after.pop(uid, None)
+                except Exception as exc:
+                    self.schedule_close_retry(uid, operation_failure_reason(exc), target["symbol"])
+                    self.log("Close queue attempt failed; the request remains queued and will retry automatically.")
+                return True
+        return True
+
+    def schedule_close_retry(self, uid, reason, symbol=""):
+        previous = self._close_retry_after.get(uid, {})
+        attempts = previous.get("attempts", 0) + 1
+        delay = min(300, 20 * (2 ** min(attempts - 1, 4)))
+        self._close_retry_after[uid] = {
+            "until": time.monotonic() + delay, "attempts": attempts}
+        name = activity_log.label(self, symbol) or "position"
+        safe_reason = activity_log.safe_failure_reason(reason)
+        activity_log.record_event(self, uid, f"close-error-{uuid.uuid4()}",
+            "close_queue_retry",
+            f"Close attempt for {name} has no finalized success: {safe_reason}. "
+            f"The queue remains active. The server will not send again while a transaction is unresolved; "
+            f"next retry is no sooner than {delay} seconds.")
+        return delay
+
+    async def worker_cycle(self, session):
+        if getattr(self, "web_access", None):
+            self.web_access.pause_expired()
+        await self.reconcile(session)
+        close_queue_active = await self.process_close_queues(session)
+        await self.scan_deposits(session)
+        self.ledger.credit_safe_partner_earnings()
+        if close_queue_active:
+            return
+        users = self.ledger.active_users()
+        if not users:
+            return
+        self.poll_discovery()
+        prices = await self.current_prices(session)
+        for symbol in self.history:
+            if symbol not in prices:
+                self.history[symbol] = []
+        for symbol, price in prices.items():
+            if symbol in self.history and price > 0:
+                if time.time()-self.history_seen.get(symbol, 0) > 90:
+                    self.history[symbol] = []
+                self.history[symbol] = (self.history[symbol] + [price])[-90:]
+                self.history_seen[symbol] = time.time()
+        snapshot = self.poll_ai(prices) if any(
+            user["trading"] or user["sniper_trading"] for user in users) else None
+        for settings in users:
+            uid = settings["uid"]
+            async with self.lock:
+                if self.pending():
+                    break
+                if getattr(self, "web_access", None):
+                    self.web_access.pause_expired(uid)
+                current = self.ledger.settings(uid)
+                positions = self.ledger.positions(uid, "OPEN")
+                target = next((p for p in positions if (
+                    (current["sniper_trading"] if p["funding_asset"] == SOL else current["trading"])
+                    and self.exit_triggered(p, prices))), None)
+                if target:
+                    await self.trade(session, uid, target["asset"], target["funding_asset"],
+                        target["raw"], "SELL", {"output_asset": target["funding_asset"]},
+                        target["id"], manual=False)
+                elif snapshot:
+                    await self.apply_ai_decision(session, uid, current, positions, prices, snapshot)
+
     async def worker(self):
-        # Settings are paused on restart. No agent-triggered trades or blind retries.
+        # Settings are paused on restart. Explicit close queues run before market scans.
         while True:
             try:
                 async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=35)) as session:
-                    if getattr(self, "web_access", None):
-                        self.web_access.pause_expired()
-                    await self.reconcile(session)
-                    await self.scan_deposits(session)
-                    self.ledger.credit_safe_partner_earnings()
-                    users = self.ledger.active_users()
-                    if users:
-                        self.poll_discovery()
-                        prices = await self.current_prices(session)
-                        for symbol in self.history:
-                            if symbol not in prices:
-                                self.history[symbol] = []
-                        for symbol, price in prices.items():
-                            if symbol in self.history and price > 0:
-                                if time.time()-self.history_seen.get(symbol, 0) > 90:
-                                    self.history[symbol] = []
-                                self.history[symbol] = (self.history[symbol] + [price])[-90:]
-                                self.history_seen[symbol] = time.time()
-                        snapshot = self.poll_ai(prices) if any(
-                            user["trading"] or user["sniper_trading"] for user in users) else None
-                        for settings in users:
-                            uid = settings["uid"]
-                            async with self.lock:
-                                if self.pending():
-                                    break
-                                if getattr(self, "web_access", None):
-                                    self.web_access.pause_expired(uid)
-                                current = self.ledger.settings(uid)
-                                positions = self.ledger.positions(uid, "OPEN")
-                                target = next((p for p in positions if current["close_requested"] or (
-                                    (current["sniper_trading"] if p["funding_asset"] == SOL else current["trading"])
-                                    and self.exit_triggered(p, prices))), None)
-                                if target:
-                                    await self.trade(session, uid, target["asset"], target["funding_asset"], target["raw"], "SELL",
-                                        {"output_asset": target["funding_asset"]}, target["id"],
-                                        manual=bool(current["close_requested"]))
-                                elif current["close_requested"]:
-                                    self.ledger.settings(uid, close=False)
-                                elif snapshot:
-                                    await self.apply_ai_decision(session, uid, current, positions, prices, snapshot)
+                    await self.worker_cycle(session)
             except Exception as exc:
                 message = str(exc) if isinstance(exc, (WalletError, LedgerError)) else type(exc).__name__
                 if message != self.last_error:
                     self.log("Custody worker: " + message)
                     self.last_error = message
+            else:
+                self.last_error = ""
             await asyncio.sleep(20)
 
     def exit_triggered(self, position, prices):

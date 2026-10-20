@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -64,6 +65,91 @@ class ActivityTests(unittest.IsolatedAsyncioTestCase):
 
     def codes(self):
         return {e.get("code") for e in self.entries()}
+
+    def open_position(self, uid=101):
+        buy = self.ledger.reserve(uid, "close-test-" + str(uuid.uuid4()), "BUY", USDC,
+            1_000_000, {"output_asset": self.runtime.watchlist["WIF"]["mint"],
+                        "symbol": "WIF", "decimals": 6})
+        self.ledger.prepared(buy["id"], str(Signature.new_unique()), "offline-wire")
+        self.ledger.finalize(buy["id"], 1_000_000, 5000, 1_000_000)
+        return self.ledger.positions(uid, "OPEN")[0]
+
+    async def test_close_queue_status_is_visible_when_automated_modes_are_off(self):
+        self.open_position()
+        self.ledger.settings(101, enabled=False, sniper_enabled=False, close=True)
+
+        result = activity_log.report(self.runtime, 101)
+
+        self.assertIn("Automatic trading is paused.", result["activity_status"])
+        self.assertIn("Manual close queue active: 1 open position(s) remaining.",
+                      result["activity_status"])
+        self.assertFalse(self.ledger.settings(101)["trading"])
+        self.assertFalse(self.ledger.settings(101)["sniper_trading"])
+
+    async def test_close_queue_attempts_owned_position_without_market_scan(self):
+        position = self.open_position()
+        self.ledger.settings(101, enabled=False, sniper_enabled=False, close=True)
+
+        active = await self.runtime.process_close_queues(None)
+
+        self.assertTrue(active)
+        self.runtime.trade.assert_awaited_once_with(None, 101, position["asset"],
+            position["funding_asset"], position["raw"], "SELL",
+            {"output_asset": position["funding_asset"]}, position["id"], manual=True)
+        self.runtime.rpc.assert_not_awaited()
+
+    async def test_close_queue_failure_is_logged_and_uses_retry_backoff(self):
+        position = self.open_position()
+        self.ledger.settings(101, enabled=False, sniper_enabled=False, close=True)
+        self.runtime.trade.side_effect = WalletError("Jupiter route unavailable")
+
+        await self.runtime.process_close_queues(None)
+        result = activity_log.report(self.runtime, 101)
+        await self.runtime.process_close_queues(None)
+
+        self.assertEqual(self.runtime.trade.await_count, 1)
+        self.assertEqual(self.runtime._close_retry_after[101]["attempts"], 1)
+        self.assertIn("Jupiter route unavailable", json.dumps(result["entries"]))
+        self.assertIn("next retry is no sooner than 20 seconds", json.dumps(result["entries"]))
+        self.assertEqual(self.ledger.positions(101, "OPEN")[0]["id"], position["id"])
+
+    async def test_worker_prioritizes_close_queue_before_market_scanning(self):
+        events = []
+        self.runtime.reconcile = AsyncMock(side_effect=lambda *_: events.append("reconcile"))
+        self.runtime.process_close_queues = AsyncMock(
+            side_effect=lambda *_: events.append("close") or True)
+        self.runtime.scan_deposits = AsyncMock(side_effect=lambda *_: events.append("deposits"))
+        self.runtime.current_prices = AsyncMock()
+        with patch.object(self.ledger, "credit_safe_partner_earnings",
+                          side_effect=lambda: events.append("partners")):
+            await self.runtime.worker_cycle(None)
+
+        self.assertEqual(events, ["reconcile", "close", "deposits", "partners"])
+        self.runtime.current_prices.assert_not_awaited()
+
+    async def test_close_all_request_is_logged_and_disables_both_modes(self):
+        self.open_position()
+        self.ledger.settings(101, enabled=True, sniper_enabled=True)
+        self.runtime.admit = Mock()
+
+        class CloseRequest(dict):
+            def __init__(self):
+                super().__init__(telegram_user={"id": 101})
+
+            async def json(self):
+                return {"confirm": True}
+
+        response = await self.runtime.close_all(CloseRequest(), None)
+        settings = self.ledger.settings(101)
+        result = activity_log.report(self.runtime, 101)
+
+        self.assertEqual(response.status, 200)
+        self.assertFalse(settings["trading"])
+        self.assertFalse(settings["sniper_trading"])
+        self.assertTrue(settings["close_requested"])
+        self.assertIn("close_queue_queued", self.codes())
+        self.assertIn("No new transaction was sent", json.dumps(result["entries"]))
+        self.runtime.trade.assert_not_awaited()
 
     async def test_hold_and_sell_without_position_are_visible_and_deduplicated(self):
         await self.apply()
@@ -276,11 +362,12 @@ class ActivityBrowserTests(unittest.TestCase):
             await refresh();
             const box=document.getElementById('log-box');
             assert(box.textContent.includes('Waiting for activity'),'empty state is not black');
-            window.logFixture={success:true,activity_status:'Core ON; waiting',
+            window.logFixture={success:true,activity_status:'Core OFF; Manual close queue active: 1 open position(s) remaining',
               entries:[{created_at:1700000000,category:'AI',message:'<img src=x onerror=alert(1)> HOLD'},
                        {created_at:1700000001,category:'TRANSACTION',message:'BUY: SUBMITTED',
                         signature:'123456789ABCDEFGHIJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'}]};
             await refresh();
+            assert(box.textContent.includes('Manual close queue active'),'queue status is visible in the log');
             assert(box.querySelector('img')===null,'AI text cannot inject HTML');
             assert(box.textContent.includes('<img'),'AI text rendered literally');
             assert(box.textContent.includes('Tx: 123'),'transaction signature shown');

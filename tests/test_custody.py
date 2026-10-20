@@ -23,6 +23,7 @@ from solders.pubkey import Pubkey
 from solders.signature import Signature
 from solders.transaction import Transaction, VersionedTransaction
 
+import activity_log
 import custody_runtime as runtime
 from custody_ledger import CustodyLedger, LedgerError, USDC, SOL, FEE_CAP, available, position_account
 import wallet_runtime as legacy
@@ -776,6 +777,36 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("sendTransaction", [call.args[1] for call in self.service.rpc.call_args_list])
         self.assertTrue(self.ledger.audit())
 
+    async def test_finalized_failed_sell_logs_reason_and_backs_off_close_queue(self):
+        sell, signature, position_id = self.pending_sell()
+        self.ledger.settings(101, close=True)
+
+        async def rpc(session, method, params=None):
+            if method == "getGenesisHash":
+                return legacy.GENESIS
+            if method == "getSignatureStatuses":
+                return {"value": [{"confirmationStatus": "finalized",
+                                   "err": {"InstructionError": [0, "Custom"]}}]}
+            if method == "getTransaction":
+                return {"meta": {"fee": 5000}}
+            raise AssertionError("Unexpected RPC: " + method)
+
+        self.service.rpc = AsyncMock(side_effect=rpc)
+        self.service.deliver_withdrawal_notifications = AsyncMock()
+
+        await self.service.reconcile(None)
+
+        self.assertEqual(self.ledger.operation(sell["id"])["state"], "FAILED")
+        position = next(p for p in self.ledger.positions(101) if p["id"] == position_id)
+        self.assertEqual(position["state"], "OPEN")
+        self.assertTrue(self.ledger.settings(101)["close_requested"])
+        self.assertEqual(self.service._close_retry_after[101]["attempts"], 1)
+        report = activity_log.report(self.service, 101)
+        self.assertIn("Solana finalized this sale with an error", json.dumps(report["entries"]))
+        self.assertIn("next retry is no sooner than 20 seconds", json.dumps(report["entries"]))
+        self.assertNotIn("sendTransaction", [call.args[1] for call in self.service.rpc.call_args_list])
+        self.assertTrue(self.ledger.audit())
+
     async def test_worker_recovers_expired_withdraw_without_resending(self):
         operation, signature = self.pending_withdraw()
         with self.ledger.db() as db:
@@ -1223,6 +1254,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         await self.service.handle(Request(202, {"trade_amount_usdc": "1"}), self.service.toggle)
         self.assertTrue(self.ledger.settings(202)["trading"])
         self.assertFalse(self.ledger.settings(101)["trading"])
+        self.open_position_for_close()
         await self.service.handle(Request(101, {"confirm": True}), self.service.close_all)
         self.assertTrue(self.ledger.settings(101)["close_requested"])
         self.assertFalse(self.ledger.settings(202)["close_requested"])

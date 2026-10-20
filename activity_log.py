@@ -27,6 +27,23 @@ def record(runtime, uid, snapshot, mode, code, message):
             pass
 
 
+def record_event(runtime, uid, event_id, code, message):
+    """Record account-scoped system activity without coupling it to trade execution."""
+    try:
+        with runtime.ledger.db() as db:
+            inserted = db.execute("INSERT OR IGNORE INTO custody_activity_events VALUES(?,?,?,?,?,?)",
+                (uid, event_id, "system", code, str(message)[:600], int(time.time()))).rowcount
+            if inserted:
+                db.execute("""DELETE FROM custody_activity_events WHERE uid=? AND rowid NOT IN
+                    (SELECT rowid FROM custody_activity_events WHERE uid=?
+                     ORDER BY created_at DESC,rowid DESC LIMIT 200)""", (uid, uid))
+    except Exception:
+        try:
+            runtime.log("Activity history write unavailable.")
+        except Exception:
+            pass
+
+
 def label(runtime, symbol):
     if not symbol:
         return ""
@@ -79,6 +96,7 @@ def report(runtime, uid):
     latest = runtime.ledger.ai_latest()
     config = ai_decisions.configuration()
     active = settings["trading"] or settings["sniper_trading"]
+    pending = runtime.pending()
     status = ("Core: " + ("ON" if settings["trading"] else "OFF") +
               " · Meme Sniper: " + ("ON" if settings["sniper_trading"] else "OFF") + ". ")
     if not active:
@@ -95,7 +113,19 @@ def report(runtime, uid):
         status += "Waiting for the first AI analysis and market data."
     if active and getattr(runtime, "ai_activity_error", ""):
         status += " " + runtime.ai_activity_error
-    if runtime.pending():
+    if settings["close_requested"]:
+        remaining = len(runtime.ledger.positions(uid, "OPEN"))
+        status += f" Manual close queue active: {remaining} open position(s) remaining."
+        if any(op["uid"] == uid for op in pending):
+            status += " Waiting for your existing transaction to resolve; do not resubmit."
+        elif pending:
+            status += " Waiting for another shared-wallet operation to resolve."
+        retry = getattr(runtime, "_close_retry_after", {}).get(uid)
+        if retry:
+            seconds = max(0, math.ceil(retry["until"] - time.monotonic()))
+            if seconds:
+                status += f" Next close attempt no sooner than {seconds} seconds."
+    elif pending:
         status += "A shared-vault operation is awaiting resolution; new sends may wait."
     with runtime.ledger.db() as db:
         events = [dict(r) for r in db.execute(
@@ -107,7 +137,8 @@ def report(runtime, uid):
         attempted = {r[0] for r in db.execute(
             "SELECT mode FROM custody_ai_attempts WHERE uid=? AND analysis_id=?",
             (uid, latest["id"] if latest else ""))}
-    entries = [{**event, "category": "AI"} for event in events]
+    entries = [{**event, "category": "SYSTEM" if event["mode"] == "system" else "AI"}
+               for event in events]
     # A freshly upgraded or paused account can have a model result without a
     # recorded worker event. Display it explicitly as a result, never an execution.
     if latest:
@@ -139,4 +170,4 @@ def report(runtime, uid):
         " [" + e["category"] + "] " + e["message"] +
         ("\nTx: " + e["signature"] if e.get("signature") else "") for e in entries]
     return {"activity_status": status, "entries": entries, "logs": logs,
-            "activity_version": "decision-history-v1"}
+            "activity_version": "decision-history-v2"}
