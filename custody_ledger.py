@@ -1221,12 +1221,19 @@ class CustodyLedger:
     def ai_allow_call(self, interval, daily_limit):
         now = int(time.time())
         with self.db() as db:
-            latest = db.execute("SELECT MAX(created_at) FROM custody_ai_calls").fetchone()[0]
+            latest_attempt = db.execute("SELECT MAX(created_at) FROM custody_ai_calls").fetchone()[0]
+            latest_success = db.execute("SELECT MAX(created_at) FROM custody_ai_analyses").fetchone()[0]
             count = db.execute("SELECT COUNT(*) FROM custody_ai_calls WHERE created_at>=?", (now - now % 86400,)).fetchone()[0]
             if count >= daily_limit:
                 raise LedgerError("Дневной лимит обращений к AI исчерпан. Новые входы остановлены.")
-            if latest is not None and now - latest < interval:
+            if latest_success is not None and now - latest_success < interval:
                 raise LedgerError("AI ожидает следующего интервала анализа. Новые входы пока остановлены.")
+            if (latest_attempt is not None
+                    and (latest_success is None or latest_attempt > latest_success)
+                    and now - latest_attempt < 60):
+                raise LedgerError(
+                    "AI предыдущий запрос завершился ошибкой. Повторите через 60 секунд; "
+                    "попытка учитывается в дневном лимите.")
             aid = str(uuid.uuid4())
             db.execute("INSERT INTO custody_ai_calls VALUES(?,?)", (aid, now))
             return aid

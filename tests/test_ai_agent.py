@@ -65,13 +65,28 @@ class AILedgerTests(unittest.TestCase):
 
     def test_ai_quota_and_cooldown_are_persistent(self):
         with patch("custody_ledger.time.time", return_value=100000):
-            self.ledger.ai_allow_call(900, 2)
+            aid = self.ledger.ai_allow_call(900, 2)
+            self.ledger.ai_record(aid, {"decisions": {}})
             with self.assertRaises(LedgerError):
                 self.ledger.ai_allow_call(900, 2)
         with patch("custody_ledger.time.time", return_value=101000):
             reopened = CustodyLedger(self.tmp.name + "/db")
-            reopened.ai_allow_call(900, 2)
+            aid = reopened.ai_allow_call(900, 2)
+            reopened.ai_record(aid, {"decisions": {}})
         with patch("custody_ledger.time.time", return_value=102000):
+            with self.assertRaises(LedgerError):
+                reopened.ai_allow_call(900, 2)
+
+    def test_failed_ai_call_retries_after_short_backoff_and_counts_toward_quota(self):
+        with patch("custody_ledger.time.time", return_value=100000):
+            self.ledger.ai_allow_call(900, 3)  # No analysis record: provider attempt failed.
+        with patch("custody_ledger.time.time", return_value=100030):
+            with self.assertRaisesRegex(LedgerError, "через 60 секунд"):
+                self.ledger.ai_allow_call(900, 3)
+        with patch("custody_ledger.time.time", return_value=100061):
+            reopened = CustodyLedger(self.tmp.name + "/db")
+            reopened.ai_allow_call(900, 3)
+        with patch("custody_ledger.time.time", return_value=100062):
             with self.assertRaises(LedgerError):
                 reopened.ai_allow_call(900, 2)
 
@@ -304,6 +319,17 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
                 await self.service.ai_snapshot(None, self.prices)
             self.assertIsNone(self.service.poll_ai(self.prices))
         self.service.trade.assert_not_awaited()
+
+    async def test_ai_retry_cooldown_returns_clear_http_429(self):
+        message = ("AI предыдущий запрос завершился ошибкой. Повторите через 60 секунд; "
+                   "попытка учитывается в дневном лимите.")
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-not-real"}):
+            with patch.object(self.service.ledger, "ai_allow_call",
+                              side_effect=LedgerError(message)):
+                with self.assertRaises(WalletError) as raised:
+                    await self.service.ai_snapshot(None, self.prices)
+        self.assertEqual(raised.exception.status, 429)
+        self.assertEqual(str(raised.exception), message)
 
     async def test_invalid_model_commands_fail_closed(self):
         for edit in [

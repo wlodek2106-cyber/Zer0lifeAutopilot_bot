@@ -322,8 +322,8 @@ class CustodyRuntime(WalletRuntime):
             try:
                 aid = self.ledger.ai_allow_call(min_interval, config["max_calls_per_day"])
                 decisions = await ai_decisions.analyze(session, market, universes, screening, main_context)
-            except LedgerError:
-                raise WalletError("AI analysis request limit or cooldown blocked this call.", 503) from None
+            except LedgerError as exc:
+                raise WalletError(str(exc), 429) from None
             except ai_decisions.AIError as exc:
                 raise WalletError(str(exc), 503) from None
             except (aiohttp.ClientError, asyncio.TimeoutError):

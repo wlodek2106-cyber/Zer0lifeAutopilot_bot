@@ -136,6 +136,7 @@ TEXT = {
     "Частичная продажа требует отдельного разбора.": "Partial sale requires separate reconciliation.",
     "Дневной лимит обращений к AI исчерпан. Новые входы остановлены.": "Daily AI call limit reached. New entries paused.",
     "AI ожидает следующего интервала анализа. Новые входы пока остановлены.": "AI is waiting for the next analysis interval. New entries paused.",
+    "AI предыдущий запрос завершился ошибкой. Повторите через 60 секунд; попытка учитывается в дневном лимите.": "The previous AI request failed. Retry in 60 seconds; this attempt still counts toward the daily limit.",
     "Неизвестный режим AI.": "Unknown AI mode.",
     "Проверка целостности реестра не пройдена.": "Ledger integrity check failed.",
     "Нужен ровно один Memo платёжного запроса.": "Exactly one payment-request Memo required.",
