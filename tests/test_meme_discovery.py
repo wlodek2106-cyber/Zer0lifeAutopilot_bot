@@ -124,3 +124,61 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
                         {"dexId":"unknown"},{"chainId":"ethereum"},{"liquidity":"malformed"}):
             result=pool_metrics(pool(**changes))
             self.assertTrue(result is None or not result["eligible"],changes)
+
+    def test_pool_metrics_explain_each_failed_threshold(self):
+        result=pool_metrics(pool(
+            liquidity={"usd":50000},
+            volume={"h24":30000},
+            txns={"h24":{"buys":10,"sells":5}},
+            pairCreatedAt=int((time.time()-3600)*1000),
+        ))
+        self.assertFalse(result["eligible"])
+        self.assertEqual(result["rejection_reasons"],[
+            "liquidity $50,000 below $100,000",
+            "24h volume $30,000 below $100,000",
+            "24h trades 15 below 200",
+            "pool age 1.0h below 24h",
+        ])
+
+    async def test_scan_reports_specific_reasons_for_rejected_whale_mint(self):
+        self.discovery.queue_whale_mint(MINT)
+
+        async def fetch(session, path):
+            if path.startswith("/tokens/"):
+                return [pool(
+                    MINT,
+                    liquidity={"usd":50000},
+                    volume={"h24":30000},
+                    txns={"h24":{"buys":10,"sells":5}},
+                    pairCreatedAt=int((time.time()-3600)*1000),
+                )]
+            return [{"chainId":"solana","tokenAddress":MINT}]
+
+        self.discovery.fetch=AsyncMock(side_effect=fetch)
+        report=await self.discovery.scan(None)
+        self.assertEqual(report["eligible"],0)
+        self.assertEqual(len(report["whale_rejections"]),1)
+        rejection=report["whale_rejections"][0]
+        self.assertEqual(rejection["mint"],MINT[:6]+"…"+MINT[-5:])
+        self.assertEqual(rejection["reasons"],[
+            "liquidity $50,000 below $100,000",
+            "24h volume $30,000 below $100,000",
+            "24h trades 15 below 200",
+            "pool age 1.0h below 24h",
+        ])
+
+    async def test_scan_reports_on_chain_authority_rejection(self):
+        self.discovery.queue_whale_mint(MINT)
+        self.rpc.return_value={"value":[mint_account(mintAuthority=MINT)]}
+
+        async def fetch(session, path):
+            if path.startswith("/tokens/"):
+                return [pool(MINT)]
+            return [{"chainId":"solana","tokenAddress":MINT}]
+
+        self.discovery.fetch=AsyncMock(side_effect=fetch)
+        report=await self.discovery.scan(None)
+        self.assertEqual(report["eligible"],0)
+        self.assertEqual(report["whale_rejections"][0]["reasons"],[
+            "mint authority is still enabled",
+        ])

@@ -37,8 +37,7 @@ def pool_metrics(pair, now=None):
             pair.get(key) is not None and not isinstance(pair[key], dict)
             for key in ("liquidity", "volume", "txns", "priceChange")):
         return None
-    if (pair.get("chainId") != "solana" or not isinstance(pair.get("dexId"), str)
-            or pair["dexId"] not in DEXES):
+    if pair.get("chainId") != "solana":
         return None
     mint = pair.get("baseToken", {}).get("address")
     if not valid_mint(mint):
@@ -54,16 +53,36 @@ def pool_metrics(pair, now=None):
     price = number(pair.get("priceUsd"))
     changes_present = all(isinstance(change.get(key), (int, float)) and not isinstance(change[key], bool)
                           and math.isfinite(change[key]) for key in ("m5", "h1"))
-    eligible = (price > 0 and liquid >= 100000 and vol >= 100000 and activity >= 200 and changes_present
-                and number(pair.get("pairCreatedAt")) > 0 and age >= 24
-                and abs(number(change.get("m5"))) <= 35 and abs(number(change.get("h1"))) <= 150)
+    reasons = []
+    if not isinstance(pair.get("dexId"), str) or pair["dexId"] not in DEXES:
+        reasons.append("DEX is not approved")
+    if price <= 0:
+        reasons.append("price unavailable")
+    if liquid < 100000:
+        reasons.append(f"liquidity ${liquid:,.0f} below $100,000")
+    if vol < 100000:
+        reasons.append(f"24h volume ${vol:,.0f} below $100,000")
+    if activity < 200:
+        reasons.append(f"24h trades {activity:,.0f} below 200")
+    if number(pair.get("pairCreatedAt")) <= 0:
+        reasons.append("pool creation time unavailable")
+    elif age < 24:
+        reasons.append(f"pool age {age:.1f}h below 24h")
+    if not changes_present:
+        reasons.append("5m/1h price-change data unavailable")
+    else:
+        if abs(number(change.get("m5"))) > 35:
+            reasons.append(f"5m move {number(change.get('m5')):.1f}% exceeds ±35%")
+        if abs(number(change.get("h1"))) > 150:
+            reasons.append(f"1h move {number(change.get('h1')):.1f}% exceeds ±150%")
     # Screening priority is activity/liquidity, never expected return.
     score = math.log1p(max(liquid, 0)) + math.log1p(max(vol, 0)) + math.log1p(max(activity, 0))
     symbol = re.sub(r"[^a-zA-Z0-9_-]", "", str(pair.get("baseToken", {}).get("symbol", "")))[:20] or "TOKEN"
     return {"mint": mint, "symbol": symbol, "price": price, "liquidity_usd": liquid,
             "volume_24h_usd": vol, "transactions_24h": activity, "age_hours": max(age, 0),
             "change_m5_pct": number(change.get("m5")), "change_h1_pct": number(change.get("h1")),
-            "score": score, "eligible": eligible}
+            "dex": pair.get("dexId"), "score": score, "eligible": not reasons,
+            "rejection_reasons": reasons}
 
 
 class MemeDiscovery:
@@ -172,13 +191,29 @@ class MemeDiscovery:
             if not mints:
                 raise ValueError("Sources returned no Solana candidates.")
             best = {}
+            rejected_pools = {}
             for pair in await self.pairs(session, mints):
                 item = pool_metrics(pair)
-                if item and item["mint"] in mints and item["eligible"]:
+                if not item or item["mint"] not in mints:
+                    continue
+                if item["eligible"]:
                     if item["liquidity_usd"] > best.get(item["mint"], {}).get("liquidity_usd", 0):
                         best[item["mint"]] = item
+                else:
+                    previous = rejected_pools.get(item["mint"])
+                    approved_dex = item["dex"] in DEXES
+                    previous_approved_dex = previous and previous["dex"] in DEXES
+                    if (previous is None or (approved_dex and not previous_approved_dex)
+                            or (approved_dex == previous_approved_dex
+                                and (len(item["rejection_reasons"]) < len(previous["rejection_reasons"])
+                                     or (len(item["rejection_reasons"]) == len(previous["rejection_reasons"])
+                                         and item["score"] > previous["score"])))):
+                        rejected_pools[item["mint"]] = item
             ranked = sorted(best.values(), key=lambda item: item["score"], reverse=True)[:20]
             accepted = []
+            mint_rejections = {}
+            for item in sorted(best.values(), key=lambda row: row["score"], reverse=True)[20:]:
+                mint_rejections[item["mint"]] = ["outside the top 20 candidates checked on-chain"]
             if ranked:
                 accounts = await self.rpc(session, "getMultipleAccounts", [
                     [item["mint"] for item in ranked], {"encoding": "jsonParsed", "commitment": "finalized"}])
@@ -186,17 +221,36 @@ class MemeDiscovery:
                 if len(values) != len(ranked):
                     raise ValueError("RPC did not confirm all candidate mint accounts.")
                 for item, account in zip(ranked, values):
-                    if not account or account.get("owner") != TOKEN or not isinstance(account.get("data"), dict):
+                    reasons = []
+                    if not account:
+                        reasons.append("on-chain mint account not found")
+                    elif account.get("owner") != TOKEN:
+                        reasons.append("not a standard SPL token (Token-2022/other program)")
+                    elif not isinstance(account.get("data"), dict):
+                        reasons.append("on-chain mint data unavailable")
+                    if reasons:
+                        mint_rejections[item["mint"]] = reasons
                         continue
                     parsed = account["data"].get("parsed") or {}
                     info = parsed.get("info") or {}
                     decimals = info.get("decimals")
-                    if (parsed.get("type") != "mint" or not info.get("isInitialized")
-                            or not isinstance(decimals, int) or isinstance(decimals, bool) or not 0 <= decimals <= 9
-                            or info.get("mintAuthority") is not None or info.get("freezeAuthority") is not None):
+                    if parsed.get("type") != "mint":
+                        reasons.append("on-chain account is not a mint")
+                    if not info.get("isInitialized"):
+                        reasons.append("mint is not initialized")
+                    if (not isinstance(decimals, int) or isinstance(decimals, bool)
+                            or not 0 <= decimals <= 9):
+                        reasons.append("mint decimals are outside the supported 0–9 range")
+                    if info.get("mintAuthority") is not None:
+                        reasons.append("mint authority is still enabled")
+                    if info.get("freezeAuthority") is not None:
+                        reasons.append("freeze authority is still enabled")
+                    if reasons:
+                        mint_rejections[item["mint"]] = reasons
                         continue
                     code = self.aliases.get(item["mint"]) or "M_" + hashlib.sha256(item["mint"].encode()).hexdigest()[:16]
                     if code in self.seeds and decimals != self.seeds[code]["decimals"]:
+                        mint_rejections[item["mint"]] = ["mint decimals do not match the saved asset identity"]
                         continue
                     accepted.append({**item, "code": code, "decimals": decimals})
             now = int(time.time())
@@ -215,10 +269,26 @@ class MemeDiscovery:
                         (item["code"], item["mint"], item["decimals"], json.dumps(item), now))
             for mint in whale_mints:
                 self.whale_priorities.pop(mint, None)
+            accepted_mints = {item["mint"] for item in accepted}
+            whale_rejections = []
+            for mint in whale_mints:
+                if mint in accepted_mints:
+                    continue
+                if mint in best:
+                    reasons = mint_rejections.get(mint, ["candidate was not accepted by the on-chain screen"])
+                else:
+                    item = rejected_pools.get(mint)
+                    reasons = (item["rejection_reasons"] if item else
+                               mint_rejections.get(mint, ["no supported Solana pool data found"]))
+                whale_rejections.append({
+                    "mint": mint[:6] + "…" + mint[-5:],
+                    "reasons": reasons[:6],
+                })
             self.report = {"source": "DexScreener profiles + meme meta feeds + bounded searches", "complete": False,
                 "checked_at": now, "scanned": len(mints), "eligible": len(accepted), "source_failures": failures,
                 "whale_prioritized": len([mint for mint in whale_mints if mint in mints]),
                 "whale_candidates": sum(1 for item in accepted if item["mint"] in whale_mints),
+                "whale_rejections": whale_rejections,
                 "message": "Bounded Solana candidate sample, not every project or a profit forecast. Whale signals are leads only; all candidates still pass the existing screen.",
                 "candidates": accepted}
             self.blocked = False
