@@ -4,8 +4,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 from solders.hash import Hash
+from solders.instruction import Instruction
 from solders.keypair import Keypair
+from solders.message import MessageV0, to_bytes_versioned
 from solders.pubkey import Pubkey
+from solders.transaction import VersionedTransaction
 
 from custody_runtime import (
     CustodyRuntime,
@@ -135,8 +138,53 @@ class JitoRoutingTests(unittest.IsolatedAsyncioTestCase):
                 await CustodyRuntime.send_via_jito(
                     object.__new__(CustodyRuntime), session, "signed-base64", expected)
 
+    async def test_swap_refresh_changes_only_hash_and_keeps_a_valid_signature(self):
+        signer = Keypair()
+        old_hash, new_hash = Hash.new_unique(), Hash.new_unique()
+        message = MessageV0.try_compile(
+            signer.pubkey(), [Instruction(Pubkey.new_unique(), b"swap-fixture", [])], [], old_hash)
+        tx = VersionedTransaction(message, [signer])
+        runtime = object.__new__(CustodyRuntime)
+        runtime.wallet = str(signer.pubkey())
+        runtime.ready = lambda: signer
+        runtime.rpc = AsyncMock(side_effect=[
+            {"context": {"slot": 100}, "value": {
+                "blockhash": str(new_hash), "lastValidBlockHeight": 250}},
+            200,
+        ])
+
+        refreshed = await CustodyRuntime.refresh_swap_blockhash(runtime, None, tx)
+
+        self.assertNotEqual(refreshed.message.recent_blockhash, old_hash)
+        self.assertEqual(refreshed.message.header, message.header)
+        self.assertEqual(refreshed.message.account_keys, message.account_keys)
+        self.assertEqual(refreshed.message.instructions, message.instructions)
+        self.assertEqual(refreshed.message.address_table_lookups, message.address_table_lookups)
+        self.assertTrue(refreshed.signatures[0].verify(
+            signer.pubkey(), to_bytes_versioned(refreshed.message)))
+        self.assertEqual(runtime.rpc.await_count, 2)
+
+    async def test_swap_refresh_rejects_a_blockhash_near_expiry(self):
+        signer = Keypair()
+        tx = VersionedTransaction(
+            MessageV0.try_compile(signer.pubkey(), [], [], Hash.new_unique()), [signer])
+        runtime = object.__new__(CustodyRuntime)
+        runtime.wallet = str(signer.pubkey())
+        runtime.ready = lambda: signer
+        runtime.rpc = AsyncMock(side_effect=[
+            {"context": {"slot": 100}, "value": {
+                "blockhash": str(Hash.new_unique()), "lastValidBlockHeight": 250}},
+            235,
+        ])
+
+        with self.assertRaisesRegex(WalletError, "too close to expiry"):
+            await CustodyRuntime.refresh_swap_blockhash(runtime, None, tx)
+
     async def test_send_reserved_never_falls_back_to_public_rpc_for_swap(self):
-        signature = str(Keypair().pubkey())
+        signer = Keypair()
+        tx = VersionedTransaction(
+            MessageV0.try_compile(signer.pubkey(), [], [], Hash.new_unique()), [signer])
+        signature = str(tx.signatures[0])
         ledger = SimpleNamespace(
             prepared=Mock(),
             submitted=Mock(),
@@ -146,6 +194,7 @@ class JitoRoutingTests(unittest.IsolatedAsyncioTestCase):
             safe_simulation=AsyncMock(return_value="signed-base64"),
             authorize_execution_order=Mock(),
             authorize_execution_quote=AsyncMock(),
+            refresh_swap_blockhash=AsyncMock(return_value=tx),
             web_access=None,
             ledger=ledger,
             send_via_jito=AsyncMock(side_effect=TimeoutError()),
@@ -153,12 +202,13 @@ class JitoRoutingTests(unittest.IsolatedAsyncioTestCase):
             reconcile=AsyncMock(),
         )
         result = await CustodyRuntime.send_reserved(
-            runtime, None, SimpleNamespace(signatures=[signature]),
+            runtime, None, tx,
             {"id": "op1", "kind": "BUY", "uid": 101, "asset": SOL, "raw": 1},
             {"output_asset": USDC})
 
         self.assertEqual(result, {"state": "UNKNOWN"})
         runtime.send_via_jito.assert_awaited_once()
+        runtime.refresh_swap_blockhash.assert_awaited_once()
         runtime.rpc.assert_not_awaited()
         ledger.submitted.assert_called_once_with("op1", False)
 

@@ -1332,6 +1332,45 @@ class CustodyRuntime(WalletRuntime):
             raise WalletError("Симуляция затрагивает посторонние пользовательские активы.")
         return wire
 
+    async def refresh_swap_blockhash(self, session, tx):
+        """Re-sign the already simulated swap with a recent, verified blockhash."""
+        message = getattr(tx, "message", None)
+        if (not isinstance(message, MessageV0) or not message.account_keys
+                or str(message.account_keys[0]) != self.wallet
+                or message.header.num_required_signatures != 1):
+            raise WalletError("The swap transaction cannot be safely refreshed.")
+        try:
+            latest = await self.rpc(session, "getLatestBlockhash", [
+                {"commitment": "confirmed"}])
+            value = latest.get("value") if isinstance(latest, dict) else None
+            context = latest.get("context") if isinstance(latest, dict) else None
+            if (not isinstance(value, dict) or not isinstance(context, dict)
+                    or type(context.get("slot")) is not int
+                    or not isinstance(value.get("blockhash"), str)
+                    or type(value.get("lastValidBlockHeight")) is not int):
+                raise ValueError("incomplete recent blockhash response")
+            current_height = await self.rpc(session, "getBlockHeight", [{
+                "commitment": "confirmed", "minContextSlot": context["slot"]}])
+            if (type(current_height) is not int
+                    or value["lastValidBlockHeight"] - current_height < 20):
+                raise WalletError(
+                    "Recent blockhash is too close to expiry; no transaction was sent.")
+            refreshed_message = MessageV0(
+                message.header, message.account_keys,
+                Hash.from_string(value["blockhash"]), message.instructions,
+                message.address_table_lookups)
+            if (refreshed_message.header != message.header
+                    or refreshed_message.account_keys != message.account_keys
+                    or refreshed_message.instructions != message.instructions
+                    or refreshed_message.address_table_lookups != message.address_table_lookups):
+                raise ValueError("refresh changed swap instructions")
+            return VersionedTransaction(refreshed_message, [self.ready()])
+        except WalletError:
+            raise
+        except Exception:
+            raise WalletError(
+                "Could not verify a fresh blockhash; no transaction was sent.") from None
+
     async def send_reserved(self, session, tx, row, info):
         try:
             wire = await self.safe_simulation(session, tx, row, info)
@@ -1344,6 +1383,8 @@ class CustodyRuntime(WalletRuntime):
                     row["kind"], info, row.get("position_id"), reserved=True)
                 await self.authorize_execution_quote(session, row["uid"], row["kind"],
                     row["asset"], info["output_asset"], row["raw"], info)
+                tx = await self.refresh_swap_blockhash(session, tx)
+                wire = base64.b64encode(bytes(tx)).decode()
             signature = str(tx.signatures[0])
             self.ledger.prepared(row["id"], signature, wire)
         except Exception as exc:
