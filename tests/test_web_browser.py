@@ -19,6 +19,13 @@ class WebBrowserTests(unittest.TestCase):
         return page.replace("</body>",(ROOT/"web_login.html").read_text()+
                             "<script>"+(ROOT/"web_terminal.js").read_text()+"</script></body>")
 
+    def telegram_page(self,stub):
+        tree=ast.parse((ROOT/"main.py").read_text())
+        page=next(ast.literal_eval(n.value) for n in tree.body if isinstance(n,ast.Assign)
+                  and any(isinstance(t,ast.Name) and t.id=="RAW_HTML" for t in n.targets))
+        page=re.sub(r'<script src="[^"]+"></script>','',page)
+        return page.replace("</head>",stub+"</head>")
+
     def test_standalone_signed_out_click_opens_touchable_login_and_no_payments(self):
         page=self.page("""<script>
         window.PublicKeyCredential=function(){};
@@ -37,19 +44,84 @@ class WebBrowserTests(unittest.TestCase):
         page=self.page("""<script>
         window.fetch=async(url)=>new Response(JSON.stringify(
             url==='/web-auth/me'?{success:true,user:{id:428821665,username:'Operator'},csrf:'fixture'}:
-            {success:true,active:true,admin_free:true,expires_at:null,purchase_available:true}));
+            {success:true,active:true,admin_free:true,expires_at:null,purchase_available:true,trading_admitted:true}));
         </script>""")
         browser.AccountBrowserTests().run_page(page,"""
             await loadWebSession();await refreshAccess();
             assert(document.getElementById('subscription-purchase').hidden,'operator never asked to pay');
             assert(document.getElementById('subscription-state').textContent.includes('free permanent'),'operator state clear');
-            showAccess({active:false,admin_free:false,expires_at:0,purchase_available:true});
+            showAccess({active:false,admin_free:false,expires_at:0,purchase_available:true,trading_admitted:true});
             updateMemeToggleUI(false);updateToggleUI(false);
             assert(document.getElementById('btn-toggle').disabled,'core locked after expiry and regular refresh');
             assert(document.getElementById('btn-meme-toggle').disabled,'sniper locked after expiry and regular refresh');
             assert(!document.querySelector('.btn-sell-all').disabled,'manual close remains accessible');
-            showAccess({active:true,admin_free:false,expires_at:1900000000,purchase_available:true});
+            showAccess({active:true,admin_free:false,expires_at:1900000000,purchase_available:true,trading_admitted:true});
             assert(!document.getElementById('btn-toggle').disabled,'paid access unlocked visually');
+        """)
+
+    def test_tariffs_tab_countdown_expiry_prompt_and_zrl_qr(self):
+        page=self.page("<script>window.fetch=async()=>new Response(JSON.stringify({success:true}));</script>")
+        browser.AccountBrowserTests().run_page(page,"""
+            const now=Math.floor(Date.now()/1000);
+            assert(!document.getElementById('nav-tariffs').hidden,'standalone menu exposes Tariffs');
+            showAccess({active:true,admin_free:false,free_access:true,free_access_until:now+90,
+              server_time:now,payment_required:false,purchase_available:true,trading_admitted:true});
+            assert(document.getElementById('subscription-free-countdown').textContent.includes('remaining'),
+              'free access countdown is visible');
+            assert(document.getElementById('tariff-modal').hidden,'no payment prompt during free access');
+            assert([...document.querySelectorAll('[data-package-id]')].every(button=>button.disabled),
+              'payment cannot be requested during free access');
+            showAccess({active:false,admin_free:false,free_access:false,payment_required:true,
+              free_access_until:now-1,server_time:now,purchase_available:true,trading_admitted:true});
+            assert(!document.getElementById('tariff-modal').hidden,'expired access prompts for a plan');
+            assert(document.getElementById('tariff-dialog').textContent.includes('100,000 ZRL'),
+              'modal presents the ZRL option');
+            const receiver='57S7TryAMhxRq5sMSyZxTkyCmzT8tPFKfXjzZwvmv5db';
+            showPaymentRequest({id:'invoice',amount:'100000.000001',asset:'ZRL',label:'7 days',
+              days:7,mint:'AyfWjjJ9FPYfsgKCUaZ7PwMpoHi8ujf4m3pYxy7MmDiq',
+              recipient:receiver,sender:'sender-wallet',deadline:now+3600},'fallback-recipient');
+            assert(!document.getElementById('subscription-qr').hidden,'payment QR is visible');
+            assert(document.getElementById('subscription-invoice-label').textContent.includes('100000.000001 ZRL'),
+              'QR amount is shown exactly');
+            assert(document.getElementById('subscription-qr').src.includes('spl-token'),
+              'ZRL QR encodes the verified mint');
+            assert(document.getElementById('subscription-address').textContent===receiver,
+              'invoice recipient overrides the generic fallback');
+            const solRecipient='CXKWBCBBGcL4hmxoMSPKB3CzGqeZYFT2Ke4hgCJ3wi4Y';
+            showPaymentRequest({id:'sol-invoice',amount:'0.500000001',asset:'SOL',label:'30 days',
+              days:30,mint:'',recipient:solRecipient,sender:'sender-wallet',deadline:now+3600},receiver);
+            assert(document.getElementById('subscription-address').textContent===solRecipient,
+              'SOL tariff displays its separate receiver');
+            assert(document.getElementById('subscription-qr').src.includes(encodeURIComponent('solana:'+solRecipient)),
+              'SOL QR encodes the separate receiver');
+        """)
+
+    def test_telegram_menu_shows_countdown_and_expiry_prompt_without_opening_checkout_for_unadmitted_user(self):
+        page=self.telegram_page("""<script>
+        window.Telegram={WebApp:{initData:'signed-fixture',initDataUnsafe:{user:{id:101}},expand(){},ready(){},openLink(){}}};
+        const now=Math.floor(Date.now()/1000);
+        window.tariffResponse={success:true,active:true,free_access:true,free_access_until:now+90,
+          server_time:now,payment_required:false,purchase_available:true,trading_admitted:true};
+        window.fetch=async(url)=>new Response(JSON.stringify(url==='/api/subscription'?window.tariffResponse:{success:true}));
+        </script>""")
+        browser.AccountBrowserTests().run_page(page,"""
+            gotoTab('tariffs',document.getElementById('nav-tariffs'));
+            await new Promise(resolve=>setTimeout(resolve,50));
+            assert(!document.getElementById('nav-tariffs').hidden,'Tariffs appears in the Telegram menu');
+            assert(!document.getElementById('telegram-tariff-view').hidden,'Telegram tariff details open');
+            assert(document.getElementById('telegram-tariff-countdown').textContent.includes('remaining'),
+              'Telegram view shows the free-access countdown');
+            assert(!document.getElementById('telegram-tariff-modal').classList.contains('active'),
+              'no expiry modal while free access is active');
+            window.tariffResponse={success:true,active:false,free_access:false,payment_required:true,
+              purchase_available:false,trading_admitted:false,server_time:now,free_access_until:now-1};
+            await refreshTelegramTariffs();
+            assert(document.getElementById('telegram-tariff-modal').classList.contains('active'),
+              'expiry prompt appears inside the mini app');
+            assert(document.getElementById('telegram-tariff-modal-message').textContent.includes('not admitted'),
+              'the prompt explains that subscription does not grant trading admission');
+            assert(document.getElementById('telegram-tariff-modal-checkout').hidden,
+              'non-admitted account cannot be sent to payment checkout');
         """)
 
     def test_realized_pnl_shows_usdc_and_sol_separately_with_loss_color(self):

@@ -803,6 +803,16 @@ RAW_HTML = r"""<!DOCTYPE html>
         .page-heading h1 { margin:0;font-size:26px;font-weight:750;letter-spacing:-.7px; }
         .eyebrow { color:#8798ae;font-size:12px;margin:0 0 6px; }
         .section-note { color:#94a5bb;font-size:13px;line-height:1.65; }
+        .tariff-packages { display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:16px 0; }
+        .tariff-package { background:#0b111b;border:1px solid #263548;border-radius:14px;padding:14px; }
+        .tariff-package strong { display:block;color:#b6ef79;margin-bottom:6px; }
+        #telegram-tariff-modal { position:fixed;inset:0;z-index:1100;display:none;place-items:center;
+            padding:18px;background:rgba(0,0,0,.78);backdrop-filter:blur(8px); }
+        #telegram-tariff-modal.active { display:grid; }
+        #telegram-tariff-modal .card { width:min(440px,100%);max-height:calc(100dvh - 36px);overflow:auto;
+            padding:24px!important;background:#101823!important;border:1px solid #334454!important;
+            box-shadow:0 24px 80px rgba(0,0,0,.6); }
+        #telegram-tariff-countdown { color:#b6ef79;font-weight:700; }
         .quick-actions { display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:18px 0; }
         #app .stat-box { background:#0b111b;border:1px solid #1d2b3d;padding:16px;border-radius:14px; }
         #app .stat-label { color:#8495ad;letter-spacing:.7px;font-size:10px; }
@@ -1877,6 +1887,23 @@ RAW_HTML = r"""<!DOCTYPE html>
             </div>
             <details><summary>Logs &amp; position controls</summary><div id="trading-activity"></div></details>
         </div>
+        <div id="tab-tariffs" class="tab-panel">
+            <header class="page-heading"><div><p class="eyebrow">ACCESS PACKAGES</p><h1>Tariffs</h1></div></header>
+            <div class="card">
+                <h3 style="margin-top:0">AI Trader access</h3>
+                <p class="section-note">Access packages do not deposit funds into your trading balance or change custody admission. Trading modes are not started by a payment.</p>
+                <section id="telegram-tariff-view" hidden>
+                    <p id="telegram-tariff-status" role="status" aria-live="polite">Checking access…</p>
+                    <p id="telegram-tariff-countdown" class="section-note" aria-live="polite"></p>
+                    <div class="tariff-packages">
+                        <div class="tariff-package"><strong>7 days · 100,000 ZRL</strong><span>Access package; exact invoice shown in secure checkout.</span></div>
+                        <div class="tariff-package"><strong>30 days · 0.5 SOL</strong><span>Access package; exact invoice shown in secure checkout.</span></div>
+                    </div>
+                    <p id="telegram-tariff-note" class="section-note">Payment is separate from your trading balance. It does not enable Core or Sniper.</p>
+                    <button id="telegram-tariff-checkout" class="btn-green-main" onclick="openTariffCheckout()">Open secure checkout</button>
+                </section>
+            </div>
+        </div>
         <div id="tab-settings" class="tab-panel">
             <header class="page-heading"><div><p class="eyebrow">Account preferences</p><h1>Settings</h1></div></header>
             <div class="card" id="passkey-settings"><h3>Account protection</h3>
@@ -1969,6 +1996,15 @@ RAW_HTML = r"""<!DOCTYPE html>
         <button class="nav-btn" onclick="gotoTab('trading', this)"><span>↗</span>Trading</button>
         <button class="nav-btn" onclick="gotoTab('deposit', this)"><span>⇄</span>Wallet</button>
         <button class="nav-btn" onclick="gotoTab('settings', this)"><span>⚙</span>Settings</button>
+        <button id="nav-tariffs" class="nav-btn" onclick="gotoTab('tariffs', this)"><span>▤</span>Tariffs</button>
+    </div>
+    <div id="telegram-tariff-modal" role="dialog" aria-modal="true" aria-labelledby="telegram-tariff-modal-title" aria-hidden="true">
+        <div class="card">
+            <h2 id="telegram-tariff-modal-title">Free access has ended</h2>
+            <p id="telegram-tariff-modal-message" class="section-note">Choose a time-limited package to continue.</p>
+            <button id="telegram-tariff-modal-checkout" class="btn-green-main" onclick="openTariffCheckout()">View tariffs and pay</button>
+            <button class="btn-copy" onclick="dismissTelegramTariffModal()">Not now</button>
+        </div>
     </div>
 
     <script>
@@ -2424,6 +2460,81 @@ RAW_HTML = r"""<!DOCTYPE html>
             return fetch(url, Object.assign({}, options, { headers }));
         }
 
+        let telegramTariffState=null,telegramTariffClockOffset=0,telegramTariffBusy=false;
+        let telegramTariffDismissed=false,nextTelegramTariffCheck=0;
+        async function refreshTelegramTariffs(){
+            if(window.ZRL_WEB||telegramTariffBusy||!getUserData())return;
+            telegramTariffBusy=true;
+            try{
+                const response=await apiFetch('/api/subscription'),data=await response.json();
+                if(!response.ok||!data.success)throw Error(data.message||'Could not check access.');
+                telegramTariffState=data;
+                telegramTariffClockOffset=Number(data.server_time||0)*1000-Date.now();
+                const status=document.getElementById('telegram-tariff-status');
+                const note=document.getElementById('telegram-tariff-note');
+                const checkout=document.getElementById('telegram-tariff-checkout');
+                if(data.free_access){
+                    status.textContent='Free AI Trader subscription is active for everyone through 1 November 2026.';
+                    note.textContent='No payment is needed before the countdown ends. Payment is not credited to trading balance and never turns on Core or Sniper.';
+                }else if(data.active){
+                    status.textContent=data.admin_free?'AI Trader access is active.':
+                        'Paid access is active until '+new Date(Number(data.expires_at)*1000).toLocaleString()+'.';
+                    note.textContent='Access renewal does not change trading admission or start trading modes.';
+                }else{
+                    status.textContent='Free access has ended. Choose a package to request continued access.';
+                    note.textContent=data.purchase_available?
+                        'Checkout uses a separate browser passkey flow. The exact payment is verified before access is added; it is never credited to trading balance.':
+                        'This account is not admitted for paid trading. A subscription does not change custody or trading admission.';
+                }
+                checkout.hidden=!data.purchase_available||data.active||data.free_access;
+                const modalCheckout=document.getElementById('telegram-tariff-modal-checkout');
+                modalCheckout.hidden=!data.purchase_available;
+                if(!data.payment_required)telegramTariffDismissed=false;
+                const modal=document.getElementById('telegram-tariff-modal');
+                if(data.payment_required&&!telegramTariffDismissed){
+                    document.getElementById('telegram-tariff-modal-message').textContent=
+                        data.purchase_available?
+                        'Choose 7 days for 100,000 ZRL or 30 days for 0.5 SOL. Payment is verified in the secure browser checkout and does not enter your trading balance.':
+                        'This account is not admitted for paid trading. Buying a subscription would not change custody or enable trading.';
+                    modal.classList.add('active');modal.setAttribute('aria-hidden','false');
+                }else{
+                    modal.classList.remove('active');modal.setAttribute('aria-hidden','true');
+                }
+                tickTelegramTariffCountdown();
+            }catch(error){
+                document.getElementById('telegram-tariff-status').textContent=error.message||'Could not check access.';
+            }finally{telegramTariffBusy=false;}
+        }
+        function tickTelegramTariffCountdown(){
+            if(window.ZRL_WEB||!telegramTariffState?.free_access)return;
+            const seconds=Number(telegramTariffState.free_access_until)-
+                Math.floor((Date.now()+telegramTariffClockOffset)/1000);
+            const label=document.getElementById('telegram-tariff-countdown');
+            if(seconds<=0){
+                label.textContent='Free access has ended. Checking your access…';
+                if(Date.now()>=nextTelegramTariffCheck){
+                    nextTelegramTariffCheck=Date.now()+10000;refreshTelegramTariffs();
+                }
+                return;
+            }
+            const days=Math.floor(seconds/86400),hours=Math.floor(seconds%86400/3600);
+            const minutes=Math.floor(seconds%3600/60),remaining=seconds%60;
+            label.textContent=`Free access · ${days}d ${hours}h ${minutes}m ${remaining}s remaining · ends 1 Nov 2026, 00:00 Europe/Warsaw`;
+        }
+        function openTariffCheckout(){
+            if(!telegramTariffState?.purchase_available)return;
+            const url=new URL('/terminal',window.location.origin).href;
+            if(window.Telegram?.WebApp?.openLink)window.Telegram.WebApp.openLink(url);
+            else window.open(url,'_blank','noopener,noreferrer');
+        }
+        function dismissTelegramTariffModal(){
+            telegramTariffDismissed=true;
+            const modal=document.getElementById('telegram-tariff-modal');
+            modal.classList.remove('active');modal.setAttribute('aria-hidden','true');
+        }
+        setInterval(tickTelegramTariffCountdown,1000);
+        setInterval(()=>{if(telegramTariffState?.free_access)refreshTelegramTariffs();},15000);
+
         let accountState = null;
         async function loadAccount() {
             const response=await apiFetch('/api/account'),data=await response.json();
@@ -2540,6 +2651,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             document.getElementById('app').style.display = 'block';
             document.getElementById('nav').style.display = 'flex';
             refresh();
+            if(!window.ZRL_WEB)refreshTelegramTariffs();
         }
 
         function gotoTab(id, btn) {
@@ -2548,6 +2660,10 @@ RAW_HTML = r"""<!DOCTYPE html>
             const target = document.getElementById('tab-' + id);
             if (target) target.classList.add('active');
             if (btn) btn.classList.add('active');
+            if(id==='tariffs'&&!window.ZRL_WEB){
+                document.getElementById('telegram-tariff-view').hidden=false;
+                refreshTelegramTariffs();
+            }
         }
 
         function switchWalletTab(tab) {
@@ -3211,7 +3327,7 @@ async def health_handler(request):
         "build_commit": os.getenv("RENDER_GIT_COMMIT", ""),
         "deposit_parser_version": "phantom-authority-v1",
         "ai_configured": bool(os.getenv("OPENAI_API_KEY")),
-        "web_terminal_version": "sol-access-v1",
+        "web_terminal_version": "access-packages-v2",
         "trading_active": bool(runtime.ledger.active_users())})
 
 async def api_get_logs(request):

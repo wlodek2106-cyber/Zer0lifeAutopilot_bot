@@ -1,4 +1,4 @@
-# Standalone trading access — SOL only
+# Standalone AI Trader access packages
 
 ## Rules
 
@@ -6,15 +6,31 @@
 - Administrator: the server-configured `ADMIN_TELEGRAM_ID` is permanently free,
   in both the existing Telegram account and the standalone terminal. No nickname,
   client-side role flag, payment-recipient address or request-body UID grants this.
-- Other accounts: exactly **0.5 native SOL** for **30 × 24 hours**. Renewal adds
-  30 days to `max(current UTC time, existing expiry)`. No automatic billing.
-- Payment receiver: `57S7TryAMhxRq5sMSyZxTkyCmzT8tPFKfXjzZwvmv5db`.
-- No ZRL, trial package, seven-day offer, wrapped SOL, USDC or Memo requirement.
+- Other accounts receive the fixed free-access window through **2026-11-01
+  00:00 Europe/Warsaw**. The server supplies the deadline; changing a device clock
+  cannot extend access. An invoice created before the window can still be verified
+  if it was paid within its original one-hour window; its paid days start after the
+  free period so they are not consumed by the promotion.
+- After the free window, packages are **100,000 ZRL for 7 days** and
+  **0.5 native SOL for 30 days**. Renewals add the selected duration to
+  `max(current UTC time, existing expiry)`. No automatic billing.
+- ZRL package receiver: `57S7TryAMhxRq5sMSyZxTkyCmzT8tPFKfXjzZwvmv5db`.
+- New SOL package receiver: `CXKWBCBBGcL4hmxoMSPKB3CzGqeZYFT2Ke4hgCJ3wi4Y`.
+- Open SOL invoices created before the receiver change retain their original
+  receiver until their one-hour invoice window expires.
+- ZRL mint: `AyfWjjJ9FPYfsgKCUaZ7PwMpoHi8ujf4m3pYxy7MmDiq`, standard SPL Token,
+  6 decimals; the mint has no mint or freeze authority on mainnet. ZRL is sent to
+  the ZRL receiver's associated token account. Wrapped SOL, USDC, other tokens,
+  wrong mints and wrong amounts are not accepted for these packages.
+- Invoice amounts include a minimal unique base-unit suffix so simultaneous
+  one-hour requests can be distinguished. Tariff cards show the package price;
+  the payment screen and QR show the exact amount to send.
 - Subscription payments are separate from custody funds and never credit the
   personal trading ledger or operator fee reserve. Customers must fund trading
   separately. Buying/renewing access never starts either mode.
-- Non-admin payments are not offered while public custody is closed unless the
-  account has explicitly been added to the operator's existing beta allowlist.
+- Free access grants only the subscription entitlement. Public custody and the
+  existing beta allowlist remain unchanged. Paid checkout is not offered to an
+  account unless it already passes the current public-custody/beta admission gate.
   This update does not enable public custody or expand that allowlist.
 
 ## Identity and browser sessions
@@ -23,11 +39,11 @@ Existing profiles, withdrawal codes, passkeys and custody balances keep the same
 server-verified Telegram UID. No account merges, money migration or new email/DNS
 provider. New users still create the account profile and first withdrawal passkey
 in Telegram; `/web-auth/me` provides a registration link from server `getMe`.
-Telegram is an identity/bootstrap interface, not a cryptocurrency subscription
-checkout. Public trading and subscription purchase/verification require the
-standalone authenticated browser; the operator's free account still works in
-Telegram. Non-admin Telegram clients cannot enable modes or call paid trading
-tools; its Trading navigation is hidden after its own stats load.
+Telegram's Tariffs menu shows the free-access countdown and the expiry prompt.
+Telegram is not a cryptocurrency checkout: purchase and transaction verification
+open the standalone authenticated browser and require the existing account
+security/passkey flow. The operator's free account still works in Telegram.
+Non-admin Telegram clients cannot bypass the existing admission checks.
 
 Browser sign-in:
 1. Nickname lookup selects an existing UID; it is NOT authentication.
@@ -53,19 +69,23 @@ and trusted proxy configuration before wider rollout.
 
 ## Subscription receipt checks
 
-The customer first creates a one-hour payment request bound to UID and the
-cryptographically confirmed sender wallet. Then sends exactly 0.5 native SOL and
-pastes Tx/signature or Solscan/Solana Explorer transaction link. No funds are
-constructed, signed or sent by the subscription feature.
+The customer first creates a one-hour request bound to UID, selected package and
+cryptographically confirmed sender wallet. The Tariffs screen shows a Solana Pay
+QR, receiver, exact unique amount and deadline. The customer pastes the transaction
+signature or Solscan/Solana Explorer link to verify. No funds are constructed,
+signed or sent by the subscription feature.
 
 Server checks mainnet genesis; finalized JSON-parsed transaction; successful
 metadata; canonical first transaction signature; integer block time within the
-request window (30-second clock tolerance at its start); linked sender signer;
-native system transfer destination and amount; and actual recipient SOL delta.
-Receiver/self-payments, unlinked/foreign senders, old transfers, wrong amount,
+request window (30-second clock tolerance at its start); and linked sender signer.
+SOL requires the exact native system transfer and actual recipient SOL delta.
+ZRL requires the configured mint, standard Token Program transfer, the sender's
+owned token account, the receiver's associated token account, matching decimals,
+and an exact wallet-wide net ZRL balance change. Receiver/self-payments,
+unlinked/foreign senders, stale transfers, wrong/extra amounts, wrong mint,
 failed/missing transaction, wrapped SOL and wrong network cannot activate access.
 Finalized receipts can be checked after their send window without resending.
-The latest unpaid request is restored after reload.
+The latest live unpaid request is restored after reload.
 
 One atomic SQLite transaction stores the unique canonical signature and unique
 order ID, and extends the expiry. Duplicate checks of the same receipt/order
@@ -93,10 +113,11 @@ not automatically restart stopped modes; the user must enable them again.
 
 ## Verification and deployment
 
-Synthetic receipt tests, actual signed P256 WebAuthn tests, HTTP middleware tests
-and mobile Chromium DOM tests cover identity, role/CSRF/cookie rules, renewal,
-replay prevention, pre-broadcast expiry refund and owned manual closure. No live
-SOL payment, real withdrawal, real iPhone Face ID or live trade was performed.
+Synthetic SOL/ZRL receipt tests, actual signed P256 WebAuthn tests, HTTP middleware
+tests and mobile Chromium DOM tests cover identity, role/CSRF/cookie rules, renewal,
+replay prevention, the fixed free window, pre-broadcast expiry refund and owned
+manual closure. The ZRL mint metadata was queried read-only on Solana mainnet. No
+live payment, real withdrawal, real iPhone Face ID or live trade was performed.
 
 Draft PR only until explicit deployment consent. Pause both modes and ensure no
 open/unmanaged positions before rollout; normal startup pauses modes. Existing

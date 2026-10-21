@@ -11,10 +11,12 @@ from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from solders.keypair import Keypair
+from solders.pubkey import Pubkey
 from account_security import AccountSecurity, digest
 from custody_ledger import CustodyLedger, SOL, USDC, FEE_CAP
-from wallet_runtime import WalletError, GENESIS, SYSTEM, TOKEN
-from web_access import WebAccess, RECEIVER, PRICE, PERIOD, SESSION_COOKIE, LOGIN_COOKIE
+from wallet_runtime import WalletError, GENESIS, SYSTEM, TOKEN, associated
+from web_access import (WebAccess, RECEIVER, SOL_RECEIVER, PRICE, PERIOD, SESSION_COOKIE, LOGIN_COOKIE,
+                        FREE_ACCESS_UNTIL, ZRL_MINT, ZRL_DECIMALS, ZRL_PRICE_RAW, ZRL_PERIOD)
 from test_account_security import Device, Request, ORIGIN, decoded
 
 OWNER = 428821665
@@ -43,6 +45,7 @@ class WebAccessTests(unittest.IsolatedAsyncioTestCase):
             wallet=self.accounts.vault, public_enabled=False, beta_users={OWNER, 101, 102},
             uid=lambda r: int(r["telegram_user"]["id"]), admit=lambda uid: None)
         self.access = WebAccess(self.runtime)
+        self.access.free_access_until = 0
         self.runtime.web_access = self.access
         self.runtime.rpc = AsyncMock(side_effect=self.rpc)
         self.signature = str(Keypair().sign_message(b"receipt"))
@@ -74,12 +77,43 @@ class WebAccessTests(unittest.IsolatedAsyncioTestCase):
     async def rpc(self, session, method, params=None):
         return GENESIS if method == "getGenesisHash" else self.tx
 
-    async def new_order(self, uid=101):
-        return decoded(await self.access.order(BrowserRequest(uid=uid), None))["order"]
+    async def new_order(self, uid=101, package_id="sol_30d"):
+        return decoded(await self.access.order(
+            BrowserRequest({"package_id": package_id}, uid=uid), None))["order"]
 
-    async def pay(self, order, signature=None, uid=101):
+    async def pay(self, order, signature=None, uid=101, build=True):
+        signature = signature or self.signature
+        if build and order["asset"] == "SOL":
+            self.tx = self.transfer(signature, raw=order["raw"], receiver=order["recipient"])
         return decoded(await self.access.verify(BrowserRequest(
-            {"order_id": order["id"], "tx_signature": signature or self.signature}, uid=uid), None))
+            {"order_id": order["id"], "tx_signature": signature}, uid=uid), None))
+
+    def zrl_transfer(self, signature, raw, sender=None, mint=ZRL_MINT):
+        sender = sender or self.sender
+        source = str(associated(Pubkey.from_string(sender), Pubkey.from_string(ZRL_MINT)))
+        receiver_ata = str(associated(Pubkey.from_string(RECEIVER), Pubkey.from_string(ZRL_MINT)))
+        source_initial = raw + 10_000
+        source_final = 10_000
+        target_account = 2
+        return {"blockTime": int(time.time()),
+            "transaction": {"signatures": [signature], "message": {
+                "accountKeys": [{"pubkey": sender, "signer": True},
+                                {"pubkey": source, "signer": False},
+                                {"pubkey": receiver_ata, "signer": False},
+                                {"pubkey": RECEIVER, "signer": False}],
+                "instructions": [{"programId": str(TOKEN), "parsed": {"type": "transferChecked",
+                    "info": {"source": source, "destination": receiver_ata, "authority": sender,
+                        "mint": mint, "tokenAmount": {"amount": str(raw), "decimals": ZRL_DECIMALS}}}}]}},
+            "meta": {"err": None, "innerInstructions": [], "preBalances": [10**10, 0, 0, 0],
+                "postBalances": [10**10 - 5000, 0, 0, 0],
+                "preTokenBalances": [{"accountIndex": 1, "mint": ZRL_MINT, "owner": sender,
+                    "uiTokenAmount": {"amount": str(source_initial), "decimals": ZRL_DECIMALS}},
+                    {"accountIndex": target_account, "mint": ZRL_MINT, "owner": RECEIVER,
+                    "uiTokenAmount": {"amount": "0", "decimals": ZRL_DECIMALS}}],
+                "postTokenBalances": [{"accountIndex": 1, "mint": ZRL_MINT, "owner": sender,
+                    "uiTokenAmount": {"amount": str(source_final), "decimals": ZRL_DECIMALS}},
+                    {"accountIndex": target_account, "mint": ZRL_MINT, "owner": RECEIVER,
+                    "uiTokenAmount": {"amount": str(raw), "decimals": ZRL_DECIMALS}}]}}
 
     async def enroll(self, uid=101):
         self.device = Device()
@@ -109,13 +143,86 @@ class WebAccessTests(unittest.IsolatedAsyncioTestCase):
             await self.new_order(OWNER)
         self.runtime.rpc.assert_not_called()
 
+    async def test_fixed_free_window_is_server_enforced_and_does_not_open_admission(self):
+        self.access.free_access_until = FREE_ACCESS_UNTIL
+        self.runtime.beta_users = {OWNER, 101}
+        with patch("web_access.time.time", return_value=FREE_ACCESS_UNTIL - 1):
+            for uid in (101, 102):
+                state = self.access.state(uid)
+                self.assertTrue(state["active"])
+                self.assertTrue(state["free_access"])
+            self.assertTrue(self.access.state(102)["payment_required"] is False)
+            self.assertFalse(self.access.state(102)["trading_admitted"])
+            with self.assertRaises(WalletError):
+                await self.new_order()
+        with patch("web_access.time.time", return_value=FREE_ACCESS_UNTIL):
+            self.assertFalse(self.access.state(101)["active"])
+            self.assertTrue(self.access.state(101)["payment_required"])
+
+    async def test_promo_skips_expiry_pause_until_fixed_deadline_then_pauses(self):
+        self.access.free_access_until = FREE_ACCESS_UNTIL
+        self.ledger.settings(101, enabled=True, sniper_enabled=True, close=True)
+        with patch("web_access.time.time", return_value=FREE_ACCESS_UNTIL - 1):
+            self.access.pause_expired(101)
+            self.assertTrue(self.ledger.settings(101)["trading"])
+            self.assertTrue(self.ledger.settings(101)["sniper_trading"])
+        with patch("web_access.time.time", return_value=FREE_ACCESS_UNTIL):
+            self.access.pause_expired(101)
+            settings = self.ledger.settings(101)
+            self.assertFalse(settings["trading"])
+            self.assertFalse(settings["sniper_trading"])
+            self.assertTrue(settings["close_requested"])
+
+    async def test_package_invoices_have_exact_unique_asset_amounts(self):
+        with self.ledger.db() as db:
+            db.execute("INSERT INTO custody_wallet_links VALUES(?,?,?)",
+                       (102, str(Keypair().pubkey()), int(time.time())))
+        first = await self.new_order(101)
+        second = await self.new_order(102)
+        self.assertEqual((first["asset"], first["amount"]), ("SOL", "0.500000001"))
+        self.assertEqual(first["recipient"], SOL_RECEIVER)
+        self.assertEqual(second["recipient"], SOL_RECEIVER)
+        self.assertEqual(second["raw"], first["raw"] + 1)
+
+    async def test_existing_sol_order_and_receipt_schema_migrates_without_data_loss(self):
+        created = int(time.time())
+        with self.ledger.db() as db:
+            db.execute("DROP TABLE access_receipts")
+            db.execute("DROP TABLE access_orders")
+            db.execute("""CREATE TABLE access_orders (
+                id TEXT PRIMARY KEY,uid INTEGER NOT NULL,sender TEXT NOT NULL,
+                created INTEGER NOT NULL,deadline INTEGER NOT NULL)""")
+            db.execute("INSERT INTO access_orders VALUES(?,?,?,?,?)",
+                       ("legacy-order", 101, self.sender, created, created + 3600))
+            db.execute("""CREATE TABLE access_receipts (
+                signature TEXT PRIMARY KEY,order_id TEXT NOT NULL UNIQUE,
+                uid INTEGER NOT NULL,sender TEXT NOT NULL,raw INTEGER NOT NULL,
+                block_time INTEGER NOT NULL,granted_at INTEGER NOT NULL)""")
+            db.execute("INSERT INTO access_receipts VALUES(?,?,?,?,?,?,?)",
+                       ("legacy-signature", "old-order", 102, self.sender,
+                        PRICE, created, created))
+        self.access = WebAccess(self.runtime)
+        self.access.free_access_until = 0
+        with self.ledger.db() as db:
+            order = db.execute("SELECT * FROM access_orders WHERE id='legacy-order'").fetchone()
+            receipt = db.execute("SELECT * FROM access_receipts WHERE signature='legacy-signature'").fetchone()
+        self.assertEqual((order["asset"], order["raw"], order["period_seconds"]),
+                         ("SOL", PRICE, PERIOD))
+        self.assertEqual(order["package_id"], "sol_30d")
+        self.assertEqual(order["recipient"], RECEIVER)
+        self.assertEqual(receipt["asset"], "SOL")
+        self.assertEqual(receipt["raw"], PRICE)
+        self.assertEqual(receipt["recipient"], RECEIVER)
+        status = decoded(await self.access.status(BrowserRequest(uid=101), None))
+        self.assertEqual(status["pending_order"]["recipient"], RECEIVER)
+
     async def test_payment_is_not_a_custody_deposit_and_never_enables_modes(self):
         order = await self.new_order()
         before = self.ledger.balance(101, SOL)
         now = int(time.time())
         result = await self.pay(order)
         self.assertTrue(result["active"])
-        self.assertEqual(result["expires_at"], now + PERIOD)
+        self.assertAlmostEqual(result["expires_at"], now + PERIOD, delta=2)
         self.assertEqual(self.ledger.balance(101, SOL), before)
         self.assertFalse(self.ledger.settings(101)["trading"])
         self.assertFalse(self.ledger.settings(101)["sniper_trading"])
@@ -132,8 +239,8 @@ class WebAccessTests(unittest.IsolatedAsyncioTestCase):
     async def test_renewal_adds_30_days_to_remaining_time_and_not_just_now(self):
         first = await self.pay(await self.new_order())
         self.signature = str(Keypair().sign_message(b"second-payment"))
-        self.tx = self.transfer(self.signature)
-        second = await self.pay(await self.new_order())
+        second_order = await self.new_order()
+        second = await self.pay(second_order)
         self.assertEqual(second["expires_at"], first["expires_at"] + PERIOD)
         self.assertFalse(self.ledger.settings(101)["trading"])
 
@@ -141,45 +248,77 @@ class WebAccessTests(unittest.IsolatedAsyncioTestCase):
         order = await self.new_order()
         with self.assertRaises(WalletError):
             await self.pay(order, uid=102)
-        self.tx = self.transfer(self.signature, sender=str(Keypair().pubkey()))
+        self.tx = self.transfer(self.signature, raw=order["raw"], sender=str(Keypair().pubkey()),
+                                receiver=order["recipient"])
         with self.assertRaises(WalletError):
-            await self.pay(order)
+            await self.pay(order, build=False)
         self.assertFalse(self.access.state(101)["active"])
 
     async def test_wrong_amount_asset_destination_and_failed_tx_rejected(self):
         order = await self.new_order()
-        for raw in (PRICE - 1, PRICE + 1):
-            self.tx = self.transfer(self.signature, raw=raw)
+        for raw in (order["raw"] - 1, order["raw"] + 1):
+            self.tx = self.transfer(self.signature, raw=raw, receiver=order["recipient"])
             with self.assertRaises(WalletError):
-                await self.pay(order)
-        self.tx = self.transfer(self.signature)
+                await self.pay(order, build=False)
+        self.tx = self.transfer(self.signature, raw=order["raw"], receiver=order["recipient"])
         self.tx["transaction"]["message"]["instructions"][0]["programId"] = str(TOKEN)
         with self.assertRaises(WalletError):
-            await self.pay(order)
-        self.tx = self.transfer(self.signature, receiver=str(Keypair().pubkey()))
+            await self.pay(order, build=False)
+        self.tx = self.transfer(self.signature, raw=order["raw"], receiver=str(Keypair().pubkey()))
         with self.assertRaises(WalletError):
-            await self.pay(order)
-        self.tx = self.transfer(self.signature)
+            await self.pay(order, build=False)
+        self.tx = self.transfer(self.signature, raw=order["raw"], receiver=order["recipient"])
         self.tx["meta"]["err"] = {"InstructionError":[0,"error"]}
         with self.assertRaises(WalletError):
-            await self.pay(order)
+            await self.pay(order, build=False)
         self.tx = None
         with self.assertRaises(WalletError):
-            await self.pay(order)
+            await self.pay(order, build=False)
         self.assertFalse(self.access.state(101)["active"])
 
     async def test_old_future_unmatched_and_devnet_receipts_rejected(self):
         order = await self.new_order()
         for stamp in (order["created"]-31, order["deadline"]+1, int(time.time())+120):
-            self.tx = self.transfer(self.signature, stamp=stamp)
+            self.tx = self.transfer(self.signature, raw=order["raw"],
+                                    receiver=order["recipient"], stamp=stamp)
             with self.assertRaises(WalletError):
-                await self.pay(order)
-        self.tx = self.transfer(str(Keypair().sign_message(b"wrong-signature")))
+                await self.pay(order, build=False)
+        self.tx = self.transfer(str(Keypair().sign_message(b"wrong-signature")), raw=order["raw"],
+                                receiver=order["recipient"])
         with self.assertRaises(WalletError):
-            await self.pay(order)
+            await self.pay(order, build=False)
         self.runtime.rpc = AsyncMock(return_value="devnet")
         with self.assertRaises(WalletError):
-            await self.pay(order)
+            await self.pay(order, build=False)
+
+    async def test_zrl_package_checks_mint_owner_exact_amount_and_never_credits_custody(self):
+        order = await self.new_order(package_id="zrl_7d")
+        self.assertEqual(order["asset"], "ZRL")
+        self.assertEqual(order["recipient"], RECEIVER)
+        self.assertEqual(order["amount"], "100000.000001")
+        self.assertEqual(order["raw"], ZRL_PRICE_RAW + 1)
+        self.assertEqual(order["mint"], ZRL_MINT)
+        self.assertEqual(order["days"], 7)
+        self.signature = str(Keypair().sign_message(b"zrl-access-payment"))
+        self.tx = self.zrl_transfer(self.signature, order["raw"])
+        before_sol = self.ledger.balance(101, SOL)
+        result = await self.pay(order, build=False)
+        self.assertTrue(result["active"])
+        self.assertAlmostEqual(result["expires_at"], int(time.time()) + ZRL_PERIOD, delta=1)
+        self.assertEqual(self.ledger.balance(101, SOL), before_sol)
+        self.assertFalse(self.ledger.settings(101)["trading"])
+        self.assertFalse(self.ledger.settings(101)["sniper_trading"])
+
+        bad_signature = str(Keypair().sign_message(b"zrl-wrong-amount"))
+        self.tx = self.zrl_transfer(bad_signature, order["raw"] + 1)
+        with self.assertRaises(WalletError):
+            await self.pay(order, signature=bad_signature, build=False)
+
+        bad_signature = str(Keypair().sign_message(b"zrl-wrong-mint"))
+        self.tx = self.zrl_transfer(bad_signature, order["raw"],
+                                    mint=str(Keypair().pubkey()))
+        with self.assertRaises(WalletError):
+            await self.pay(order, signature=bad_signature, build=False)
 
     async def test_expiry_stops_both_modes_but_preserves_explicit_close_request(self):
         self.ledger.settings(101, enabled=True, sniper_enabled=True, close=True)
@@ -215,7 +354,7 @@ class WebAccessTests(unittest.IsolatedAsyncioTestCase):
         with self.ledger.db() as db:
             db.execute("UPDATE access_memberships SET expires=? WHERE uid=101",(int(time.time())-1,))
         self.signature=str(Keypair().sign_message(b"renew-after-expiry"))
-        self.tx=self.transfer(self.signature)
+        self.tx=self.transfer(self.signature,raw=second_order["raw"],receiver=second_order["recipient"])
         result=await self.pay(second_order)
         self.assertAlmostEqual(result["expires_at"],int(time.time())+PERIOD,delta=1)
 
@@ -223,8 +362,9 @@ class WebAccessTests(unittest.IsolatedAsyncioTestCase):
         order=await self.new_order()
         state=decoded(await self.access.status(BrowserRequest(),None))
         self.assertEqual(state["pending_order"]["id"],order["id"])
+        self.tx=self.transfer(self.signature,raw=order["raw"],receiver=order["recipient"])
         with patch("web_access.time.time",return_value=time.time()+4000):
-            result=await self.pay(order)
+            result=await self.pay(order,build=False)
         self.assertTrue(result["active"])
 
     def funded_buy(self):

@@ -15,11 +15,27 @@
 #subscription-card h3{color:#eef5f4;letter-spacing:-.03em}
 #subscription-card strong{color:#64dcb1}
 #subscription-address{font-family:monospace;user-select:all}
+#subscription-card .tariff-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin:16px 0}
+#subscription-card .tariff-option{padding:16px;border:1px solid #30424e;border-radius:15px;background:#0b141c}
+#subscription-card .tariff-option h4{margin:0 0 8px;color:#eef5f4}
+#subscription-card .tariff-option p{min-height:42px;margin:8px 0;color:#aebdc2}
+#subscription-card .tariff-option button{width:100%}
+#subscription-free-countdown{font-weight:700;color:#b6ef79}
+#subscription-qr{display:block;width:190px;height:190px;padding:7px;margin:12px auto;background:#fff;border-radius:12px}
+#subscription-qr[hidden]{display:none}
+#tariff-modal[hidden]{display:none}
+#tariff-modal{position:fixed;inset:0;z-index:10004;display:grid;place-items:center;padding:16px;background:rgba(0,0,0,.76);backdrop-filter:blur(8px)}
+#tariff-dialog{width:min(460px,100%);max-height:calc(100dvh - 32px);overflow:auto;padding:24px;border:1px solid #30424e;border-radius:22px;background:linear-gradient(150deg,#14212b,#101922);color:#e9f0f2;box-shadow:0 26px 80px rgba(0,0,0,.62)}
+#tariff-dialog h2{margin:0 0 10px;color:#f0f7f5;font-size:25px}
+#tariff-dialog p{line-height:1.6;color:#b6c5c8}
+#tariff-dialog button{width:100%;min-height:48px;margin-top:10px;padding:12px;border:1px solid #38c99a;border-radius:12px;background:linear-gradient(180deg,#36d9a2,#19ae81);color:#062219;font-weight:720}
+#tariff-dialog button:disabled{opacity:.55}
+#tariff-dialog #tariff-modal-close{border-color:#40515a;background:#17242d;color:#e6eef0}
 @media(max-width:480px){#web-login{padding:20px;border-radius:19px;inset:max(12px,env(safe-area-inset-top,12px)) 12px auto;max-height:calc(100dvh - 24px - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px))}}
 @media(prefers-reduced-motion:reduce){#web-login *,#subscription-card *{scroll-behavior:auto!important;transition-duration:.01ms!important;animation-duration:.01ms!important}}
-:where(#web-login,#subscription-card) :focus-visible{outline:3px solid #5ad9b0;outline-offset:3px}
+:where(#web-login,#subscription-card,#tariff-dialog) :focus-visible{outline:3px solid #5ad9b0;outline-offset:3px}
 </style>
-<section id="web-login" hidden data-web-version="sol-access-v1">
+<section id="web-login" hidden data-web-version="access-packages-v2">
 <h2>Sign in to AI Trader</h2>
 <p class="section-note">Use your account nickname, account security code and device passkey. Your balances stay with the same account.</p>
 <label for="web-nickname">Account nickname</label><input id="web-nickname" autocomplete="username" maxlength="24" autocapitalize="off">
@@ -29,12 +45,22 @@
 <a id="web-register" hidden target="_blank" rel="noopener noreferrer">Register in Telegram</a>
 </section>
 <section id="subscription-card" class="card" hidden>
-<h3>Trading access</h3><p id="subscription-state" role="status">Checking access...</p>
+<h3>AI Trader access</h3><p id="subscription-state" role="status">Checking access...</p>
+<p id="subscription-free-countdown" class="section-note" aria-live="polite"></p>
 <div id="subscription-purchase">
-<p><strong>0.5 SOL · 30 days</strong><br>Renewals add 30 days to your remaining time. No automatic charges.</p>
-<p class="section-note">Send exactly 0.5 native SOL from your confirmed wallet after creating a request. This fee does not increase your trading balance. No Memo required.</p>
-<button id="subscription-order" class="btn-green-main">Create payment request</button>
+<p class="section-note">Choose a time-limited package. Payment purchases access only; it is not deposited into your trading balance. It does not change custody admission or turn on trading modes.</p>
+<p class="section-note">The exact invoice can include a tiny unique base-unit amount for transaction matching. Always send the exact amount shown with the QR code.</p>
+<div class="tariff-grid">
+<article class="tariff-option"><h4>7 days · 100,000 ZRL</h4>
+<p>AI Trader access for one week.</p>
+<button class="btn-green-main" data-package-id="zrl_7d">Choose ZRL</button></article>
+<article class="tariff-option"><h4>30 days · 0.5 SOL</h4>
+<p>AI Trader access for 30 days.</p>
+<button class="btn-green-main" data-package-id="sol_30d">Choose SOL</button></article>
+</div>
 <div id="subscription-transfer" hidden>
+<p id="subscription-invoice-label"><strong>Exact invoice amount:</strong></p>
+<img id="subscription-qr" alt="Solana payment QR code" hidden referrerpolicy="no-referrer">
 <p>Payment receiver:</p><p id="subscription-address"></p>
 <p id="subscription-deadline" class="section-note"></p>
 <button id="subscription-copy" class="btn-copy">Copy payment address</button>
@@ -44,4 +70,13 @@
 </div></div>
 <p class="section-note">At expiry both automatic modes stop, including automated take-profit and stop-loss. Open positions remain. Withdrawals and explicitly requested manual position closing remain available. Payment does not enable trading automatically.</p>
 <button id="web-logout" class="btn-copy">Sign out of this browser</button>
+</section>
+<section id="tariff-modal" hidden>
+<div id="tariff-dialog" role="dialog" aria-modal="true" aria-labelledby="tariff-modal-title">
+<h2 id="tariff-modal-title">Free access has ended</h2>
+<p id="tariff-modal-note">Choose an access package. Payment is verified on Solana and does not enter your trading balance.</p>
+<button data-package-id="zrl_7d">7 days · 100,000 ZRL</button>
+<button data-package-id="sol_30d">30 days · 0.5 SOL</button>
+<button id="tariff-modal-close">Not now · open Tariffs from the menu</button>
+</div>
 </section>

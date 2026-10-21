@@ -62,31 +62,80 @@ for(const id of ['web-nickname','web-pin'])document.getElementById(id).addEventL
  webLoginPending=null;webSignIn.textContent='Continue';
 });
 const subscriptionCard=document.getElementById('subscription-card');
-document.getElementById('tab-trading').insertBefore(subscriptionCard,document.getElementById('trading-controls'));
+document.getElementById('tab-tariffs').prepend(subscriptionCard);
+const tariffsNav=document.getElementById('nav-tariffs');
+if(window.ZRL_WEB)tariffsNav.hidden=false;
 let accessNotice=document.createElement('p');accessNotice.className='section-note';accessNotice.id='overview-access';
 document.getElementById('tab-terminal').prepend(accessNotice);
+const tariffModal=document.getElementById('tariff-modal');
+let accessSnapshot=null,serverClockOffset=0,paywallDismissed=false,expiryRefreshStarted=false;
 function showAccess(data){
+  accessSnapshot=data;
+  serverClockOffset=(Number(data.server_time||0)*1000)-Date.now();
+  expiryRefreshStarted=false;
  window.webAccessActive=data.active===true;
  subscriptionCard.hidden=false;
- const text=data.admin_free?'Administrator · free permanent access':
-  data.active?'Active until '+new Date(data.expires_at*1000).toLocaleString():
-  'Inactive · automatic trading is stopped';
+  let text=data.admin_free?'Administrator · free permanent access':
+   data.free_access?'Free access for everyone · until 1 Nov 2026, 00:00 Warsaw time':
+   data.active?'Paid access active until '+new Date(data.expires_at*1000).toLocaleString():
+   'Access expired · automatic trading is stopped';
+  if(!data.trading_admitted&&!data.admin_free)
+   text+=' · this account is not admitted to custody/trading';
  document.getElementById('subscription-state').textContent=text;
  accessNotice.textContent=text;
  document.getElementById('subscription-purchase').hidden=data.admin_free;
- document.getElementById('subscription-order').disabled=!data.purchase_available;
+  document.querySelectorAll('[data-package-id]').forEach(button=>{
+   button.disabled=!data.purchase_available||data.free_access===true;
+  });
  if(!data.admin_free&&!data.purchase_available)
-  document.getElementById('subscription-state').textContent=text+'. Customer access is not open; no payment is requested.';
+   document.getElementById('subscription-state').textContent=text+
+    '. Paid checkout is not open for this account; no payment is requested.';
+  const modalNote=document.getElementById('tariff-modal-note');
+  modalNote.textContent=data.purchase_available?
+   'Choose a package below. The payment is verified on Solana and is never added to your trading balance.':
+   'Paid access is not open for this account. No payment request will be created; custody admission remains unchanged.';
+  tariffModal.hidden=!(data.payment_required&&!data.admin_free&&!paywallDismissed);
+  tickFreeCountdown();
  // Manual close-all lives in the activity card and is never disabled here.
- document.querySelectorAll('[onclick="toggleTrading()"],[onclick="toggleMemeTrading()"]').forEach(b=>b.disabled=!data.active);
+  document.querySelectorAll('[onclick="toggleTrading()"],[onclick="toggleMemeTrading()"]')
+   .forEach(b=>b.disabled=!data.active||data.trading_admitted!==true);
 }
 function showPaymentRequest(order,recipient){
  accessOrder=order.id;
- document.getElementById('subscription-address').textContent=recipient;
+ const paymentRecipient=order.recipient||recipient;
+ if(!paymentRecipient)throw Error('Payment recipient is missing from this invoice.');
+ document.getElementById('subscription-address').textContent=paymentRecipient;
+  document.getElementById('subscription-invoice-label').textContent=
+   `Exact invoice: ${order.amount} ${order.asset} · ${order.label} access`;
  document.getElementById('subscription-deadline').textContent=
-  'Send from '+order.sender+' before '+new Date(order.deadline*1000).toLocaleString()+
-  '. Already sent? Verify the same Tx even after this window; do not resend.';
+   `Send ${order.amount} ${order.asset} from ${order.sender} before `+
+   new Date(order.deadline*1000).toLocaleString()+
+   '. If already sent within this window, verify that same transaction later; do not resend. Payment is not credited to your trading balance.';
+  const params=new URLSearchParams({amount:order.amount,label:'AI Trader',message:`${order.days}-day access`});
+  if(order.mint)params.set('spl-token',order.mint);
+  const paymentUri=`solana:${paymentRecipient}?${params.toString()}`;
+  const qr=document.getElementById('subscription-qr');
+  qr.src='https://api.qrserver.com/v1/create-qr-code/?size=200x200&data='+encodeURIComponent(paymentUri);
+  qr.hidden=false;
  document.getElementById('subscription-transfer').hidden=false;
+}
+async function createSubscriptionOrder(packageId){
+ const buttons=[...document.querySelectorAll('[data-package-id]')];
+ buttons.forEach(button=>button.disabled=true);
+ try{
+  const r=await apiFetch('/api/subscription/order',{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({package_id:packageId})});
+  const data=await r.json();
+  if(!r.ok||!data.success)throw Error(data.message||'Could not create payment request.');
+  paywallDismissed=true;tariffModal.hidden=true;
+  showPaymentRequest(data.order,data.recipient);
+  gotoTab('tariffs',tariffsNav);
+  document.getElementById('subscription-transfer').scrollIntoView({behavior:'smooth',block:'nearest'});
+ }catch(e){
+  document.getElementById('subscription-state').textContent=e.message;
+ }finally{
+  buttons.forEach(button=>button.disabled=!accessSnapshot?.purchase_available||accessSnapshot?.free_access===true);
+ }
 }
 async function refreshAccess(){
  if(!window.webSession?.user||accessCheckBusy)return;
@@ -95,19 +144,20 @@ async function refreshAccess(){
   const r=await apiFetch('/api/subscription'),data=await r.json();
   if(!r.ok||!data.success)throw Error(data.message||'Could not check access.');
   showAccess(data);
-  if(data.pending_order&&!data.admin_free&&!accessOrder)showPaymentRequest(data.pending_order,data.recipient);
+  if(data.pending_order&&!data.admin_free)showPaymentRequest(data.pending_order,data.recipient);
  }catch(e){document.getElementById('subscription-state').textContent=e.message;}
  finally{accessCheckBusy=false;}
 }
-document.getElementById('subscription-order').onclick=async()=>{
- const button=document.getElementById('subscription-order');button.disabled=true;
- try{
-  const r=await apiFetch('/api/subscription/order',{method:'POST'}),data=await r.json();
-  if(!r.ok||!data.success)throw Error(data.message||'Could not create payment request.');
-  showPaymentRequest(data.order,data.recipient);
- }catch(e){document.getElementById('subscription-state').textContent=e.message;}
- finally{button.disabled=false;}
+document.querySelectorAll('[data-package-id]').forEach(button=>
+ button.addEventListener('click',()=>createSubscriptionOrder(button.dataset.packageId)));
+document.getElementById('tariff-modal-close').onclick=()=>{
+ paywallDismissed=true;tariffModal.hidden=true;
 };
+document.addEventListener('keydown',event=>{
+ if(event.key==='Escape'&&!tariffModal.hidden){
+  paywallDismissed=true;tariffModal.hidden=true;
+ }
+});
 document.getElementById('subscription-copy').onclick=async()=>{
  try{await navigator.clipboard.writeText(document.getElementById('subscription-address').textContent);}
  catch(e){document.getElementById('subscription-state').textContent='Select and copy the payment address shown below.';}
@@ -120,7 +170,8 @@ document.getElementById('subscription-verify').onclick=async()=>{
    body:JSON.stringify({order_id:accessOrder,tx_signature:document.getElementById('subscription-tx').value})});
   const data=await r.json();if(!r.ok||!data.success)throw Error(data.message||'Payment is not verified.');
   showAccess(data);document.getElementById('subscription-state').textContent+=' · Payment verified';
-  document.getElementById('subscription-transfer').hidden=true;accessOrder=null;
+   document.getElementById('subscription-transfer').hidden=true;
+   document.getElementById('subscription-qr').hidden=true;accessOrder=null;
  }catch(e){document.getElementById('subscription-state').textContent=e.message;}
  finally{button.disabled=false;}
 };
@@ -137,3 +188,20 @@ loadWebSession().then(()=>{
  else refreshAccess();
 }).catch(e=>{document.getElementById('web-login').hidden=false;webMessage.textContent=e.message;});
 setInterval(refreshAccess,15000);
+function tickFreeCountdown(){
+ const label=document.getElementById('subscription-free-countdown');
+ if(!accessSnapshot||accessSnapshot.admin_free){label.textContent='';return;}
+ if(!accessSnapshot.free_access){label.textContent='';return;}
+ const seconds=Number(accessSnapshot.free_access_until)-Math.floor((Date.now()+serverClockOffset)/1000);
+ if(seconds<=0){
+  label.textContent='Free access has ended. Checking paid access…';
+  if(!expiryRefreshStarted){expiryRefreshStarted=true;refreshAccess();}
+  return;
+ }
+ const days=Math.floor(seconds/86400),hours=Math.floor(seconds%86400/3600);
+ const minutes=Math.floor(seconds%3600/60),remaining=seconds%60;
+ const countdown=`${days}d ${hours}h ${minutes}m ${remaining}s`;
+ label.textContent=`Free access for everyone · ${countdown} remaining · ends 1 Nov 2026 at 00:00 Europe/Warsaw`;
+ accessNotice.textContent=`Free access · ${countdown} remaining · custody/trading admission is unchanged`;
+}
+setInterval(tickFreeCountdown,1000);
