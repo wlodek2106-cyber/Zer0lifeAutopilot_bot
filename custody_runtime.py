@@ -2240,11 +2240,17 @@ class CustodyRuntime(WalletRuntime):
                               if asset in (SOL, USDC) else str(payload["raw"]))
                     symbol = "SOL" if asset == SOL else "USDC" if asset == USDC else asset
                     restored = f"Purchase reservation released: {amount} {symbol}."
+                    mode_note = (
+                        "Core and Sniper settings were left unchanged.\n"
+                        "This BUY will not be retried; any later order requires a fresh AI analysis.\n")
+                else:
+                    mode_note = (
+                        "Core: OFF. Sniper: OFF.\n"
+                        "This transaction was not retried. Enable a mode manually to resume.\n")
                 text = (
                     "AI Trader: a pending operation was safely recovered.\n"
                     "Solana proved expiry; the transaction was not found.\n"
-                    f"{restored}\nCore: OFF. Sniper: OFF.\n"
-                    "No repeat trade was sent. Enable a mode manually to resume.\n"
+                    f"{restored}\n{mode_note}"
                     f"Transaction: https://solscan.io/tx/{payload['signature']}")
                 delivered, error = False, "Telegram delivery unavailable"
                 retry_after = min(3600, 60 * 2 ** min(event["attempts"], 6))

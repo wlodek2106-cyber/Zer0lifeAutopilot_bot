@@ -989,12 +989,16 @@ class CustodyLedger:
                     (signature,operation_id,actor_id,state_before,evidence) VALUES(?,?,?,?,?)""",
                     (row["signature"], oid, recovery_audit["actor_id"], row["state"],
                      json.dumps(recovery_audit["evidence"])))
-                # Pause automated modes while preserving an explicitly requested
-                # close-all queue after a safely expired SELL. A Telegram failure
-                # must never roll back recovery or permit autonomous trading.
-                db.execute("""UPDATE custody_users SET trading=0,sniper_trading=0,
+                # A proven-absent, expired BUY is safe to retire without disabling
+                # modes: its original AI analysis remains claimed and cannot resend.
+                # Pause modes after other recovered operations; preserve an
+                # explicitly requested close-all queue after a SELL.
+                db.execute("""UPDATE custody_users SET
+                    trading=CASE WHEN ?='BUY' THEN trading ELSE 0 END,
+                    sniper_trading=CASE WHEN ?='BUY' THEN sniper_trading ELSE 0 END,
                     close_requested=CASE WHEN ?='SELL' THEN close_requested ELSE 0 END
-                    WHERE uid=?""", (row["kind"], row["uid"]))
+                    WHERE uid=?""",
+                    (row["kind"], row["kind"], row["kind"], row["uid"]))
                 db.execute("""INSERT INTO custody_recovery_notifications(operation_id,uid,payload)
                     VALUES(?,?,?)""", (oid, row["uid"], json.dumps({
                         "kind": row["kind"], "asset": row["asset"], "raw": row["raw"],

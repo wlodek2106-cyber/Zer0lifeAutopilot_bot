@@ -797,7 +797,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.ledger.submitted(operation["id"], False)
         return operation, signature
 
-    async def test_expired_pending_buy_restores_available_amount_only_after_proof(self):
+    async def test_expired_pending_buy_restores_funds_and_preserves_enabled_modes(self):
         buy, signature = self.pending_buy()
         available_before = self.ledger.balance(101, USDC)
         self.ledger.settings(101, enabled=True, sniper_enabled=True)
@@ -812,8 +812,8 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("purchase amount is available again", result["message"])
         self.assertEqual(self.ledger.operation(buy["id"])["state"], "FAILED")
         self.assertEqual(self.ledger.balance(101, USDC), available_before + 1_000_000)
-        self.assertFalse(self.ledger.settings(101)["trading"])
-        self.assertFalse(self.ledger.settings(101)["sniper_trading"])
+        self.assertTrue(self.ledger.settings(101)["trading"])
+        self.assertTrue(self.ledger.settings(101)["sniper_trading"])
         self.assertEqual(self.ledger.positions(101), [])
         with self.ledger.db() as db:
             audit = db.execute("SELECT actor_id,state_before,evidence FROM custody_operation_recovery_audit WHERE signature=?",
@@ -863,7 +863,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ledger.balance(101, USDC), available_before)
         self.assertTrue(self.ledger.audit())
 
-    async def test_worker_recovers_dropped_buy_and_pauses_without_resend(self):
+    async def test_worker_recovers_dropped_buy_and_preserves_modes_without_resend(self):
         buy, signature = self.pending_buy()
         with self.ledger.db() as db:
             db.execute("UPDATE custody_operations SET created_at=created_at-300 WHERE id=?", (buy["id"],))
@@ -879,8 +879,8 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(proof.call_args.args[2]["signed_wire"])
         self.assertEqual(self.ledger.balance(101, USDC), before + 1_000_000)
         self.assertEqual(self.ledger.operation(buy["id"])["state"], "FAILED")
-        self.assertFalse(self.ledger.settings(101)["trading"])
-        self.assertFalse(self.ledger.settings(101)["sniper_trading"])
+        self.assertTrue(self.ledger.settings(101)["trading"])
+        self.assertTrue(self.ledger.settings(101)["sniper_trading"])
         self.assertTrue(self.ledger.audit())
         self.assertNotIn("sendTransaction", [c.args[1] for c in self.service.rpc.call_args_list])
 
@@ -1007,12 +1007,12 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                 Request(101, {"signature": signature, "confirm_expired": True}), None)
         return buy
 
-    async def test_recovery_atomically_pauses_and_queues_one_owner_alert(self):
+    async def test_recovery_preserves_buy_modes_and_queues_one_owner_alert(self):
         self.ledger.settings(202, enabled=True, sniper_enabled=True)
         buy = await self.recovered_notification()
         settings = self.ledger.settings(101)
-        self.assertFalse(settings["trading"])
-        self.assertFalse(settings["sniper_trading"])
+        self.assertTrue(settings["trading"])
+        self.assertTrue(settings["sniper_trading"])
         self.assertFalse(settings["close_requested"])
         self.ledger.fail(buy["id"], network_proven=True)
         events = self.ledger.recovery_notifications(int(time.time()))
@@ -1061,7 +1061,8 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         message = session.calls[0][1]["json"]
         self.assertEqual(message["chat_id"], 101)
         self.assertIn("1 USDC", message["text"])
-        self.assertIn("Core: OFF. Sniper: OFF.", message["text"])
+        self.assertIn("Core and Sniper settings were left unchanged.", message["text"])
+        self.assertIn("This BUY will not be retried", message["text"])
         self.assertEqual(self.ledger.recovery_notifications(int(time.time()) + 100000), [])
 
     async def test_confirmed_withdrawal_sends_amount_and_solscan_receipt_once(self):
@@ -1098,7 +1099,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         events = self.ledger.recovery_notifications(before + 1240)
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["attempts"], 1)
-        self.assertFalse(self.ledger.settings(101)["trading"])
+        self.assertTrue(self.ledger.settings(101)["trading"])
         with patch.object(runtime.time, "time", return_value=before + 1240):
             success = NotificationSession()
             await self.service.deliver_recovery_notifications(success)
@@ -1113,7 +1114,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             NotificationSession(error=RuntimeError("url contains test-only-token")))
         self.assertNotIn("test-only-token", " ".join(messages))
         self.assertEqual(self.ledger.operation(buy["id"])["state"], "FAILED")
-        self.assertFalse(self.ledger.settings(101)["sniper_trading"])
+        self.assertTrue(self.ledger.settings(101)["sniper_trading"])
         self.assertEqual(len(self.ledger.recovery_notifications(int(time.time()) + 100)), 1)
 
     async def test_missing_token_keeps_notification_queued(self):
