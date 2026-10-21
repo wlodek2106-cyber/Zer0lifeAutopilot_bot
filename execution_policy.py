@@ -9,7 +9,7 @@ from custody_ledger import USDC, SOL
 from entry_costs import MAX_COST_BPS, MAX_PRICE_IMPACT_PCT, MAX_QUOTE_AGE_SECONDS, assess_entry
 from wallet_runtime import WalletError
 
-VERSION = "independent-execution-v2-core-confirmation"
+VERSION = "independent-execution-v3-chart-confirmation"
 MAX_POSITIONS = MappingProxyType({"main": 5, "sniper": 5})
 DECISION_SECONDS = 120
 QUOTE_SECONDS = MAX_QUOTE_AGE_SECONDS
@@ -67,10 +67,16 @@ def risk_exit(price, entry):
 
 
 def core_entry_signal(symbol, context):
-    """Apply available chart-guide checks without inventing candle or indicator data."""
+    """Require fresh chart confirmation for Core entries; never gate exits."""
     if not isinstance(context, dict) or not isinstance(context.get(symbol), dict):
         return deny("core_context", "SKIPPED: Core 5-minute/1-hour market context is missing.")
     metrics = context[symbol]
+    if metrics.get("chart_ready") != 1:
+        return deny("core_chart_data",
+                    "SKIPPED: fresh 5-minute and 1-hour OHLCV candles are unavailable; Core BUY is blocked.")
+    if metrics.get("chart_buy_setup") != 1:
+        return deny("core_chart_confirmation",
+                    "SKIPPED: charts show no confirmed support hold or breakout-retest with momentum confirmation.")
     m5, h1 = metrics.get("change_m5_pct"), metrics.get("change_h1_pct")
     if not (bounded_pct(m5) and bounded_pct(h1)):
         return deny("core_context", "SKIPPED: Core needs fresh 5-minute and 1-hour price changes.")

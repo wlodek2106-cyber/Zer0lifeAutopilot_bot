@@ -381,6 +381,7 @@ class CustodyRuntime(WalletRuntime):
         latest_record = json.loads(latest["decisions"]) if latest else {}
         return {**ai_decisions.configuration(), "last_analyzed_at": latest["created_at"] if latest else None,
                 "last_decisions": latest_record.get("decisions") if latest else None,
+                "chart_context": latest_record.get("main_market_context", {}) if latest else {},
                 "last_trigger": latest_record.get("trigger", "scheduled") if latest else None,
                 "sniper_assets": self.ai_universes()["sniper"],
                 "asset_labels": {s: info.get("label", s) + (" · "+info["mint"][:4]+"…"+info["mint"][-4:]

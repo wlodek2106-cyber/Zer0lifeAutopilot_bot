@@ -151,7 +151,7 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
             "prices": self.prices.copy(), "samples": {"SOL": 5, "WIF": 5},
             "main_market_context": {"SOL": {
                 "change_m5_pct": 0.8, "change_h1_pct": 1.5, "change_h6_pct": 0.2,
-                "buys_m5": 8, "sells_m5": 4}},
+                "buys_m5": 8, "sells_m5": 4, "chart_ready": 1, "chart_buy_setup": 1}},
             "decisions": {"main": {"action": "BUY", "symbol": "SOL", "reason": "signal"},
                           "sniper": {"action": "HOLD", "symbol": None, "reason": "wait"}}}
 
@@ -384,11 +384,11 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(reason_schema["minLength"], 1)
             self.assertEqual(reason_schema["maxLength"], 350)
         self.assertIn("main (USDC) only", self.payload["messages"][1]["content"])
-        self.assertIn("unvalidated heuristics", self.payload["messages"][1]["content"])
-        self.assertIn("OHLC candles", self.payload["messages"][1]["content"])
-        self.assertIn("Never infer or claim those missing signals", self.payload["messages"][1]["content"])
-        self.assertIn("EMA 20/50, RSI and MACD",
-                      user_payload["main_chart_data_capabilities"]["unavailable"])
+        self.assertIn("not backtested", self.payload["messages"][1]["content"])
+        self.assertIn("OHLCV chart features", self.payload["messages"][1]["content"])
+        self.assertIn("chart data is missing or stale", self.payload["messages"][1]["content"])
+        self.assertTrue(any(item.startswith("5-minute EMA20/50, RSI14, MACD histogram")
+                            for item in user_payload["main_chart_data_capabilities"]["available"]))
         self.assertEqual(user_payload["main_usdc_signal_evidence_numeric"]["SOL"]["change_m5_pct"], 0.8)
         self.assertTrue(user_payload["main_usdc_signal_evidence_numeric"]["SOL"]["trend_aligned_positive"])
         self.assertNotIn("WIF", user_payload["main_usdc_signal_evidence_numeric"])

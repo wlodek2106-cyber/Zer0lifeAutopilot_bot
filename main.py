@@ -1880,6 +1880,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <p id="ai-status" class="status-output">Checking AI status...</p>
                 <button class="btn-copy" onclick="previewAI()">Check AI · no trade</button>
                 <p id="ai-decisions" class="status-output"></p>
+                <p id="ai-chart-zones" class="status-output"></p>
                 <details>
                     <summary>Independent execution guard</summary>
                     <p class="section-note">AI proposes BUY / SELL / HOLD only. Server-owned checks decide whether an order is allowed. AI cannot change limits or disable checks.</p>
@@ -1988,7 +1989,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             <details id="strategy-help"><summary>Strategy limits &amp; risks</summary>
                 <p class="section-note">Core trades use your USDC; sniper trades use your SOL. Other users' funds and the operator fee reserve are never your trading capital. Automatic conversion or profit allocation between strategies is not implemented.</p>
                 <p class="section-note">Core: SOL, JUP, RAY, PYTH, JTO, ORCA; up to 5 positions. ORCA currently retains mint authority (additional tokens may be issued); no token is risk-free. Sniper: up to 5 SOL-funded positions, limited by your available SOL and saved order size. Every 15 minutes a bounded DexScreener profiles/search scan checks up to 90 Solana mints, screens up to 20 and sends at most 8 current candidates plus held assets to AI. This is not every project or a profit forecast; profiles alone do not establish meme status.</p>
-                <p class="section-note">Core BUY requires a positive 5-minute and 1-hour trend plus buyer-flow or relative-strength confirmation; it skips extended moves and strong 6-hour declines. This feed has no OHLC candles, so support/resistance, breakout/retest, candle patterns, EMA/RSI/MACD, and relative-volume signals are not verified. The added chart-guide filter is not backtested and does not predict profit. Sniper rules are unchanged.</p>
+                <p class="section-note">Core BUY requires the existing trend and flow checks plus fresh 5-minute/1-hour OHLCV data and a confirmed support-hold or breakout-retest setup. Chart zones use closed candles from the selected Solana pool; missing or stale candles block new Core buys. Zones and indicators are estimates, not predictions, and this strategy is not backtested. Core TP/SL and Sniper rules are unchanged.</p>
                 <p class="section-note">Confirmed buy, sell, take-profit, and stop-loss alerts are sent to each participant's own Telegram chat. Enable Telegram notifications on your phone. Alerts are sent after Solana finalizes the trade; a safely failed stop-loss sale gets a separate alert saying the position remains open.</p>
                 <p class="section-note">Sniper entry filters: approved DEX, at least $100k pool liquidity and 24h volume, 200 daily trades, pool age 24h+, extreme-pump exclusion, standard SPL mint with no mint/freeze authority. Fresh eligibility is required for every buy. Scores rank liquidity/activity, not expected profit. Holder concentration, LP locks and every contract/market risk are not fully checked. Standard mint checks do not guarantee token safety.</p>
                 <p class="section-note">AI makes decisions after you enable a mode. Orders require personal funds, permitted assets, at least 5 price samples, a fresh decision and stable pricing. Only one shared-wallet operation can be pending at a time.</p>
@@ -2215,6 +2216,32 @@ RAW_HTML = r"""<!DOCTYPE html>
                 box.textContent=Object.entries(result.decisions).map(([mode,d])=>(mode==='main'?'USDC':'SOL')+': '+d.action+' '+(d.symbol||'')+' — '+d.reason).join('\n');
                 await refresh();
             } catch(e) {box.textContent=e.message;}
+        }
+        function renderCoreChartZones(context, labels) {
+            const output=document.getElementById('ai-chart-zones');
+            if(!output)return;
+            const rows=Object.entries(context||{});
+            if(!rows.length) {
+                output.textContent='Core chart zones · 5m/1h: waiting for fresh OHLCV candles. New Core buys are blocked until chart confirmation is available.';
+                return;
+            }
+            const price=value=>Number.isFinite(Number(value))&&Number(value)>0?Number(value).toPrecision(5):'not established';
+            output.textContent='Core chart zones · 5m entry / 1h context · USD\\n'+rows.map(([symbol,c])=>{
+                const label=(labels||{})[symbol]||symbol;
+                if(c.chart_ready!==1)
+                    return label+': fresh candles unavailable ('+(c.chart_m5_candles||0)+' 5m / '+(c.chart_h1_candles||0)+' 1h); Core BUY blocked.';
+                const trend=c.chart_trend_h1>0?'up':c.chart_trend_h1<0?'down':'range/unclear';
+                const buy=Number(c.chart_support_low_usd)>0&&Number(c.chart_support_high_usd)>0
+                    ?price(c.chart_support_low_usd)+'–'+price(c.chart_support_high_usd):'not established';
+                const sell=Number(c.chart_resistance_low_usd)>0&&Number(c.chart_resistance_high_usd)>0
+                    ?price(c.chart_resistance_low_usd)+'–'+price(c.chart_resistance_high_usd):'not established';
+                const rsi=Number.isFinite(Number(c.chart_rsi14_5m))?Number(c.chart_rsi14_5m).toFixed(1):'n/a';
+                const volume=Number.isFinite(Number(c.chart_volume_ratio_5m))?Number(c.chart_volume_ratio_5m).toFixed(2)+'×':'n/a';
+                return label+': 1h '+trend+' · buy/support '+buy+' · sell/resistance '+sell
+                    +' · 5m RSI '+rsi+' · relative volume '+volume
+                    +' · confirmed entry '+(c.chart_buy_setup===1?'YES':'NO')
+                    +(c.chart_sell_setup===1?' · exit evidence near resistance':'');
+            }).join('\\n');
         }
         let withdrawSending = false;
         async function scanCandidates() {
@@ -3240,6 +3267,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                           +(ai.last_trigger==='whale_signal'?' · whale-triggered':''):
                         'AI not connected. Operator setup required.')+whaleAIState;
                     if(ai.last_decisions)document.getElementById('ai-decisions').textContent='Last analysis: '+new Date(ai.last_analyzed_at*1000).toLocaleString('en-GB')+'\n'+Object.entries(ai.last_decisions).map(([mode,d])=>(mode==='main'?'USDC':'SOL')+': '+d.action+' '+((ai.asset_labels||{})[d.symbol]||d.symbol||'')+' — '+d.reason).join('\n');
+                    renderCoreChartZones(ai.chart_context,ai.asset_labels);
                     const discovery=ai.discovery||{};
                     document.getElementById('discovery-status').textContent=discovery.entry_paused?discovery.message:
                         discovery.checked_at?(discovery.eligible||0)+' screened · '+(discovery.scanned||0)+' scanned · refreshed '+new Date(discovery.checked_at*1000).toLocaleTimeString('en-GB'):discovery.message||'Candidate scan pending.';

@@ -1,5 +1,7 @@
 import unittest
+import time
 
+import market_context
 from market_context import context_from_pairs
 
 
@@ -59,3 +61,54 @@ class MarketContextTests(unittest.TestCase):
 
         self.assertEqual(result["SOL"]["change_h1_pct"], -0.4)
         self.assertNotIn("change_m5_pct", result["SOL"])
+
+    def test_pool_address_is_only_exposed_for_internal_candle_fetch(self):
+        pair = self.pair("sol-mint", 200_000, 30_000,
+                         pairAddress="11111111111111111111111111111111")
+
+        public = context_from_pairs([pair], self.watchlist, ["SOL"])
+        internal = context_from_pairs(
+            [pair], self.watchlist, ["SOL"], include_pool_address=True)
+
+        self.assertNotIn("_pool_address", public["SOL"])
+        self.assertEqual(internal["SOL"]["_pool_address"], pair["pairAddress"])
+
+
+class ChartContextFetchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fetches_closed_candles_and_removes_internal_pool_address(self):
+        now = int(time.time())
+        pool = "11111111111111111111111111111111"
+
+        def candles(interval):
+            last_closed = now // interval * interval - interval
+            return [[last_closed - interval * (59 - i), 100 + i * .02,
+                     100.1 + i * .02, 99.9 + i * .02,
+                     100 + i * .02, 100] for i in reversed(range(60))]
+
+        class Response:
+            status = 200
+
+            def __init__(self, interval):
+                self.interval = interval
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def json(self):
+                return {"data": {"attributes": {"ohlcv_list": candles(self.interval)}}}
+
+        class Session:
+            def get(self, url, **kwargs):
+                interval = 300 if "/minute" in url else 3600
+                return Response(interval)
+
+        market_context._CANDLE_CACHE.clear()
+        context = {"SOL": {"_pool_address": pool}}
+        await market_context._add_chart_context(Session(), context)
+
+        self.assertEqual(context["SOL"]["chart_ready"], 1)
+        self.assertEqual(context["SOL"]["chart_m5_candles"], 60)
+        self.assertNotIn("_pool_address", context["SOL"])

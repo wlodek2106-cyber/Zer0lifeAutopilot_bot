@@ -28,7 +28,8 @@ class PolicyTests(unittest.TestCase):
             created_at=1000, now=1001, original={"SOL": 100}, prices={"SOL": 100},
             samples={"SOL": 5}, held=[], balance=1_000_000, order_raw=1_000_000,
             main_context={"SOL": {"change_m5_pct": 0.8, "change_h1_pct": 1.5,
-                "change_h6_pct": 1.0, "buys_m5": 8, "sells_m5": 4}})
+                "change_h6_pct": 1.0, "buys_m5": 8, "sells_m5": 4,
+                "chart_ready": 1, "chart_buy_setup": 1}})
         values.update(changes)
         return policy.proposal(**values)
 
@@ -94,20 +95,28 @@ class PolicyTests(unittest.TestCase):
 
     def test_core_requires_aligned_trend_and_independent_confirmation(self):
         self.assertEqual(self.proposal(main_context={}).code, "core_context")
-        falling = {"SOL": {"change_m5_pct": 0.8, "change_h1_pct": -0.1}}
+        chart_ok = {"chart_ready": 1, "chart_buy_setup": 1}
+        falling = {"SOL": {**chart_ok, "change_m5_pct": 0.8, "change_h1_pct": -0.1}}
         self.assertEqual(self.proposal(main_context=falling).code, "core_trend")
-        extended = {"SOL": {"change_m5_pct": 3.1, "change_h1_pct": 2.0}}
+        extended = {"SOL": {**chart_ok, "change_m5_pct": 3.1, "change_h1_pct": 2.0}}
         self.assertEqual(self.proposal(main_context=extended).code, "core_extended")
-        drawdown = {"SOL": {"change_m5_pct": 0.8, "change_h1_pct": 2.0,
+        drawdown = {"SOL": {**chart_ok, "change_m5_pct": 0.8, "change_h1_pct": 2.0,
                             "change_h6_pct": -5.1}}
         self.assertEqual(self.proposal(main_context=drawdown).code, "core_drawdown")
-        no_confirmation = {"SOL": {"change_m5_pct": 0.8, "change_h1_pct": 2.0}}
+        no_confirmation = {"SOL": {**chart_ok, "change_m5_pct": 0.8, "change_h1_pct": 2.0}}
         self.assertEqual(self.proposal(main_context=no_confirmation).code, "core_confirmation")
         relative = {
-            "SOL": {"change_m5_pct": 0.2, "change_h1_pct": 1.0},
-            "JUP": {"change_m5_pct": 0.8, "change_h1_pct": 1.5},
+            "SOL": {**chart_ok, "change_m5_pct": 0.2, "change_h1_pct": 1.0},
+            "JUP": {**chart_ok, "change_m5_pct": 0.8, "change_h1_pct": 1.5},
         }
         self.assertTrue(policy.core_entry_signal("JUP", relative).allowed)
+
+    def test_core_requires_fresh_chart_data_and_a_confirmed_setup(self):
+        missing_chart = {"SOL": {"change_m5_pct": 0.8, "change_h1_pct": 1.5}}
+        self.assertEqual(self.proposal(main_context=missing_chart).code, "core_chart_data")
+        no_setup = {"SOL": {"change_m5_pct": 0.8, "change_h1_pct": 1.5,
+                            "chart_ready": 1, "chart_buy_setup": 0}}
+        self.assertEqual(self.proposal(main_context=no_setup).code, "core_chart_confirmation")
 
     def test_order_requires_saved_size_allowlisted_mint_and_enabled_mode(self):
         self.assertTrue(self.order().allowed)

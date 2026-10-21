@@ -21,6 +21,33 @@ MAIN_CONTEXT_LIMITS = {
     "sells_m5": (0, 1_000_000_000),
     "buys_h1": (0, 1_000_000_000),
     "sells_h1": (0, 1_000_000_000),
+    "chart_ready": (0, 1),
+    "chart_buy_setup": (0, 1),
+    "chart_sell_setup": (0, 1),
+    "chart_trend_h1": (-1, 1),
+    "chart_rsi14_5m": (0, 100),
+    "chart_macd_hist_pct_5m": (-1000, 1000),
+    "chart_volume_ratio_5m": (0, 1000),
+    "chart_atr_pct_5m": (0, 1000),
+    "chart_ema20_5m_usd": (0, 1_000_000_000_000),
+    "chart_ema50_5m_usd": (0, 1_000_000_000_000),
+    "chart_ema20_h1_usd": (0, 1_000_000_000_000),
+    "chart_ema50_h1_usd": (0, 1_000_000_000_000),
+    "chart_price_usd": (0, 1_000_000_000_000),
+    "chart_support_low_usd": (0, 1_000_000_000_000),
+    "chart_support_high_usd": (0, 1_000_000_000_000),
+    "chart_resistance_low_usd": (0, 1_000_000_000_000),
+    "chart_resistance_high_usd": (0, 1_000_000_000_000),
+    "chart_support_touches_h1": (0, 1000),
+    "chart_resistance_touches_h1": (0, 1000),
+    "chart_m5_candles": (0, 1000),
+    "chart_h1_candles": (0, 1000),
+    "chart_m5_age_seconds": (0, 10_000_000),
+    "chart_h1_age_seconds": (0, 10_000_000),
+    "chart_m5_closed_at": (0, 10_000_000_000),
+    "chart_h1_closed_at": (0, 10_000_000_000),
+    "chart_bullish_engulfing_5m": (0, 1),
+    "chart_bearish_engulfing_5m": (0, 1),
 }
 MAIN_CHART_DATA_CAPABILITIES = {
     "available": [
@@ -28,13 +55,15 @@ MAIN_CHART_DATA_CAPABILITIES = {
         "20-second sampled prices over the recent analysis window",
         "5-minute and 1-hour buy/sell transaction counts",
         "24-hour liquidity and total-volume aggregates",
+        "Closed 5-minute and 1-hour OHLCV candles from the selected Solana pool",
+        "Support/resistance areas from confirmed hourly swing points",
+        "5-minute EMA20/50, RSI14, MACD histogram, ATR and same-timeframe relative volume",
+        "Confirmed 5-minute engulfing flags and deterministic support-hold/breakout-retest checks",
     ],
     "unavailable": [
-        "OHLC candle closes and wicks",
-        "support/resistance zones and confirmed breakout/retest",
-        "candlestick patterns",
-        "relative volume against a same-timeframe baseline",
-        "EMA 20/50, RSI and MACD",
+        "Full order-book depth, news/fundamentals and token-safety guarantees",
+        "Every possible candlestick pattern or arbitrary chart timeframe",
+        "Guaranteed fills, future price direction or profit",
     ],
 }
 
@@ -186,12 +215,15 @@ async def analyze(session, market, universes, screening=None, main_context=None)
                 "only where the feed supports them. Core BUY requires positive 5-minute and 1-hour trends, "
                 "no overextension (5-minute above 3%, 1-hour above 10%) and no 6-hour decline below -5%, "
                 "plus buyer pressure or token strength versus SOL. The server independently enforces these "
-                "checks. The feed does not contain OHLC candles, support/resistance zones, confirmed "
-                "breakouts/retests, candlestick patterns, relative volume, EMA, RSI or MACD. Never infer or "
-                "claim those missing signals; 24-hour total volume is not relative-volume confirmation. "
-                "Two price-change measurements alone are not independent confirmation. Missing or conflicting "
-                "evidence means HOLD. These are unvalidated heuristics, not a profit forecast; never force a "
-                "trade when no candidate qualifies.")},
+                "checks. Fresh numeric 5-minute/1-hour OHLCV chart features are supplied when available: "
+                "hourly support/resistance areas, confirmed support-hold or breakout-retest setup flags, "
+                "EMA, RSI, MACD, ATR, same-timeframe relative volume and simple engulfing flags. "
+                "Core BUY additionally requires chart_ready=1 and chart_buy_setup=1; the server enforces this. "
+                "Do not treat 24-hour total volume as relative volume, and do not invent candle signals when "
+                "chart data is missing or stale. Consider chart_sell_setup only as evidence for exiting an "
+                "already-owned spot position; SELL never opens a short. Fixed server TP/SL and exit controls "
+                "remain authoritative. Missing or conflicting evidence means HOLD. These heuristics are not "
+                "backtested and do not predict profit; never force a trade when no candidate qualifies.")},
             {"role": "user", "content": json.dumps({
                 "prices_usd_recent_samples": market, "permitted_symbols": universes,
                 "sample_interval_seconds": 20,
