@@ -2604,7 +2604,8 @@ class CustodyRuntime(WalletRuntime):
                 universe=snapshot.get("universes", self.ai_universes())[mode],
                 created_at=snapshot["created_at"],
                 original=snapshot["prices"], prices=prices, samples=snapshot.get("samples", {}),
-                held=held, balance=self.ledger.balance(uid, funding), order_raw=settings[size_key])
+                held=held, balance=self.ledger.balance(uid, funding), order_raw=settings[size_key],
+                main_context=snapshot.get("main_market_context", {}))
             self.record_execution_check(uid, verdict, "proposal", action, symbol or "")
             if not verdict.allowed:
                 note(verdict.code, verdict.reason)

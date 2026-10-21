@@ -149,6 +149,9 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.prices = {"SOL": 100, "WIF": 2}
         self.snapshot = {"id": "test-analysis", "created_at": int(time.time()),
             "prices": self.prices.copy(), "samples": {"SOL": 5, "WIF": 5},
+            "main_market_context": {"SOL": {
+                "change_m5_pct": 0.8, "change_h1_pct": 1.5, "change_h6_pct": 0.2,
+                "buys_m5": 8, "sells_m5": 4}},
             "decisions": {"main": {"action": "BUY", "symbol": "SOL", "reason": "signal"},
                           "sniper": {"action": "HOLD", "symbol": None, "reason": "wait"}}}
 
@@ -381,8 +384,13 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(reason_schema["minLength"], 1)
             self.assertEqual(reason_schema["maxLength"], 350)
         self.assertIn("main (USDC) only", self.payload["messages"][1]["content"])
-        self.assertIn("unvalidated signal heuristics", self.payload["messages"][1]["content"])
+        self.assertIn("unvalidated heuristics", self.payload["messages"][1]["content"])
+        self.assertIn("OHLC candles", self.payload["messages"][1]["content"])
+        self.assertIn("Never infer or claim those missing signals", self.payload["messages"][1]["content"])
+        self.assertIn("EMA 20/50, RSI and MACD",
+                      user_payload["main_chart_data_capabilities"]["unavailable"])
         self.assertEqual(user_payload["main_usdc_signal_evidence_numeric"]["SOL"]["change_m5_pct"], 0.8)
+        self.assertTrue(user_payload["main_usdc_signal_evidence_numeric"]["SOL"]["trend_aligned_positive"])
         self.assertNotIn("WIF", user_payload["main_usdc_signal_evidence_numeric"])
 
     async def test_main_usdc_signal_evidence_compares_recent_trend_and_buy_pressure(self):
@@ -399,6 +407,7 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(evidence["JUP"]["relative_change_vs_SOL_pct"], 2.0)
         self.assertTrue(evidence["JUP"]["buyers_exceed_sellers_m5"])
         self.assertTrue(evidence["JUP"]["momentum_positive"])
+        self.assertTrue(evidence["JUP"]["trend_aligned_positive"])
         self.assertTrue(evidence["JUP"]["buyer_pressure_positive"])
         self.assertTrue(evidence["JUP"]["relative_strength_positive"])
         self.assertEqual(evidence["JUP"]["liquidity_usd"], 250_000)

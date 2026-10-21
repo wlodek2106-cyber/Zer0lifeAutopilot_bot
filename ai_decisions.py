@@ -22,6 +22,21 @@ MAIN_CONTEXT_LIMITS = {
     "buys_h1": (0, 1_000_000_000),
     "sells_h1": (0, 1_000_000_000),
 }
+MAIN_CHART_DATA_CAPABILITIES = {
+    "available": [
+        "DEX 5-minute, 1-hour, 6-hour and 24-hour price-change aggregates",
+        "20-second sampled prices over the recent analysis window",
+        "5-minute and 1-hour buy/sell transaction counts",
+        "24-hour liquidity and total-volume aggregates",
+    ],
+    "unavailable": [
+        "OHLC candle closes and wicks",
+        "support/resistance zones and confirmed breakout/retest",
+        "candlestick patterns",
+        "relative volume against a same-timeframe baseline",
+        "EMA 20/50, RSI and MACD",
+    ],
+}
 
 
 def configuration():
@@ -88,6 +103,13 @@ def main_usdc_signal_evidence(market, context, permitted_symbols):
                 item["buyers_exceed_sellers_" + window] = buys > sells
         dex_short = metrics.get("change_m5_pct")
         dex_hour = metrics.get("change_h1_pct")
+        dex_six_hour = metrics.get("change_h6_pct")
+        item["trend_aligned_positive"] = bool(
+            type(dex_short) in (int, float) and dex_short > 0
+            and type(dex_hour) in (int, float) and dex_hour > 0
+            and (type(dex_six_hour) not in (int, float) or dex_six_hour >= -5)
+            and dex_short <= 3 and dex_hour <= 10
+        )
         item["momentum_positive"] = bool(
             (recent_move is not None and recent_move > 0
              and any(type(value) in (int, float) and value > 0 for value in (dex_short, dex_hour)))
@@ -160,22 +182,22 @@ async def analyze(session, market, universes, screening=None, main_context=None)
                 "Only the independent risk controller may execute any decision.")},
             {"role": "system", "content": (
                 "Additional strategy guidance for main (USDC) only; do not apply it to sniper (SOL), "
-                "whose existing decision policy remains unchanged. Compare all permitted main assets using "
-                "main_usdc_signal_evidence_numeric. A broad flat market is not by itself a reason to HOLD if "
-                "one permitted asset has confirmed relative strength. Consider BUY for the best-supported "
-                "single asset when at least two evidence categories align: momentum_positive, "
-                "buyer_pressure_positive, and relative_strength_positive. Require momentum plus at least "
-                "one of the latter two categories; two price-change measurements alone are not independent "
-                "confirmation. Do not chase an extended move (recent-sample or DEX 5-minute change above 3%, "
-                "or DEX 1-hour change above 10%); avoid candidates with DEX 6-hour change below -5%. "
-                "Missing or conflicting "
-                "evidence still means HOLD. These are unvalidated signal heuristics, not a profit forecast; "
-                "never force a trade when no candidate qualifies.")},
+                "whose existing decision policy remains unchanged. Follow the supplied chart-guide principles "
+                "only where the feed supports them. Core BUY requires positive 5-minute and 1-hour trends, "
+                "no overextension (5-minute above 3%, 1-hour above 10%) and no 6-hour decline below -5%, "
+                "plus buyer pressure or token strength versus SOL. The server independently enforces these "
+                "checks. The feed does not contain OHLC candles, support/resistance zones, confirmed "
+                "breakouts/retests, candlestick patterns, relative volume, EMA, RSI or MACD. Never infer or "
+                "claim those missing signals; 24-hour total volume is not relative-volume confirmation. "
+                "Two price-change measurements alone are not independent confirmation. Missing or conflicting "
+                "evidence means HOLD. These are unvalidated heuristics, not a profit forecast; never force a "
+                "trade when no candidate qualifies.")},
             {"role": "user", "content": json.dumps({
                 "prices_usd_recent_samples": market, "permitted_symbols": universes,
                 "sample_interval_seconds": 20,
                 "main_dex_market_context_numeric": sanitize_main_context(main_context, universes["main"]),
                 "main_dex_context_applies_only_to": "main (USDC), never sniper (SOL)",
+                "main_chart_data_capabilities": MAIN_CHART_DATA_CAPABILITIES,
                 "main_usdc_signal_evidence_numeric": main_usdc_signal_evidence(
                     market, main_context, universes["main"]),
                 "sniper_screening_numeric": screening or {},

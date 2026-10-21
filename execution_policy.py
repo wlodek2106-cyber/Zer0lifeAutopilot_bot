@@ -9,7 +9,7 @@ from custody_ledger import USDC, SOL
 from entry_costs import MAX_COST_BPS, MAX_PRICE_IMPACT_PCT, MAX_QUOTE_AGE_SECONDS, assess_entry
 from wallet_runtime import WalletError
 
-VERSION = "independent-execution-v1"
+VERSION = "independent-execution-v2-core-confirmation"
 MAX_POSITIONS = MappingProxyType({"main": 5, "sniper": 5})
 DECISION_SECONDS = 120
 QUOTE_SECONDS = MAX_QUOTE_AGE_SECONDS
@@ -47,6 +47,10 @@ def positive(value):
     return (type(value) in (int, float) and math.isfinite(value) and value > 0)
 
 
+def bounded_pct(value):
+    return type(value) in (int, float) and -5000 <= value <= 5000
+
+
 def risk_exit_reason(price, entry):
     if not positive(price) or not positive(entry):
         return None
@@ -60,6 +64,43 @@ def risk_exit_reason(price, entry):
 
 def risk_exit(price, entry):
     return risk_exit_reason(price, entry) is not None
+
+
+def core_entry_signal(symbol, context):
+    """Apply available chart-guide checks without inventing candle or indicator data."""
+    if not isinstance(context, dict) or not isinstance(context.get(symbol), dict):
+        return deny("core_context", "SKIPPED: Core 5-minute/1-hour market context is missing.")
+    metrics = context[symbol]
+    m5, h1 = metrics.get("change_m5_pct"), metrics.get("change_h1_pct")
+    if not (bounded_pct(m5) and bounded_pct(h1)):
+        return deny("core_context", "SKIPPED: Core needs fresh 5-minute and 1-hour price changes.")
+    if m5 <= 0 or h1 <= 0:
+        return deny("core_trend", "SKIPPED: Core has no aligned positive 5-minute and 1-hour trend.")
+    if m5 > 3 or h1 > 10:
+        return deny("core_extended", "SKIPPED: Core signal is overextended; the guide warns against chasing.")
+    h6 = metrics.get("change_h6_pct")
+    if bounded_pct(h6) and h6 < -5:
+        return deny("core_drawdown", "SKIPPED: Core 6-hour decline is below the configured trend limit.")
+
+    buyer_pressure = any(
+        type(metrics.get("buys_" + window)) is int
+        and type(metrics.get("sells_" + window)) is int
+        and metrics["buys_" + window] > metrics["sells_" + window]
+        for window in ("m5", "h1")
+    )
+    sol_metrics = context.get("SOL")
+    relative_strength = (
+        symbol != "SOL" and isinstance(sol_metrics, dict) and (
+            (bounded_pct(sol_metrics.get("change_m5_pct"))
+             and m5 > sol_metrics["change_m5_pct"])
+            or (bounded_pct(sol_metrics.get("change_h1_pct"))
+                and h1 > sol_metrics["change_h1_pct"])
+        )
+    )
+    if not buyer_pressure and not relative_strength:
+        return deny("core_confirmation",
+                    "SKIPPED: Core lacks buyer-flow or relative-strength confirmation.")
+    return allow()
 
 
 def fresh(created_at, now, maximum):
@@ -76,7 +117,7 @@ def integer(value):
 
 
 def proposal(*, mode, decision, universe, created_at, original, prices, samples,
-             held, balance, order_raw, now=None):
+             held, balance, order_raw, main_context=None, now=None):
     """A proposal cannot supply amounts, accounts, flags, limits or exceptions."""
     now = time.time() if now is None else now
     if (mode not in MAX_POSITIONS or not isinstance(decision, dict)
@@ -115,6 +156,10 @@ def proposal(*, mode, decision, universe, created_at, original, prices, samples,
         return deny("already_open", "SKIPPED: you already hold an open position in this asset.")
     if type(order_raw) is not int or order_raw <= 0 or balance < order_raw:
         return deny("balance", "SKIPPED: your available balance is below the saved purchase size.")
+    if mode == "main":
+        signal = core_entry_signal(symbol, main_context)
+        if not signal.allowed:
+            return signal
     return allow()
 
 
