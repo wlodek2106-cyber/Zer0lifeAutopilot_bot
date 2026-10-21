@@ -42,14 +42,18 @@ class WebBrowserTests(unittest.TestCase):
 
     def test_admin_free_and_expiry_presentation_never_disables_manual_close(self):
         page=self.page("""<script>
+        const now=Math.floor(Date.now()/1000);
         window.fetch=async(url)=>new Response(JSON.stringify(
             url==='/web-auth/me'?{success:true,user:{id:428821665,username:'Operator'},csrf:'fixture'}:
-            {success:true,active:true,admin_free:true,expires_at:null,purchase_available:true,trading_admitted:true}));
+            {success:true,active:true,admin_free:true,expires_at:null,purchase_available:true,trading_admitted:true,
+             free_access_until:now+90,server_time:now}));
         </script>""")
         browser.AccountBrowserTests().run_page(page,"""
             await loadWebSession();await refreshAccess();
             assert(document.getElementById('subscription-purchase').hidden,'operator never asked to pay');
             assert(document.getElementById('subscription-state').textContent.includes('free permanent'),'operator state clear');
+            assert(document.getElementById('subscription-free-countdown').textContent.includes('ends in'),
+              'operator sees the public free-access countdown without losing permanent admin access');
             showAccess({active:false,admin_free:false,expires_at:0,purchase_available:true,trading_admitted:true});
             updateMemeToggleUI(false);updateToggleUI(false);
             assert(document.getElementById('btn-toggle').disabled,'core locked after expiry and regular refresh');
@@ -66,7 +70,7 @@ class WebBrowserTests(unittest.TestCase):
             assert(!document.getElementById('nav-tariffs').hidden,'standalone menu exposes Tariffs');
             showAccess({active:true,admin_free:false,free_access:true,free_access_until:now+90,
               server_time:now,payment_required:false,purchase_available:true,trading_admitted:true});
-            assert(document.getElementById('subscription-free-countdown').textContent.includes('remaining'),
+            assert(document.getElementById('subscription-free-countdown').textContent.includes('ends in'),
               'free access countdown is visible');
             assert(document.getElementById('tariff-modal').hidden,'no payment prompt during free access');
             assert([...document.querySelectorAll('[data-package-id]')].every(button=>button.disabled),
@@ -109,10 +113,16 @@ class WebBrowserTests(unittest.TestCase):
             await new Promise(resolve=>setTimeout(resolve,50));
             assert(!document.getElementById('nav-tariffs').hidden,'Tariffs appears in the Telegram menu');
             assert(!document.getElementById('telegram-tariff-view').hidden,'Telegram tariff details open');
-            assert(document.getElementById('telegram-tariff-countdown').textContent.includes('remaining'),
+            assert(document.getElementById('telegram-tariff-countdown').textContent.includes('ends in'),
               'Telegram view shows the free-access countdown');
             assert(!document.getElementById('telegram-tariff-modal').classList.contains('active'),
               'no expiry modal while free access is active');
+            document.querySelector('[data-telegram-package="zrl_7d"]').click();
+            assert(document.getElementById('telegram-package-modal').classList.contains('active'),
+              'package details open while free access is active');
+            assert(document.getElementById('telegram-package-modal-checkout').hidden,
+              'checkout stays unavailable until free access ends');
+            closeTelegramPackage();
             window.tariffResponse={success:true,active:false,free_access:false,payment_required:true,
               purchase_available:false,trading_admitted:false,server_time:now,free_access_until:now-1};
             await refreshTelegramTariffs();
@@ -122,7 +132,68 @@ class WebBrowserTests(unittest.TestCase):
               'the prompt explains that subscription does not grant trading admission');
             assert(document.getElementById('telegram-tariff-modal-checkout').hidden,
               'non-admitted account cannot be sent to payment checkout');
+            window.tariffResponse={success:true,active:true,admin_free:true,free_access:false,
+              free_access_until:now+90,server_time:now,payment_required:false,purchase_available:true};
+            await refreshTelegramTariffs();
+            assert(document.getElementById('telegram-tariff-countdown').textContent.includes('ends in'),
+              'administrator also sees the public free-access countdown');
+            assert(document.getElementById('telegram-tariff-status').textContent.includes('permanent'),
+              'administrator keeps permanent access');
+            document.querySelector('[data-telegram-package="zrl_7d"]').click();
+            assert(document.getElementById('telegram-package-modal-status').textContent.includes('permanent free access'),
+              'package click explains that administrator access does not require payment');
+            assert(document.getElementById('telegram-package-modal-checkout').hidden,
+              'administrator is not sent to a payment flow');
         """)
+
+    def test_telegram_tariff_cards_open_details_and_selected_package_checkout(self):
+        page=self.telegram_page("""<script>
+        window.openedTariffUrl='';
+        const NativeURL=window.URL;
+        window.URL=class extends NativeURL{
+          constructor(input,base){super(input,typeof base==='string'&&base.startsWith('http')?base:'https://ai-trader.test');}
+        };
+        window.Telegram={WebApp:{initData:'signed-fixture',initDataUnsafe:{user:{id:101}},expand(){},ready(){},
+          openLink(url){window.openedTariffUrl=url;}}};
+        const now=Math.floor(Date.now()/1000);
+        window.tariffResponse={success:true,active:false,free_access:false,free_access_until:now-1,
+          server_time:now,payment_required:true,purchase_available:true,trading_admitted:true};
+        window.fetch=async(url)=>new Response(JSON.stringify(url==='/api/subscription'?window.tariffResponse:{success:true}));
+        </script>""")
+        browser.AccountBrowserTests().run_page(page,"""
+            gotoTab('tariffs',document.getElementById('nav-tariffs'));
+            await refreshTelegramTariffs();
+            document.querySelector('[data-telegram-package="sol_30d"]').click();
+            const modal=document.getElementById('telegram-package-modal');
+            await new Promise(resolve=>{
+              const started=Date.now();
+              const waitForAccess=()=>{
+                const status=document.getElementById('telegram-package-modal-status').textContent;
+                if(!status.includes('Checking account access…')||Date.now()-started>1500)resolve();
+                else setTimeout(waitForAccess,10);
+              };
+              waitForAccess();
+            });
+            assert(modal.classList.contains('active'),'tapping a package opens its details');
+            assert(document.getElementById('telegram-package-modal-title').textContent.includes('30-day'),
+              'selected package is identified');
+            const checkout=document.getElementById('telegram-package-modal-checkout');
+            assert(!checkout.hidden,'eligible expired account can continue to secure checkout: '+JSON.stringify({
+              hidden:checkout.hidden,access:telegramTariffState,status:document.getElementById('telegram-package-modal-status').textContent}));
+            checkout.click();
+            assert(new URL(window.openedTariffUrl).searchParams.get('package')==='sol_30d',
+              'checkout opens with the selected SOL package');
+        """)
+
+    def test_checkout_deep_link_selects_the_requested_package(self):
+        page=self.page("<script>window.fetch=async()=>new Response(JSON.stringify({success:true,user:null}));</script>")
+        browser.AccountBrowserTests().run_page(page,"""
+            focusRequestedPackage();
+            assert(document.getElementById('tab-tariffs').classList.contains('active'),
+              'checkout link opens the Tariffs tab');
+            assert(document.querySelector('[data-package-id="sol_30d"]').classList.contains('requested-package'),
+              'the selected package is highlighted');
+        ""","?package=sol_30d")
 
     def test_realized_pnl_shows_usdc_and_sol_separately_with_loss_color(self):
         page=self.page("<script>window.fetch=async()=>new Response(JSON.stringify({success:true}));</script>")

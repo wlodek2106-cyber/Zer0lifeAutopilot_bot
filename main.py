@@ -804,12 +804,21 @@ RAW_HTML = r"""<!DOCTYPE html>
         .eyebrow { color:#8798ae;font-size:12px;margin:0 0 6px; }
         .section-note { color:#94a5bb;font-size:13px;line-height:1.65; }
         .tariff-packages { display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:16px 0; }
-        .tariff-package { background:#0b111b;border:1px solid #263548;border-radius:14px;padding:14px; }
+        .tariff-package { display:flex;flex-direction:column;gap:8px;width:100%;min-height:120px;
+            text-align:left;font:inherit;color:inherit;background:#0b111b;border:1px solid #263548;
+            border-radius:14px;padding:14px;cursor:pointer; }
+        .tariff-package:hover,.tariff-package:focus-visible { border-color:#b6ef79;outline:2px solid rgba(182,239,121,.25); }
         .tariff-package strong { display:block;color:#b6ef79;margin-bottom:6px; }
         #telegram-tariff-modal { position:fixed;inset:0;z-index:1100;display:none;place-items:center;
             padding:18px;background:rgba(0,0,0,.78);backdrop-filter:blur(8px); }
         #telegram-tariff-modal.active { display:grid; }
         #telegram-tariff-modal .card { width:min(440px,100%);max-height:calc(100dvh - 36px);overflow:auto;
+            padding:24px!important;background:#101823!important;border:1px solid #334454!important;
+            box-shadow:0 24px 80px rgba(0,0,0,.6); }
+        #telegram-package-modal { position:fixed;inset:0;z-index:1110;display:none;place-items:center;
+            padding:18px;background:rgba(0,0,0,.78);backdrop-filter:blur(8px); }
+        #telegram-package-modal.active { display:grid; }
+        #telegram-package-modal .card { width:min(440px,100%);max-height:calc(100dvh - 36px);overflow:auto;
             padding:24px!important;background:#101823!important;border:1px solid #334454!important;
             box-shadow:0 24px 80px rgba(0,0,0,.6); }
         #telegram-tariff-countdown { color:#b6ef79;font-weight:700; }
@@ -1896,8 +1905,12 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <p id="telegram-tariff-status" role="status" aria-live="polite">Checking access…</p>
                     <p id="telegram-tariff-countdown" class="section-note" aria-live="polite"></p>
                     <div class="tariff-packages">
-                        <div class="tariff-package"><strong>7 days · 100,000 ZRL</strong><span>Access package; exact invoice shown in secure checkout.</span></div>
-                        <div class="tariff-package"><strong>30 days · 0.5 SOL</strong><span>Access package; exact invoice shown in secure checkout.</span></div>
+                        <button type="button" class="tariff-package" data-telegram-package="zrl_7d">
+                            <strong>7 days · 100,000 ZRL</strong><span>Tap to view package details.</span>
+                        </button>
+                        <button type="button" class="tariff-package" data-telegram-package="sol_30d">
+                            <strong>30 days · 0.5 SOL</strong><span>Tap to view package details.</span>
+                        </button>
                     </div>
                     <p id="telegram-tariff-note" class="section-note">Payment is separate from your trading balance. It does not enable Core or Sniper.</p>
                     <button id="telegram-tariff-checkout" class="btn-green-main" onclick="openTariffCheckout()">Open secure checkout</button>
@@ -2004,6 +2017,15 @@ RAW_HTML = r"""<!DOCTYPE html>
             <p id="telegram-tariff-modal-message" class="section-note">Choose a time-limited package to continue.</p>
             <button id="telegram-tariff-modal-checkout" class="btn-green-main" onclick="openTariffCheckout()">View tariffs and pay</button>
             <button class="btn-copy" onclick="dismissTelegramTariffModal()">Not now</button>
+        </div>
+    </div>
+    <div id="telegram-package-modal" role="dialog" aria-modal="true" aria-labelledby="telegram-package-modal-title" aria-hidden="true">
+        <div class="card">
+            <h2 id="telegram-package-modal-title">Access package</h2>
+            <p id="telegram-package-modal-description" class="section-note"></p>
+            <p id="telegram-package-modal-status" class="section-note" role="status" aria-live="polite">Checking account access…</p>
+            <button id="telegram-package-modal-checkout" class="btn-green-main" hidden>Continue to secure checkout</button>
+            <button class="btn-copy" onclick="closeTelegramPackage()">Close</button>
         </div>
     </div>
 
@@ -2461,6 +2483,11 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         let telegramTariffState=null,telegramTariffClockOffset=0,telegramTariffBusy=false;
+        let selectedTelegramPackage=null;
+        const telegramPackageDetails={
+            zrl_7d:{title:'7-day AI Trader access',description:'100,000 ZRL · verified as a package payment; never added to trading balance.'},
+            sol_30d:{title:'30-day AI Trader access',description:'0.5 SOL · verified as a package payment; never added to trading balance.'}
+        };
         let telegramTariffDismissed=false,nextTelegramTariffCheck=0;
         async function refreshTelegramTariffs(){
             if(window.ZRL_WEB||telegramTariffBusy||!getUserData())return;
@@ -2473,12 +2500,14 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const status=document.getElementById('telegram-tariff-status');
                 const note=document.getElementById('telegram-tariff-note');
                 const checkout=document.getElementById('telegram-tariff-checkout');
-                if(data.free_access){
+                if(data.admin_free){
+                    status.textContent='Administrator access is permanent; package payment is not required.';
+                    note.textContent='The public free-access countdown below is for other accounts. A subscription never changes trading admission or starts Core or Sniper.';
+                }else if(data.free_access){
                     status.textContent='Free AI Trader subscription is active for everyone through 1 November 2026.';
                     note.textContent='No payment is needed before the countdown ends. Payment is not credited to trading balance and never turns on Core or Sniper.';
                 }else if(data.active){
-                    status.textContent=data.admin_free?'AI Trader access is active.':
-                        'Paid access is active until '+new Date(Number(data.expires_at)*1000).toLocaleString()+'.';
+                    status.textContent='Paid access is active until '+new Date(Number(data.expires_at)*1000).toLocaleString()+'.';
                     note.textContent='Access renewal does not change trading admission or start trading modes.';
                 }else{
                     status.textContent='Free access has ended. Choose a package to request continued access.';
@@ -2486,9 +2515,9 @@ RAW_HTML = r"""<!DOCTYPE html>
                         'Checkout uses a separate browser passkey flow. The exact payment is verified before access is added; it is never credited to trading balance.':
                         'This account is not admitted for paid trading. A subscription does not change custody or trading admission.';
                 }
-                checkout.hidden=!data.purchase_available||data.active||data.free_access;
+                checkout.hidden=!data.purchase_available||data.admin_free||data.active||data.free_access;
                 const modalCheckout=document.getElementById('telegram-tariff-modal-checkout');
-                modalCheckout.hidden=!data.purchase_available;
+                modalCheckout.hidden=!data.purchase_available||data.admin_free||data.free_access;
                 if(!data.payment_required)telegramTariffDismissed=false;
                 const modal=document.getElementById('telegram-tariff-modal');
                 if(data.payment_required&&!telegramTariffDismissed){
@@ -2500,33 +2529,84 @@ RAW_HTML = r"""<!DOCTYPE html>
                 }else{
                     modal.classList.remove('active');modal.setAttribute('aria-hidden','true');
                 }
+                if(selectedTelegramPackage)renderTelegramPackageDetails();
                 tickTelegramTariffCountdown();
             }catch(error){
                 document.getElementById('telegram-tariff-status').textContent=error.message||'Could not check access.';
             }finally{telegramTariffBusy=false;}
         }
         function tickTelegramTariffCountdown(){
-            if(window.ZRL_WEB||!telegramTariffState?.free_access)return;
-            const seconds=Number(telegramTariffState.free_access_until)-
-                Math.floor((Date.now()+telegramTariffClockOffset)/1000);
+            if(window.ZRL_WEB||!telegramTariffState)return;
             const label=document.getElementById('telegram-tariff-countdown');
+            const until=Number(telegramTariffState.free_access_until||0);
+            if(!until){label.textContent='';return;}
+            const seconds=until-
+                Math.floor((Date.now()+telegramTariffClockOffset)/1000);
             if(seconds<=0){
-                label.textContent='Free access has ended. Checking your access…';
-                if(Date.now()>=nextTelegramTariffCheck){
+                label.textContent=telegramTariffState.admin_free?
+                    'Public free access has ended · your administrator access remains permanent.':
+                    telegramTariffState.active?
+                    'Public free access has ended · your paid access remains active.':
+                    'Free access has ended. Checking your access…';
+                if(telegramTariffState.free_access&&Date.now()>=nextTelegramTariffCheck){
                     nextTelegramTariffCheck=Date.now()+10000;refreshTelegramTariffs();
                 }
                 return;
             }
             const days=Math.floor(seconds/86400),hours=Math.floor(seconds%86400/3600);
             const minutes=Math.floor(seconds%3600/60),remaining=seconds%60;
-            label.textContent=`Free access · ${days}d ${hours}h ${minutes}m ${remaining}s remaining · ends 1 Nov 2026, 00:00 Europe/Warsaw`;
+            const accessNote=telegramTariffState.admin_free?' · your administrator access remains permanent':'';
+            label.textContent=`Public free access ends in ${days}d ${hours}h ${minutes}m ${remaining}s · 1 Nov 2026, 00:00 Europe/Warsaw${accessNote}`;
         }
-        function openTariffCheckout(){
-            if(!telegramTariffState?.purchase_available)return;
-            const url=new URL('/terminal',window.location.origin).href;
-            if(window.Telegram?.WebApp?.openLink)window.Telegram.WebApp.openLink(url);
-            else window.open(url,'_blank','noopener,noreferrer');
+        function openTariffCheckout(packageId=null){
+            if(!telegramTariffState?.purchase_available||telegramTariffState.admin_free||telegramTariffState.free_access)return;
+            const url=new URL('/terminal',window.location.origin);
+            if(['zrl_7d','sol_30d'].includes(packageId))url.searchParams.set('package',packageId);
+            if(window.Telegram?.WebApp?.openLink)window.Telegram.WebApp.openLink(url.href);
+            else window.open(url.href,'_blank','noopener,noreferrer');
         }
+        function openTelegramPackage(packageId){
+            if(!telegramPackageDetails[packageId])return;
+            selectedTelegramPackage=packageId;
+            renderTelegramPackageDetails();
+            const modal=document.getElementById('telegram-package-modal');
+            modal.classList.add('active');modal.setAttribute('aria-hidden','false');
+            if(!telegramTariffState)refreshTelegramTariffs();
+        }
+        function renderTelegramPackageDetails(){
+            const plan=telegramPackageDetails[selectedTelegramPackage];
+            if(!plan)return;
+            document.getElementById('telegram-package-modal-title').textContent=plan.title;
+            document.getElementById('telegram-package-modal-description').textContent=plan.description;
+            const status=document.getElementById('telegram-package-modal-status');
+            const checkout=document.getElementById('telegram-package-modal-checkout');
+            const data=telegramTariffState;
+            if(!data){
+                status.textContent='Checking account access…';
+            }else if(data.admin_free){
+                status.textContent='Your administrator account has permanent free access. No package payment is needed.';
+            }else if(data.free_access){
+                status.textContent='Your free access is still active. Checkout opens after the public free-access period ends.';
+            }else if(!data.purchase_available){
+                status.textContent='This account is not admitted for paid access. Payment would not change custody or trading admission.';
+            }else if(data.active){
+                status.textContent='Your access is active until '+new Date(Number(data.expires_at)*1000).toLocaleString()+'. You can renew securely.';
+            }else{
+                status.textContent='Continue to the secure browser checkout to create an exact payment invoice.';
+            }
+            checkout.hidden=!data?.purchase_available||data.admin_free||data.free_access;
+            checkout.onclick=()=>openTariffCheckout(selectedTelegramPackage);
+        }
+        function closeTelegramPackage(){
+            selectedTelegramPackage=null;
+            const modal=document.getElementById('telegram-package-modal');
+            modal.classList.remove('active');modal.setAttribute('aria-hidden','true');
+        }
+        document.querySelectorAll('[data-telegram-package]').forEach(button=>
+            button.addEventListener('click',()=>openTelegramPackage(button.dataset.telegramPackage)));
+        document.getElementById('telegram-package-modal').addEventListener('click',event=>{
+            if(event.target.id==='telegram-package-modal')closeTelegramPackage();
+        });
         function dismissTelegramTariffModal(){
             telegramTariffDismissed=true;
             const modal=document.getElementById('telegram-tariff-modal');
@@ -2583,6 +2663,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         async function finishAccount(){
             try{
                 proceedToTerminal();
+                if(window.ZRL_WEB&&typeof window.focusRequestedPackage==='function')window.focusRequestedPackage();
             } catch (e) {
                 alert(e.message || "Could not verify authorization. Reopen the app through Telegram.");
             }

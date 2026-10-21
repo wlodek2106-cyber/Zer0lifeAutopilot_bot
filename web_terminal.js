@@ -53,6 +53,7 @@ webSignIn.onclick=async()=>{
   document.getElementById('web-login').hidden=true;
   await openTerminal();
   await refreshAccess();
+  focusRequestedPackage();
  }catch(e){
   webMessage.textContent=e.name==='NotAllowedError'?'Cancelled. Tap again to retry.':e.message;
   if(e.name!=='NotAllowedError'){webLoginPending=null;webSignIn.textContent='Continue';}
@@ -64,6 +65,23 @@ for(const id of ['web-nickname','web-pin'])document.getElementById(id).addEventL
 const subscriptionCard=document.getElementById('subscription-card');
 document.getElementById('tab-tariffs').prepend(subscriptionCard);
 const tariffsNav=document.getElementById('nav-tariffs');
+const requestedPackageId=['zrl_7d','sol_30d'].includes(new URLSearchParams(location.search).get('package'))?
+  new URLSearchParams(location.search).get('package'):null;
+function focusRequestedPackage(){
+ if(!window.ZRL_WEB||!requestedPackageId)return;
+ gotoTab('tariffs',tariffsNav);
+ const button=[...document.querySelectorAll('[data-package-id]')]
+  .find(candidate=>candidate.dataset.packageId===requestedPackageId);
+ if(button){
+  button.classList.add('requested-package');
+  button.scrollIntoView({behavior:'smooth',block:'center'});
+  if(!button.disabled)button.focus();
+ }else{
+  const status=document.getElementById('subscription-state');
+  status?.setAttribute('tabindex','-1');status?.focus();
+ }
+}
+window.focusRequestedPackage=focusRequestedPackage;
 if(window.ZRL_WEB)tariffsNav.hidden=false;
 let accessNotice=document.createElement('p');accessNotice.className='section-note';accessNotice.id='overview-access';
 document.getElementById('tab-terminal').prepend(accessNotice);
@@ -183,25 +201,36 @@ document.getElementById('web-logout').onclick=async()=>{
   window.webSession=null;location.reload();
  }catch(e){document.getElementById('subscription-state').textContent=e.message;}
 };
-loadWebSession().then(()=>{
+loadWebSession().then(async()=>{
  if(!window.webSession)document.getElementById('web-login').hidden=false;
- else refreshAccess();
+  else if(requestedPackageId){
+   document.getElementById('web-login').hidden=true;
+   await openTerminal();
+   await refreshAccess();
+   if(document.getElementById('nav').style.display!=='none')focusRequestedPackage();
+  }else refreshAccess();
 }).catch(e=>{document.getElementById('web-login').hidden=false;webMessage.textContent=e.message;});
 setInterval(refreshAccess,15000);
 function tickFreeCountdown(){
  const label=document.getElementById('subscription-free-countdown');
- if(!accessSnapshot||accessSnapshot.admin_free){label.textContent='';return;}
- if(!accessSnapshot.free_access){label.textContent='';return;}
- const seconds=Number(accessSnapshot.free_access_until)-Math.floor((Date.now()+serverClockOffset)/1000);
+  if(!accessSnapshot){label.textContent='';return;}
+  const until=Number(accessSnapshot.free_access_until||0);
+  if(!until){label.textContent='';return;}
+  const seconds=until-Math.floor((Date.now()+serverClockOffset)/1000);
  if(seconds<=0){
-  label.textContent='Free access has ended. Checking paid access…';
-  if(!expiryRefreshStarted){expiryRefreshStarted=true;refreshAccess();}
+   label.textContent=accessSnapshot.admin_free?
+    'Public free access has ended · your administrator access remains permanent.':
+    accessSnapshot.active?'Public free access has ended · your paid access remains active.':
+    'Free access period has ended.';
+   if(accessSnapshot.free_access&&!expiryRefreshStarted){expiryRefreshStarted=true;refreshAccess();}
   return;
  }
  const days=Math.floor(seconds/86400),hours=Math.floor(seconds%86400/3600);
  const minutes=Math.floor(seconds%3600/60),remaining=seconds%60;
  const countdown=`${days}d ${hours}h ${minutes}m ${remaining}s`;
- label.textContent=`Free access for everyone · ${countdown} remaining · ends 1 Nov 2026 at 00:00 Europe/Warsaw`;
- accessNotice.textContent=`Free access · ${countdown} remaining · custody/trading admission is unchanged`;
+  const ownerNote=accessSnapshot.admin_free?' · your administrator access remains permanent':'';
+  label.textContent=`Public free access ends in ${countdown} · 1 Nov 2026 at 00:00 Europe/Warsaw${ownerNote}`;
+  if(accessSnapshot.free_access&&!accessSnapshot.admin_free)
+   accessNotice.textContent=`Free access · ${countdown} remaining · custody/trading admission is unchanged`;
 }
 setInterval(tickFreeCountdown,1000);
