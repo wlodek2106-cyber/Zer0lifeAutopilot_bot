@@ -3187,10 +3187,16 @@ RAW_HTML = r"""<!DOCTYPE html>
                         Number(s.withdrawable_sol||0).toFixed(9) +
                         ' SOL. Network fees paid by operator reserve.';
                     await loadPartnerProgram();
-                    if(!window.ZRL_WEB&&!s.is_admin){
-                        document.querySelectorAll('.nav-btn')[1].style.display='none';
-                        document.querySelectorAll('[data-target-tab="trading"]').forEach(b=>b.style.display='none');
-                        document.getElementById('tab-trading').style.display='none';
+                    const tradingAllowed=!!(s.is_admin||s.trading_admitted);
+                    const navButtons=document.querySelectorAll('.nav-btn');
+                    if(navButtons[1])navButtons[1].style.display=tradingAllowed?'':'none';
+                    document.querySelectorAll('[data-target-tab="trading"]').forEach(b=>b.style.display=tradingAllowed?'':'none');
+                    const tradingPanel=document.getElementById('tab-trading');
+                    if(tradingPanel){
+                        tradingPanel.style.display=tradingAllowed?'':'none';
+                        if(!tradingAllowed&&tradingPanel.classList.contains('active')){
+                            gotoTab('terminal',navButtons[0]);
+                        }
                     }
                     const flags = s.wallet_status || {};
                     document.getElementById('wallet-runtime-status').textContent =

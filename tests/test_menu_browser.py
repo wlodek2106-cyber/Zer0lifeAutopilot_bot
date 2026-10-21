@@ -22,6 +22,7 @@ class MenuBrowserTests(unittest.TestCase):
             "success": True, "username": "fixture", "user_balance": 34.037005,
             "sol_balance": .164009149, "withdrawable": 34.037005, "wallet_history": [],
             "trades": [], "logs": [], "trading_active": False, "is_admin": True,
+            "trading_admitted": True,
             "wallet_status": {"wallet_configured": True, "persistent_storage": True, "finance_allowed": True},
             "trading_settings": {"order_usdc": 1, "max_positions": 5, "assets": ["SOL", "JUP"]},
             "execution_policy": {
@@ -58,7 +59,7 @@ class MenuBrowserTests(unittest.TestCase):
             try {
                 proceedToTerminal(); await refresh();
                 const assert=(condition,message)=>{if(!condition)failures.push(message);};
-                assert(document.querySelectorAll('.nav-btn').length===4,'four navigation items');
+                assert(document.querySelectorAll('.nav-btn').length===5,'five navigation items');
                 assert(document.getElementById('meme-sniper-card').closest('.tab-panel').id==='tab-trading','SOL sniper in Trading, not Overview');
                 assert(document.getElementById('sniper-sol-balance').textContent==='0.164009 SOL','sniper shows personal SOL');
                 assert(document.getElementById('sniper-position-cap').textContent==='Screened Solana candidates · up to 5 positions','sniper cap matches server policy');
@@ -104,6 +105,20 @@ class MenuBrowserTests(unittest.TestCase):
                     assert(getComputedStyle(document.getElementById('tab-'+tabs[i])).display==='block','visible '+tabs[i]);
                     assert(document.documentElement.scrollWidth<=innerWidth,'no horizontal overflow '+tabs[i]);
                 }
+                fixture.is_admin=false;
+                fixture.trading_admitted=true;
+                await refresh();
+                const tradingNav=document.querySelectorAll('.nav-btn')[1];
+                const tradingPanel=document.getElementById('tab-trading');
+                assert(getComputedStyle(tradingNav).display!=='none','admitted Telegram participant sees Trading');
+                fixture.trading_admitted=false;
+                await refresh();
+                assert(getComputedStyle(tradingNav).display==='none','non-admitted participant cannot see Trading');
+                assert(tradingPanel.style.display==='none','non-admitted Trading panel is hidden');
+                fixture.trading_admitted=true;
+                await refresh();
+                assert(getComputedStyle(tradingNav).display!=='none','Trading returns when admission is restored');
+                assert(tradingPanel.style.display!=='none','Trading panel is restored when admission returns');
                 failures.push(...window.testErrors);
             } catch(e) {failures.push(String(e));}
             const result=document.createElement('pre');result.id='browser-test-result';

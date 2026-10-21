@@ -1978,6 +1978,7 @@ class CustodyRuntime(WalletRuntime):
             "pending_operations": [pending_summary(row) for row in own_pending],
             "ledger_audited": True,
             "trading_active": bool(settings["trading"]), "is_admin": uid == self.owner_id,
+            "trading_admitted": self.public_enabled or uid in self.beta_users,
             "operator_fees": self.operator_fees(uid),
             "sniper_active": bool(settings["sniper_trading"]),
             "sniper_settings": {"order_sol": settings["sniper_order_raw"]/1e9,
