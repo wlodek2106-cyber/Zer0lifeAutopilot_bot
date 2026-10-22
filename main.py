@@ -1397,6 +1397,11 @@ RAW_HTML = r"""<!DOCTYPE html>
         #partner-program .partner-wallet.is-unlinked .partner-wallet-badge::before { background:#e7bd73; }
         #partner-program .partner-earnings { margin:0 0 12px; padding:12px; border:1px solid rgba(255,255,255,.075); border-radius:12px; background:rgba(7,10,7,.42); }
         #partner-program .partner-earnings-title { margin:0 0 7px; color:#87917d; font:700 8px ui-monospace,monospace; letter-spacing:.12em; text-transform:uppercase; }
+        #partner-program .partner-currency-totals { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:8px 0 10px; }
+        #partner-program .partner-currency-card { min-width:0; padding:10px; border:1px solid rgba(201,243,106,.12); border-radius:10px; background:rgba(13,18,12,.68); }
+        #partner-program .partner-currency-card > span { display:block; color:#a3ad96; font:700 8px ui-monospace,monospace; letter-spacing:.1em; text-transform:uppercase; }
+        #partner-program .partner-currency-card > strong { display:block; margin:5px 0 7px; color:#d4f77b; font:700 14px ui-monospace,monospace; overflow-wrap:anywhere; }
+        #partner-program .partner-currency-card > small { display:block; color:#9da693; font-size:9px; line-height:1.55; }
         #partner-program .partner-earning-row { display:flex; justify-content:space-between; gap:8px; padding:6px 0; border-top:1px solid rgba(255,255,255,.05); color:#9da693; font-size:10px; line-height:1.4; }
         #partner-program .partner-earning-row strong { color:#dce4d2; text-align:right; font:600 10px ui-monospace,monospace; }
         #partner-program .partner-earnings-empty { margin:0; color:#a4ad9a; font-size:11px; }
@@ -1963,6 +1968,9 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <p id="partner-program-status" class="partner-sr-only" role="status">Loading partner balances…</p>
                 <div class="partner-earnings">
                     <p class="partner-earnings-title">Partner earnings by currency</p>
+                    <div id="partner-currency-totals" class="partner-currency-totals" aria-live="polite">
+                        <p class="partner-earnings-empty">Loading partner balances…</p>
+                    </div>
                     <div id="partner-earnings-summary" aria-live="polite"><p class="partner-earnings-empty">Loading partner balances…</p></div>
                 </div>
                 <div class="partner-invite">
@@ -2085,6 +2093,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             const walletLabel = document.getElementById('partner-wallet-label');
             const walletDetail = document.getElementById('partner-wallet-detail');
             const walletBadge = document.getElementById('partner-wallet-badge');
+            const currencyTotals = document.getElementById('partner-currency-totals');
             const earningsSummary = document.getElementById('partner-earnings-summary');
             const copyStatus = document.querySelector('.partner-copy-status');
             const levelInfo = [
@@ -2137,17 +2146,38 @@ RAW_HTML = r"""<!DOCTYPE html>
                 status.textContent='Referrals by level: '+counts.join(' / ')+
                     '. Partner commissions are credited to your main balance for normal withdrawal.';
                 const allEarnings=Array.isArray(data.earnings)?data.earnings:[];
+                if(currencyTotals){
+                    currencyTotals.replaceChildren();
+                    const totalsData=Array.isArray(data.earnings_totals)?data.earnings_totals:[];
+                    const totalsByAsset=new Map(totalsData.map(item=>[item.asset,item]));
+                    const assets=['USDC','SOL'];
+                    for(const item of totalsData){
+                        if(item.asset&&!assets.includes(item.asset))assets.push(item.asset);
+                    }
+                    for(const asset of assets){
+                        const item=totalsByAsset.get(asset)||{};
+                        const card=document.createElement('div');card.className='partner-currency-card';
+                        const label=document.createElement('span');label.textContent=asset+' total earned';
+                        const total=document.createElement('strong');
+                        total.textContent=formatAmount(item.earned_raw,asset)+' '+asset;
+                        const details=document.createElement('small');
+                        details.textContent='Main balance: '+formatAmount(item.credited_raw,asset)+
+                            ' · Pending: '+formatAmount(item.pending_raw,asset)+
+                            ' · Paid: '+formatAmount(item.paid_raw,asset);
+                        card.append(label,total,details);currencyTotals.appendChild(card);
+                    }
+                }
                 const earned=allEarnings.filter(item=>Number(item.credited_raw||0)>0||
                     Number(item.pending_raw||0)>0||Number(item.paid_raw||0)>0);
                 if(earningsSummary){
                     earningsSummary.replaceChildren();
                     if(!earned.length){
-                        const empty=document.createElement('p');empty.className='partner-earnings-empty';empty.textContent='No partner earnings yet.';
+                        const empty=document.createElement('p');empty.className='partner-earnings-empty';empty.textContent='No commissions recorded yet.';
                         earningsSummary.appendChild(empty);
                     }else{
                         earned.forEach(item=>{
                             const row=document.createElement('div');row.className='partner-earning-row';
-                            const asset=item.asset==='SOL'?'SOL':'USDC';
+                            const asset=String(item.asset||'UNKNOWN');
                             const level=document.createElement('span');level.textContent='Level '+Number(item.level)+' · '+asset;
                             const amounts=document.createElement('strong');
                             const parts=[];
@@ -2177,6 +2207,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 if(walletLabel)walletLabel.textContent='Partner status unavailable';
                 if(walletDetail)walletDetail.textContent='Could not load wallet or payout status.';
                 if(walletBadge)walletBadge.textContent='UNAVAILABLE';
+                if(currencyTotals)currencyTotals.textContent='Could not load partner earnings.';
                 if(earningsSummary)earningsSummary.textContent='Could not load partner earnings.';
                 if(copyStatus)copyStatus.textContent='Partner referral link is unavailable.';
             }

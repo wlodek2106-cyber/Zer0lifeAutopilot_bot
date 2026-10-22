@@ -344,6 +344,19 @@ class CustodyLedger:
                     earned.append({"level": level, "asset": item["asset"],
                                    "earned_raw": item["total"], "credited_raw": item["credited"],
                                    "paid_raw": item["paid"], "pending_raw": item["pending"]})
+            totals_by_asset = {}
+            for item in earned:
+                totals = totals_by_asset.setdefault(item["asset"], {
+                    "earned_raw": 0, "credited_raw": 0, "paid_raw": 0, "pending_raw": 0})
+                for field in ("earned_raw", "credited_raw", "paid_raw", "pending_raw"):
+                    totals[field] += int(item[field])
+            total_assets = [USDC, SOL] + sorted(
+                asset for asset in totals_by_asset if asset not in (USDC, SOL))
+            earnings_totals = [
+                {"asset": asset, **totals_by_asset.get(asset, {
+                    "earned_raw": 0, "credited_raw": 0, "paid_raw": 0, "pending_raw": 0})}
+                for asset in total_assets
+            ]
             earnings_history = [dict(row) for row in db.execute(
                 """SELECT id,level,asset,amount_raw,state,signature,created_at
                    FROM custody_partner_earnings WHERE partner_uid=?
@@ -354,7 +367,7 @@ class CustodyLedger:
             return {"code": code,
                 "invite_url": ("https://t.me/" + bot_username + "?start=ref_" + code) if bot_username else "",
                 "rates_bps": list(PARTNER_LEVEL_BPS), "referrals_by_level": counts,
-                "earnings": earned, "history": earnings_history,
+                "earnings": earned, "earnings_totals": earnings_totals, "history": earnings_history,
                 "automatic_payouts": False, "balance_crediting": True,
                 "review_required": review_required,
                 "wallet_linked": bool(db.execute(

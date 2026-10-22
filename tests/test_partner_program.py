@@ -39,11 +39,12 @@ class PartnerProgramTests(unittest.TestCase):
         self.assertTrue(self.ledger.audit())
 
     def close_trade(self, cost, proceeds, funding_asset=USDC):
+        mint = "test-mint-" + uuid.uuid4().hex
         buy = self.ledger.reserve(101, str(uuid.uuid4()), "BUY", funding_asset, cost,
-            {"output_asset": "test-mint", "symbol": "TEST", "decimals": 6})
+            {"output_asset": mint, "symbol": "TEST", "decimals": 6})
         self.ledger.prepared(buy["id"], str(Signature.new_unique()), "offline-buy")
         self.ledger.finalize(buy["id"], cost, 0, 1_000_000)
-        sell = self.ledger.reserve(101, str(uuid.uuid4()), "SELL", "test-mint", 1_000_000,
+        sell = self.ledger.reserve(101, str(uuid.uuid4()), "SELL", mint, 1_000_000,
             {"output_asset": funding_asset}, position_id=buy["id"])
         self.ledger.prepared(sell["id"], str(Signature.new_unique()), "offline-sell")
         self.ledger.finalize(sell["id"], 1_000_000, 0, proceeds)
@@ -73,6 +74,26 @@ class PartnerProgramTests(unittest.TestCase):
         withdrawal = self.ledger.reserve(404, "ordinary-wallet-withdrawal", "WITHDRAW",
             USDC, 10_000, {}, "verified-wallet")
         self.assertEqual(withdrawal["state"], "RESERVED")
+
+    def test_partner_report_totals_keep_usdc_and_sol_separate(self):
+        empty_report = self.ledger.partner_report(404)
+        self.assertEqual([(item["asset"], item["earned_raw"])
+                          for item in empty_report["earnings_totals"]],
+                         [(USDC, 0), (SOL, 0)])
+
+        self.close_trade(10_000_000, 11_000_000, USDC)
+        self.close_trade(10_000_000_000, 11_000_000_000, SOL)
+
+        report = self.ledger.partner_report(404)
+        totals = {item["asset"]: item for item in report["earnings_totals"]}
+        self.assertEqual(totals[USDC], {
+            "asset": USDC, "earned_raw": 10_000, "credited_raw": 10_000,
+            "paid_raw": 0, "pending_raw": 0,
+        })
+        self.assertEqual(totals[SOL], {
+            "asset": SOL, "earned_raw": 10_000_000, "credited_raw": 10_000_000,
+            "paid_raw": 0, "pending_raw": 0,
+        })
 
     def test_previous_losses_are_recovered_before_new_commission(self):
         first = self.close_trade(10_000_000, 9_000_000)
