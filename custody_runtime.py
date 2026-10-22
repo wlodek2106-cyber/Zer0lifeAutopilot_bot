@@ -174,6 +174,7 @@ class CustodyRuntime(WalletRuntime):
         self.discovery_task = None
         self.discovery_due = 0
         self.discovery_started = 0
+        self.discovery_failures = 0
         self.whale_analysis_status = {
             "state": "idle", "checked_at": None, "symbols": [],
             "message": "Waiting for a screened whale candidate.",
@@ -203,31 +204,63 @@ class CustodyRuntime(WalletRuntime):
 
     async def background_discovery(self):
         whale_mints = set()
+        scan_succeeded = False
+        retry_delay = 900
         try:
             whale_mints = set(self.discovery.pending_whale_mints())
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=75)) as session:
                 await self.discovery.scan(session)
                 self.restore_catalog()
+                scan_succeeded = True
+                self.discovery_failures = 0
                 accepted = self.discovery.report.get("candidates", [])
                 whale_symbols = [row["code"] for row in accepted if
                                  row.get("mint") in whale_mints and isinstance(row.get("code"), str)]
                 if whale_symbols:
-                    await self.analyze_whale_candidates(session, whale_symbols)
+                    try:
+                        await self.analyze_whale_candidates(session, whale_symbols)
+                    except Exception as exc:
+                        self.whale_analysis_status = {
+                            "state": "error", "checked_at": int(time.time()), "symbols": whale_symbols,
+                            "message": "Candidate scan succeeded, but whale-triggered AI analysis failed.",
+                        }
+                        self.log("Whale AI analysis failed (" +
+                                 self.discovery.failure_category(exc) +
+                                 "); screened candidates remain available.")
                 elif whale_mints:
                     self.whale_analysis_status = {
                         "state": "screened_out", "checked_at": int(time.time()), "symbols": [],
                         "message": "No whale-triggered mint passed the existing candidate screen; no AI call or order was made.",
                     }
-        except Exception:
-            self.discovery.fail()
-            if whale_mints:
+        except Exception as exc:
+            if scan_succeeded:
+                self.log("Post-scan processing failed (" +
+                         self.discovery.failure_category(exc) +
+                         "); verified candidates remain available.")
+                if whale_mints:
+                    self.whale_analysis_status = {
+                        "state": "error", "checked_at": int(time.time()), "symbols": [],
+                        "message": "Candidate scan succeeded, but post-scan processing failed; no order was sent.",
+                    }
+            else:
+                self.discovery_failures = min(self.discovery_failures + 1, 5)
+                retry_delay = min(900, 60 * (2 ** (self.discovery_failures - 1)))
+                if self.discovery.pending_whale_mints():
+                    retry_delay = 60
+                reason = self.discovery.failure_category(exc)
+                self.discovery.fail(reason)
+                self.log("Candidate scan failed (" + reason +
+                         "); new sniper entries paused, retrying in " +
+                         str(retry_delay) + " seconds.")
+            if whale_mints and not scan_succeeded:
                 self.whale_analysis_status = {
                     "state": "error", "checked_at": int(time.time()), "symbols": [],
                     "message": "Candidate screening failed; AI analysis was not run and no order was sent.",
                 }
         finally:
-            self.discovery_due = time.time() + (
-                60 if self.discovery.pending_whale_mints() else 900)
+            if self.discovery.pending_whale_mints():
+                retry_delay = 60
+            self.discovery_due = time.time() + retry_delay
 
     def on_whale_signal(self, event):
         """Queue confirmed whale-buy mints for screening; never place an order."""

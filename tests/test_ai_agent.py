@@ -256,6 +256,38 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.service.whale_analysis_status["state"], "screened_out")
         self.service.trade.assert_not_awaited()
 
+    async def test_candidate_scan_failure_is_reported_safely_and_retried_with_backoff(self):
+        messages = []
+        self.service.log = messages.append
+        self.service.discovery.scan = AsyncMock(
+            side_effect=ValueError("DexScreener unavailable: HTTP 429"))
+
+        await self.service.background_discovery()
+        self.assertTrue(self.service.discovery.blocked)
+        self.assertIn("market-data HTTP 429", self.service.discovery.report["message"])
+        self.assertIn("market-data HTTP 429", messages[0])
+        self.assertNotIn("DexScreener", messages[0])
+        self.assertEqual(self.service.discovery_failures, 1)
+        self.assertLessEqual(self.service.discovery_due - time.time(), 60)
+
+        await self.service.background_discovery()
+        self.assertEqual(self.service.discovery_failures, 2)
+        self.assertLessEqual(self.service.discovery_due - time.time(), 120)
+
+    async def test_successful_candidate_scan_resets_retry_backoff(self):
+        self.service.discovery_failures = 3
+
+        async def successful_scan(_session):
+            self.service.discovery.blocked = False
+            self.service.discovery.report = {"candidates": [], "eligible": 0, "scanned": 0}
+
+        self.service.discovery.scan = AsyncMock(side_effect=successful_scan)
+        await self.service.background_discovery()
+
+        self.assertFalse(self.service.discovery.blocked)
+        self.assertEqual(self.service.discovery_failures, 0)
+        self.assertGreaterEqual(self.service.discovery_due - time.time(), 899)
+
     async def test_whale_ai_bypasses_scheduled_cache_but_respects_one_minute_quota(self):
         self.service.market_context_fn = AsyncMock(return_value={
             "SOL": {"change_m5_pct": 1.2}

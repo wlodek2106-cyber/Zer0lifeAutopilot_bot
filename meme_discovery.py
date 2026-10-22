@@ -314,9 +314,31 @@ class MemeDiscovery:
         start = (int(now // SHORTLIST_ROTATION_SECONDS) * AI_SHORTLIST_SIZE) % len(ranked)
         return [ranked[(start + offset) % len(ranked)] for offset in range(AI_SHORTLIST_SIZE)]
 
-    def fail(self):
+    @staticmethod
+    def failure_category(exc):
+        if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+            return "network timeout"
+        if isinstance(exc, aiohttp.ClientResponseError):
+            return f"provider HTTP {exc.status}"
+        if isinstance(exc, aiohttp.ClientError):
+            return "network/provider error"
+        message = str(exc)
+        match = re.fullmatch(r"DexScreener unavailable: HTTP (\d{3})", message)
+        if match:
+            return f"market-data HTTP {match.group(1)}"
+        if "Solana RPC" in message:
+            return "Solana RPC error"
+        if isinstance(exc, ValueError):
+            return "invalid external scan data"
+        return "internal scan error"
+
+    def fail(self, reason=None):
         self.blocked = True
-        self.report = {**self.report, "message": "Candidate scan unavailable. New sniper entries paused.",
+        message = "Candidate scan unavailable"
+        if reason:
+            message += f" ({reason})"
+        self.report = {**self.report,
+                       "message": message + ". New sniper entries paused; automatic retry scheduled.",
                        "entry_paused": True}
 
     async def prices(self, session, held=()):
