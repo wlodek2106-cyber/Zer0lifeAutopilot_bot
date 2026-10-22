@@ -15,7 +15,9 @@ MIN_WHALE_LAMPORTS = 1_000_000_000
 MAX_WHALE_LAMPORTS = 10_000_000_000
 HELIUS_WS = "wss://mainnet.helius-rpc.com/"
 HELIUS_RPC = "https://mainnet.helius-rpc.com/"
-LOOKUP_INTERVAL_SECONDS = 0.5  # Reserve most of the free-tier 10 RPS for the rest of the bot.
+# Keep transaction lookups at a conservative 2 requests/second until the
+# account's exact provider rate limit is known; bursts are bounded by the queue.
+LOOKUP_INTERVAL_SECONDS = 0.5
 STALE_LOOKUP_SECONDS = 30
 MAX_LOOKUP_QUEUE = 32
 
@@ -31,11 +33,9 @@ DEX_PROGRAMS = {
     "Orca Whirlpools": "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",
 }
 PROGRAM_NAMES = {program_id: name for name, program_id in DEX_PROGRAMS.items()}
-# Standard logsSubscribe is a broad firehose on a free RPC plan. Keep the live
-# signal feed to the two memecoin launch programs and only explicit buy logs.
-WHALE_SIGNAL_PROGRAMS = {
-    name: DEX_PROGRAMS[name] for name in ("Pump.fun", "PumpSwap")
-}
+# Standard logsSubscribe is available across Helius plans; the app's supported
+# DEX allowlist is curated to these known programs, not every Solana DEX.
+WHALE_SIGNAL_PROGRAMS = dict(DEX_PROGRAMS)
 
 
 def _pubkey(value):
@@ -101,7 +101,7 @@ def _message_parts(notification):
 
 
 def parse_log_notification(notification):
-    """Extract only explicit BUY signatures from standard logsSubscribe."""
+    """Extract successful BUY/SWAP signatures for later transaction validation."""
     if not isinstance(notification, dict) or notification.get("method") != "logsNotification":
         return None
     params = notification.get("params") or {}
@@ -118,7 +118,8 @@ def parse_log_notification(notification):
             or not isinstance(logs, list)):
         return None
     joined_logs = " ".join(line for line in logs if isinstance(line, str)).lower()
-    if "instruction: buy" not in joined_logs and "event: buy" not in joined_logs:
+    if not any(action in joined_logs for action in (
+            "instruction: buy", "event: buy", "instruction: swap", "event: swap")):
         return None
     return {"signature": signature, "slot": slot}
 
@@ -290,7 +291,7 @@ class HeliusWhaleStream:
             "AuthRejected": "Helius rejected the API key (401/403); check the Render secret.",
             "SubscriptionRejected": "Helius rejected a standard logs subscription.",
             "SubscriptionTimeout": "Helius did not confirm the logs subscriptions.",
-            "RateLimited": "The free RPC limit was reached; some transaction checks may be dropped.",
+            "RateLimited": "The Helius/provider rate limit was reached; some transaction checks may be dropped.",
             "TransactionUnavailable": "A transaction lookup returned no confirmed transaction.",
             "StaleTransaction": "The lookup queue was too busy; an old signal was dropped.",
             "ProviderUnavailable": "Helius RPC is temporarily unavailable.",
@@ -301,8 +302,9 @@ class HeliusWhaleStream:
         if self.state == "connected":
             if detail:
                 return "Connected to standard logsSubscribe. " + detail
-            return ("Connected to Helius standard logsSubscribe for explicit Pump.fun/PumpSwap BUY logs. "
-                    "Other DEXs are excluded on the free stream; candidates still pass screening.")
+            return ("Connected to Helius standard logsSubscribe for confirmed BUY/SWAP logs from "
+                    + ", ".join(WHALE_SIGNAL_PROGRAMS)
+                    + ". Transactions are validated before becoming signals; candidates still pass screening.")
         if self.state == "retrying":
             reason = (" " + detail) if detail else ""
             return ("Helius standard stream disconnected; reconnecting with bounded backoff."

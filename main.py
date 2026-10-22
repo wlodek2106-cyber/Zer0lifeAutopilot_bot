@@ -3298,8 +3298,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                     const whaleRejections=(discovery.whale_rejections||[]).slice(0,4).map(item=>
                         item.mint+' — '+(item.reasons||[]).join('; '));
                     document.getElementById('whale-signal-status').textContent=(whale.message||'Whale stream status unavailable.')
-                        +'\nPump.fun/PumpSwap explicit BUY logs only; other DEXs are excluded on the free stream.'
-                        +'\nA signal is not an order; eligible candidates must pass the existing screen.'
+                        +'\nSignal DEXs: Pump.fun, PumpSwap, Raydium, Meteora and Orca; confirmed BUY/SWAP logs are checked.'
+                        +'\nSignals are not orders; transactions and candidates must pass the existing safety screen.'
                         +'\n'+whaleQueue
                         +(whaleRejections.length?'\nWhy recent whale candidates were rejected:\n'+whaleRejections.join('\n'):'')
                         +(whaleRows.length?'\n'+whaleRows.join('\n'):'\nNo qualifying signals received yet.');

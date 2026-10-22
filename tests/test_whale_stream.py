@@ -146,7 +146,7 @@ class WhaleSignalTests(unittest.IsolatedAsyncioTestCase):
         del payload["params"]["result"]["meta"]["err"]
         self.assertIsNone(parse_whale_buy(payload))
 
-    async def test_free_stream_uses_only_pump_buy_program_subscriptions(self):
+    async def test_stream_subscribes_to_all_curated_dex_programs(self):
         stream = HeliusWhaleStream("unit-test-key")
         requests = stream.subscriptions()
         self.assertEqual(len(requests), len(WHALE_SIGNAL_PROGRAMS))
@@ -156,16 +156,30 @@ class WhaleSignalTests(unittest.IsolatedAsyncioTestCase):
             list(WHALE_SIGNAL_PROGRAMS.values()),
         )
         self.assertTrue(all(request["params"][1]["commitment"] == "confirmed" for request in requests))
-        self.assertEqual(stream.snapshot()["supported_programs"], ["Pump.fun", "PumpSwap"])
+        self.assertEqual(list(WHALE_SIGNAL_PROGRAMS.items()), list(DEX_PROGRAMS.items()))
+        self.assertEqual(stream.snapshot()["supported_programs"], list(DEX_PROGRAMS))
         for address in DEX_PROGRAMS.values():
             self.assertEqual(str(Pubkey.from_string(address)), address)
 
-    def test_log_parser_accepts_only_explicit_successful_buy_signatures(self):
+    def test_log_parser_accepts_confirmed_buy_and_swap_signatures(self):
         self.assertEqual(parse_log_notification(logs_notification()), {"signature": SIGNATURE, "slot": 123})
+        self.assertEqual(
+            parse_log_notification(logs_notification(logs=["Program log: Instruction: SwapBaseIn"])),
+            {"signature": SIGNATURE, "slot": 123},
+        )
+        self.assertEqual(
+            parse_log_notification(logs_notification(logs=["Program log: Event: Swap"])),
+            {"signature": SIGNATURE, "slot": 123},
+        )
         self.assertIsNone(parse_log_notification(logs_notification(logs=["Program log: Initialize"])))
-        self.assertIsNone(parse_log_notification(logs_notification(logs=["Program log: Instruction: Swap"])))
         self.assertIsNone(parse_log_notification(logs_notification(err={"InstructionError": [0, "failed"]})))
         self.assertIsNone(parse_log_notification(logs_notification(signature="bad")))
+
+    def test_transaction_parser_recognizes_buys_on_each_curated_dex(self):
+        for name, program in DEX_PROGRAMS.items():
+            with self.subTest(dex=name):
+                event = parse_whale_buy(notification(program=program))
+                self.assertEqual(event["program"], name)
 
     async def test_logs_are_deduplicated_and_queue_overflow_keeps_newer_events(self):
         stream = HeliusWhaleStream("unit-test-key")
