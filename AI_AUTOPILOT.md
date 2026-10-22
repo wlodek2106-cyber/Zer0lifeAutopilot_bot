@@ -6,10 +6,13 @@ This is a callable OpenAI adapter plus independent custodial execution controlle
 not a promise of profitable trading. No live model call, live trade, or withdrawal
 has been validated by the automated tests.
 
-Main mode selects SOL/JUP/RAY/PYTH using personal USDC, up to five positions.
-SOL sniper v1 selects only allowlisted WIF, up to one position. It is not yet a
-new-listing discovery engine. SOL proceeds return to the same user's SOL balance.
-There is no automatic cross-mode profit conversion or allocation.
+Core mode selects SOL/JUP/RAY/PYTH/JTO/ORCA/KMNO/NOS/SHDW using personal USDC,
+up to five positions. New Core assets still require current liquidity/volume,
+quote-impact and closed-candle chart checks before entry. The SOL-funded Sniper
+uses WIF/BONK/BOME/POPCAT/MEW/PENGU as screened seeds alongside bounded discovery,
+up to five positions. A seed is not an eligible trade or a profit forecast.
+SOL proceeds return to the same user's SOL balance. There is no automatic
+cross-mode profit conversion or allocation.
 
 Both flags are off on restart. The owner/user starts each mode in the authenticated
 Telegram application after configuration and readiness checks. The agent must not
@@ -90,7 +93,8 @@ Keep the database backup and immutable records; never delete unknown operations.
 ## Verification
 
 Tests use temporary databases, mocked HTTP/model responses, synthetic simulation
-accounts, and Chromium with mocked Telegram/API. Live public read-only checks can
-verify the WIF mint and a Jupiter SOL→WIF quote but cannot prove a real swap or
-profit. Production model access and account-specific readiness require checks in
-the authenticated app after the operator enters the key.
+accounts, and Chromium with mocked Telegram/API. Live public read-only checks of
+token metadata, pools, quotes and candles cannot prove a real swap, fill or profit.
+Every entry rechecks current eligibility and execution limits. Production model
+access and account-specific readiness require checks in the authenticated app
+after the operator enters the key.

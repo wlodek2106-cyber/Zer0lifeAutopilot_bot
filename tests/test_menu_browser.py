@@ -88,15 +88,19 @@ class MenuBrowserTests(unittest.TestCase):
                 assert(!document.getElementById('strategy-help').open,'strategy help collapsed by default');
                 assert(document.getElementById('meme-sniper-card').querySelectorAll('p.section-note').length===2,'compact sniper card');
                 fixture.ai_status={configured:true,model:'gpt-4.1-mini',interval_seconds:900,
-                    last_analyzed_at:1791925101,sniper_assets:['WIF'],
+                    last_analyzed_at:1791925101,sniper_assets:[],
                     last_decisions:{main:{action:'HOLD',symbol:null,reason:'No significant signal.'},
-                                    sniper:{action:'HOLD',symbol:null,reason:'Insufficient WIF samples.'}}};
+                                    sniper:{action:'HOLD',symbol:null,reason:'No eligible candidates.'}}};
                 fixture.trading_active=true;fixture.sniper_active=true;
-                fixture.trading_settings.assets=['SOL','JUP','RAY','WIF','PYTH'];
+                fixture.trading_settings.assets=['SOL','JUP','RAY','WIF','PYTH','BONK','BOME','POPCAT','MEW','PENGU','KMNO','NOS','SHDW'];
                 await refresh();
                 assert(document.getElementById('toggle-text').textContent==='Autopilot: ON','enabled core status in English');
                 assert(document.getElementById('meme-toggle-text').textContent==='AI: ON','enabled sniper status in English');
-                assert(!document.getElementById('strategy-assets').textContent.includes('WIF'),'core asset list excludes sniper-only WIF');
+                const coreAssets=document.getElementById('strategy-assets').textContent;
+                assert(!['WIF','BONK','BOME','POPCAT','MEW','PENGU'].some(symbol=>coreAssets.includes(symbol)),
+                    'core asset list excludes every sniper-only seed when there are no live candidates');
+                assert(['KMNO','NOS','SHDW'].every(symbol=>coreAssets.includes(symbol)),
+                    'validated USDC assets remain visible in the Core list');
                 assert(document.getElementById('ai-decisions').textContent.includes('No significant signal.'),'English model explanation');
                 const tabs=['terminal','trading','deposit','settings'];
                 for(let i=0;i<tabs.length;i++){

@@ -30,7 +30,7 @@ or future returns. WIF remains a seeded candidate but must pass current screenin
 - Core price feed uses the documented per-token batch endpoint rather than the
   legacy cross-token pairs response. Missing markets still fail closed.
 
-Existing controls still apply: one SOL-funded position per user, own SOL/order size,
+Existing controls still apply: up to five SOL-funded positions per user, own SOL/order size,
 five samples for token and SOL, 120-second AI action window, 1% price/relative-SOL
 drift bound, 0.4% slippage, 3.5% TP/-2% SL, segregated fee treasury, one pending
 shared-vault operation, simulation/solvency/finalization checks, no blind retries,

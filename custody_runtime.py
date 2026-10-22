@@ -44,6 +44,7 @@ JITO_TIP_CACHE_SECONDS = 15
 JITO_TIP_MAX_AGE_SECONDS = 120
 JUPITER_PRIORITY_FEE_LAMPORTS = 25_000
 WHALE_AI_COOLDOWN_SECONDS = 60
+SNIPER_SYMBOLS = ("WIF", "BONK", "BOME", "POPCAT", "MEW", "PENGU")
 
 
 def operation_failure_reason(exc):
@@ -164,7 +165,7 @@ class CustodyRuntime(WalletRuntime):
         self.ledger.restart_pause()
         self.ai_lock = asyncio.Lock()
         self.ai_task = None
-        self.sniper_symbols = [symbol for symbol in ("WIF",) if symbol in self.watchlist]
+        self.sniper_symbols = [symbol for symbol in SNIPER_SYMBOLS if symbol in self.watchlist]
         self.watchlist = {symbol: dict(info) for symbol, info in self.watchlist.items()}
         self.main_symbols = [s for s in self.watchlist if s not in self.sniper_symbols]
         self.discovery = MemeDiscovery(self.ledger, self.rpc,

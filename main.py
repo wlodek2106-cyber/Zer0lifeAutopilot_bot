@@ -69,7 +69,15 @@ WATCHLIST = {
     "PYTH": {"mint": "HZ1JovNiDcZvKhgWNgQX5Z59C3b22DoPtRUC544HLD37", "decimals": 6},
     # Official Jito/Orca mint addresses; decimals verified on Solana mainnet.
     "JTO": {"mint": "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL", "decimals": 9},
-    "ORCA": {"mint": "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE", "decimals": 6}
+    "ORCA": {"mint": "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE", "decimals": 6},
+    "KMNO": {"mint": "KMNo3nJsBXfcpJTVhZcXLW7RmTwTt4GVFE7suUBo9sS", "decimals": 6},
+    "NOS": {"mint": "nosXBVoaCTtYdLvKY6Csb4AC8JCdQKKAaWYtx2ZMoo7", "decimals": 6},
+    "SHDW": {"mint": "SHDWyBxihqiCj6YekG2GUr7wqKLeLAMK1gHZck9pL6y", "decimals": 9},
+    "BONK": {"mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "decimals": 5},
+    "BOME": {"mint": "ukHH6c7mMyiWCf1b9pnWe25TSpkDDt3H5pQZgZ74J82", "decimals": 6},
+    "POPCAT": {"mint": "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr", "decimals": 9},
+    "MEW": {"mint": "MEW1gQWJ3nEXg2qgERiKu7FAFj79PHvQVREQUzScPP5", "decimals": 5},
+    "PENGU": {"mint": "2zMMhcVQEXDtdE6vsFS7S7D5oUodfJHE8vd1gnBouauv", "decimals": 6}
 }
 
 TRADE_AMOUNT_USDC = 20.0
@@ -1987,7 +1995,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             </div>
             <details id="strategy-help"><summary>Strategy limits &amp; risks</summary>
                 <p class="section-note">Core trades use your USDC; sniper trades use your SOL. Other users' funds and the operator fee reserve are never your trading capital. Automatic conversion or profit allocation between strategies is not implemented.</p>
-                <p class="section-note">Core: SOL, JUP, RAY, PYTH, JTO, ORCA; up to 5 positions. ORCA currently retains mint authority (additional tokens may be issued); no token is risk-free. Sniper: up to 5 SOL-funded positions, limited by your available SOL and saved order size. Every 15 minutes a bounded DexScreener profiles/search scan checks up to 90 Solana mints, screens up to 20 and sends at most 8 current candidates plus held assets to AI. This is not every project or a profit forecast; profiles alone do not establish meme status.</p>
+                <p class="section-note">Core: SOL, JUP, RAY, PYTH, JTO, ORCA, KMNO, NOS, SHDW; up to 5 USDC-funded positions. ORCA currently retains mint authority (additional tokens may be issued); no token is risk-free. Sniper seeds: WIF, BONK, BOME, POPCAT, MEW, PENGU; up to 5 SOL-funded positions, limited by your available SOL and saved order size. Every 15 minutes a bounded DexScreener profiles/search scan checks up to 90 Solana mints, screens up to 20 and sends at most 8 current candidates plus held assets to AI. This is not every project or a profit forecast; profiles alone do not establish meme status.</p>
                 <p class="section-note">Core BUY requires the existing trend and flow checks plus fresh 5-minute/1-hour OHLCV data and a confirmed support-hold or breakout-retest setup. Chart zones use closed candles from the selected Solana pool; missing or stale candles block new Core buys. Zones and indicators are estimates, not predictions, and this strategy is not backtested. Core TP/SL and Sniper rules are unchanged.</p>
                 <p class="section-note">Confirmed buy, sell, take-profit, and stop-loss alerts are sent to each participant's own Telegram chat. Enable Telegram notifications on your phone. Alerts are sent after Solana finalizes the trade; a safely failed stop-loss sale gets a separate alert saying the position remains open.</p>
                 <p class="section-note">Sniper entry filters: approved DEX, at least $10k pool liquidity, $100k 24h volume, 200 daily trades, pool age 24h+, extreme-pump exclusion, standard SPL mint with no mint/freeze authority. The shortlist rotates every 15 minutes through up to 20 on-chain-verified candidates; AI sees up to 8 at a time. After any completed close, all participants are blocked from re-buying that mint for 24 hours. Fresh eligibility is required for every buy. Scores rank liquidity/activity, not expected profit. Holder concentration, LP locks and every contract/market risk are not fully checked. Standard mint checks do not guarantee token safety.</p>
@@ -3302,7 +3310,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                     if(!settingsOrderDirty&&document.activeElement!==sniperInput)sniperInput.value=sniper.order_sol;
                     document.getElementById('sniper-pnl').textContent='Realized PnL: '+Number(s.profit_sol||0).toFixed(9)+' SOL';
                     document.getElementById('strategy-order-size').textContent=currentTradingSettings.order_usdc.toFixed(2)+' USDC';
-                    document.getElementById('strategy-assets').textContent=(currentTradingSettings.assets||[]).filter(symbol=>!(ai.sniper_assets||['WIF']).includes(symbol)).join(' · ');
+                    const sniperOnly=new Set(['WIF','BONK','BOME','POPCAT','MEW','PENGU',...(ai.sniper_assets||[])]);
+                    document.getElementById('strategy-assets').textContent=(currentTradingSettings.assets||[]).filter(symbol=>!sniperOnly.has(symbol)).join(' · ');
                     const settingsInput=document.getElementById('settings-order');
                     if(!settingsOrderDirty&&document.activeElement!==settingsInput)settingsInput.value=currentTradingSettings.order_usdc;
                     document.getElementById('settings-budget').textContent='Saved: '+currentTradingSettings.order_usdc+' USDC · up to '+(currentTradingSettings.max_positions||5)+' positions, limited by available funds.';
@@ -3819,7 +3828,7 @@ async def main():
         get_signer_keypair, verify_user_pin, get_token_prices, WATCHLIST, add_log,
         base_url=RENDER_URL, notification_token=TELEGRAM_TOKEN,
         market_context_fn=lambda session: fetch_main_market_context(
-            session, WATCHLIST, [symbol for symbol in WATCHLIST if symbol != "WIF"]))
+            session, WATCHLIST, runtime.main_symbols))
     runtime.recent_logs = lambda: RECENT_LOGS
     runtime.accounts = AccountSecurity(runtime.ledger, RENDER_URL, verify_user_pin, runtime.wallet,
         notification_token=TELEGRAM_TOKEN)
