@@ -14,6 +14,7 @@ SOL = "SOL"
 FEE_CAP = 5_000_000
 ACTIVE = ("RESERVED", "PREPARED", "SUBMITTED", "UNKNOWN")
 PARTNER_LEVEL_BPS = (100, 50, 25)
+LOSS_REENTRY_COOLDOWN_SECONDS = 24 * 60 * 60
 
 
 class LedgerError(Exception):
@@ -174,6 +175,8 @@ class CustodyLedger:
                     raw INTEGER NOT NULL CHECK(raw>0), cost_usdc INTEGER NOT NULL CHECK(cost_usdc>0),
                     state TEXT NOT NULL, buy_tx TEXT NOT NULL, sell_tx TEXT,
                     proceeds_usdc INTEGER, created_at INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS custody_loss_reentry_cooldowns (
+                    asset TEXT PRIMARY KEY, blocked_until INTEGER NOT NULL, last_loss_at INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS custody_scan_cursor (
                     address TEXT PRIMARY KEY, signature TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS custody_seen_signatures (
@@ -202,7 +205,7 @@ class CustodyLedger:
                     "sniper_order_raw": "INTEGER NOT NULL DEFAULT 5000000"},
                 "custody_positions": {
                     "funding_asset": "TEXT NOT NULL DEFAULT '" + USDC + "'",
-                    "cost_raw": "INTEGER", "proceeds_raw": "INTEGER"},
+                    "cost_raw": "INTEGER", "proceeds_raw": "INTEGER", "closed_at": "INTEGER"},
                 "custody_operations": {"failure_reason": "TEXT NOT NULL DEFAULT ''"},
             }.items():
                 columns = {row[1] for row in db.execute("PRAGMA table_info(" + table + ")")}
@@ -210,6 +213,24 @@ class CustodyLedger:
                     if name not in columns:
                         db.execute("ALTER TABLE " + table + " ADD COLUMN " + name + " " + definition)
             db.execute("UPDATE custody_positions SET cost_raw=cost_usdc,proceeds_raw=proceeds_usdc WHERE cost_raw IS NULL")
+            db.execute("""UPDATE custody_positions SET closed_at=(
+                    SELECT MAX(o.created_at) FROM custody_operations o
+                    WHERE o.position_id=custody_positions.id AND o.kind='SELL' AND o.state='COMPLETED')
+                WHERE state='CLOSED' AND closed_at IS NULL""")
+            now = int(time.time())
+            db.execute("""INSERT INTO custody_loss_reentry_cooldowns(asset,blocked_until,last_loss_at)
+                SELECT p.asset, MAX(COALESCE(p.closed_at,o.created_at)) + ?,
+                       MAX(COALESCE(p.closed_at,o.created_at))
+                FROM custody_positions p JOIN custody_operations o
+                    ON o.position_id=p.id AND o.kind='SELL' AND o.state='COMPLETED'
+                WHERE p.state='CLOSED' AND p.cost_raw IS NOT NULL AND p.proceeds_raw IS NOT NULL
+                    AND p.proceeds_raw < p.cost_raw
+                    AND COALESCE(p.closed_at,o.created_at) >= ?
+                GROUP BY p.asset
+                ON CONFLICT(asset) DO UPDATE SET
+                    blocked_until=MAX(custody_loss_reentry_cooldowns.blocked_until,excluded.blocked_until),
+                    last_loss_at=MAX(custody_loss_reentry_cooldowns.last_loss_at,excluded.last_loss_at)""",
+                (LOSS_REENTRY_COOLDOWN_SECONDS, now - LOSS_REENTRY_COOLDOWN_SECONDS))
         self.credit_safe_partner_earnings()
 
     @contextmanager
@@ -903,6 +924,12 @@ class CustodyLedger:
             elif kind == "BUY":
                 if asset not in (USDC, SOL) or metadata.get("output_asset") in (None, asset):
                     raise LedgerError("Недопустимая валюта покупки.")
+                cooldown = db.execute("""SELECT blocked_until FROM custody_loss_reentry_cooldowns
+                    WHERE asset=?""", (metadata["output_asset"],)).fetchone()
+                if cooldown and cooldown["blocked_until"] > int(time.time()):
+                    raise LedgerError(
+                        "BLOCKED: token is under a global 24-hour cooldown after a realized loss; "
+                        "no funds were reserved.")
             elif kind == "PARTNER_PAYOUT":
                 source = partner_account(uid)
                 if asset not in (USDC, SOL) or not recipient or raw > _balance(db, source, asset):
@@ -1144,9 +1171,19 @@ class CustodyLedger:
             elif row["kind"] == "SELL":
                 if spent != row["raw"]:
                     raise LedgerError("Частичная продажа требует отдельного разбора.")
-                db.execute("""UPDATE custody_positions SET state='CLOSED',sell_tx=?,proceeds_usdc=?,proceeds_raw=?
-                    WHERE id=? AND uid=?""", (row["signature"], received if info["output_asset"] == USDC else None,
-                    received, row["position_id"], row["uid"]))
+                closed_at = int(time.time())
+                db.execute("""UPDATE custody_positions SET state='CLOSED',sell_tx=?,proceeds_usdc=?,
+                    proceeds_raw=?,closed_at=? WHERE id=? AND uid=?""",
+                    (row["signature"], received if info["output_asset"] == USDC else None,
+                     received, closed_at, row["position_id"], row["uid"]))
+                if received - position["cost_raw"] - commission_total < 0:
+                    blocked_until = closed_at + LOSS_REENTRY_COOLDOWN_SECONDS
+                    db.execute("""INSERT INTO custody_loss_reentry_cooldowns
+                        (asset,blocked_until,last_loss_at) VALUES(?,?,?)
+                        ON CONFLICT(asset) DO UPDATE SET
+                            blocked_until=MAX(custody_loss_reentry_cooldowns.blocked_until,excluded.blocked_until),
+                            last_loss_at=MAX(custody_loss_reentry_cooldowns.last_loss_at,excluded.last_loss_at)""",
+                        (position["asset"], blocked_until, closed_at))
             elif row["kind"] == "PARTNER_PAYOUT":
                 db.execute("""UPDATE custody_partner_earnings SET state='PAID',signature=?
                     WHERE operation_id=? AND state='SUBMITTED'""", (row["signature"], oid))
@@ -1187,6 +1224,13 @@ class CustodyLedger:
                 (" AND state=?" if state else "") + " ORDER BY created_at DESC",
                 (uid, state) if state else (uid,))
             return [dict(r) for r in rows]
+
+    def loss_entry_cooldown_until(self, asset, now=None):
+        now = int(time.time()) if now is None else int(now)
+        with self.db() as db:
+            row = db.execute("""SELECT blocked_until FROM custody_loss_reentry_cooldowns
+                WHERE asset=? AND blocked_until>?""", (asset, now)).fetchone()
+            return int(row["blocked_until"]) if row else None
 
     def settings(self, uid, enabled=None, raw=None, close=None, sniper_enabled=None, sniper_raw=None):
         with self.db() as db:

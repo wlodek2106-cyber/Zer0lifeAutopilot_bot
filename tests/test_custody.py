@@ -289,13 +289,73 @@ class LedgerTests(unittest.TestCase):
 
     def test_actual_sale_profit_and_loss_owner_only(self):
         for proceeds in (1_100_000, 900_000):
-            buy = self.reserve(kind="BUY", info={"output_asset": SOL, "symbol": "SOL", "decimals": 9})
+            mint = "test-mint-" + str(proceeds)
+            buy = self.reserve(kind="BUY", info={"output_asset": mint, "symbol": "MEW", "decimals": 6})
             self.complete(buy, received=8_888_888)
-            sale = self.reserve(kind="SELL", asset=SOL, raw=8_888_888, position=buy["id"], info={"output_asset": USDC})
+            sale = self.reserve(kind="SELL", asset=mint, raw=8_888_888, position=buy["id"],
+                                info={"output_asset": USDC})
             self.complete(sale, spent=8_888_888, received=proceeds)
             self.assertEqual(self.ledger.positions(101)[0]["state"], "CLOSED")
         self.assertEqual(self.ledger.balance(101, USDC), 10_000_000)
         self.assertEqual(self.ledger.balance(202, USDC), 30_000_000)
+
+    def test_loss_starts_global_cooldown_for_every_user_and_expires_after_24_hours(self):
+        mint = "mew-mint"
+        buy = self.reserve(uid=101, kind="BUY", asset=USDC, raw=1_000_000,
+            info={"output_asset": mint, "symbol": "MEW", "decimals": 6})
+        self.complete(buy, spent=1_000_000, fee=0, received=100)
+        position = self.ledger.positions(101, "OPEN")[0]
+        sale = self.reserve(uid=101, kind="SELL", asset=mint, raw=position["raw"],
+            position=position["id"], info={"output_asset": USDC})
+        closed_at = 1_700_000_000
+        with patch("custody_ledger.time.time", return_value=closed_at):
+            self.complete(sale, spent=position["raw"], fee=0, received=900_000)
+
+        expires_at = closed_at + 24 * 60 * 60
+        self.assertEqual(self.ledger.loss_entry_cooldown_until(mint, now=closed_at), expires_at)
+        starting_balance = self.ledger.balance(202, USDC)
+        with patch("custody_ledger.time.time", return_value=closed_at + 1):
+            with self.assertRaisesRegex(LedgerError, "global 24-hour cooldown"):
+                self.ledger.reserve(202, str(uuid.uuid4()), "BUY", USDC, 1_000_000,
+                    {"output_asset": mint, "symbol": "MEW", "decimals": 6})
+        self.assertEqual(self.ledger.balance(202, USDC), starting_balance)
+        self.assertIsNone(self.ledger.loss_entry_cooldown_until(mint, now=expires_at))
+        with patch("custody_ledger.time.time", return_value=expires_at + 1):
+            allowed = self.ledger.reserve(202, str(uuid.uuid4()), "BUY", USDC, 1_000_000,
+                {"output_asset": mint, "symbol": "MEW", "decimals": 6})
+        self.assertEqual(allowed["state"], "RESERVED")
+
+    def test_profitable_close_does_not_start_global_cooldown(self):
+        mint = "profitable-mint"
+        buy = self.reserve(uid=101, kind="BUY", asset=USDC, raw=1_000_000,
+            info={"output_asset": mint, "symbol": "TEST", "decimals": 6})
+        self.complete(buy, spent=1_000_000, fee=0, received=100)
+        position = self.ledger.positions(101, "OPEN")[0]
+        sale = self.reserve(uid=101, kind="SELL", asset=mint, raw=position["raw"],
+            position=position["id"], info={"output_asset": USDC})
+        self.complete(sale, spent=position["raw"], fee=0, received=1_100_000)
+        self.assertIsNone(self.ledger.loss_entry_cooldown_until(mint))
+
+    def test_recent_losses_backfill_global_cooldown_when_ledger_reopens(self):
+        mint = "recent-loss-mint"
+        buy = self.reserve(uid=101, kind="BUY", asset=USDC, raw=1_000_000,
+            info={"output_asset": mint, "symbol": "TEST", "decimals": 6})
+        self.complete(buy, spent=1_000_000, fee=0, received=100)
+        position = self.ledger.positions(101, "OPEN")[0]
+        sale = self.reserve(uid=101, kind="SELL", asset=mint, raw=position["raw"],
+            position=position["id"], info={"output_asset": USDC})
+        closed_at = int(time.time())
+        with patch("custody_ledger.time.time", return_value=closed_at):
+            self.complete(sale, spent=position["raw"], fee=0, received=900_000)
+        with self.ledger.db() as db:
+            db.execute("DELETE FROM custody_loss_reentry_cooldowns WHERE asset=?", (mint,))
+
+        with patch("custody_ledger.time.time", return_value=closed_at + 3600):
+            reopened = CustodyLedger(self.path)
+        self.assertEqual(
+            reopened.loss_entry_cooldown_until(mint, now=closed_at + 3600),
+            closed_at + 24 * 60 * 60,
+        )
 
     def test_fartcoin_sell_rpc_effects_credit_exact_sol_proceeds(self):
         wallet = str(Keypair().pubkey())

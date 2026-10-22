@@ -198,6 +198,33 @@ class RuntimePolicyTests(unittest.IsolatedAsyncioTestCase):
         row = self.ledger.reserve(101, "offline-policy-test", "BUY", USDC, 1_000_000, info)
         return row, info
 
+    async def test_global_loss_cooldown_blocks_buys_but_keeps_sells_available(self):
+        position = fixtures.RuntimeTests.open_position_for_close(self)
+        now = int(time.time())
+        with self.ledger.db() as db:
+            db.execute("""INSERT INTO custody_loss_reentry_cooldowns
+                (asset,blocked_until,last_loss_at) VALUES(?,?,?)""",
+                (position["asset"], now + 3600, now))
+
+        info = {"symbol": position["symbol"], "decimals": position["decimals"],
+                "output_asset": position["asset"]}
+        starting_balance = self.ledger.balance(101, position["funding_asset"])
+        with self.assertRaises(policy.ExecutionDenied):
+            self.service.authorize_execution_order(101, position["funding_asset"],
+                position["asset"], 1_000_000, "BUY", info)
+        self.assertEqual(self.ledger.execution_report(101)["status"], "BLOCKED")
+        self.assertEqual(self.ledger.balance(101, position["funding_asset"]), starting_balance)
+        self.assertEqual(self.ledger.pending(), [])
+
+        sell_info = {"symbol": position["symbol"], "decimals": position["decimals"],
+                     "output_asset": position["funding_asset"]}
+        self.service.authorize_execution_order(101, position["asset"],
+            position["funding_asset"], position["raw"], "SELL", sell_info,
+            position_id=position["id"])
+        sell = self.ledger.reserve(101, "global-lockout-exit", "SELL",
+            position["asset"], position["raw"], sell_info, position_id=position["id"])
+        self.assertEqual(sell["state"], "RESERVED")
+
     async def test_sell_revalidation_accepts_only_its_reserved_position(self):
         position = fixtures.RuntimeTests.open_position_for_close(self)
         info = {"output_asset": position["funding_asset"], "symbol": position["symbol"],
