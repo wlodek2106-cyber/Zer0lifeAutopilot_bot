@@ -1348,8 +1348,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
         #partner-program .partner-head, #partner-program .partner-table,
         #partner-program .partner-wallet, #partner-program .partner-earnings,
-        #partner-program .partner-invite, #partner-program .partner-rules,
-        #partner-program #partner-history { position: relative; z-index: 1; }
+        #partner-program .partner-invite, #partner-program .partner-rules { position: relative; z-index: 1; }
         #partner-program .partner-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:14px; }
         #partner-program .partner-kicker { margin:0 0 6px; color:var(--partner-lime); font-size:9px; font-weight:750; letter-spacing:.16em; }
         #partner-program .partner-head h3 { margin:0; color:#eef2e9; font-size:19px; line-height:1.15; letter-spacing:-.035em; }
@@ -1396,14 +1395,11 @@ RAW_HTML = r"""<!DOCTYPE html>
         #partner-program .partner-wallet.is-unlinked .partner-wallet-badge { color:#e7bd73; }
         #partner-program .partner-wallet.is-unlinked .partner-wallet-badge::before { background:#e7bd73; }
         #partner-program .partner-earnings { margin:0 0 12px; padding:12px; border:1px solid rgba(255,255,255,.075); border-radius:12px; background:rgba(7,10,7,.42); }
-        #partner-program .partner-earnings-title { margin:0 0 7px; color:#87917d; font:700 8px ui-monospace,monospace; letter-spacing:.12em; text-transform:uppercase; }
+        #partner-program .partner-earnings-title { margin:0 0 7px; color:#87917d; font:700 10px ui-monospace,monospace; letter-spacing:.1em; text-transform:uppercase; }
         #partner-program .partner-currency-totals { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:8px 0 10px; }
         #partner-program .partner-currency-card { min-width:0; padding:10px; border:1px solid rgba(201,243,106,.12); border-radius:10px; background:rgba(13,18,12,.68); }
-        #partner-program .partner-currency-card > span { display:block; color:#a3ad96; font:700 8px ui-monospace,monospace; letter-spacing:.1em; text-transform:uppercase; }
-        #partner-program .partner-currency-card > strong { display:block; margin:5px 0 7px; color:#d4f77b; font:700 14px ui-monospace,monospace; overflow-wrap:anywhere; }
-        #partner-program .partner-currency-card > small { display:block; color:#9da693; font-size:9px; line-height:1.55; }
-        #partner-program .partner-earning-row { display:flex; justify-content:space-between; gap:8px; padding:6px 0; border-top:1px solid rgba(255,255,255,.05); color:#9da693; font-size:10px; line-height:1.4; }
-        #partner-program .partner-earning-row strong { color:#dce4d2; text-align:right; font:600 10px ui-monospace,monospace; }
+        #partner-program .partner-currency-card > span { display:block; color:#a3ad96; font:700 10px ui-monospace,monospace; letter-spacing:.1em; text-transform:uppercase; }
+        #partner-program .partner-currency-card > strong { display:block; margin:6px 0 0; color:#d4f77b; font:700 18px ui-monospace,monospace; overflow-wrap:anywhere; }
         #partner-program .partner-earnings-empty { margin:0; color:#a4ad9a; font-size:11px; }
         #partner-program .partner-invite { padding:14px 13px 12px; border:1px solid rgba(201,243,106,.13); border-radius:13px; background:rgba(7,10,7,.38); }
         #partner-program .partner-invite-title { margin:0 0 4px; color:#e5ebdc; font-size:13px; font-weight:680; }
@@ -1428,9 +1424,6 @@ RAW_HTML = r"""<!DOCTYPE html>
         #partner-program .partner-rules summary { color:#c7d1ba; font-size:11px; font-weight:650; cursor:pointer; }
         #partner-program .partner-rules ul { margin:9px 0 0; padding-left:17px; color:#9aa493; font-size:10px; line-height:1.55; }
         #partner-program .partner-rules li { margin:6px 0; padding-left:2px; }
-        #partner-program .partner-history { margin-top:10px; }
-        #partner-program .partner-history-row { padding:9px 10px; border-top:1px solid rgba(255,255,255,.06); color:#a3ad9b; font-size:10px; line-height:1.5; overflow-wrap:anywhere; }
-        #partner-program .partner-history-row .btn-copy { margin:8px 0 0; }
         #partner-program .partner-sr-only {
             position:absolute !important; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
             clip:rect(0,0,0,0); white-space:nowrap; border:0;
@@ -1967,11 +1960,10 @@ RAW_HTML = r"""<!DOCTYPE html>
                 </div>
                 <p id="partner-program-status" class="partner-sr-only" role="status">Loading partner balances…</p>
                 <div class="partner-earnings">
-                    <p class="partner-earnings-title">Partner earnings by currency</p>
+                    <p class="partner-earnings-title">Accumulated partner commissions</p>
                     <div id="partner-currency-totals" class="partner-currency-totals" aria-live="polite">
                         <p class="partner-earnings-empty">Loading partner balances…</p>
                     </div>
-                    <div id="partner-earnings-summary" aria-live="polite"><p class="partner-earnings-empty">Loading partner balances…</p></div>
                 </div>
                 <div class="partner-invite">
                     <h4 class="partner-invite-title">Your referral link</h4>
@@ -1992,7 +1984,6 @@ RAW_HTML = r"""<!DOCTYPE html>
                         <li>Solana network fees are paid from the operator reserve and are not deducted from the partner’s commission.</li>
                     </ul>
                 </details>
-                <div id="partner-history" class="partner-history" aria-live="polite"></div>
             </div>
             <details id="strategy-help"><summary>Strategy limits &amp; risks</summary>
                 <p class="section-note">Core trades use your USDC; sniper trades use your SOL. Other users' funds and the operator fee reserve are never your trading capital. Automatic conversion or profit allocation between strategies is not implemented.</p>
@@ -2094,7 +2085,6 @@ RAW_HTML = r"""<!DOCTYPE html>
             const walletDetail = document.getElementById('partner-wallet-detail');
             const walletBadge = document.getElementById('partner-wallet-badge');
             const currencyTotals = document.getElementById('partner-currency-totals');
-            const earningsSummary = document.getElementById('partner-earnings-summary');
             const copyStatus = document.querySelector('.partner-copy-status');
             const levelInfo = [
                 {name:'Direct', depth:'DIRECT REFERRALS'},
@@ -2145,61 +2135,33 @@ RAW_HTML = r"""<!DOCTYPE html>
                 if(walletBadge)walletBadge.textContent='IN-APP';
                 status.textContent='Referrals by level: '+counts.join(' / ')+
                     '. Partner commissions are credited to your main balance for normal withdrawal.';
-                const allEarnings=Array.isArray(data.earnings)?data.earnings:[];
                 if(currencyTotals){
                     currencyTotals.replaceChildren();
                     const totalsData=Array.isArray(data.earnings_totals)?data.earnings_totals:[];
-                    const totalsByAsset=new Map(totalsData.map(item=>[item.asset,item]));
-                    const assets=['USDC','SOL'];
+                    const displayAsset=asset=>{
+                        if(asset==='USDC'||asset==='EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v')return 'USDC';
+                        if(asset==='SOL')return 'SOL';
+                        if(asset==='ZRL')return 'ZRL';
+                        return '';
+                    };
+                    const totalsByAsset=new Map();
                     for(const item of totalsData){
-                        if(item.asset&&!assets.includes(item.asset))assets.push(item.asset);
+                        const asset=displayAsset(item.asset);
+                        if(!asset)continue;
+                        const total=totalsByAsset.get(asset)||{earned_raw:0};
+                        total.earned_raw+=Number(item.earned_raw||0);
+                        totalsByAsset.set(asset,total);
                     }
+                    const assets=['USDC','SOL'];
+                    if(totalsByAsset.has('ZRL'))assets.push('ZRL');
                     for(const asset of assets){
                         const item=totalsByAsset.get(asset)||{};
                         const card=document.createElement('div');card.className='partner-currency-card';
-                        const label=document.createElement('span');label.textContent=asset+' total earned';
+                        const label=document.createElement('span');label.textContent=asset;
                         const total=document.createElement('strong');
                         total.textContent=formatAmount(item.earned_raw,asset)+' '+asset;
-                        const details=document.createElement('small');
-                        details.textContent='Main balance: '+formatAmount(item.credited_raw,asset)+
-                            ' · Pending: '+formatAmount(item.pending_raw,asset)+
-                            ' · Paid: '+formatAmount(item.paid_raw,asset);
-                        card.append(label,total,details);currencyTotals.appendChild(card);
+                        card.append(label,total);currencyTotals.appendChild(card);
                     }
-                }
-                const earned=allEarnings.filter(item=>Number(item.credited_raw||0)>0||
-                    Number(item.pending_raw||0)>0||Number(item.paid_raw||0)>0);
-                if(earningsSummary){
-                    earningsSummary.replaceChildren();
-                    if(!earned.length){
-                        const empty=document.createElement('p');empty.className='partner-earnings-empty';empty.textContent='No commissions recorded yet.';
-                        earningsSummary.appendChild(empty);
-                    }else{
-                        earned.forEach(item=>{
-                            const row=document.createElement('div');row.className='partner-earning-row';
-                            const asset=String(item.asset||'UNKNOWN');
-                            const level=document.createElement('span');level.textContent='Level '+Number(item.level)+' · '+asset;
-                            const amounts=document.createElement('strong');
-                            const parts=[];
-                            if(Number(item.credited_raw||0)>0)parts.push(formatAmount(item.credited_raw,asset)+' credited');
-                            if(Number(item.pending_raw||0)>0)parts.push(formatAmount(item.pending_raw,asset)+' pending');
-                            if(Number(item.paid_raw||0)>0)parts.push(formatAmount(item.paid_raw,asset)+' sent');
-                            amounts.textContent=parts.join(' · ');
-                            row.append(level,amounts);earningsSummary.appendChild(row);
-                        });
-                    }
-                }
-                const history=document.getElementById('partner-history');
-                history.replaceChildren();
-                for(const item of (data.history||[])){
-                    const row=document.createElement('div');
-                    row.className='partner-history-row';
-                    const decimals=item.asset==='SOL'?9:6;
-                    const stateLabel=item.state==='CREDITED'?'ADDED TO MAIN BALANCE':
-                        item.state==='PAID'?'SENT TO LINKED WALLET':String(item.state||'UNKNOWN').replace(/_/g,' ');
-                    row.textContent='Level '+item.level+' · '+(Number(item.amount_raw)/10**decimals).toFixed(decimals)+' '+item.asset+
-                        ' · '+stateLabel+(item.signature?' · '+item.signature:'');
-                    history.appendChild(row);
                 }
             } catch(error) {
                 if(link)link.value='Referral link unavailable.';
