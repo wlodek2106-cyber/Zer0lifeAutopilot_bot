@@ -137,6 +137,22 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.discovery.assets()[0]["mint"],OTHER)
         self.assertTrue(self.ledger.audit())
 
+    async def test_new_seed_alias_preserves_existing_mint_identity(self):
+        old_code = "M_" + hashlib.sha256(MINT.encode()).hexdigest()[:16]
+        with self.ledger.db() as db:
+            db.execute("INSERT INTO custody_meme_assets VALUES(?,?,?,?,?)",
+                       (old_code,MINT,6,json.dumps({"eligible":False,"symbol":"CAT","code":old_code}),
+                        int(time.time())))
+        seeded = MemeDiscovery(self.ledger,self.rpc,[],{"WIF":{"mint":MINT,"decimals":6}})
+        seeded.fetch = self.discovery.fetch
+
+        report = await seeded.scan(None)
+
+        matches = [row for row in report["candidates"] if row["mint"] == MINT]
+        self.assertEqual(len(matches),1)
+        self.assertEqual(matches[0]["code"],old_code)
+        self.assertEqual(sum(row["mint"] == MINT for row in seeded.assets()),1)
+
     def test_unsafe_illiquid_young_pumped_or_malformed_pools_excluded(self):
         for changes in ({"liquidity":{"usd":9999}},{"volume":{"h24":99999}},
                         {"txns":{"h24":{"buys":1,"sells":1}}},{"priceUsd":"nan"},

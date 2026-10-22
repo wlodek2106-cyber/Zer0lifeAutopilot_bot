@@ -266,6 +266,14 @@ class MemeDiscovery:
                     metrics = json.loads(row["metrics"]); metrics["eligible"] = False
                     db.execute("UPDATE custody_meme_assets SET metrics=? WHERE code=?", (json.dumps(metrics), row["code"]))
                 for item in accepted:
+                    existing_mint = db.execute(
+                        "SELECT code,decimals FROM custody_meme_assets WHERE mint=?",
+                        (item["mint"],)).fetchone()
+                    if existing_mint:
+                        if existing_mint["decimals"] != item["decimals"]:
+                            raise ValueError("Candidate mint decimals changed. New entries paused.")
+                        # Keep the persisted identity for held positions and cached decisions.
+                        item["code"] = existing_mint["code"]
                     previous = db.execute("SELECT mint,decimals FROM custody_meme_assets WHERE code=?",
                                           (item["code"],)).fetchone()
                     if previous and (previous["mint"], previous["decimals"]) != (item["mint"], item["decimals"]):
