@@ -185,6 +185,29 @@ class WebAccessTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(WalletError):
                 runtime.admit_trading(102)
 
+    async def test_paid_membership_admits_trading_after_free_window(self):
+        self.access.free_access_until = FREE_ACCESS_UNTIL
+        self.runtime.beta_users = {OWNER}
+        expires = FREE_ACCESS_UNTIL + 3600
+        with self.ledger.db() as db:
+            db.execute("INSERT INTO access_memberships VALUES(?,?)", (102, expires))
+        request = BrowserRequest(uid=102)
+        request["auth_method"] = "telegram"
+
+        with patch("web_access.time.time", return_value=FREE_ACCESS_UNTIL + 1):
+            state = self.access.state(102)
+            self.assertTrue(state["active"])
+            self.assertFalse(state["free_access"])
+            self.assertTrue(state["trading_admitted"])
+            self.access.trading_request(request)
+
+        with patch("web_access.time.time", return_value=expires):
+            state = self.access.state(102)
+            self.assertFalse(state["active"])
+            self.assertFalse(state["trading_admitted"])
+            with self.assertRaises(WalletError):
+                self.access.trading_request(request)
+
     async def test_promo_skips_expiry_pause_until_fixed_deadline_then_pauses(self):
         self.access.free_access_until = FREE_ACCESS_UNTIL
         self.ledger.settings(101, enabled=True, sniper_enabled=True, close=True)

@@ -121,11 +121,17 @@ class WebAccess:
 
     def trading_admitted(self, uid, now=None):
         uid = int(uid)
+        current = int(time.time() if now is None else now)
+        with self.ledger.db() as db:
+            membership = db.execute(
+                "SELECT expires FROM access_memberships WHERE uid=?", (uid,)).fetchone()
+        paid_active = bool(membership and membership["expires"] > current)
         return bool(
             self.owner(uid)
             or getattr(self.runtime, "public_enabled", False)
             or uid in getattr(self.runtime, "beta_users", set())
-            or self.free_access_active(now)
+            or self.free_access_active(current)
+            or paid_active
         )
 
     @staticmethod
