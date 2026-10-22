@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 from solders.pubkey import Pubkey
 from custody_ledger import CustodyLedger
-from meme_discovery import MemeDiscovery, TOKEN, pool_metrics
+from meme_discovery import MemeDiscovery, TARGETED_SEARCH_TERMS, TOKEN, pool_metrics
 
 MINT = str(Pubkey.from_bytes(hashlib.sha256(b"first-candidate").digest()))
 OTHER = str(Pubkey.from_bytes(hashlib.sha256(b"second-candidate").digest()))
@@ -54,6 +54,12 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.rpc.await_args.args[1],"getMultipleAccounts")
         self.assertLessEqual(len(self.discovery.candidates()),8)
         self.assertTrue(self.ledger.audit())
+
+    async def test_scan_includes_more_targeted_memecoin_sources(self):
+        await self.discovery.scan(None)
+        paths = {call.args[1] for call in self.discovery.fetch.await_args_list}
+        expected = {f"/latest/dex/search?q={term}" for term in TARGETED_SEARCH_TERMS}
+        self.assertTrue(expected.issubset(paths))
 
     def test_candidate_shortlist_rotates_across_all_verified_candidates(self):
         now = 1_800_000

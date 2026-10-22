@@ -16,6 +16,9 @@ MIN_LIQUIDITY_USD = 10_000
 MAX_VERIFIED_CANDIDATES = 20
 AI_SHORTLIST_SIZE = 8
 SHORTLIST_ROTATION_SECONDS = 15 * 60
+# Discovery hints only. Every result remains subject to the same market and
+# on-chain checks below; a matching ticker is not treated as token identity.
+TARGETED_SEARCH_TERMS = ("FARTCOIN", "PONKE", "GIGA", "GOAT", "MOTHER", "MYRO", "SLERF")
 
 
 def number(value):
@@ -169,7 +172,8 @@ class MemeDiscovery:
                 self.fetch(session, "/token-profiles/recent-updates/v1"),
                 self.fetch(session, "/latest/dex/search?q=" + quote("meme")),
                 self.fetch(session, "/latest/dex/search?q=" + quote("pump")),
-                *[self.fetch(session, "/latest/dex/search?q=" + term) for term in ("BONK", "POPCAT", "BOME")],
+                *[self.fetch(session, "/latest/dex/search?q=" + term)
+                  for term in ("BONK", "POPCAT", "BOME", *TARGETED_SEARCH_TERMS)],
                 *[self.fetch(session, path) for path in meta_paths],
                 return_exceptions=True)
             mints, failures, sources = list(dict.fromkeys([*whale_mints, *self.aliases])), 0, []
