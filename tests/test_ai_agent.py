@@ -267,6 +267,9 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("market-data HTTP 429", self.service.discovery.report["message"])
         self.assertIn("market-data HTTP 429", messages[0])
         self.assertNotIn("DexScreener", messages[0])
+        self.assertEqual(
+            self.service.discovery.failure_category(KeyError("sensitive detail")),
+            "internal scan error (KeyError)")
         self.assertEqual(self.service.discovery_failures, 1)
         self.assertLessEqual(self.service.discovery_due - time.time(), 60)
 

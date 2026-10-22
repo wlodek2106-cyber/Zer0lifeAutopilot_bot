@@ -330,7 +330,7 @@ class MemeDiscovery:
             return "Solana RPC error"
         if isinstance(exc, ValueError):
             return "invalid external scan data"
-        return "internal scan error"
+        return f"internal scan error ({type(exc).__name__})"
 
     def fail(self, reason=None):
         self.blocked = True
