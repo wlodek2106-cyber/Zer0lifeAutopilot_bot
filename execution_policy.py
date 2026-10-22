@@ -17,6 +17,9 @@ MAX_SLOT_DISTANCE = 75
 MAX_SLIPPAGE_BPS = 40
 MAX_IMPACT_PCT = MAX_PRICE_IMPACT_PCT
 WRAPPED_SOL = "So11111111111111111111111111111111111111112"
+SNIPER_STOP_LOSS_PCT = 0.02
+SNIPER_TRAILING_ACTIVATION_PCT = 0.035
+SNIPER_TRAILING_DRAWDOWN_PCT = 0.02
 
 
 class ExecutionDenied(WalletError):
@@ -59,6 +62,17 @@ def risk_exit_reason(price, entry):
         return "TAKE_PROFIT"
     if change <= -.020:
         return "STOP_LOSS"
+    return None
+
+
+def sniper_exit_reason(price, entry, peak):
+    if not positive(price) or not positive(entry) or not positive(peak):
+        return None
+    if price <= entry * (1 - SNIPER_STOP_LOSS_PCT):
+        return "STOP_LOSS"
+    if (peak >= entry * (1 + SNIPER_TRAILING_ACTIVATION_PCT)
+            and price <= peak * (1 - SNIPER_TRAILING_DRAWDOWN_PCT)):
+        return "TRAILING_STOP"
     return None
 
 

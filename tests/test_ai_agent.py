@@ -447,12 +447,18 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_sol_risk_exit_uses_sol_relative_price_not_usdc(self):
         position = {"symbol": "WIF", "funding_asset": SOL, "cost_raw": 5_000_000,
-                    "raw": 250_000, "decimals": 6}
+                    "raw": 250_000, "decimals": 6, "peak_price": 0.02}
         self.assertFalse(self.service.exit_triggered(position, {"WIF": 2, "SOL": 100}))
+        position["peak_price"] = 0.0213
         self.assertTrue(self.service.exit_triggered(position, {"WIF": 2.08, "SOL": 100}))
         self.assertTrue(self.service.exit_triggered(position, {"WIF": 1.94, "SOL": 100}))
-        self.assertEqual(self.service.exit_reason(position, {"WIF": 2.08, "SOL": 100}), "TAKE_PROFIT")
+        self.assertEqual(self.service.exit_reason(position, {"WIF": 2.08, "SOL": 100}), "TRAILING_STOP")
         self.assertEqual(self.service.exit_reason(position, {"WIF": 1.94, "SOL": 100}), "STOP_LOSS")
+
+    async def test_sniper_does_not_sell_at_fixed_profit_target_without_a_peak_retrace(self):
+        position = {"symbol": "WIF", "funding_asset": SOL, "cost_raw": 5_000_000,
+                    "raw": 250_000, "decimals": 6, "peak_price": 0.0213}
+        self.assertIsNone(self.service.exit_reason(position, {"WIF": 2.13, "SOL": 100}))
 
     async def test_native_realized_profit_is_sol_not_fabricated_usdc(self):
         ledger = self.service.ledger

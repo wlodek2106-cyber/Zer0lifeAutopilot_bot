@@ -1,6 +1,7 @@
 """Integer, double-entry custody ledger with owner-confirmed backed legacy imports."""
 import hashlib
 import json
+import math
 import os
 import secrets
 import sqlite3
@@ -14,7 +15,7 @@ SOL = "SOL"
 FEE_CAP = 5_000_000
 ACTIVE = ("RESERVED", "PREPARED", "SUBMITTED", "UNKNOWN")
 PARTNER_LEVEL_BPS = (100, 50, 25)
-LOSS_REENTRY_COOLDOWN_SECONDS = 24 * 60 * 60
+REENTRY_COOLDOWN_SECONDS = 24 * 60 * 60
 
 
 class LedgerError(Exception):
@@ -174,6 +175,7 @@ class CustodyLedger:
                     asset TEXT NOT NULL, symbol TEXT NOT NULL, decimals INTEGER NOT NULL,
                     raw INTEGER NOT NULL CHECK(raw>0), cost_usdc INTEGER NOT NULL CHECK(cost_usdc>0),
                     state TEXT NOT NULL, buy_tx TEXT NOT NULL, sell_tx TEXT,
+                    peak_price REAL NOT NULL DEFAULT 0,
                     proceeds_usdc INTEGER, created_at INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS custody_loss_reentry_cooldowns (
                     asset TEXT PRIMARY KEY, blocked_until INTEGER NOT NULL, last_loss_at INTEGER NOT NULL);
@@ -205,7 +207,8 @@ class CustodyLedger:
                     "sniper_order_raw": "INTEGER NOT NULL DEFAULT 5000000"},
                 "custody_positions": {
                     "funding_asset": "TEXT NOT NULL DEFAULT '" + USDC + "'",
-                    "cost_raw": "INTEGER", "proceeds_raw": "INTEGER", "closed_at": "INTEGER"},
+                    "cost_raw": "INTEGER", "proceeds_raw": "INTEGER", "closed_at": "INTEGER",
+                    "peak_price": "REAL NOT NULL DEFAULT 0"},
                 "custody_operations": {"failure_reason": "TEXT NOT NULL DEFAULT ''"},
             }.items():
                 columns = {row[1] for row in db.execute("PRAGMA table_info(" + table + ")")}
@@ -223,14 +226,13 @@ class CustodyLedger:
                        MAX(COALESCE(p.closed_at,o.created_at))
                 FROM custody_positions p JOIN custody_operations o
                     ON o.position_id=p.id AND o.kind='SELL' AND o.state='COMPLETED'
-                WHERE p.state='CLOSED' AND p.cost_raw IS NOT NULL AND p.proceeds_raw IS NOT NULL
-                    AND p.proceeds_raw < p.cost_raw
+                WHERE p.state='CLOSED'
                     AND COALESCE(p.closed_at,o.created_at) >= ?
                 GROUP BY p.asset
                 ON CONFLICT(asset) DO UPDATE SET
                     blocked_until=MAX(custody_loss_reentry_cooldowns.blocked_until,excluded.blocked_until),
                     last_loss_at=MAX(custody_loss_reentry_cooldowns.last_loss_at,excluded.last_loss_at)""",
-                (LOSS_REENTRY_COOLDOWN_SECONDS, now - LOSS_REENTRY_COOLDOWN_SECONDS))
+                (REENTRY_COOLDOWN_SECONDS, now - REENTRY_COOLDOWN_SECONDS))
         self.credit_safe_partner_earnings()
 
     @contextmanager
@@ -941,7 +943,7 @@ class CustodyLedger:
                     WHERE asset=?""", (metadata["output_asset"],)).fetchone()
                 if cooldown and cooldown["blocked_until"] > int(time.time()):
                     raise LedgerError(
-                        "BLOCKED: token is under a global 24-hour cooldown after a realized loss; "
+                        "BLOCKED: token is under a global 24-hour re-entry cooldown after a completed trade; "
                         "no funds were reserved.")
             elif kind == "PARTNER_PAYOUT":
                 source = partner_account(uid)
@@ -1006,11 +1008,13 @@ class CustodyLedger:
                        (str(failure_reason or "")[:300], oid))
             if row["kind"] == "SELL" and recovery_audit is None:
                 info = json.loads(row["metadata"])
-                if info.get("exit_reason") == "STOP_LOSS":
+                exit_reason = info.get("exit_reason")
+                if exit_reason in ("STOP_LOSS", "TRAILING_STOP"):
                     db.execute("""INSERT OR IGNORE INTO custody_trade_notifications
                         (operation_id,uid,payload) VALUES(?,?,?)""",
                         (oid, row["uid"], json.dumps({
-                            "kind": "STOP_LOSS_FAILED",
+                            "kind": "TRAILING_STOP_FAILED" if exit_reason == "TRAILING_STOP"
+                                else "STOP_LOSS_FAILED",
                             "symbol": info.get("symbol", "TOKEN"),
                             "signature": row["signature"],
                         }, separators=(",", ":"))))
@@ -1189,14 +1193,13 @@ class CustodyLedger:
                     proceeds_raw=?,closed_at=? WHERE id=? AND uid=?""",
                     (row["signature"], received if info["output_asset"] == USDC else None,
                      received, closed_at, row["position_id"], row["uid"]))
-                if received - position["cost_raw"] - commission_total < 0:
-                    blocked_until = closed_at + LOSS_REENTRY_COOLDOWN_SECONDS
-                    db.execute("""INSERT INTO custody_loss_reentry_cooldowns
-                        (asset,blocked_until,last_loss_at) VALUES(?,?,?)
-                        ON CONFLICT(asset) DO UPDATE SET
-                            blocked_until=MAX(custody_loss_reentry_cooldowns.blocked_until,excluded.blocked_until),
-                            last_loss_at=MAX(custody_loss_reentry_cooldowns.last_loss_at,excluded.last_loss_at)""",
-                        (position["asset"], blocked_until, closed_at))
+                blocked_until = closed_at + REENTRY_COOLDOWN_SECONDS
+                db.execute("""INSERT INTO custody_loss_reentry_cooldowns
+                    (asset,blocked_until,last_loss_at) VALUES(?,?,?)
+                    ON CONFLICT(asset) DO UPDATE SET
+                        blocked_until=MAX(custody_loss_reentry_cooldowns.blocked_until,excluded.blocked_until),
+                        last_loss_at=MAX(custody_loss_reentry_cooldowns.last_loss_at,excluded.last_loss_at)""",
+                    (position["asset"], blocked_until, closed_at))
             elif row["kind"] == "PARTNER_PAYOUT":
                 db.execute("""UPDATE custody_partner_earnings SET state='PAID',signature=?
                     WHERE operation_id=? AND state='SUBMITTED'""", (row["signature"], oid))
@@ -1216,7 +1219,7 @@ class CustodyLedger:
                     }
                 else:
                     exit_reason = info.get("exit_reason")
-                    if exit_reason not in ("STOP_LOSS", "TAKE_PROFIT"):
+                    if exit_reason not in ("STOP_LOSS", "TAKE_PROFIT", "TRAILING_STOP"):
                         exit_reason = None
                     notification = {
                         "kind": "SELL", "symbol": position["symbol"],
@@ -1238,12 +1241,27 @@ class CustodyLedger:
                 (uid, state) if state else (uid,))
             return [dict(r) for r in rows]
 
-    def loss_entry_cooldown_until(self, asset, now=None):
+    def record_position_peak(self, uid, position_id, price):
+        if type(price) not in (int, float) or not math.isfinite(price) or price <= 0:
+            return None
+        with self.db() as db:
+            db.execute("""UPDATE custody_positions SET peak_price=MAX(peak_price,?)
+                WHERE id=? AND uid=? AND state='OPEN'""",
+                (float(price), position_id, uid))
+            row = db.execute("""SELECT peak_price FROM custody_positions
+                WHERE id=? AND uid=? AND state='OPEN'""", (position_id, uid)).fetchone()
+            return float(row["peak_price"]) if row else None
+
+    def entry_cooldown_until(self, asset, now=None):
         now = int(time.time()) if now is None else int(now)
         with self.db() as db:
             row = db.execute("""SELECT blocked_until FROM custody_loss_reentry_cooldowns
                 WHERE asset=? AND blocked_until>?""", (asset, now)).fetchone()
             return int(row["blocked_until"]) if row else None
+
+    # Kept for callers from older releases; the cooldown now applies after every close.
+    def loss_entry_cooldown_until(self, asset, now=None):
+        return self.entry_cooldown_until(asset, now)
 
     def settings(self, uid, enabled=None, raw=None, close=None, sniper_enabled=None, sniper_raw=None):
         with self.db() as db:

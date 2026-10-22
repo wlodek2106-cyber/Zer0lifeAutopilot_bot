@@ -178,7 +178,9 @@ class CustodyRuntime(WalletRuntime):
             "message": "Waiting for a screened whale candidate.",
         }
         self.whale_stream = HeliusWhaleStream(
-            os.getenv("HELIUS_API_KEY", ""), self.on_whale_signal)
+            os.getenv("HELIUS_API_KEY", ""), self.on_whale_signal,
+            enabled=os.getenv("HELIUS_WHALE_STREAM_ENABLED", "false").strip().lower()
+                in ("1", "true", "yes", "on"))
         self.whale_stream_task = None
         self._jito_tip_accounts = []
         self._jito_tip_accounts_expiry = 0
@@ -1798,12 +1800,12 @@ class CustodyRuntime(WalletRuntime):
                                   position_id=None, reserved=False):
         positions = (self.ledger.positions(uid) if reserved and kind == "SELL"
                      else self.ledger.positions(uid, "OPEN"))
-        cooldown_until = (self.ledger.loss_entry_cooldown_until(output_asset)
+        cooldown_until = (self.ledger.entry_cooldown_until(output_asset)
                           if kind == "BUY" else None)
         if cooldown_until:
             remaining_minutes = max(1, (cooldown_until - int(time.time()) + 59) // 60)
-            verdict = execution_policy.deny("global_loss_cooldown",
-                "BLOCKED: this token is globally locked after a realized loss; about "
+            verdict = execution_policy.deny("global_reentry_cooldown",
+                "BLOCKED: this token is globally locked after a recent completed trade; about "
                 f"{remaining_minutes} minute(s) remain. No BUY was sent.")
         else:
             verdict = execution_policy.order(uid=uid, kind=kind, asset=asset,
@@ -2339,9 +2341,10 @@ class CustodyRuntime(WalletRuntime):
         kind = payload.get("kind")
         symbol = "".join(c for c in str(payload.get("symbol", "TOKEN"))
                          if c.isalnum() or c in "-_")[:24] or "TOKEN"
-        if kind == "STOP_LOSS_FAILED":
+        if kind in ("STOP_LOSS_FAILED", "TRAILING_STOP_FAILED"):
             signature = payload.get("signature")
-            text = (f"Zer0Life AI Trader\nStop-loss triggered for {symbol}, "
+            reason = "Trailing stop" if kind == "TRAILING_STOP_FAILED" else "Stop-loss"
+            text = (f"Zer0Life AI Trader\n{reason} triggered for {symbol}, "
                     "but the sale was not confirmed. The position remains open.")
             if (isinstance(signature, str) and 64 <= len(signature) <= 100
                     and all(c in "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -2373,6 +2376,8 @@ class CustodyRuntime(WalletRuntime):
                 header = "Stop-loss triggered — sale confirmed on Solana."
             elif reason == "TAKE_PROFIT":
                 header = "Take-profit reached — sale confirmed on Solana."
+            elif reason == "TRAILING_STOP":
+                header = "Trailing stop triggered — sale confirmed on Solana."
             else:
                 header = "Sale confirmed on Solana."
             details = f"Sold: {token_amount} {symbol}\nCredited: {funding_amount} {funding_name}"
@@ -2524,6 +2529,14 @@ class CustodyRuntime(WalletRuntime):
                 for position in positions:
                     mode_enabled = (current["sniper_trading"] if position["funding_asset"] == SOL
                                     else current["trading"])
+                    if mode_enabled and position["funding_asset"] == SOL:
+                        price = self.position_exit_price(position, prices)
+                        entry = self.position_entry_price(position)
+                        if price is not None and entry is not None:
+                            peak = self.ledger.record_position_peak(
+                                uid, position["id"], max(entry, price))
+                            if peak is not None:
+                                position["peak_price"] = peak
                     reason = self.exit_reason(position, prices) if mode_enabled else None
                     if reason:
                         target, target_reason = position, reason
@@ -2555,18 +2568,38 @@ class CustodyRuntime(WalletRuntime):
                 self.last_error = ""
             await asyncio.sleep(20)
 
-    def exit_reason(self, position, prices):
+    def position_exit_price(self, position, prices):
         price = prices.get(position["symbol"], 0)
-        if not math.isfinite(price) or price <= 0:
+        if not isinstance(price, (int, float)) or not math.isfinite(price) or price <= 0:
             return None
         native = position["funding_asset"] == SOL
         if native:
-            if not math.isfinite(prices.get("SOL", 0)) or prices.get("SOL", 0) <= 0:
+            sol_price = prices.get("SOL", 0)
+            if not isinstance(sol_price, (int, float)) or not math.isfinite(sol_price) or sol_price <= 0:
                 return None
-            price /= prices["SOL"]
+            price /= sol_price
             if not math.isfinite(price) or price <= 0:
                 return None
-        entry = position["cost_raw"] / (1e9 if native else 1e6) / (position["raw"]/10**position["decimals"])
+        return price
+
+    @staticmethod
+    def position_entry_price(position):
+        try:
+            native = position["funding_asset"] == SOL
+            entry = (position["cost_raw"] / (1e9 if native else 1e6)
+                     / (position["raw"] / 10**position["decimals"]))
+        except (KeyError, TypeError, ZeroDivisionError):
+            return None
+        return entry if math.isfinite(entry) and entry > 0 else None
+
+    def exit_reason(self, position, prices):
+        price = self.position_exit_price(position, prices)
+        entry = self.position_entry_price(position)
+        if price is None or entry is None:
+            return None
+        if position["funding_asset"] == SOL:
+            peak = position.get("peak_price") or entry
+            return execution_policy.sniper_exit_reason(price, entry, max(peak, entry, price))
         return execution_policy.risk_exit_reason(price, entry)
 
     def exit_triggered(self, position, prices):
@@ -2615,11 +2648,11 @@ class CustodyRuntime(WalletRuntime):
             symbol, action = decision["symbol"], decision["action"]
             if action == "BUY" and symbol in self.watchlist:
                 mint = asset_for_mint(self.watchlist[symbol]["mint"])
-                cooldown_until = self.ledger.loss_entry_cooldown_until(mint)
+                cooldown_until = self.ledger.entry_cooldown_until(mint)
                 if cooldown_until:
                     remaining_minutes = max(1, (cooldown_until - int(time.time()) + 59) // 60)
-                    note("global_loss_cooldown",
-                         f"SKIPPED: {symbol} is globally locked after a realized loss; about "
+                    note("global_reentry_cooldown",
+                         f"SKIPPED: {symbol} is globally locked after a recent completed trade; about "
                          f"{remaining_minutes} minute(s) remain. No BUY sent.")
                     continue
             held = [p for p in positions if p["funding_asset"] == funding]

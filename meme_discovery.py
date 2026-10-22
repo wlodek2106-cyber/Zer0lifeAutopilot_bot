@@ -13,6 +13,9 @@ from solders.pubkey import Pubkey
 TOKEN = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 DEXES = {"raydium", "orca", "meteora", "pumpswap"}
 MIN_LIQUIDITY_USD = 10_000
+MAX_VERIFIED_CANDIDATES = 20
+AI_SHORTLIST_SIZE = 8
+SHORTLIST_ROTATION_SECONDS = 15 * 60
 
 
 def number(value):
@@ -210,10 +213,12 @@ class MemeDiscovery:
                                      or (len(item["rejection_reasons"]) == len(previous["rejection_reasons"])
                                          and item["score"] > previous["score"])))):
                         rejected_pools[item["mint"]] = item
-            ranked = sorted(best.values(), key=lambda item: item["score"], reverse=True)[:20]
+            ranked = sorted(best.values(), key=lambda item: item["score"], reverse=True)[
+                :MAX_VERIFIED_CANDIDATES]
             accepted = []
             mint_rejections = {}
-            for item in sorted(best.values(), key=lambda row: row["score"], reverse=True)[20:]:
+            for item in sorted(best.values(), key=lambda row: row["score"], reverse=True)[
+                    MAX_VERIFIED_CANDIDATES:]:
                 mint_rejections[item["mint"]] = ["outside the top 20 candidates checked on-chain"]
             if ranked:
                 accounts = await self.rpc(session, "getMultipleAccounts", [
@@ -295,13 +300,19 @@ class MemeDiscovery:
             self.blocked = False
             return self.report
 
-    def candidates(self):
+    def candidates(self, now=None):
         if self.blocked:
             return []
-        now = time.time()
+        now = time.time() if now is None else now
         rows = [json.loads(row["metrics"]) for row in self.assets()
                 if 0 <= now-row["checked_at"] < 1800 and json.loads(row["metrics"]).get("eligible")]
-        return sorted(rows, key=lambda row: row["score"], reverse=True)[:8]
+        ranked = sorted(rows, key=lambda row: row["score"], reverse=True)[:MAX_VERIFIED_CANDIDATES]
+        if len(ranked) <= AI_SHORTLIST_SIZE:
+            return ranked
+        # Keep each AI shortlist stable for one analysis interval, then rotate through
+        # all on-chain-verified candidates rather than showing only the top eight.
+        start = (int(now // SHORTLIST_ROTATION_SECONDS) * AI_SHORTLIST_SIZE) % len(ranked)
+        return [ranked[(start + offset) % len(ranked)] for offset in range(AI_SHORTLIST_SIZE)]
 
     def fail(self):
         self.blocked = True

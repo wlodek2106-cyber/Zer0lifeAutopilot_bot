@@ -137,21 +137,21 @@ class LedgerTests(unittest.TestCase):
         backing = self.ledger.liabilities()[USDC] + 2_000_000
         self.ledger.opening(101, USDC, 2_000_000, backing)
 
-        def close_trade(uid, buy_raw, sell_raw):
+        def close_trade(uid, buy_raw, sell_raw, token_mint):
             buy = self.ledger.reserve(uid, str(uuid.uuid4()), "BUY", USDC, buy_raw,
-                {"output_asset": SOL, "symbol": "SOL", "decimals": 9})
+                {"output_asset": token_mint, "symbol": "TOKEN", "decimals": 6})
             self.ledger.prepared(buy["id"], str(Signature.new_unique()), "offline-wire")
             self.ledger.finalize(buy["id"], buy_raw, 0, 1_000_000_000)
-            sell = self.ledger.reserve(uid, str(uuid.uuid4()), "SELL", SOL, 1_000_000_000,
+            sell = self.ledger.reserve(uid, str(uuid.uuid4()), "SELL", token_mint, 1_000_000_000,
                 {"output_asset": USDC}, position_id=buy["id"])
             self.ledger.prepared(sell["id"], str(Signature.new_unique()), "offline-wire")
             self.ledger.finalize(sell["id"], 1_000_000_000, 0, sell_raw)
 
-        close_trade(101, 2_000_000, 4_000_000)
+        close_trade(101, 2_000_000, 4_000_000, "owner-profit-mint")
         with self.ledger.db() as db:
             db.execute("INSERT INTO custody_referrals(uid,parent_uid,created_at) VALUES(202,101,?)",
                        (int(time.time()),))
-        close_trade(202, 2_000_000, 3_000_000)
+        close_trade(202, 2_000_000, 3_000_000, "partner-profit-mint")
 
         expected = 10_000_000 + 2_000_000 + 2_000_000 + 10_000
         self.assertEqual(self.ledger.withdrawal_entitlement(101, USDC), expected)
@@ -312,32 +312,21 @@ class LedgerTests(unittest.TestCase):
             self.complete(sale, spent=position["raw"], fee=0, received=900_000)
 
         expires_at = closed_at + 24 * 60 * 60
-        self.assertEqual(self.ledger.loss_entry_cooldown_until(mint, now=closed_at), expires_at)
+        self.assertEqual(self.ledger.entry_cooldown_until(mint, now=closed_at), expires_at)
         starting_balance = self.ledger.balance(202, USDC)
         with patch("custody_ledger.time.time", return_value=closed_at + 1):
-            with self.assertRaisesRegex(LedgerError, "global 24-hour cooldown"):
+            with self.assertRaisesRegex(LedgerError, "global 24-hour re-entry cooldown"):
                 self.ledger.reserve(202, str(uuid.uuid4()), "BUY", USDC, 1_000_000,
                     {"output_asset": mint, "symbol": "MEW", "decimals": 6})
         self.assertEqual(self.ledger.balance(202, USDC), starting_balance)
-        self.assertIsNone(self.ledger.loss_entry_cooldown_until(mint, now=expires_at))
+        self.assertIsNone(self.ledger.entry_cooldown_until(mint, now=expires_at))
         with patch("custody_ledger.time.time", return_value=expires_at + 1):
             allowed = self.ledger.reserve(202, str(uuid.uuid4()), "BUY", USDC, 1_000_000,
                 {"output_asset": mint, "symbol": "MEW", "decimals": 6})
         self.assertEqual(allowed["state"], "RESERVED")
 
-    def test_profitable_close_does_not_start_global_cooldown(self):
+    def test_profitable_close_starts_global_cooldown_for_every_user(self):
         mint = "profitable-mint"
-        buy = self.reserve(uid=101, kind="BUY", asset=USDC, raw=1_000_000,
-            info={"output_asset": mint, "symbol": "TEST", "decimals": 6})
-        self.complete(buy, spent=1_000_000, fee=0, received=100)
-        position = self.ledger.positions(101, "OPEN")[0]
-        sale = self.reserve(uid=101, kind="SELL", asset=mint, raw=position["raw"],
-            position=position["id"], info={"output_asset": USDC})
-        self.complete(sale, spent=position["raw"], fee=0, received=1_100_000)
-        self.assertIsNone(self.ledger.loss_entry_cooldown_until(mint))
-
-    def test_recent_losses_backfill_global_cooldown_when_ledger_reopens(self):
-        mint = "recent-loss-mint"
         buy = self.reserve(uid=101, kind="BUY", asset=USDC, raw=1_000_000,
             info={"output_asset": mint, "symbol": "TEST", "decimals": 6})
         self.complete(buy, spent=1_000_000, fee=0, received=100)
@@ -346,16 +335,54 @@ class LedgerTests(unittest.TestCase):
             position=position["id"], info={"output_asset": USDC})
         closed_at = int(time.time())
         with patch("custody_ledger.time.time", return_value=closed_at):
-            self.complete(sale, spent=position["raw"], fee=0, received=900_000)
+            self.complete(sale, spent=position["raw"], fee=0, received=1_100_000)
+        self.assertEqual(
+            self.ledger.entry_cooldown_until(mint, now=closed_at),
+            closed_at + 24 * 60 * 60,
+        )
+        with patch("custody_ledger.time.time", return_value=closed_at + 1):
+            with self.assertRaisesRegex(LedgerError, "global 24-hour re-entry cooldown"):
+                self.ledger.reserve(202, str(uuid.uuid4()), "BUY", USDC, 1_000_000,
+                    {"output_asset": mint, "symbol": "TEST", "decimals": 6})
+
+    def test_recent_completed_trades_backfill_global_cooldown_when_ledger_reopens(self):
+        mint = "recent-close-mint"
+        buy = self.reserve(uid=101, kind="BUY", asset=USDC, raw=1_000_000,
+            info={"output_asset": mint, "symbol": "TEST", "decimals": 6})
+        self.complete(buy, spent=1_000_000, fee=0, received=100)
+        position = self.ledger.positions(101, "OPEN")[0]
+        sale = self.reserve(uid=101, kind="SELL", asset=mint, raw=position["raw"],
+            position=position["id"], info={"output_asset": USDC})
+        closed_at = int(time.time())
+        with patch("custody_ledger.time.time", return_value=closed_at):
+            self.complete(sale, spent=position["raw"], fee=0, received=1_100_000)
         with self.ledger.db() as db:
             db.execute("DELETE FROM custody_loss_reentry_cooldowns WHERE asset=?", (mint,))
 
         with patch("custody_ledger.time.time", return_value=closed_at + 3600):
             reopened = CustodyLedger(self.path)
         self.assertEqual(
-            reopened.loss_entry_cooldown_until(mint, now=closed_at + 3600),
+            reopened.entry_cooldown_until(mint, now=closed_at + 3600),
             closed_at + 24 * 60 * 60,
         )
+
+    def test_position_peak_is_monotonic_persistent_and_owner_scoped(self):
+        self.credit(101, SOL, 20_000_000)
+        buy = self.reserve(uid=101, kind="BUY", asset=SOL, raw=5_000_000,
+            info={"output_asset": "peak-mint", "symbol": "WIF", "decimals": 6})
+        self.complete(buy, spent=5_000_000, fee=0, received=250_000)
+        position = self.ledger.positions(101, "OPEN")[0]
+
+        self.assertAlmostEqual(
+            self.ledger.record_position_peak(101, position["id"], 0.021), 0.021)
+        self.assertAlmostEqual(
+            self.ledger.record_position_peak(101, position["id"], 0.020), 0.021)
+        self.assertIsNone(
+            self.ledger.record_position_peak(202, position["id"], 0.03))
+
+        reopened = CustodyLedger(self.path)
+        restored = reopened.positions(101, "OPEN")[0]
+        self.assertAlmostEqual(restored["peak_price"], 0.021)
 
     def test_fartcoin_sell_rpc_effects_credit_exact_sol_proceeds(self):
         wallet = str(Keypair().pubkey())
@@ -454,6 +481,25 @@ class LedgerTests(unittest.TestCase):
         payload = json.loads(event["payload"])
         self.assertEqual(payload["kind"], "STOP_LOSS_FAILED")
         self.assertIn("The position remains open.",
+                      runtime.CustodyRuntime.trade_notification_text(payload))
+        self.assertEqual(self.ledger.positions(101, "OPEN")[0]["id"], position["id"])
+
+    def test_trailing_stop_notification_is_preserved_and_says_position_remains_open_on_failure(self):
+        self.credit(101, SOL, 20_000_000)
+        buy = self.reserve(uid=101, kind="BUY", asset=SOL, raw=5_000_000,
+            info={"output_asset": "trail-mint", "symbol": "WIF", "decimals": 6})
+        self.complete(buy, spent=5_000_000, fee=0, received=250_000)
+        position = self.ledger.positions(101, "OPEN")[0]
+        sale = self.reserve(101, kind="SELL", asset="trail-mint", raw=position["raw"],
+            info={"output_asset": SOL, "exit_reason": "TRAILING_STOP", "symbol": "WIF"},
+            position=position["id"])
+        self.ledger.fail(sale["id"], failure_reason="Sale could not be prepared.")
+
+        event = next(row for row in self.ledger.trade_notifications(int(time.time()))
+                     if row["operation_id"] == sale["id"])
+        payload = json.loads(event["payload"])
+        self.assertEqual(payload["kind"], "TRAILING_STOP_FAILED")
+        self.assertIn("Trailing stop triggered",
                       runtime.CustodyRuntime.trade_notification_text(payload))
         self.assertEqual(self.ledger.positions(101, "OPEN")[0]["id"], position["id"])
 

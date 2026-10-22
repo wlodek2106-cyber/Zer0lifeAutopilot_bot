@@ -259,10 +259,12 @@ class HeliusStreamError(Exception):
 class HeliusWhaleStream:
     """One reconnecting Helius subscription. It never submits or signs trades."""
 
-    def __init__(self, api_key="", on_signal=None):
+    def __init__(self, api_key="", on_signal=None, enabled=True):
         self.api_key = str(api_key or "").strip()
         self.on_signal = on_signal
-        self.state = "connecting" if self.api_key else "waiting_for_key"
+        self.configuration_enabled = bool(enabled)
+        self.state = ("connecting" if self.api_key else "waiting_for_key"
+                      ) if self.configuration_enabled else "stopped"
         self.last_error = ""
         self.reconnects = 0
         self.total_signals = 0
@@ -281,9 +283,12 @@ class HeliusWhaleStream:
 
     @property
     def enabled(self):
-        return bool(self.api_key)
+        return self.configuration_enabled and bool(self.api_key)
 
     def _state_message(self):
+        if not self.configuration_enabled:
+            return ("Helius whale stream is disabled by configuration. "
+                    "Scheduled candidate scanning remains available; whale-triggered signals are off.")
         if not self.api_key:
             return ("Waiting for HELIUS_API_KEY in Render. The stream is off; "
                     "no paid-plan upgrade or trade is triggered.")
@@ -516,7 +521,7 @@ class HeliusWhaleStream:
 
     async def run(self):
         if not self.enabled:
-            self.state = "waiting_for_key"
+            self.state = "stopped" if not self.configuration_enabled else "waiting_for_key"
             self.message = self._state_message()
             return
         delay = 1

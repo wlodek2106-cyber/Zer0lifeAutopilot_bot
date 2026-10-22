@@ -55,6 +55,26 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(len(self.discovery.candidates()),8)
         self.assertTrue(self.ledger.audit())
 
+    def test_candidate_shortlist_rotates_across_all_verified_candidates(self):
+        now = 1_800_000
+        with self.ledger.db() as db:
+            for index in range(20):
+                code = f"M_{index}"
+                mint = str(Pubkey.from_bytes(hashlib.sha256(code.encode()).digest()))
+                metrics = {"code": code, "score": 100-index, "eligible": True}
+                db.execute("INSERT INTO custody_meme_assets VALUES(?,?,?,?,?)",
+                    (code, mint, 6, json.dumps(metrics), now-30))
+        self.discovery.blocked = False
+
+        first = self.discovery.candidates(now=now)
+        second = self.discovery.candidates(now=now+15*60)
+
+        self.assertEqual(len(first), 8)
+        self.assertEqual(len(second), 8)
+        self.assertEqual([row["code"] for row in first], [f"M_{i}" for i in range(8)])
+        self.assertEqual([row["code"] for row in second], [f"M_{i}" for i in range(8, 16)])
+        self.assertEqual(len({row["code"] for row in first+second}), 16)
+
     async def test_authorities_token2022_invalid_or_uninitialized_mints_excluded(self):
         for bad in (mint_account(mintAuthority=MINT),mint_account(freezeAuthority=MINT),
                     mint_account(isInitialized=False),mint_account(decimals=True),

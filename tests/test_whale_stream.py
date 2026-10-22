@@ -116,6 +116,16 @@ class FakeHttpSession:
 
 
 class WhaleSignalTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stream_can_be_disabled_even_when_api_key_is_present(self):
+        stream = HeliusWhaleStream("unit-test-key", enabled=False)
+
+        await stream.run()
+
+        status = stream.snapshot()
+        self.assertFalse(status["enabled"])
+        self.assertEqual(status["state"], "stopped")
+        self.assertIn("Scheduled candidate scanning remains available", status["message"])
+
     def test_valid_confirmed_program_buy_in_1_to_10_sol_range(self):
         event = parse_whale_buy(notification(sol_spend=2_500_000_000), observed_at=100)
         self.assertEqual(event["mint"], MINT)
