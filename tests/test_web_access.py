@@ -143,7 +143,7 @@ class WebAccessTests(unittest.IsolatedAsyncioTestCase):
             await self.new_order(OWNER)
         self.runtime.rpc.assert_not_called()
 
-    async def test_fixed_free_window_is_server_enforced_and_does_not_open_admission(self):
+    async def test_fixed_free_window_is_server_enforced_and_opens_trading_admission(self):
         self.access.free_access_until = FREE_ACCESS_UNTIL
         self.runtime.beta_users = {OWNER, 101}
         with patch("web_access.time.time", return_value=FREE_ACCESS_UNTIL - 1):
@@ -152,12 +152,38 @@ class WebAccessTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(state["active"])
                 self.assertTrue(state["free_access"])
             self.assertTrue(self.access.state(102)["payment_required"] is False)
-            self.assertFalse(self.access.state(102)["trading_admitted"])
+            self.assertTrue(self.access.state(102)["trading_admitted"])
             with self.assertRaises(WalletError):
                 await self.new_order()
         with patch("web_access.time.time", return_value=FREE_ACCESS_UNTIL):
             self.assertFalse(self.access.state(101)["active"])
             self.assertTrue(self.access.state(101)["payment_required"])
+            self.assertFalse(self.access.state(102)["trading_admitted"])
+
+    async def test_free_window_admits_all_users_to_trading_but_not_general_custody(self):
+        from custody_runtime import CustodyRuntime
+        self.access.free_access_until = FREE_ACCESS_UNTIL
+        self.runtime.beta_users = {OWNER}
+        runtime = object.__new__(CustodyRuntime)
+        runtime.public_enabled = False
+        runtime.beta_users = {OWNER}
+        runtime.web_access = self.access
+        runtime.ready = lambda: None
+
+        with patch("web_access.time.time", return_value=FREE_ACCESS_UNTIL - 1):
+            for uid in (101, 102):
+                self.assertTrue(self.access.state(uid)["trading_admitted"])
+                runtime.admit_trading(uid)
+            telegram_request = BrowserRequest(uid=102)
+            telegram_request["auth_method"] = "telegram"
+            self.access.trading_request(telegram_request)
+            with self.assertRaises(WalletError):
+                runtime.admit(102)
+
+        with patch("web_access.time.time", return_value=FREE_ACCESS_UNTIL):
+            self.assertFalse(self.access.state(102)["trading_admitted"])
+            with self.assertRaises(WalletError):
+                runtime.admit_trading(102)
 
     async def test_promo_skips_expiry_pause_until_fixed_deadline_then_pauses(self):
         self.access.free_access_until = FREE_ACCESS_UNTIL
@@ -336,12 +362,24 @@ class WebAccessTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(WalletError):
                 self.access.require(101, "SELL")
 
-    async def test_no_telegram_paid_trading_or_memo_or_key_bypass(self):
+    async def test_authenticated_telegram_trading_still_requires_access_and_valid_session(self):
         req = BrowserRequest(uid=101)
         req["auth_method"] = "telegram"
         with self.assertRaises(WalletError):
             self.access.trading_request(req)
+        with self.ledger.db() as db:
+            db.execute("INSERT INTO access_memberships VALUES(?,?)", (101, int(time.time()) + 3600))
+        self.access.trading_request(req)
+
+        invalid = BrowserRequest(uid=101)
+        invalid["auth_method"] = "untrusted"
+        with self.assertRaises(WalletError) as caught:
+            self.access.trading_request(invalid)
+        self.assertEqual(caught.exception.status, 401)
+
         self.access.trading_request(BrowserRequest(uid=OWNER))
+        with self.ledger.db() as db:
+            db.execute("DELETE FROM access_memberships WHERE uid=?", (101,))
         with self.assertRaises(WalletError):
             self.access.require(101, "SELL", "someone-elses-position", manual=True)
 

@@ -164,14 +164,19 @@ class AccountSecurityTests(unittest.IsolatedAsyncioTestCase):
     async def test_telegram_code_is_delivered_once_and_binds_exact_withdrawal(self):
         await self.register()
         body={k:v for k,v in self.transfer.items() if k not in ("purpose","pin")}
+        code_body={**body,"withdrawal_fee_raw":18_750,"withdrawal_net_raw":1_231_250}
         session=TelegramSession()
-        response=await self.accounts.send_withdrawal_code(Request(body),session,body)
-        self.assertEqual(decoded(response),{"success":True,"expires_in":300})
+        response=await self.accounts.send_withdrawal_code(Request(body),session,code_body)
+        self.assertEqual(decoded(response),{"success":True,"expires_in":300,
+            "asset":"USDC","requested_raw":"1250000","withdrawal_fee_raw":"18750",
+            "net_raw":"1231250"})
         message=session.calls[0][1]["json"]["text"]
         code=message.split("Code: ",1)[1].splitlines()[0]
         self.assertEqual(len(code),6)
         self.assertIn(body["recipient_address"],message)
         self.assertIn("1.25 USDC",message)
+        self.assertIn("Withdrawal fee (1.5%): 0.01875 USDC",message)
+        self.assertIn("Recipient receives: 1.23125 USDC",message)
         with self.ledger.db() as db:
             row=db.execute("SELECT * FROM app_withdrawal_codes WHERE uid=101").fetchone()
         self.assertNotIn(code,row["code_hash"])

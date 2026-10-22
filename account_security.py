@@ -180,6 +180,13 @@ class AccountSecurity:
             raise WalletError("Telegram code delivery is unavailable. No transfer was sent.", 503)
         body = body if body is not None else await request.json()
         payload, binding = self.withdrawal_intent(uid, body)
+        fee_raw = body.get("withdrawal_fee_raw", 0)
+        net_raw = body.get("withdrawal_net_raw", int(payload["raw"]) - fee_raw
+                           if type(fee_raw) is int else -1)
+        if (type(fee_raw) is not int or fee_raw < 0
+                or type(net_raw) is not int or net_raw <= 0
+                or fee_raw + net_raw != int(payload["raw"])):
+            raise WalletError("Withdrawal fee preview does not match the confirmed amount.", 400)
         now = int(time.time())
         code = f"{secrets.randbelow(1_000_000):06d}"
         code_id = uuid.uuid4().hex
@@ -203,12 +210,18 @@ class AccountSecurity:
                 (code_id, uid, binding, self._withdrawal_code_hash(uid, binding, code), now, now + 300))
 
         decimals = 9 if payload["token"] == "SOL" else 6
-        amount = format(Decimal(payload["raw"]) / Decimal(10**decimals), "f")
-        amount = amount.rstrip("0").rstrip(".") if "." in amount else amount
+        def format_amount(raw):
+            value = format(Decimal(raw) / Decimal(10**decimals), "f")
+            return value.rstrip("0").rstrip(".") if "." in value else value
+        amount = format_amount(int(payload["raw"]))
+        fee_amount = format_amount(fee_raw)
+        net_amount = format_amount(net_raw)
         message = (
             "Zer0Life AI Trader withdrawal confirmation\n"
             f"Code: {code}\n"
-            f"Amount: {amount} {payload['token']}\n"
+            f"Requested: {amount} {payload['token']}\n"
+            f"Withdrawal fee (1.5%): {fee_amount} {payload['token']}\n"
+            f"Recipient receives: {net_amount} {payload['token']}\n"
             f"To: {payload['recipient_address']}\n"
             "Valid for 5 minutes and one use only. Never share this code."
         )
@@ -231,7 +244,9 @@ class AccountSecurity:
             raise WalletError(
                 "Telegram delivery is unconfirmed. Check the bot chat before requesting another code.", 503
             ) from exc
-        return web.json_response({"success": True, "expires_in": 300},
+        return web.json_response({"success": True, "expires_in": 300,
+            "asset": payload["token"], "requested_raw": payload["raw"],
+            "withdrawal_fee_raw": str(fee_raw), "net_raw": str(net_raw)},
                                  headers={"Cache-Control": "no-store"})
 
     def consume_withdrawal_code(self, uid, body):

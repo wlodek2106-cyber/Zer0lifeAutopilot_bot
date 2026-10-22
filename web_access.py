@@ -119,6 +119,15 @@ class WebAccess:
     def free_access_active(self, now=None):
         return int(time.time() if now is None else now) < self.free_access_until
 
+    def trading_admitted(self, uid, now=None):
+        uid = int(uid)
+        return bool(
+            self.owner(uid)
+            or getattr(self.runtime, "public_enabled", False)
+            or uid in getattr(self.runtime, "beta_users", set())
+            or self.free_access_active(now)
+        )
+
     @staticmethod
     def public_order(row):
         order = dict(row)
@@ -146,7 +155,7 @@ class WebAccess:
         promo_free = not owner_free and self.free_access_active(now)
         expiry = row["expires"] if row else 0
         paid_active = expiry > now
-        admitted = self.runtime.public_enabled or uid in self.runtime.beta_users
+        admitted = self.trading_admitted(uid, now)
         return {"success": True, "active": owner_free or promo_free or paid_active,
                 "admin_free": owner_free, "free_access": promo_free,
                 "free_access_until": self.free_access_until,
@@ -263,8 +272,10 @@ class WebAccess:
 
     def trading_request(self, request):
         uid = self.runtime.uid(request)
-        if not self.owner(uid) and request.get("auth_method") != "web":
-            raise WalletError("Trading is available only in the standalone web terminal.", 403)
+        if request.get("auth_method") not in ("telegram", "web"):
+            raise WalletError("Sign in with Telegram or the standalone web terminal to trade.", 401)
+        if not self.trading_admitted(uid):
+            raise WalletError("Trading is not enabled for this account.", 403)
         self.require(uid)
 
     def same_origin(self, request):

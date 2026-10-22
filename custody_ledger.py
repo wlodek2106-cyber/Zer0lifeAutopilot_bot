@@ -511,11 +511,18 @@ class CustodyLedger:
             FROM custody_partner_earnings
             WHERE partner_uid=? AND asset=? AND state IN ('CREDITED','PAID')""",
             (uid, asset)).fetchone()[0]
+        withdrawal_commissions = db.execute("""SELECT COALESCE(SUM(e.delta),0)
+            FROM custody_entries e
+            JOIN custody_operations o ON e.journal='complete:' || o.id
+            WHERE e.account=? AND e.asset=? AND o.kind='WITHDRAW'
+              AND o.asset=? AND o.state='COMPLETED'""",
+            (available(uid), asset, asset)).fetchone()[0]
         completed_withdrawals = db.execute("""SELECT COALESCE(SUM(raw),0)
             FROM custody_operations WHERE uid=? AND asset=?
             AND kind IN ('WITHDRAW','PARTNER_PAYOUT') AND state='COMPLETED'""",
             (uid, asset)).fetchone()[0]
-        return max(0, deposits + opening + realized_profit + partner_income - completed_withdrawals)
+        return max(0, deposits + opening + realized_profit + partner_income
+                   + withdrawal_commissions - completed_withdrawals)
 
     def withdrawal_entitlement(self, uid, asset):
         if type(uid) is not int or uid <= 0 or asset not in (USDC, SOL):
@@ -1148,6 +1155,20 @@ class CustodyLedger:
             if row["kind"] == "PARTNER_PAYOUT" and spent != row["raw"]:
                 raise LedgerError("Партнёрская выплата должна совпасть с точной суммой резерва.")
             info = json.loads(row["metadata"])
+            commission_raw = 0
+            commission_owner_uid = None
+            if row["kind"] == "WITHDRAW":
+                commission_raw = info.get("withdrawal_fee_raw", 0)
+                net_raw = info.get("withdrawal_net_raw", row["raw"])
+                commission_owner_uid = info.get("withdrawal_commission_owner_uid")
+                if (type(commission_raw) is not int or commission_raw < 0
+                        or type(net_raw) is not int or net_raw <= 0
+                        or net_raw + commission_raw != row["raw"] or spent != net_raw):
+                    raise LedgerError("Withdrawal does not match the reserved amount and fee.")
+                if commission_raw and (
+                        type(commission_owner_uid) is not int or commission_owner_uid <= 0
+                        or commission_owner_uid == row["uid"]):
+                    raise LedgerError("Could not verify the withdrawal commission recipient.")
             account = reserve_account(oid)
             source = (position_account(row["position_id"]) if row["kind"] == "SELL" else
                       partner_account(row["uid"]) if row["kind"] == "PARTNER_PAYOUT" else available(row["uid"]))
@@ -1155,7 +1176,12 @@ class CustodyLedger:
                 (account, SOL, -fee), ("external", SOL, fee),
                 (account, SOL, -(row["fee_cap"] - fee)), ("treasury", SOL, row["fee_cap"] - fee)]
             if row["raw"] > spent:
-                lines += [(account, row["asset"], -(row["raw"] - spent)), (source, row["asset"], row["raw"] - spent)]
+                retained = row["raw"] - spent
+                if row["kind"] == "WITHDRAW" and commission_raw:
+                    lines += [(account, row["asset"], -retained),
+                              (available(commission_owner_uid), row["asset"], retained)]
+                else:
+                    lines += [(account, row["asset"], -retained), (source, row["asset"], retained)]
             commission_total = 0
             if row["kind"] in ("BUY", "SELL"):
                 if received <= 0:
@@ -1207,7 +1233,8 @@ class CustodyLedger:
             if row["kind"] == "WITHDRAW":
                 db.execute("""INSERT OR IGNORE INTO custody_withdrawal_notifications
                     (operation_id,uid,payload) VALUES(?,?,?)""", (oid, row["uid"], json.dumps({
-                        "asset": row["asset"], "raw": spent, "recipient": row["recipient"],
+                        "asset": row["asset"], "raw": spent, "requested_raw": row["raw"],
+                        "commission_raw": commission_raw, "recipient": row["recipient"],
                         "signature": row["signature"]})))
             elif row["kind"] in ("BUY", "SELL"):
                 if row["kind"] == "BUY":

@@ -1834,7 +1834,10 @@ RAW_HTML = r"""<!DOCTYPE html>
                         <button class="token-btn" id="wtoken-sol" onclick="selectWithdrawToken('SOL')">Solana (SOL)</button>
                     </div>
                     <input id="withdraw-address" class="sig-input" placeholder="Recipient wallet address" oninput="clearWithdrawalCode()">
-                    <input id="withdraw-amount" type="number" step="any" class="sig-input" placeholder="Amount" oninput="clearWithdrawalCode()">
+                    <input id="withdraw-amount" type="number" step="any" class="sig-input" placeholder="Amount" oninput="clearWithdrawalCode();updateWithdrawalFeePreview()">
+                    <p id="withdrawal-fee-preview" class="status-output" role="status" aria-live="polite">
+                        Non-admin withdrawals have a 1.5% fee, credited to the administrator in the same currency.
+                    </p>
                     <button class="btn-copy" id="btn-withdraw-code" onclick="requestWithdrawalCode()">Send code in Telegram</button>
                     <input id="withdraw-code" class="sig-input" type="text" inputmode="numeric" autocomplete="one-time-code"
                         maxlength="6" pattern="[0-9]{6}" placeholder="6-digit Telegram code">
@@ -2789,6 +2792,46 @@ RAW_HTML = r"""<!DOCTYPE html>
             document.getElementById('wtoken-usdc').className = token === 'USDC' ? 'token-btn active' : 'token-btn';
             document.getElementById('wtoken-sol').className = token === 'SOL' ? 'token-btn active' : 'token-btn';
             clearWithdrawalCode();
+            updateWithdrawalFeePreview();
+        }
+
+        function withdrawalRawFromAmount(amount, token) {
+            const decimals=token==='SOL'?9:6;
+            const text=String(amount||'').trim();
+            if(!/^\d+(?:\.\d*)?$/.test(text))return null;
+            const [whole,fraction='']=text.split('.');
+            if(fraction.length>decimals)return null;
+            const scale=10n**BigInt(decimals);
+            return BigInt(whole)*scale+BigInt(fraction.padEnd(decimals,'0')||'0');
+        }
+        function formatWithdrawalRaw(raw, token) {
+            const decimals=token==='SOL'?9:6;
+            const amount=BigInt(raw);
+            const scale=10n**BigInt(decimals);
+            const whole=(amount/scale).toString();
+            const fraction=(amount%scale).toString().padStart(decimals,'0').replace(/0+$/,'');
+            return fraction?whole+'.'+fraction:whole;
+        }
+        function updateWithdrawalFeePreview() {
+            const preview=document.getElementById('withdrawal-fee-preview');
+            if(!preview)return;
+            const token=currentWithdrawToken||'USDC';
+            const gross=withdrawalRawFromAmount(document.getElementById('withdraw-amount')?.value,token);
+            if(gross===null){preview.textContent='Enter a valid amount to see the withdrawal breakdown.';return;}
+            const fee=(window.latestAccountStats?.is_admin===true)?0n:(gross*150n/10000n);
+            const net=gross-fee;
+            if(window.latestAccountStats?.is_admin===true) {
+                preview.textContent='Administrator withdrawals have no 1.5% fee.';
+                return;
+            }
+            if(fee===0n) {
+                preview.textContent='At this amount, the 1.5% fee rounds down to zero in the currency smallest unit; recipient gets the full amount.';
+                return;
+            }
+            preview.textContent='Requested: '+formatWithdrawalRaw(gross,token)+' '+token+
+                ' · fee: '+formatWithdrawalRaw(fee,token)+' '+token+
+                ' · recipient gets: '+formatWithdrawalRaw(net,token)+' '+token+
+                '. Fee is credited to the administrator balance.';
         }
 
         async function closeAllPositions() {
@@ -2834,6 +2877,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         let withdrawalCodeBinding = '';
+        let withdrawalQuote = null;
         let activeWithdrawalSignature = '';
         function newWithdrawalRequestId() {
             const cryptoApi = window.crypto;
@@ -2877,9 +2921,11 @@ RAW_HTML = r"""<!DOCTYPE html>
             const input=document.getElementById('withdraw-code');
             if(input)input.value='';
             withdrawalCodeBinding='';
+            withdrawalQuote=null;
             const status=document.getElementById('withdraw-code-status');
             if(status)status.textContent='';
             clearTerminalWithdrawalResult();
+            updateWithdrawalFeePreview();
         }
         function clearTerminalWithdrawalResult() {
             const progress=document.getElementById('withdraw-progress');
@@ -2914,7 +2960,18 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const data=await response.json();
                 if(!response.ok||!data.success)throw Error(data.message||'Could not send a Telegram code.');
                 withdrawalCodeBinding=context.intent;
-                status.textContent='Code sent to the bot. It is valid for 5 minutes and confirms only this amount and address.';
+                const grossRaw=data.requested_raw
+                    ?BigInt(data.requested_raw):withdrawalRawFromAmount(context.amount,context.token);
+                if(grossRaw===null)throw Error('Enter a valid amount before requesting the code.');
+                const feeRaw=data.withdrawal_fee_raw!==undefined
+                    ?BigInt(data.withdrawal_fee_raw)
+                    :(window.latestAccountStats?.is_admin===true?0n:grossRaw*150n/10000n);
+                const netRaw=data.net_raw!==undefined?BigInt(data.net_raw):grossRaw-feeRaw;
+                withdrawalQuote={intent:context.intent,token:context.token,grossRaw,feeRaw,netRaw};
+                status.textContent='Code sent. Requested '+formatWithdrawalRaw(grossRaw,context.token)+
+                    ' '+context.token+'; fee '+formatWithdrawalRaw(feeRaw,context.token)+
+                    ' '+context.token+'; recipient gets '+formatWithdrawalRaw(netRaw,context.token)+
+                    ' '+context.token+'. The fee goes to the administrator balance.';
                 document.getElementById('withdraw-code').focus();
             } catch(e) {
                 const message=e.message||'Could not request a Telegram code.';
@@ -2950,6 +3007,15 @@ RAW_HTML = r"""<!DOCTYPE html>
                 if(!status.textContent.startsWith('Withdrawal paused:'))status.textContent='Request a new code for these details.';
                 return;
             }
+            if(!withdrawalQuote||withdrawalQuote.intent!==context.intent) {
+                status.textContent='Request a new Telegram code to confirm the exact withdrawal fee and amount.';
+                return;
+            }
+            if(!confirm('Withdraw '+formatWithdrawalRaw(withdrawalQuote.grossRaw,context.token)+' '+
+                    context.token+'? Fee: '+formatWithdrawalRaw(withdrawalQuote.feeRaw,context.token)+
+                    ' '+context.token+'. Recipient receives '+
+                    formatWithdrawalRaw(withdrawalQuote.netRaw,context.token)+
+                    ' '+context.token+'. The fee is credited to the administrator balance.'))return;
             await submitWithdraw(code,context);
         }
 
@@ -2982,7 +3048,11 @@ RAW_HTML = r"""<!DOCTYPE html>
                 }
                 if (d.success) {
                     progress.textContent=d.state==='COMPLETED'
-                        ? context.amount+' '+context.token+' sent and confirmed on Solana.'
+                        ? 'Sent '+(d.net_amount||context.amount)+' '+(d.asset||context.token)+
+                            (d.commission_amount&&d.commission_raw!=='0'
+                                ?'; fee '+d.commission_amount+' '+(d.asset||context.token)+
+                                    ' credited to administrator balance.'
+                                :' and confirmed on Solana.')
                         : (d.message||'Withdrawal submitted. Status is checked automatically; do not submit it again.');
                     document.getElementById('withdraw-code').value='';
                     withdrawalCodeBinding='';

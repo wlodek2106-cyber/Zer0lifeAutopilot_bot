@@ -44,6 +44,7 @@ JITO_TIP_CACHE_SECONDS = 15
 JITO_TIP_MAX_AGE_SECONDS = 120
 JUPITER_PRIORITY_FEE_LAMPORTS = 25_000
 WHALE_AI_COOLDOWN_SECONDS = 60
+WITHDRAWAL_COMMISSION_BPS = 150
 SNIPER_SYMBOLS = ("WIF", "BONK", "BOME", "POPCAT", "MEW", "PENGU")
 
 
@@ -475,6 +476,14 @@ class CustodyRuntime(WalletRuntime):
     def admit(self, uid):
         if not self.public_enabled and uid not in self.beta_users:
             raise WalletError("Публичный приём средств ещё не открыт.", 503)
+        self.ready()
+
+    def admit_trading(self, uid):
+        access = getattr(self, "web_access", None)
+        admitted = (access.trading_admitted(uid) if access else
+                    self.public_enabled or uid in self.beta_users)
+        if not admitted:
+            raise WalletError("Trading access is not enabled for this account.", 403)
         self.ready()
 
     def readiness(self):
@@ -1253,7 +1262,11 @@ class CustodyRuntime(WalletRuntime):
             index = addresses.index(self.wallet)
             native_delta = tx["meta"]["postBalances"][index] - tx["meta"]["preBalances"][index]
             if row["kind"] in ("WITHDRAW", "PARTNER_PAYOUT"):
-                spent = row["raw"]
+                spent = (int(info.get("withdrawal_net_raw", row["raw"]))
+                         if row["kind"] == "WITHDRAW" else row["raw"])
+                commission_raw = int(info.get("withdrawal_fee_raw", row["raw"] - spent))
+                if row["kind"] == "WITHDRAW" and row["raw"] - spent != commission_raw:
+                    raise WalletError("Withdrawal fee does not match the reserved amount.")
                 asset_delta = self.effects(tx, self.wallet, row["asset"])
                 if asset_delta != -spent:
                     raise WalletError("Результат партнёрского перевода не соответствует резерву.")
@@ -1365,10 +1378,12 @@ class CustodyRuntime(WalletRuntime):
             # Token account lamports include rent and, for WSOL, wrapped amount.
             deltas[SOL] += (new["lamports"] if new else 0) - (old["lamports"] if old else 0)
         if row["kind"] in ("WITHDRAW", "PARTNER_PAYOUT"):
-            expected = -row["raw"]
+            transfer_raw = (int(info.get("withdrawal_net_raw", row["raw"]))
+                            if row["kind"] == "WITHDRAW" else row["raw"])
+            expected = -transfer_raw
             if deltas.get(row["asset"], 0) != expected:
                 raise WalletError("Симуляция перевода не соответствует зарезервированной сумме.")
-            expense = -native_delta - (row["raw"] if row["asset"] == SOL else 0)
+            expense = -native_delta - (transfer_raw if row["asset"] == SOL else 0)
             if expense < fee or expense > row["fee_cap"]:
                 raise WalletError("Расход SOL на вывод выходит за резерв комиссий.")
             permitted = {row["asset"], SOL}
@@ -1696,14 +1711,33 @@ class CustodyRuntime(WalletRuntime):
             return web.json_response({"success": state != "FAILED", "state": state,
                 "operation_id": row["id"], "tx_signature": row["signature"], "message": message},
                 status=200 if state == "COMPLETED" else 409 if state == "FAILED" else 202)
+        info = json.loads(row.get("metadata") or "{}")
+        gross_raw = int(row["raw"])
+        fee_raw = int(info.get("withdrawal_fee_raw", 0))
+        net_raw = int(info.get("withdrawal_net_raw", gross_raw))
+        decimals = 6 if row["asset"] == USDC else 9
+        symbol = "USDC" if row["asset"] == USDC else "SOL"
+        message = ("Withdrawal failed. The full amount is available again." if state == "FAILED" else
+            "Withdrawal sent to Solana and waiting for confirmation. Do not submit it again."
+            if state == "SUBMITTED" else
+            "The network result is unclear. We are checking it; do not submit this withdrawal again."
+            if state != "COMPLETED" else
+            "Withdrawal confirmed on Solana. Recipient received " + display_raw(net_raw, decimals) +
+            " " + symbol + (("; fee " + display_raw(fee_raw, decimals) +
+                " " + symbol + " was credited to the administrator balance.")
+                if fee_raw else "."))
         return web.json_response({"success": state != "FAILED", "state": state,
-            "operation_id": row["id"], "tx_signature": row["signature"],
-            "message": "Withdrawal confirmed on Solana." if state == "COMPLETED" else
-                "Withdrawal failed. The amount is available again." if state == "FAILED" else
-                "Withdrawal sent to Solana and waiting for confirmation. Do not submit it again."
-                if state == "SUBMITTED" else
-                "The network result is unclear. We are checking it; do not submit this withdrawal again."
-        }, status=200 if state == "COMPLETED" else 409 if state == "FAILED" else 202)
+            "operation_id": row["id"], "tx_signature": row["signature"], "message": message,
+            "asset": symbol, "requested_amount": display_raw(gross_raw, decimals),
+            "commission_amount": display_raw(fee_raw, decimals),
+            "net_amount": display_raw(net_raw, decimals),
+            "requested_raw": str(gross_raw), "commission_raw": str(fee_raw),
+            "net_raw": str(net_raw)},
+            status=200 if state == "COMPLETED" else 409 if state == "FAILED" else 202)
+
+    def withdrawal_amounts(self, uid, gross_raw):
+        fee_raw = 0 if uid == self.owner_id else gross_raw * WITHDRAWAL_COMMISSION_BPS // 10_000
+        return fee_raw, gross_raw - fee_raw
 
     async def request_withdrawal_code(self, request, session):
         uid = self.uid(request)
@@ -1734,7 +1768,10 @@ class CustodyRuntime(WalletRuntime):
                 raise WalletError(
                     "The amount exceeds your verified withdrawal limit. Maximum available: "
                     + display_raw(withdrawable, decimals) + " " + token + ".", 409)
-            return await self.accounts.send_withdrawal_code(request, session, body)
+            commission_raw, net_raw = self.withdrawal_amounts(uid, raw)
+            code_body = {**body, "withdrawal_fee_raw": commission_raw,
+                         "withdrawal_net_raw": net_raw}
+            return await self.accounts.send_withdrawal_code(request, session, code_body)
 
     async def withdraw(self, request, session):
         uid = self.uid(request)
@@ -1772,9 +1809,17 @@ class CustodyRuntime(WalletRuntime):
                 self.accounts.consume_withdrawal_code(uid, body)
             else:
                 raise WalletError("Telegram withdrawal confirmation is unavailable.", 503)
-            row = self.ledger.reserve(uid, request_id, "WITHDRAW", asset, raw, {}, str(recipient))
+            commission_raw, net_raw = self.withdrawal_amounts(uid, raw)
+            metadata = {
+                "withdrawal_fee_bps": 0 if uid == self.owner_id else WITHDRAWAL_COMMISSION_BPS,
+                "withdrawal_fee_raw": commission_raw,
+                "withdrawal_net_raw": net_raw,
+                "withdrawal_commission_owner_uid": self.owner_id if uid != self.owner_id else None,
+            }
+            row = self.ledger.reserve(uid, request_id, "WITHDRAW", asset, raw, metadata, str(recipient))
             try:
-                tx = await super().withdraw_transaction(session, self.ready(), token, recipient, raw, row["id"])
+                tx = await super().withdraw_transaction(
+                    session, self.ready(), token, recipient, net_raw, row["id"])
             except Exception as exc:
                 self.ledger.fail(row["id"], failure_reason=operation_failure_reason(exc))
                 raise
@@ -1975,8 +2020,21 @@ class CustodyRuntime(WalletRuntime):
                 "position_id": p["id"]})
         for row in operations:
             if row["kind"] == "WITHDRAW":
-                history.append({"type": "WITHDRAW", "amount": display_raw(row["raw"], 6 if row["asset"] == USDC else 9) +
-                    (" USDC" if row["asset"] == USDC else " SOL"), "tx": row["signature"],
+                info = json.loads(row.get("metadata") or "{}")
+                decimals = 6 if row["asset"] == USDC else 9
+                symbol = "USDC" if row["asset"] == USDC else "SOL"
+                gross_raw = int(row["raw"])
+                fee_raw = int(info.get("withdrawal_fee_raw", 0))
+                net_raw = int(info.get("withdrawal_net_raw", gross_raw))
+                amount = display_raw(net_raw, decimals) + " " + symbol
+                if fee_raw:
+                    amount += (" (fee " + display_raw(fee_raw, decimals) + " " + symbol +
+                               "; requested " + display_raw(gross_raw, decimals) + " " + symbol + ")")
+                history.append({"type": "WITHDRAW", "amount": amount,
+                    "requested_amount": display_raw(gross_raw, decimals),
+                    "fee_amount": display_raw(fee_raw, decimals),
+                    "net_amount": display_raw(net_raw, decimals), "asset": symbol,
+                    "tx": row["signature"],
                     "time": datetime.fromtimestamp(row["created_at"], timezone.utc).isoformat(),
                     "status": row["state"], "telegram_notified": bool(row["telegram_notice_delivered_at"])})
         for inv in invoices:
@@ -2022,7 +2080,9 @@ class CustodyRuntime(WalletRuntime):
             "pending_operations": [pending_summary(row) for row in own_pending],
             "ledger_audited": True,
             "trading_active": bool(settings["trading"]), "is_admin": uid == self.owner_id,
-            "trading_admitted": self.public_enabled or uid in self.beta_users,
+            "trading_admitted": (self.web_access.trading_admitted(uid)
+                                 if getattr(self, "web_access", None)
+                                 else self.public_enabled or uid in self.beta_users),
             "operator_fees": self.operator_fees(uid),
             "sniper_active": bool(settings["sniper_trading"]),
             "sniper_settings": {"order_sol": settings["sniper_order_raw"]/1e9,
@@ -2098,12 +2158,12 @@ class CustodyRuntime(WalletRuntime):
 
     async def toggle_sniper(self, request, session):
         uid = self.uid(request)
-        self.admit(uid)
         async with self.lock:
             settings = self.ledger.settings(uid)
             if settings["sniper_trading"]:
                 self.ledger.settings(uid, sniper_enabled=False)
             else:
+                self.admit_trading(uid)
                 if getattr(self, "web_access", None):
                     self.web_access.trading_request(request)
                 symbols = self.ai_universes()["sniper"]
@@ -2137,11 +2197,11 @@ class CustodyRuntime(WalletRuntime):
 
     async def toggle(self, request, session):
         uid = self.uid(request)
-        self.admit(uid)
         settings = self.ledger.settings(uid)
         if settings["trading"]:
             self.ledger.settings(uid, enabled=False)
         else:
+            self.admit_trading(uid)
             if getattr(self, "web_access", None):
                 self.web_access.trading_request(request)
             body = await request.json()
@@ -2336,13 +2396,20 @@ class CustodyRuntime(WalletRuntime):
                         "Unsupported withdrawal asset")
                     continue
                 amount = display_raw(payload["raw"], 6 if asset == USDC else 9)
+                requested_raw = int(payload.get("requested_raw", payload["raw"]))
+                commission_raw = int(payload.get("commission_raw", 0))
+                requested_amount = display_raw(requested_raw, 6 if asset == USDC else 9)
+                commission_amount = display_raw(commission_raw, 6 if asset == USDC else 9)
                 signature = payload["signature"]
                 text = (
                     "Zer0Life AI Trader\n"
                     "Withdrawal confirmed on Solana.\n"
-                    f"Sent: {amount} {symbol}\n"
-                    f"Recipient: {payload['recipient']}\n"
-                    f"Transaction: https://solscan.io/tx/{signature}")
+                    f"Requested: {requested_amount} {symbol}\n"
+                    + (f"Withdrawal fee (1.5%): {commission_amount} {symbol}\n"
+                       if commission_raw else "")
+                    + f"Sent: {amount} {symbol}\n"
+                    + f"Recipient: {payload['recipient']}\n"
+                    + f"Transaction: https://solscan.io/tx/{signature}")
                 delivered, error = False, "Telegram delivery unavailable"
                 retry_after = min(3600, 60 * 2 ** min(event["attempts"], 6))
                 try:

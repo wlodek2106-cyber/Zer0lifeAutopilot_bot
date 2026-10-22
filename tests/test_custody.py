@@ -235,6 +235,23 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(self.ledger.balance(101, SOL), 2_000_000)
         self.assertEqual(self.ledger.balance(101, USDC), 10_000_000)
 
+    def test_sol_withdrawal_commission_credits_owner_in_sol_once(self):
+        self.credit(202, SOL, 3_000_000)
+        gross, commission, net = 1_000_000, 15_000, 985_000
+        op = self.ledger.reserve(202, str(uuid.uuid4()), "WITHDRAW", SOL, gross, {
+            "withdrawal_fee_bps": 150,
+            "withdrawal_fee_raw": commission,
+            "withdrawal_net_raw": net,
+            "withdrawal_commission_owner_uid": 101,
+        }, "recipient")
+        self.complete(op, spent=net, fee=5000)
+        self.assertEqual(self.ledger.balance(202, SOL), 2_000_000)
+        self.assertEqual(self.ledger.balance(101, SOL), commission)
+        self.assertEqual(self.ledger.withdrawal_capacity(101, SOL), commission)
+        self.ledger.finalize(op["id"], spent=net, fee=5000)
+        self.assertEqual(self.ledger.balance(101, SOL), commission)
+        self.assertTrue(self.ledger.audit())
+
     def test_fee_is_operator_only(self):
         self.credit(202, SOL, 9_000_000)
         op = self.reserve()
@@ -1988,12 +2005,15 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                          bytes([12]) + (1_000_000).to_bytes(8, "little") + bytes([6]))
         self.assertNotIn(legacy.MEMO, transaction.message.account_keys)
 
-    async def run_withdrawal(self, timeout=False, failed=False):
+    async def run_withdrawal(self, uid=202, timeout=False, failed=False):
         invoice, sig, tx = self.payment(uid=101, raw=2_000_000)
         await self.service.apply_deposit(None, sig)
         invoice, sig, tx = self.payment(uid=202, raw=7_000_000)
         await self.service.apply_deposit(None, sig)
         sends = []
+        requested_raw = 1_000_000
+        fee_raw = 0 if uid == self.service.owner_id else requested_raw * 150 // 10_000
+        sent_raw = requested_raw - fee_raw
         genesis_rpc = self.rpc
         finalized = not timeout
         async def rpc(session, method, params=None):
@@ -2017,7 +2037,8 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(destination_ata, transaction.message.account_keys)
                 self.assertEqual(row["recipient"], str(self.recipient))
                 self.assertEqual(row["state"], "PREPARED")
-                self.assertEqual(self.ledger.balance(101, USDC), 1_000_000)
+                starting_raw = 2_000_000 if uid == self.service.owner_id else 7_000_000
+                self.assertEqual(self.ledger.balance(uid, USDC), starting_raw - 1_000_000)
                 sends.append(row["signature"])
                 if timeout:
                     raise legacy.WalletError("Simulated network timeout")
@@ -2034,13 +2055,14 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                     "preTokenBalances": [{"owner": self.service.wallet, "mint": USDC,
                                            "uiTokenAmount": {"amount": "100000000"}}],
                     "postTokenBalances": [{"owner": self.service.wallet, "mint": USDC,
-                                            "uiTokenAmount": {"amount": "100000000" if failed else "99000000"}}]}}
+                                            "uiTokenAmount": {"amount": "100000000" if failed
+                                                else str(100_000_000 - sent_raw)}}]}}
             return await genesis_rpc(session, method, params)
         self.service.rpc = rpc
         async def simulate(session, transaction, row, info):
             return base64.b64encode(bytes(transaction)).decode()
         self.service.safe_simulation = simulate
-        request = Request(101, {"token": "USDC", "amount": "1", "recipient_address": str(self.recipient),
+        request = Request(uid, {"token": "USDC", "amount": "1", "recipient_address": str(self.recipient),
             "telegram_code": "123456", "request_id": str(uuid.uuid4())})
         response = await self.service.handle(request, self.service.withdraw)
         self.assertEqual(response.status, 202)
@@ -2049,12 +2071,14 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         if timeout:
             self.assertEqual(submitted["state"], "UNKNOWN")
             self.assertEqual(self.ledger.pending()[0]["state"], "UNKNOWN")
-            self.assertEqual(self.ledger.balance(101, USDC), 1_000_000)
+            starting_raw = 2_000_000 if uid == self.service.owner_id else 7_000_000
+            self.assertEqual(self.ledger.balance(uid, USDC), starting_raw - 1_000_000)
             finalized = True
             await self.service.reconcile(None)
         else:
             self.assertEqual(submitted["state"], "SUBMITTED")
-            self.assertEqual(self.ledger.balance(101, USDC), 1_000_000)
+            starting_raw = 2_000_000 if uid == self.service.owner_id else 7_000_000
+            self.assertEqual(self.ledger.balance(uid, USDC), starting_raw - 1_000_000)
             finalized = True
             await self.service.reconcile(None)
             final_state = self.ledger.operation(submitted["operation_id"])["state"]
@@ -2062,8 +2086,15 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         repeat = await self.service.handle(request, self.service.withdraw)
         self.assertEqual(repeat.status, 409 if failed else 200)
         self.assertEqual(len(sends), 1)
-        self.assertEqual(self.ledger.balance(101, USDC), 2_000_000 if failed else 1_000_000)
-        self.assertEqual(self.ledger.balance(202, USDC), 7_000_000)
+        if uid == self.service.owner_id:
+            self.assertEqual(self.ledger.balance(101, USDC), 2_000_000 if failed else 1_000_000)
+            self.assertEqual(self.ledger.balance(202, USDC), 7_000_000)
+        else:
+            self.assertEqual(self.ledger.balance(101, USDC),
+                             2_000_000 if failed else 2_000_000 + fee_raw)
+            self.assertEqual(self.ledger.balance(202, USDC), 7_000_000 if failed else 6_000_000)
+            self.assertEqual(self.ledger.withdrawal_capacity(101, USDC),
+                             2_000_000 if failed else 2_000_000 + fee_raw)
         self.assertTrue(self.ledger.audit())
 
     async def test_native_sol_withdrawal_targets_the_entered_recipient(self):
@@ -2084,6 +2115,9 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_complete_withdrawal_pipeline_is_owner_scoped_and_idempotent(self):
         await self.run_withdrawal()
+
+    async def test_owner_withdrawals_are_exempt_from_commission(self):
+        await self.run_withdrawal(uid=self.service.owner_id)
 
     async def test_timeout_then_finalization_never_resends_or_refunds(self):
         await self.run_withdrawal(timeout=True)
