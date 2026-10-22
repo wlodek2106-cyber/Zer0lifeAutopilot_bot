@@ -118,23 +118,30 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.ledger.audit())
 
     def test_unsafe_illiquid_young_pumped_or_malformed_pools_excluded(self):
-        for changes in ({"liquidity":{"usd":99999}},{"volume":{"h24":99999}},
+        for changes in ({"liquidity":{"usd":9999}},{"volume":{"h24":99999}},
                         {"txns":{"h24":{"buys":1,"sells":1}}},{"priceUsd":"nan"},
                         {"pairCreatedAt":int(time.time()*1000)},{"priceChange":{"m5":36}},
                         {"dexId":"unknown"},{"chainId":"ethereum"},{"liquidity":"malformed"}):
             result=pool_metrics(pool(**changes))
             self.assertTrue(result is None or not result["eligible"],changes)
 
+    def test_pool_liquidity_minimum_is_ten_thousand(self):
+        accepted=pool_metrics(pool(liquidity={"usd":10000}))
+        self.assertTrue(accepted["eligible"])
+        rejected=pool_metrics(pool(liquidity={"usd":9999}))
+        self.assertFalse(rejected["eligible"])
+        self.assertIn("liquidity $9,999 below $10,000",rejected["rejection_reasons"])
+
     def test_pool_metrics_explain_each_failed_threshold(self):
         result=pool_metrics(pool(
-            liquidity={"usd":50000},
+            liquidity={"usd":5000},
             volume={"h24":30000},
             txns={"h24":{"buys":10,"sells":5}},
             pairCreatedAt=int((time.time()-3600)*1000),
         ))
         self.assertFalse(result["eligible"])
         self.assertEqual(result["rejection_reasons"],[
-            "liquidity $50,000 below $100,000",
+            "liquidity $5,000 below $10,000",
             "24h volume $30,000 below $100,000",
             "24h trades 15 below 200",
             "pool age 1.0h below 24h",
@@ -147,7 +154,7 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
             if path.startswith("/tokens/"):
                 return [pool(
                     MINT,
-                    liquidity={"usd":50000},
+                    liquidity={"usd":5000},
                     volume={"h24":30000},
                     txns={"h24":{"buys":10,"sells":5}},
                     pairCreatedAt=int((time.time()-3600)*1000),
@@ -161,7 +168,7 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         rejection=report["whale_rejections"][0]
         self.assertEqual(rejection["mint"],MINT[:6]+"…"+MINT[-5:])
         self.assertEqual(rejection["reasons"],[
-            "liquidity $50,000 below $100,000",
+            "liquidity $5,000 below $10,000",
             "24h volume $30,000 below $100,000",
             "24h trades 15 below 200",
             "pool age 1.0h below 24h",

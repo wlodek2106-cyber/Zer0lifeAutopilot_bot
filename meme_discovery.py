@@ -12,6 +12,7 @@ from solders.pubkey import Pubkey
 
 TOKEN = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 DEXES = {"raydium", "orca", "meteora", "pumpswap"}
+MIN_LIQUIDITY_USD = 10_000
 
 
 def number(value):
@@ -58,8 +59,8 @@ def pool_metrics(pair, now=None):
         reasons.append("DEX is not approved")
     if price <= 0:
         reasons.append("price unavailable")
-    if liquid < 100000:
-        reasons.append(f"liquidity ${liquid:,.0f} below $100,000")
+    if liquid < MIN_LIQUIDITY_USD:
+        reasons.append(f"liquidity ${liquid:,.0f} below ${MIN_LIQUIDITY_USD:,.0f}")
     if vol < 100000:
         reasons.append(f"24h volume ${vol:,.0f} below $100,000")
     if activity < 200:
