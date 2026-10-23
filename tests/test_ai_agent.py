@@ -152,6 +152,7 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
             "main_market_context": {"SOL": {
                 "change_m5_pct": 0.8, "change_h1_pct": 1.5, "change_h6_pct": 0.2,
                 "buys_m5": 8, "sells_m5": 4, "chart_ready": 1, "chart_buy_setup": 1}},
+            "sniper_market_context": {"WIF": {"chart_ready": 1, "chart_buy_setup": 1}},
             "decisions": {"main": {"action": "BUY", "symbol": "SOL", "reason": "signal"},
                           "sniper": {"action": "HOLD", "symbol": None, "reason": "wait"}}}
 
@@ -172,6 +173,14 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.service.verify_sniper_mint.assert_awaited_once_with(None, "WIF")
         self.assertEqual(self.service.trade.await_args.args[2:6], (SOL, self.mint, 5_000_000, "BUY"))
 
+    async def test_sniper_chart_gate_blocks_missing_chart_for_buys(self):
+        self.snapshot["decisions"]["main"] = {"action": "HOLD", "symbol": None, "reason": "wait"}
+        self.snapshot["decisions"]["sniper"] = {"action": "BUY", "symbol": "WIF", "reason": "signal"}
+        self.snapshot["sniper_market_context"] = {}
+        await self.apply()
+        self.service.trade.assert_not_awaited()
+        self.assertEqual(self.service.ledger.execution_report(101)["code"], "sniper_chart_data")
+
     def new_candidate(self):
         mint = str(Keypair().pubkey())
         code = "M_test_verified"
@@ -181,6 +190,8 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
             db.execute("INSERT INTO custody_meme_assets VALUES(?,?,?,?,?)", (
                 code, mint, 6, json.dumps(metrics), int(time.time())))
         self.service.restore_catalog()
+        self.snapshot.setdefault("sniper_market_context", {})[code] = {
+            "chart_ready": 1, "chart_buy_setup": 1}
         return code, mint
 
     async def test_discovered_asset_uses_native_capital_and_cannot_leak_into_core(self):
@@ -405,7 +416,7 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("telegram", content.lower())
         self.assertNotIn("test-key-not-real", content)
         self.assertFalse(self.payload["store"])
-        user_payload = json.loads(self.payload["messages"][2]["content"])
+        user_payload = json.loads(self.payload["messages"][3]["content"])
         self.assertEqual(user_payload["main_dex_market_context_numeric"], {
             "SOL": {"change_m5_pct": 0.8, "change_h1_pct": 2.1, "buys_h1": 12}
         })
@@ -424,6 +435,8 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("chart data is missing or stale", self.payload["messages"][1]["content"])
         self.assertIn("only say the floor was breached when the value is less than -5%",
                       self.payload["messages"][1]["content"])
+        self.assertIn("chart_ready=1 and chart_buy_setup=1",
+                      self.payload["messages"][2]["content"])
         self.assertIn("relative strength versus SOL is not applicable",
                       self.payload["messages"][1]["content"])
         self.assertTrue(any(item.startswith("5-minute EMA20/50, RSI14, MACD histogram")
@@ -453,12 +466,14 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("buyers_exceed_sellers_h1", evidence["JUP"])
         self.assertNotIn("buyers_exceed_sellers_m5", evidence["SOL"])
 
-    async def test_ai_snapshot_fetches_and_persists_only_main_market_context(self):
+    async def test_ai_snapshot_fetches_and_persists_both_mode_chart_contexts(self):
         context = {
             "SOL": {"change_m5_pct": 0.8, "liquidity_usd": 200_000},
             "WIF": {"change_m5_pct": 50},
         }
         self.service.market_context_fn = AsyncMock(return_value=context)
+        sniper_context = {"WIF": {"chart_ready": 1, "chart_buy_setup": 1}}
+        self.service.sniper_market_context_fn = AsyncMock(return_value=sniper_context)
         decisions = {
             "main": {"action": "HOLD", "symbol": None, "reason": "No clear USDC signal."},
             "sniper": {"action": "HOLD", "symbol": None, "reason": "No signal."},
@@ -468,12 +483,16 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
             snapshot = await self.service.ai_snapshot(None, self.prices)
 
         self.service.market_context_fn.assert_awaited_once_with(None)
+        self.service.sniper_market_context_fn.assert_awaited_once_with(
+            None, self.service.watchlist, ["WIF"])
         self.assertEqual(analyze.await_args.args[4], {
             "SOL": {"change_m5_pct": 0.8, "liquidity_usd": 200_000},
         })
         self.assertEqual(snapshot["main_market_context"], {
             "SOL": {"change_m5_pct": 0.8, "liquidity_usd": 200_000},
         })
+        self.assertEqual(analyze.await_args.args[5], sniper_context)
+        self.assertEqual(snapshot["sniper_market_context"], sniper_context)
 
     async def test_model_failure_does_not_consume_user_funds(self):
         before = self.service.ledger.balance(101, SOL)

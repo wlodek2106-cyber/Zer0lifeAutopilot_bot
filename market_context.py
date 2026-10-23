@@ -7,6 +7,7 @@ import time
 import aiohttp
 
 import chart_analysis
+from meme_discovery import DEXES
 
 
 MIN_LIQUIDITY_USD = 100_000
@@ -46,7 +47,9 @@ def _finite_price(value):
     return number if math.isfinite(number) else None
 
 
-def context_from_pairs(pairs, watchlist, permitted_symbols=None, *, include_pool_address=False):
+def context_from_pairs(pairs, watchlist, permitted_symbols=None, *, include_pool_address=False,
+                       min_liquidity_usd=MIN_LIQUIDITY_USD,
+                       min_volume_24h_usd=MIN_VOLUME_24H_USD, permitted_dexes=None):
     """Pick the deepest eligible pool for each permitted token and keep numeric metrics only."""
     if not isinstance(pairs, list):
         return {}
@@ -60,6 +63,8 @@ def context_from_pairs(pairs, watchlist, permitted_symbols=None, *, include_pool
     for pair in pairs:
         if not isinstance(pair, dict) or pair.get("chainId") != "solana":
             continue
+        if permitted_dexes is not None and pair.get("dexId") not in permitted_dexes:
+            continue
         base = pair.get("baseToken")
         symbol = symbols_by_mint.get(base.get("address")) if isinstance(base, dict) else None
         if not symbol:
@@ -69,8 +74,8 @@ def context_from_pairs(pairs, watchlist, permitted_symbols=None, *, include_pool
         volume_data = pair.get("volume")
         liquidity = _finite_number(liquidity_data.get("usd")) if isinstance(liquidity_data, dict) else None
         volume = _finite_number(volume_data.get("h24")) if isinstance(volume_data, dict) else None
-        if (price is None or price <= 0 or liquidity is None or liquidity < MIN_LIQUIDITY_USD
-                or volume is None or volume < MIN_VOLUME_24H_USD
+        if (price is None or price <= 0 or liquidity is None or liquidity < min_liquidity_usd
+                or volume is None or volume < min_volume_24h_usd
                 or liquidity <= selected.get(symbol, {}).get("_liquidity", -1)):
             continue
 
@@ -182,5 +187,35 @@ async def fetch_main_market_context(session, watchlist, permitted_symbols):
             return {}
         context = context_from_pairs(
             await response.json(), watchlist, permitted_symbols, include_pool_address=True)
+    await _add_chart_context(session, context)
+    return context
+
+
+async def fetch_sniper_market_context(session, watchlist, permitted_symbols):
+    """Fetch chart evidence for screened Sniper candidates by exact mint identity."""
+    mints = [
+        watchlist[symbol]["mint"]
+        for symbol in permitted_symbols
+        if symbol in watchlist and isinstance(watchlist[symbol].get("mint"), str)
+    ]
+    if not mints:
+        return {}
+    pairs = []
+    for offset in range(0, len(mints), 30):
+        url = "https://api.dexscreener.com/tokens/v1/solana/" + ",".join(mints[offset:offset + 30])
+        async with session.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+            timeout=aiohttp.ClientTimeout(total=8),
+        ) as response:
+            if response.status != 200:
+                raise ValueError("Sniper market-data provider returned a non-success status")
+            batch = await response.json()
+            if not isinstance(batch, list):
+                raise ValueError("Sniper market-data provider returned an invalid pair list")
+            pairs.extend(batch)
+    context = context_from_pairs(
+        pairs, watchlist, permitted_symbols, include_pool_address=True,
+        min_liquidity_usd=10_000, min_volume_24h_usd=100_000, permitted_dexes=DEXES)
     await _add_chart_context(session, context)
     return context

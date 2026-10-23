@@ -153,10 +153,12 @@ def memo_invoice(tx):
 
 
 class CustodyRuntime(WalletRuntime):
-    def __init__(self, *args, base_url, notification_token="", market_context_fn=None, **kwargs):
+    def __init__(self, *args, base_url, notification_token="", market_context_fn=None,
+                 sniper_market_context_fn=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.notification_token = notification_token
         self.market_context_fn = market_context_fn
+        self.sniper_market_context_fn = sniper_market_context_fn
         self._notification_lock = asyncio.Lock()
         self.legacy_runtime = WalletRuntime(*args, **kwargs)
         self.ledger = CustodyLedger(self.db_file)
@@ -355,6 +357,7 @@ class CustodyRuntime(WalletRuntime):
                 "change_m5_pct", "change_h1_pct") if key in row}
                 for symbol, row in screening_rows.items()}
             main_context = {}
+            sniper_context = {}
             if self.market_context_fn and not whale_triggered:
                 try:
                     raw_context = await self.market_context_fn(session)
@@ -365,11 +368,24 @@ class CustodyRuntime(WalletRuntime):
                         }
                 except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
                     main_context = {}
+            if self.sniper_market_context_fn and screening_rows:
+                try:
+                    raw_context = await self.sniper_market_context_fn(
+                        session, self.watchlist, list(screening_rows))
+                    if isinstance(raw_context, dict):
+                        sniper_context = {
+                            symbol: metrics for symbol, metrics in raw_context.items()
+                            if symbol in universes["sniper"] and isinstance(metrics, dict)
+                        }
+                except Exception:
+                    # Missing chart data fails closed for buys, but must not prevent position exits.
+                    sniper_context = {}
             if whale_triggered and any(symbol not in market for symbol in whale_symbols):
                 raise WalletError("Whale candidate has no fresh market price; AI analysis was not sent.", 409)
             try:
                 aid = self.ledger.ai_allow_call(min_interval, config["max_calls_per_day"])
-                decisions = await ai_decisions.analyze(session, market, universes, screening, main_context)
+                decisions = await ai_decisions.analyze(
+                    session, market, universes, screening, main_context, sniper_context)
             except LedgerError as exc:
                 raise WalletError(str(exc), 429) from None
             except ai_decisions.AIError as exc:
@@ -379,6 +395,8 @@ class CustodyRuntime(WalletRuntime):
             record = {"decisions": decisions, "universes": universes, "prices": {s: h[-1] for s, h in market.items()},
                       "samples": {s: len(h) for s, h in market.items()},
                       "main_market_context": ai_decisions.sanitize_main_context(main_context, universes["main"]),
+                      "sniper_market_context": ai_decisions.sanitize_main_context(
+                          sniper_context, universes["sniper"]),
                       "trigger": "whale_signal" if whale_triggered else "scheduled",
                       "whale_symbols": whale_symbols if whale_triggered else []}
             self.ledger.ai_record(aid, record)
@@ -2873,6 +2891,10 @@ class CustodyRuntime(WalletRuntime):
                                             "proposal", action, symbol or "")
             decision = snapshot["decisions"][mode]
             symbol, action = decision["symbol"], decision["action"]
+            if (mode == "sniper" and action == "BUY" and
+                    getattr(self, "discovery", None) and not self.discovery.entry_allowed(symbol)):
+                note("candidate", "SKIPPED: candidate screening is stale or the asset is no longer eligible.")
+                continue
             if action == "BUY" and symbol in self.watchlist:
                 mint = asset_for_mint(self.watchlist[symbol]["mint"])
                 cooldown_until = self.ledger.entry_cooldown_until(mint)
@@ -2890,7 +2912,8 @@ class CustodyRuntime(WalletRuntime):
                 created_at=snapshot["created_at"],
                 original=snapshot["prices"], prices=prices, samples=snapshot.get("samples", {}),
                 held=held, balance=self.ledger.balance(uid, funding), order_raw=settings[size_key],
-                main_context=snapshot.get("main_market_context", {}))
+                main_context=snapshot.get("main_market_context", {}),
+                sniper_context=snapshot.get("sniper_market_context", {}))
             self.record_execution_check(uid, verdict, "proposal", action, symbol or "")
             if not verdict.allowed:
                 note(verdict.code, verdict.reason)
@@ -2907,9 +2930,6 @@ class CustodyRuntime(WalletRuntime):
                      "SKIPPED: this analysis was already claimed; no automatic retry.")
             elif action == "BUY":
                 if mode == "sniper":
-                    if getattr(self, "discovery", None) and not self.discovery.entry_allowed(symbol):
-                        note("candidate", "SKIPPED: candidate screening is stale or the asset is no longer eligible.")
-                        continue
                     try:
                         await self.verify_sniper_mint(session, symbol)
                     except Exception:

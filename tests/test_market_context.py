@@ -73,6 +73,14 @@ class MarketContextTests(unittest.TestCase):
         self.assertNotIn("_pool_address", public["SOL"])
         self.assertEqual(internal["SOL"]["_pool_address"], pair["pairAddress"])
 
+    def test_sniper_chart_pool_can_use_screened_10k_liquidity_floor(self):
+        pair = self.pair("wif-mint", 12_000, 100_000, dexId="raydium")
+        self.assertEqual(context_from_pairs(
+            [pair], self.watchlist, ["WIF"], min_liquidity_usd=10_000,
+            min_volume_24h_usd=100_000, permitted_dexes={"raydium"})[
+                "WIF"]["liquidity_usd"], 12_000)
+        self.assertEqual(context_from_pairs([pair], self.watchlist, ["WIF"]), {})
+
 
 class ChartContextFetchTests(unittest.IsolatedAsyncioTestCase):
     async def test_fetches_closed_candles_and_removes_internal_pool_address(self):

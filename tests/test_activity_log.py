@@ -55,6 +55,7 @@ class ActivityTests(unittest.IsolatedAsyncioTestCase):
             "main_market_context": {"SOL": {"change_m5_pct": 0.8, "change_h1_pct": 1.5,
                 "change_h6_pct": 1.0, "buys_m5": 8, "sells_m5": 4,
                 "chart_ready": 1, "chart_buy_setup": 1}},
+            "sniper_market_context": {"WIF": {"chart_ready": 1, "chart_buy_setup": 1}},
             "decisions": {
                 "main": {"action": "HOLD", "symbol": None, "reason": "No trend"},
                 "sniper": {"action": "SELL", "symbol": "WIF", "reason": "Weak momentum"}}}

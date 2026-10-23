@@ -78,13 +78,25 @@ class PolicyTests(unittest.TestCase):
         proposal_values = dict(mode="sniper", decision=decision, universe=["WIF"],
             created_at=1000, now=1001, original={"WIF": 1, "SOL": 100},
             prices={"WIF": 1, "SOL": 100}, samples={"WIF": 5, "SOL": 5},
-            balance=25_000_000, order_raw=5_000_000)
+            balance=25_000_000, order_raw=5_000_000,
+            sniper_context={"WIF": {"chart_ready": 1, "chart_buy_setup": 1}})
         four_open = [{"symbol": f"TOKEN{i}"} for i in range(4)]
         five_open = [{"symbol": f"TOKEN{i}"} for i in range(5)]
         self.assertTrue(policy.proposal(held=four_open, **proposal_values).allowed)
         self.assertEqual(policy.proposal(held=five_open, **proposal_values).code, "position_limit")
         self.assertEqual(policy.proposal(held=four_open[:3] + [{"symbol": "WIF"}],
             **proposal_values).code, "already_open")
+        self.assertEqual(policy.proposal(held=four_open, **{
+            **proposal_values, "sniper_context": {}}).code, "sniper_chart_data")
+        self.assertEqual(policy.proposal(held=four_open, **{
+            **proposal_values, "sniper_context": {
+                "WIF": {"chart_ready": 1, "chart_buy_setup": 0}}}).code,
+            "sniper_chart_confirmation")
+        self.assertTrue(policy.proposal(
+            held=[{"symbol": "WIF"}],
+            **{**proposal_values, "decision": {
+                "action": "SELL", "symbol": "WIF", "reason": "exit"},
+               "sniper_context": {}}).allowed)
 
         order_values = dict(uid=101, kind="BUY", asset=SOL, output_asset="wif-mint",
             raw=5_000_000, metadata={"symbol": "WIF", "decimals": 6},

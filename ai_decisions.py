@@ -170,7 +170,7 @@ def validate_decisions(value, universes):
     return value
 
 
-async def analyze(session, market, universes, screening=None, main_context=None):
+async def analyze(session, market, universes, screening=None, main_context=None, sniper_context=None):
     config = configuration()
     if not config["configured"]:
         raise AIError("Добавьте OPENAI_API_KEY в Environment сервиса Render.")
@@ -228,6 +228,11 @@ async def analyze(session, market, universes, screening=None, main_context=None)
                 "already-owned spot position; SELL never opens a short. Server stop-loss and trailing-exit controls "
                 "remain authoritative. Missing or conflicting evidence means HOLD. These heuristics are not "
                 "backtested and do not predict profit; never force a trade when no candidate qualifies.")},
+            {"role": "system", "content": (
+                "For sniper (SOL) BUY, also require the supplied numeric sniper chart context to have "
+                "chart_ready=1 and chart_buy_setup=1. If the context is missing, stale, or unconfirmed, "
+                "choose HOLD. This is a separate entry gate; it never blocks SELL of an owned position. "
+                "The server independently enforces the same rule.")},
             {"role": "user", "content": json.dumps({
                 "prices_usd_recent_samples": market, "permitted_symbols": universes,
                 "sample_interval_seconds": 20,
@@ -237,6 +242,8 @@ async def analyze(session, market, universes, screening=None, main_context=None)
                 "main_usdc_signal_evidence_numeric": main_usdc_signal_evidence(
                     market, main_context, universes["main"]),
                 "sniper_screening_numeric": screening or {},
+                "sniper_chart_context_numeric": sanitize_main_context(
+                    sniper_context, universes["sniper"]),
                 "main_funding": "USDC", "sniper_funding": "SOL"})},
         ],
     }

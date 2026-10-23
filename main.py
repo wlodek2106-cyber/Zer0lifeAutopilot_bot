@@ -24,7 +24,7 @@ from solders.message import Message
 from solders.hash import Hash
 from solders.instruction import Instruction, AccountMeta
 from custody_runtime import CustodyRuntime
-from market_context import fetch_main_market_context
+from market_context import fetch_main_market_context, fetch_sniper_market_context
 from english_text import english_json_middleware
 from account_security import AccountSecurity
 from web_access import WebAccess
@@ -4195,7 +4195,9 @@ async def main():
         get_signer_keypair, verify_user_pin, get_token_prices, WATCHLIST, add_log,
         base_url=RENDER_URL, notification_token=TELEGRAM_TOKEN,
         market_context_fn=lambda session: fetch_main_market_context(
-            session, WATCHLIST, runtime.main_symbols))
+            session, WATCHLIST, runtime.main_symbols),
+        sniper_market_context_fn=lambda session, watchlist, symbols: fetch_sniper_market_context(
+            session, watchlist, symbols))
     runtime.recent_logs = lambda: RECENT_LOGS
     runtime.accounts = AccountSecurity(runtime.ledger, RENDER_URL, verify_user_pin, runtime.wallet,
         notification_token=TELEGRAM_TOKEN)

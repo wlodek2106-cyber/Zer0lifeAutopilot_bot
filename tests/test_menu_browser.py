@@ -86,7 +86,7 @@ class MenuBrowserTests(unittest.TestCase):
                 assert(!/[А-Яа-яЁё]/.test(copy.textContent),'all UI text in English');
                 assert(document.getElementById('strategy-help').closest('.tab-panel').id==='tab-settings','long strategy text in Settings');
                 assert(!document.getElementById('strategy-help').open,'strategy help collapsed by default');
-                assert(document.getElementById('meme-sniper-card').querySelectorAll('p.section-note').length===2,'compact sniper card');
+                assert(document.getElementById('meme-sniper-card').querySelectorAll('p.section-note').length===3,'compact sniper card');
                 fixture.ai_status={configured:true,model:'gpt-4.1-mini',interval_seconds:900,
                     last_analyzed_at:1791925101,sniper_assets:[],
                     asset_labels:{SOL:'SOL',JUP:'JUP'},

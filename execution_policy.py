@@ -9,7 +9,7 @@ from custody_ledger import USDC, SOL
 from entry_costs import MAX_COST_BPS, MAX_PRICE_IMPACT_PCT, MAX_QUOTE_AGE_SECONDS, assess_entry
 from wallet_runtime import WalletError
 
-VERSION = "independent-execution-v4-shared-trailing-exits"
+VERSION = "independent-execution-v5-sniper-chart-gate"
 MAX_POSITIONS = MappingProxyType({"main": 5, "sniper": 5})
 DECISION_SECONDS = 120
 QUOTE_SECONDS = MAX_QUOTE_AGE_SECONDS
@@ -121,6 +121,21 @@ def core_entry_signal(symbol, context):
     return allow()
 
 
+def sniper_entry_signal(symbol, context):
+    """Require fresh 5m/1h chart data and a deterministic buy setup for Sniper entries."""
+    if not isinstance(context, dict) or not isinstance(context.get(symbol), dict):
+        return deny("sniper_chart_data",
+                    "SKIPPED: fresh 5-minute and 1-hour chart data is unavailable; Sniper BUY is blocked.")
+    metrics = context[symbol]
+    if metrics.get("chart_ready") != 1:
+        return deny("sniper_chart_data",
+                    "SKIPPED: fresh 5-minute and 1-hour candles are unavailable; Sniper BUY is blocked.")
+    if metrics.get("chart_buy_setup") != 1:
+        return deny("sniper_chart_confirmation",
+                    "SKIPPED: the 5-minute/1-hour chart has no confirmed Sniper buy setup.")
+    return allow()
+
+
 def fresh(created_at, now, maximum):
     return (type(created_at) in (int, float) and math.isfinite(created_at)
             and 0 <= now - created_at <= maximum)
@@ -135,7 +150,7 @@ def integer(value):
 
 
 def proposal(*, mode, decision, universe, created_at, original, prices, samples,
-             held, balance, order_raw, main_context=None, now=None):
+             held, balance, order_raw, main_context=None, sniper_context=None, now=None):
     """A proposal cannot supply amounts, accounts, flags, limits or exceptions."""
     now = time.time() if now is None else now
     if (mode not in MAX_POSITIONS or not isinstance(decision, dict)
@@ -176,6 +191,10 @@ def proposal(*, mode, decision, universe, created_at, original, prices, samples,
         return deny("balance", "SKIPPED: your available balance is below the saved purchase size.")
     if mode == "main":
         signal = core_entry_signal(symbol, main_context)
+        if not signal.allowed:
+            return signal
+    elif mode == "sniper":
+        signal = sniper_entry_signal(symbol, sniper_context)
         if not signal.allowed:
             return signal
     return allow()
@@ -256,6 +275,7 @@ def describe():
             "buy_max_price_impact_pct": float(MAX_IMPACT_PCT), "core_max_cost_pct": MAX_COST_BPS / 100,
             "max_positions": dict(MAX_POSITIONS), "liquidity_basis": "executable_route_price_impact",
             "entry_filters_never_block_exits": True,
+            "sniper_buy_requires_fresh_chart_confirmation": True,
             "exit_policy": {"core_stop_loss_pct": CORE_STOP_LOSS_PCT,
                             "sniper_stop_loss_pct": SNIPER_STOP_LOSS_PCT,
                             "trailing_activation_pct": TRAILING_ACTIVATION_PCT,
