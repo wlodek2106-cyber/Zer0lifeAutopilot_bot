@@ -2063,7 +2063,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             </details>
             <details><summary>Diagnostics</summary><p id="worker-status" class="status-output">Loading...</p></details>
             <details><summary>AI connection &amp; costs</summary>
-                <p class="section-note">Set OPENAI_API_KEY only in Render Environment. Never enter secrets in chat or app fields. OPENAI_MODEL defaults to gpt-4.1-mini.</p>
+                <p class="section-note">Set OPENAI_API_KEY only in Render Environment. Never enter secrets in chat or app fields. OPENAI_MODEL defaults to gpt-4.1; model availability and billing depend on the OpenAI account.</p>
                 <p class="section-note">Default: one analysis every 15 minutes, up to 96 attempted API calls per UTC day across the service, including failed calls. OpenAI API billing is separate and paid by the operator. Only market prices are sent to the model, not keys, Telegram identities or personal balances.</p>
             </details>
             <details id="operator-settings" style="display:none;"><summary>Operator tools · fees &amp; migration</summary><div id="settings-admin"></div></details>

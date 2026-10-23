@@ -156,6 +156,13 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
             "decisions": {"main": {"action": "BUY", "symbol": "SOL", "reason": "signal"},
                           "sniper": {"action": "HOLD", "symbol": None, "reason": "wait"}}}
 
+    async def test_default_analysis_model_is_gpt_41_and_can_be_overridden(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("OPENAI_MODEL", None)
+            self.assertEqual(ai_decisions.configuration()["model"], "gpt-4.1")
+        with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-4.1-mini"}):
+            self.assertEqual(ai_decisions.configuration()["model"], "gpt-4.1-mini")
+
     async def apply(self, snapshot=None, prices=None, positions=None):
         await self.service.apply_ai_decision(None, 101, self.service.ledger.settings(101),
             positions or [], prices or self.prices, snapshot or self.snapshot)
@@ -412,6 +419,7 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
                     "SOL_BAD": {"change_h1_pct": float("nan")},
                 })
         content = json.dumps(self.payload)
+        self.assertEqual(self.payload["model"], "gpt-4.1")
         self.assertNotIn(self.service.wallet, content)
         self.assertNotIn("telegram", content.lower())
         self.assertNotIn("test-key-not-real", content)

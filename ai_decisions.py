@@ -71,7 +71,7 @@ MAIN_CHART_DATA_CAPABILITIES = {
 def configuration():
     return {
         "configured": bool(os.getenv("OPENAI_API_KEY")),
-        "model": os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+        "model": os.getenv("OPENAI_MODEL", "gpt-4.1"),
         "interval_seconds": max(300, int(os.getenv("AI_INTERVAL_SECONDS", "900"))),
         "max_calls_per_day": max(1, min(288, int(os.getenv("AI_MAX_CALLS_PER_DAY", "96")))),
     }
