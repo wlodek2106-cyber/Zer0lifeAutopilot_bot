@@ -9,7 +9,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_CEILING
-from urllib.parse import quote, urlencode, urlsplit
+from urllib.parse import urlencode
 
 import aiohttp
 from aiohttp import web
@@ -643,20 +643,10 @@ class CustodyRuntime(WalletRuntime):
             params["spl-token"] = USDC
         pay_uri = f"solana:{self.wallet}?{urlencode(params)}" if active else None
         payment_url = self.base_url.rstrip("/") + "/deposit/" + invoice["id"]
-        parsed_payment_url = urlsplit(payment_url)
-        phantom_browse_uri = None
-        if parsed_payment_url.scheme == "https" and parsed_payment_url.netloc:
-            app_ref = f"{parsed_payment_url.scheme}://{parsed_payment_url.netloc}/"
-            phantom_browse_uri = (
-                "https://phantom.com/ul/browse/"
-                + quote(payment_url, safe="")
-                + "?ref="
-                + quote(app_ref, safe="")
-            )
         return {"invoice_id": invoice["id"], "token": token, "amount": amount,
             "deposit_wallet": self.wallet, "expires_at": invoice["expires_at"],
             "state": invoice["state"], "solana_pay_uri": pay_uri,
-            "payment_url": payment_url, "phantom_browse_uri": phantom_browse_uri}
+            "payment_url": payment_url}
 
     async def create_invoice(self, request, session):
         uid = self.uid(request)

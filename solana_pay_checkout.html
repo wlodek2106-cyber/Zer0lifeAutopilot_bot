@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>AI Trader · Solana Pay deposit</title>
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
 :root{color-scheme:dark}
 *{box-sizing:border-box}
@@ -47,26 +46,6 @@ code{font:inherit}
 const invoiceId = location.pathname.split('/').filter(Boolean).pop();
 const statusNode = document.getElementById('status');
 const walletLink = document.getElementById('wallet-link');
-function setWalletTarget(invoice) {
-    walletLink.onclick = null;
-    walletLink.href = invoice.solana_pay_uri;
-    walletLink.textContent = 'Open in Solana wallet';
-    const webApp = window.Telegram?.WebApp;
-    const isMobile = ['ios', 'android', 'android_x'].includes(String(webApp?.platform || '').toLowerCase())
-        || /iPhone|iPad|iPod|Android/i.test(navigator.userAgent || '');
-    if (!isMobile || typeof webApp?.openLink !== 'function' || !invoice.phantom_browse_uri) return;
-    const phantomLink = invoice.phantom_browse_uri;
-    walletLink.href = phantomLink;
-    walletLink.textContent = 'Continue in Phantom';
-    walletLink.onclick = (event) => {
-        event.preventDefault();
-        try {
-            webApp.openLink(phantomLink);
-        } catch (_) {
-            location.href = invoice.solana_pay_uri;
-        }
-    };
-}
 async function refreshInvoice() {
     try {
         const response = await fetch('/deposit/' + encodeURIComponent(invoiceId) + '/status', {cache:'no-store'});
@@ -85,7 +64,7 @@ async function refreshInvoice() {
             statusNode.textContent = 'This request has expired. Do not pay to it; create a new request in AI Trader.';
             statusNode.dataset.state = 'error';
         } else {
-            setWalletTarget(invoice);
+            walletLink.href = invoice.solana_pay_uri;
             walletLink.hidden = false;
             statusNode.textContent = 'Waiting for payment. After you approve it, this page checks confirmation automatically. Do not send it again.';
             statusNode.dataset.state = '';

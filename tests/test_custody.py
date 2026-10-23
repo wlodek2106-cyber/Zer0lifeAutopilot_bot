@@ -1961,7 +1961,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("balance", data)
 
     async def test_solana_pay_invoice_uses_exact_native_sol_and_mainnet_usdc_requests(self):
-        from urllib.parse import parse_qs, unquote, urlsplit
+        from urllib.parse import parse_qs, urlsplit
 
         cases = [
             ("SOL", "0.123456789", None),
@@ -1984,19 +1984,10 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(params["memo"], ["ZL1:" + data["invoice_id"]])
             self.assertEqual(params["label"], [f"AI Trader {token}"])
             self.assertEqual(params["message"], [f"Deposit {amount} {token}"])
-            self.assertIsNotNone(data["phantom_browse_uri"])
             if mint:
                 self.assertEqual(params["spl-token"], [mint])
             else:
                 self.assertNotIn("spl-token", params)
-            phantom = urlsplit(data["phantom_browse_uri"])
-            self.assertEqual(phantom.scheme, "https")
-            self.assertEqual(phantom.netloc, "phantom.com")
-            self.assertTrue(phantom.path.startswith("/ul/browse/"))
-            encoded_page = phantom.path.removeprefix("/ul/browse/")
-            self.assertEqual(unquote(encoded_page), data["payment_url"])
-            self.assertEqual(parse_qs(phantom.query)["ref"], [urlsplit(data["payment_url"]).scheme + "://" +
-                             urlsplit(data["payment_url"]).netloc + "/"])
 
     async def test_solana_pay_invoice_rejects_unknown_asset_and_excess_precision(self):
         for body in (

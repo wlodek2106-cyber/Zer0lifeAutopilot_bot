@@ -2349,26 +2349,6 @@ RAW_HTML = r"""<!DOCTYPE html>
                 return button;
             }));
         }
-        function setSolanaPayWalletTarget(anchor, invoice) {
-            anchor.onclick = null;
-            anchor.href = invoice.solana_pay_uri;
-            anchor.textContent = 'Open in Solana wallet';
-            const webApp = window.Telegram?.WebApp;
-            const isMobile = ['ios', 'android', 'android_x'].includes(String(webApp?.platform || '').toLowerCase())
-                || /iPhone|iPad|iPod|Android/i.test(navigator.userAgent || '');
-            if (!isMobile || typeof webApp?.openLink !== 'function' || !invoice.phantom_browse_uri) return;
-            const phantomLink = invoice.phantom_browse_uri;
-            anchor.href = phantomLink;
-            anchor.textContent = 'Continue in Phantom';
-            anchor.onclick = (event) => {
-                event.preventDefault();
-                try {
-                    webApp.openLink(phantomLink);
-                } catch (_) {
-                    window.location.href = invoice.solana_pay_uri;
-                }
-            };
-        }
         async function createSolanaPayInvoice() {
             const button = document.getElementById('solpay-create');
             if (activeSolanaPayInvoice?.state === 'OPEN' &&
@@ -2443,7 +2423,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 if (storageKey) { try { sessionStorage.removeItem(storageKey); } catch(e) {} }
                 return;
             }
-            setSolanaPayWalletTarget(openWallet, invoice);
+            openWallet.href = invoice.solana_pay_uri;
             openWallet.hidden = false;
             statusPage.href = invoice.payment_url;
             statusPage.hidden = !invoice.payment_url;
