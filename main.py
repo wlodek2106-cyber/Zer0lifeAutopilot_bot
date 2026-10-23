@@ -1847,7 +1847,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                             <a id="solpay-open-wallet" class="btn-green-main solpay-open-wallet">Open in Solana wallet</a>
                             <a id="solpay-status-page" href="#" target="_blank" rel="noopener noreferrer"
                                 style="display:block;color:#86efac;font-size:11px;text-align:center;margin:8px 0;">Open payment status page</a>
-                            <div class="solpay-note">The wallet shows its network fee before you approve. The bot verifies the exact asset and amount, then credits your balance after Solana finalizes the transfer. Do not pay twice.</div>
+                            <div class="solpay-note">Your wallet needs the full amount in the selected asset and a little SOL for network fees. It shows the fee before approval. The bot credits your balance after Solana finalizes the exact transfer. Do not pay twice.</div>
                         </div>
                     </div>
 
@@ -2349,6 +2349,26 @@ RAW_HTML = r"""<!DOCTYPE html>
                 return button;
             }));
         }
+        function setSolanaPayWalletTarget(anchor, invoice) {
+            anchor.onclick = null;
+            anchor.href = invoice.solana_pay_uri;
+            anchor.textContent = 'Open in Solana wallet';
+            const webApp = window.Telegram?.WebApp;
+            const isMobile = ['ios', 'android', 'android_x'].includes(String(webApp?.platform || '').toLowerCase())
+                || /iPhone|iPad|iPod|Android/i.test(navigator.userAgent || '');
+            if (!isMobile || typeof webApp?.openLink !== 'function' || !invoice.phantom_browse_uri) return;
+            const phantomLink = invoice.phantom_browse_uri;
+            anchor.href = phantomLink;
+            anchor.textContent = 'Continue in Phantom';
+            anchor.onclick = (event) => {
+                event.preventDefault();
+                try {
+                    webApp.openLink(phantomLink);
+                } catch (_) {
+                    window.location.href = invoice.solana_pay_uri;
+                }
+            };
+        }
         async function createSolanaPayInvoice() {
             const button = document.getElementById('solpay-create');
             if (activeSolanaPayInvoice?.state === 'OPEN' &&
@@ -2423,7 +2443,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 if (storageKey) { try { sessionStorage.removeItem(storageKey); } catch(e) {} }
                 return;
             }
-            openWallet.href = invoice.solana_pay_uri;
+            setSolanaPayWalletTarget(openWallet, invoice);
             openWallet.hidden = false;
             statusPage.href = invoice.payment_url;
             statusPage.hidden = !invoice.payment_url;
