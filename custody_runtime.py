@@ -46,7 +46,8 @@ JITO_TIP_MAX_AGE_SECONDS = 120
 JUPITER_PRIORITY_FEE_LAMPORTS = 25_000
 WHALE_AI_COOLDOWN_SECONDS = 60
 WITHDRAWAL_COMMISSION_BPS = 150
-SNIPER_SYMBOLS = ("WIF", "BONK", "BOME", "POPCAT", "MEW", "PENGU")
+CORE_SYMBOLS = ("SOL", "JUP", "RAY", "PYTH", "JTO", "ORCA", "KMNO", "NOS", "SHDW", "PEPE")
+SNIPER_SYMBOLS = ("WIF", "BONK", "BOME", "POPCAT", "MEW", "PENGU", "PEPE")
 
 
 def operation_failure_reason(exc):
@@ -169,9 +170,13 @@ class CustodyRuntime(WalletRuntime):
         self.ai_task = None
         self.sniper_symbols = [symbol for symbol in SNIPER_SYMBOLS if symbol in self.watchlist]
         self.watchlist = {symbol: dict(info) for symbol, info in self.watchlist.items()}
-        self.main_symbols = [s for s in self.watchlist if s not in self.sniper_symbols]
+        self.main_symbols = [symbol for symbol in CORE_SYMBOLS if symbol in self.watchlist]
+        # PEPE is intentionally eligible for either strategy, with each mode
+        # still using its own balance and independent execution gates.
+        sniper_mints = {self.watchlist[s]["mint"] for s in self.sniper_symbols}
         self.discovery = MemeDiscovery(self.ledger, self.rpc,
-            [self.watchlist[s]["mint"] for s in self.main_symbols],
+            [self.watchlist[s]["mint"] for s in self.main_symbols
+             if self.watchlist[s]["mint"] not in sniper_mints],
             {s: self.watchlist[s] for s in self.sniper_symbols})
         self.discovery_task = None
         self.discovery_due = 0
@@ -314,7 +319,7 @@ class CustodyRuntime(WalletRuntime):
                      if symbol in current_codes or discovery and discovery.entry_allowed(symbol)]
         sniper_assets = list(dict.fromkeys(preferred + [row["code"] for row in candidates]))[:8]
         sniper_assets += sorted(self.held_sniper_symbols())[:32]
-        return {"main": getattr(self, "main_symbols", [s for s in self.watchlist if s not in self.sniper_symbols]),
+        return {"main": getattr(self, "main_symbols", [s for s in CORE_SYMBOLS if s in self.watchlist]),
                 "sniper": list(dict.fromkeys(sniper_assets)) if discovery else self.sniper_symbols}
 
     async def ai_snapshot(self, session, prices, whale_symbols=None):
@@ -2750,7 +2755,7 @@ class CustodyRuntime(WalletRuntime):
                 for position in positions:
                     mode_enabled = (current["sniper_trading"] if position["funding_asset"] == SOL
                                     else current["trading"])
-                    if mode_enabled and position["funding_asset"] == SOL:
+                    if mode_enabled:
                         price = self.position_exit_price(position, prices)
                         entry = self.position_entry_price(position)
                         if price is not None and entry is not None:
@@ -2821,7 +2826,8 @@ class CustodyRuntime(WalletRuntime):
         if position["funding_asset"] == SOL:
             peak = position.get("peak_price") or entry
             return execution_policy.sniper_exit_reason(price, entry, max(peak, entry, price))
-        return execution_policy.risk_exit_reason(price, entry)
+        peak = position.get("peak_price") or entry
+        return execution_policy.risk_exit_reason(price, entry, max(peak, entry, price))
 
     def exit_triggered(self, position, prices):
         return self.exit_reason(position, prices) is not None

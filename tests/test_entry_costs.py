@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock
 
 from entry_costs import assess_entry, quote_amounts, EntryCostError
 from custody_ledger import USDC
-from custody_runtime import WRAPPED_SOL, JITO_TIP_MIN_LAMPORTS, SNIPER_SYMBOLS
+from custody_runtime import CORE_SYMBOLS, WRAPPED_SOL, JITO_TIP_MIN_LAMPORTS, SNIPER_SYMBOLS
 from wallet_runtime import WalletError
 import test_custody as fixtures
 
@@ -167,7 +167,7 @@ class CostRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(verdict.code, "jito_tip_stats")
         self.assertIn("no new BUY was sent", verdict.reason)
 
-    async def test_validated_asset_catalog_separates_core_and_sniper(self):
+    async def test_validated_asset_catalog_allows_pepe_in_core_and_sniper(self):
         import main
         catalog = main.WATCHLIST
         self.assertEqual(catalog["JTO"], {"mint": JTO, "decimals": 9})
@@ -176,6 +176,7 @@ class CostRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "KMNO": {"mint": "KMNo3nJsBXfcpJTVhZcXLW7RmTwTt4GVFE7suUBo9sS", "decimals": 6},
             "NOS": {"mint": "nosXBVoaCTtYdLvKY6Csb4AC8JCdQKKAaWYtx2ZMoo7", "decimals": 6},
             "SHDW": {"mint": "SHDWyBxihqiCj6YekG2GUr7wqKLeLAMK1gHZck9pL6y", "decimals": 9},
+            "PEPE": {"mint": "B5WTLaRwaUQpKk7ir1wniNB6m5o8GgMrimhKMYan2R6B", "decimals": 6},
         }
         expected_sniper = {
             "BONK": {"mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "decimals": 5},
@@ -186,13 +187,15 @@ class CostRuntimeTests(unittest.IsolatedAsyncioTestCase):
         }
         for symbol, info in {**expected_core, **expected_sniper}.items():
             self.assertEqual(catalog[symbol], info)
-        self.assertEqual(set(SNIPER_SYMBOLS), {"WIF", *expected_sniper})
+        self.assertEqual(set(SNIPER_SYMBOLS), {"WIF", "PEPE", *expected_sniper})
+        self.assertIn("PEPE", CORE_SYMBOLS)
 
         self.service.watchlist = copy.deepcopy(catalog)
         self.service.sniper_symbols = [s for s in SNIPER_SYMBOLS if s in catalog]
-        self.service.main_symbols = [s for s in catalog if s not in self.service.sniper_symbols]
+        self.service.main_symbols = [s for s in CORE_SYMBOLS if s in catalog]
         self.service.discovery = None
         universes = self.service.ai_universes()
         self.assertTrue({"JTO", "ORCA", *expected_core}.issubset(universes["main"]))
         self.assertTrue(set(SNIPER_SYMBOLS).issubset(universes["sniper"]))
-        self.assertFalse(set(SNIPER_SYMBOLS) & set(universes["main"]))
+        self.assertEqual(set(SNIPER_SYMBOLS) & set(universes["main"]), {"PEPE"})
+        self.assertEqual(catalog["PEPE"]["mint"], self.service.watchlist["PEPE"]["mint"])

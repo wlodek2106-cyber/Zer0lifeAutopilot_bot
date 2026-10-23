@@ -225,7 +225,7 @@ async def analyze(session, market, universes, screening=None, main_context=None)
                 "Core BUY additionally requires chart_ready=1 and chart_buy_setup=1; the server enforces this. "
                 "Do not treat 24-hour total volume as relative volume, and do not invent candle signals when "
                 "chart data is missing or stale. Consider chart_sell_setup only as evidence for exiting an "
-                "already-owned spot position; SELL never opens a short. Fixed server TP/SL and exit controls "
+                "already-owned spot position; SELL never opens a short. Server stop-loss and trailing-exit controls "
                 "remain authoritative. Missing or conflicting evidence means HOLD. These heuristics are not "
                 "backtested and do not predict profit; never force a trade when no candidate qualifies.")},
             {"role": "user", "content": json.dumps({

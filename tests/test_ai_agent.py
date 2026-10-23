@@ -491,8 +491,10 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         position["peak_price"] = 0.0213
         self.assertTrue(self.service.exit_triggered(position, {"WIF": 2.08, "SOL": 100}))
         self.assertTrue(self.service.exit_triggered(position, {"WIF": 1.94, "SOL": 100}))
+        self.assertTrue(self.service.exit_triggered(position, {"WIF": 1.79, "SOL": 100}))
         self.assertEqual(self.service.exit_reason(position, {"WIF": 2.08, "SOL": 100}), "TRAILING_STOP")
-        self.assertEqual(self.service.exit_reason(position, {"WIF": 1.94, "SOL": 100}), "STOP_LOSS")
+        self.assertEqual(self.service.exit_reason(position, {"WIF": 1.94, "SOL": 100}), "TRAILING_STOP")
+        self.assertEqual(self.service.exit_reason(position, {"WIF": 1.79, "SOL": 100}), "STOP_LOSS")
 
     async def test_sniper_does_not_sell_at_fixed_profit_target_without_a_peak_retrace(self):
         position = {"symbol": "WIF", "funding_asset": SOL, "cost_raw": 5_000_000,

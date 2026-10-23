@@ -6,11 +6,13 @@ This is a callable OpenAI adapter plus independent custodial execution controlle
 not a promise of profitable trading. No live model call, live trade, or withdrawal
 has been validated by the automated tests.
 
-Core mode selects SOL/JUP/RAY/PYTH/JTO/ORCA/KMNO/NOS/SHDW using personal USDC,
+Core mode selects SOL/JUP/RAY/PYTH/JTO/ORCA/KMNO/NOS/SHDW/PEPE using personal USDC,
 up to five positions. New Core assets still require current liquidity/volume,
 quote-impact and closed-candle chart checks before entry. The SOL-funded Sniper
-uses WIF/BONK/BOME/POPCAT/MEW/PENGU as screened seeds alongside bounded discovery,
+uses WIF/BONK/BOME/POPCAT/MEW/PENGU/PEPE as screened seeds alongside bounded discovery,
 up to five positions. A seed is not an eligible trade or a profit forecast.
+PEPE is available to both universes, but each mode uses its own balance and all
+existing independent entry checks remain in force.
 SOL proceeds return to the same user's SOL balance. There is no automatic
 cross-mode profit conversion or allocation.
 
@@ -72,8 +74,9 @@ First analysis can HOLD while prices warm up; AI refresh interval is 15 minutes.
   USD 100,000 and 24-hour volume at least USD 10,000. These figures are reported by
   DexScreener, not independently audited, and do not guarantee execution liquidity.
 - AI HTTP requests run separately from the position-management loop. Failed,
-  unavailable or malformed AI output produces no new AI order. TP/SL (3.5% / 2%)
-  and requested liquidation remain deterministic protections, not guaranteed fills.
+  unavailable or malformed AI output produces no new AI order. Both modes use a
+  10% stop-loss; after +3.5% gain, a 2% pullback from the tracked peak triggers
+  a trailing exit. These are deterministic conditions, not guaranteed fills.
 - Jupiter slippage bound stays 40 bps. Fees/rent come from operator treasury.
 
 ## Ledger migration

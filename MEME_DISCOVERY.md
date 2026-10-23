@@ -32,10 +32,10 @@ or future returns. WIF remains a seeded candidate but must pass current screenin
 
 Existing controls still apply: up to five SOL-funded positions per user, own SOL/order size,
 five samples for token and SOL, 120-second AI action window, 1% price/relative-SOL
-drift bound, 0.4% slippage, 3.5% TP/-2% SL, segregated fee treasury, one pending
-shared-vault operation, simulation/solvency/finalization checks, no blind retries,
-model call quota and no auto-resume after restart. No funds are converted or
-redistributed between modes/users by this change.
+drift bound, 0.4% slippage, -10% stop and trailing exit after +3.5% / 2% peak pullback,
+segregated fee treasury, one pending shared-vault operation, simulation/solvency/
+finalization checks, no blind retries, model call quota and no auto-resume after
+restart. No funds are converted or redistributed between modes/users by this change.
 
 Limits: holder concentration, LP locks, upgradeability of all protocols, wash volume,
 MEV, malicious pools, correlated exposure and every market/contract risk are NOT

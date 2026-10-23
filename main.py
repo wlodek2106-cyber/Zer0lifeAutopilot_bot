@@ -77,7 +77,9 @@ WATCHLIST = {
     "BOME": {"mint": "ukHH6c7mMyiWCf1b9pnWe25TSpkDDt3H5pQZgZ74J82", "decimals": 6},
     "POPCAT": {"mint": "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr", "decimals": 9},
     "MEW": {"mint": "MEW1gQWJ3nEXg2qgERiKu7FAFj79PHvQVREQUzScPP5", "decimals": 5},
-    "PENGU": {"mint": "2zMMhcVQEXDtdE6vsFS7S7D5oUodfJHE8vd1gnBouauv", "decimals": 6}
+    "PENGU": {"mint": "2zMMhcVQEXDtdE6vsFS7S7D5oUodfJHE8vd1gnBouauv", "decimals": 6},
+    # CoinGecko Pepe on SOL; verified on finalized Solana RPC.
+    "PEPE": {"mint": "B5WTLaRwaUQpKk7ir1wniNB6m5o8GgMrimhKMYan2R6B", "decimals": 6}
 }
 
 TRADE_AMOUNT_USDC = 20.0
@@ -1758,6 +1760,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <div class="stat-box"><div class="stat-label">Order size</div><div class="stat-val" id="sniper-order-size">Loading...</div></div>
                 </div>
                 <p id="sniper-position-cap" class="section-note">Screened Solana candidates · Checking position limit…</p>
+                <p class="section-note">Exit rules: −10% stop; from +3.5%, exit after a 2% pullback from the peak.</p>
                 <div id="discovery-status" class="section-note">Candidate scan pending.</div>
                 <button class="action-btn" id="scan-candidates" onclick="scanCandidates()">Scan candidates</button>
                 <details><summary>Candidate shortlist</summary><div id="candidate-list" class="section-note" style="white-space:pre-line">No verified shortlist yet.</div></details>
@@ -1777,8 +1780,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div class="grid-stats">
                     <div class="stat-box"><div class="stat-label">Order size</div><div class="stat-val" id="strategy-order-size">Loading...</div></div>
                     <div class="stat-box"><div class="stat-label">Slippage</div><div class="stat-val" style="color: #60a5fa;">0.40%</div></div>
-                    <div class="stat-box"><div class="stat-label">Take Profit</div><div class="stat-val" style="color: #4ade80;">+3.50%</div></div>
-                    <div class="stat-box"><div class="stat-label">Stop Loss</div><div class="stat-val" style="color: #f87171;">-2.00%</div></div>
+                    <div class="stat-box"><div class="stat-label">Profit trail</div><div class="stat-val" style="color: #4ade80;">+3.50% / −2.00%</div></div>
+                    <div class="stat-box"><div class="stat-label">Stop loss</div><div class="stat-val" style="color: #f87171;">−10.00%</div></div>
                 </div>
                 <p class="section-note">Core entry cost budget: 2.50% of the order. Includes quoted DEX fees, price impact, slippage, estimated network fees, Jito tips and account rent for entry/exit. Estimates do not guarantee profit or exit costs. SELL exits are not blocked by this filter.</p>
                 <p id="entry-cost-check" class="section-note" aria-live="polite">No entry cost check yet.</p>
@@ -2050,13 +2053,13 @@ RAW_HTML = r"""<!DOCTYPE html>
             </div>
             <details id="strategy-help"><summary>Strategy limits &amp; risks</summary>
                 <p class="section-note">Core trades use your USDC; sniper trades use your SOL. Other users' funds and the operator fee reserve are never your trading capital. Automatic conversion or profit allocation between strategies is not implemented.</p>
-                <p class="section-note">Core: SOL, JUP, RAY, PYTH, JTO, ORCA, KMNO, NOS, SHDW; up to 5 USDC-funded positions. ORCA currently retains mint authority (additional tokens may be issued); no token is risk-free. Sniper seeds: WIF, BONK, BOME, POPCAT, MEW, PENGU; up to 5 SOL-funded positions, limited by your available SOL and saved order size. Every 15 minutes a bounded DexScreener profiles/search scan checks up to 90 Solana mints, screens up to 20 and sends at most 8 current candidates plus held assets to AI. This is not every project or a profit forecast; profiles alone do not establish meme status.</p>
-                <p class="section-note">Core BUY requires the existing trend and flow checks plus fresh 5-minute/1-hour OHLCV data and a confirmed support-hold or breakout-retest setup. Chart zones use closed candles from the selected Solana pool; missing or stale candles block new Core buys. Zones and indicators are estimates, not predictions, and this strategy is not backtested. Core TP/SL and Sniper rules are unchanged.</p>
+                <p class="section-note">Core: SOL, JUP, RAY, PYTH, JTO, ORCA, KMNO, NOS, SHDW, PEPE; up to 5 USDC-funded positions. ORCA currently retains mint authority (additional tokens may be issued); no token is risk-free. Sniper seeds: WIF, BONK, BOME, POPCAT, MEW, PENGU, PEPE; up to 5 SOL-funded positions, limited by your available SOL and saved order size. Every 15 minutes a bounded DexScreener profiles/search scan checks up to 90 Solana mints, screens up to 20 and sends at most 8 current candidates plus held assets to AI. This is not every project or a profit forecast; profiles alone do not establish meme status.</p>
+                <p class="section-note">Core BUY requires the existing trend and flow checks plus fresh 5-minute/1-hour OHLCV data and a confirmed support-hold or breakout-retest setup. Chart zones use closed candles from the selected Solana pool; missing or stale candles block new Core buys. Zones and indicators are estimates, not predictions, and this strategy is not backtested.</p>
                 <p class="section-note">Confirmed buy, sell, take-profit, and stop-loss alerts are sent to each participant's own Telegram chat. Enable Telegram notifications on your phone. Alerts are sent after Solana finalizes the trade; a safely failed stop-loss sale gets a separate alert saying the position remains open.</p>
                 <p class="section-note">Sniper entry filters: approved DEX, at least $10k pool liquidity, $100k 24h volume, 200 daily trades, pool age 24h+, extreme-pump exclusion, standard SPL mint with no mint/freeze authority. The shortlist rotates every 15 minutes through up to 20 on-chain-verified candidates; AI sees up to 8 at a time. After any completed close, all participants are blocked from re-buying that mint for 24 hours. Fresh eligibility is required for every buy. Scores rank liquidity/activity, not expected profit. Holder concentration, LP locks and every contract/market risk are not fully checked. Standard mint checks do not guarantee token safety.</p>
                 <p class="section-note">AI makes decisions after you enable a mode. Orders require personal funds, permitted assets, at least 5 price samples, a fresh decision and stable pricing. Only one shared-wallet operation can be pending at a time.</p>
-                <p class="section-note">TP/SL are checked approximately every 20 seconds independently of AI availability. Model failures stop new AI orders. After a server restart both modes pause and need manual reactivation.</p>
-                <p class="section-note">TP/SL are execution conditions, not guaranteed fill prices. Fees, slippage and liquidity affect results. You can lose money; returns are not guaranteed.</p>
+                <p class="section-note">Both modes use a 10% stop below entry. After a position reaches +3.5%, a trailing exit triggers after a 2% pullback from its highest tracked price. Exits are checked approximately every 20 seconds independently of AI availability. Model failures stop new AI orders. After a server restart both modes pause and need manual reactivation.</p>
+                <p class="section-note">Stops and trailing exits are execution conditions, not guaranteed fill prices. A 10% stop permits a larger loss than the former 2% stop; fast price moves, fees, slippage and liquidity can make the realized loss larger. Returns are not guaranteed.</p>
             </details>
             <details><summary>Diagnostics</summary><p id="worker-status" class="status-output">Loading...</p></details>
             <details><summary>AI connection &amp; costs</summary>

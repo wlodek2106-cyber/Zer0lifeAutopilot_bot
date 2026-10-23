@@ -9,7 +9,7 @@ from custody_ledger import USDC, SOL
 from entry_costs import MAX_COST_BPS, MAX_PRICE_IMPACT_PCT, MAX_QUOTE_AGE_SECONDS, assess_entry
 from wallet_runtime import WalletError
 
-VERSION = "independent-execution-v3-chart-confirmation"
+VERSION = "independent-execution-v4-shared-trailing-exits"
 MAX_POSITIONS = MappingProxyType({"main": 5, "sniper": 5})
 DECISION_SECONDS = 120
 QUOTE_SECONDS = MAX_QUOTE_AGE_SECONDS
@@ -17,9 +17,10 @@ MAX_SLOT_DISTANCE = 75
 MAX_SLIPPAGE_BPS = 40
 MAX_IMPACT_PCT = MAX_PRICE_IMPACT_PCT
 WRAPPED_SOL = "So11111111111111111111111111111111111111112"
-SNIPER_STOP_LOSS_PCT = 0.02
-SNIPER_TRAILING_ACTIVATION_PCT = 0.035
-SNIPER_TRAILING_DRAWDOWN_PCT = 0.02
+CORE_STOP_LOSS_PCT = 0.10
+SNIPER_STOP_LOSS_PCT = 0.10
+TRAILING_ACTIVATION_PCT = 0.035
+TRAILING_DRAWDOWN_PCT = 0.02
 
 
 class ExecutionDenied(WalletError):
@@ -54,30 +55,27 @@ def bounded_pct(value):
     return type(value) in (int, float) and -5000 <= value <= 5000
 
 
-def risk_exit_reason(price, entry):
+def trailing_exit_reason(price, entry, peak, stop_loss_pct):
     if not positive(price) or not positive(entry):
         return None
-    change = price / entry - 1
-    if change >= .035:
-        return "TAKE_PROFIT"
-    if change <= -.020:
+    if price <= entry * (1 - stop_loss_pct):
         return "STOP_LOSS"
-    return None
-
-
-def sniper_exit_reason(price, entry, peak):
-    if not positive(price) or not positive(entry) or not positive(peak):
-        return None
-    if price <= entry * (1 - SNIPER_STOP_LOSS_PCT):
-        return "STOP_LOSS"
-    if (peak >= entry * (1 + SNIPER_TRAILING_ACTIVATION_PCT)
-            and price <= peak * (1 - SNIPER_TRAILING_DRAWDOWN_PCT)):
+    if (positive(peak) and peak >= entry * (1 + TRAILING_ACTIVATION_PCT)
+            and price <= peak * (1 - TRAILING_DRAWDOWN_PCT)):
         return "TRAILING_STOP"
     return None
 
 
-def risk_exit(price, entry):
-    return risk_exit_reason(price, entry) is not None
+def risk_exit_reason(price, entry, peak=None):
+    return trailing_exit_reason(price, entry, peak, CORE_STOP_LOSS_PCT)
+
+
+def sniper_exit_reason(price, entry, peak):
+    return trailing_exit_reason(price, entry, peak, SNIPER_STOP_LOSS_PCT)
+
+
+def risk_exit(price, entry, peak=None):
+    return risk_exit_reason(price, entry, peak) is not None
 
 
 def core_entry_signal(symbol, context):
@@ -257,4 +255,8 @@ def describe():
             "quote_max_slot_distance": MAX_SLOT_DISTANCE, "slippage_bps": MAX_SLIPPAGE_BPS,
             "buy_max_price_impact_pct": float(MAX_IMPACT_PCT), "core_max_cost_pct": MAX_COST_BPS / 100,
             "max_positions": dict(MAX_POSITIONS), "liquidity_basis": "executable_route_price_impact",
-            "entry_filters_never_block_exits": True}
+            "entry_filters_never_block_exits": True,
+            "exit_policy": {"core_stop_loss_pct": CORE_STOP_LOSS_PCT,
+                            "sniper_stop_loss_pct": SNIPER_STOP_LOSS_PCT,
+                            "trailing_activation_pct": TRAILING_ACTIVATION_PCT,
+                            "trailing_drawdown_pct": TRAILING_DRAWDOWN_PCT}}
