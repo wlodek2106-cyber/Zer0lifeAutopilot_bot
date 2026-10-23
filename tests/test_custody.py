@@ -1792,7 +1792,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.service.legacy_runtime.reserve("old-operation", "old-signature", "WITHDRAW", {})
         self.status = {"confirmationStatus": "finalized", "err": "failed"}
         response = await self.service.handle(Request(101, {"token": "USDC", "amount": "1"}), self.service.create_invoice)
-        self.assertEqual(response.status, 410)
+        self.assertEqual(response.status, 200)
         self.assertEqual(self.service.legacy_runtime.operation("old-operation")["state"], "FAILED")
         self.assertFalse(self.service.readiness()["legacy_operation_pending"])
 
@@ -1959,6 +1959,43 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("uid", data)
         self.assertNotIn("username", data)
         self.assertNotIn("balance", data)
+
+    async def test_solana_pay_invoice_uses_exact_native_sol_and_mainnet_usdc_requests(self):
+        from urllib.parse import parse_qs, urlsplit
+
+        cases = [
+            ("SOL", "0.123456789", None),
+            ("USDC", "12.345678", USDC),
+        ]
+        for token, amount, mint in cases:
+            response = await self.service.handle(
+                Request(101, {"token": token, "amount": amount}), self.service.create_invoice)
+            self.assertEqual(response.status, 200)
+            data = json.loads(response.text)
+            self.assertEqual(data["token"], token)
+            self.assertEqual(data["amount"], amount)
+            self.assertGreater(data["expires_at"], int(time.time()))
+
+            uri = urlsplit(data["solana_pay_uri"])
+            self.assertEqual(uri.scheme, "solana")
+            self.assertEqual(uri.path, self.service.wallet)
+            params = parse_qs(uri.query)
+            self.assertEqual(params["amount"], [amount])
+            self.assertEqual(params["memo"], ["ZL1:" + data["invoice_id"]])
+            if mint:
+                self.assertEqual(params["spl-token"], [mint])
+            else:
+                self.assertNotIn("spl-token", params)
+
+    async def test_solana_pay_invoice_rejects_unknown_asset_and_excess_precision(self):
+        for body in (
+            {"token": "BONK", "amount": "1"},
+            {"token": "USDC", "amount": "1.0000001"},
+            {"token": "SOL", "amount": "0"},
+        ):
+            response = await self.service.handle(Request(101, body), self.service.create_invoice)
+            self.assertEqual(response.status, 400)
+            self.assertFalse(json.loads(response.text)["success"])
 
     async def test_unsigned_sol_transfer_preserves_amount_recipient_without_memo(self):
         invoice = self.ledger.invoice(101, SOL, 1_000_000)

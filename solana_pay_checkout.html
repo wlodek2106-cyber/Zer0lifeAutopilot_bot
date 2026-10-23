@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>AI Trader · Solana Pay deposit</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;padding:24px 16px;background:#080d14;color:#e7edf5;font:15px system-ui,-apple-system,sans-serif}
+main{width:min(100%,520px);margin:0 auto}
+.eyebrow{color:#c8ff72;font:700 10px ui-monospace,monospace;letter-spacing:.16em}
+h1{margin:8px 0;font-size:26px;letter-spacing:-.04em}
+.muted{color:#94a5bb;font-size:13px;line-height:1.6}
+.card{margin:20px 0;padding:16px;background:#101823;border:1px solid #223043;border-radius:18px}
+.row{display:flex;justify-content:space-between;gap:12px;padding:11px 0;border-bottom:1px solid #1e2a39;color:#94a5bb;font-size:12px}
+.row:last-child{border-bottom:0}
+.row strong{max-width:66%;color:#e7edf5;text-align:right;overflow-wrap:anywhere}
+.button{display:block;margin:16px 0;padding:15px;border-radius:14px;background:#c8ff37;color:#10150a;text-align:center;text-decoration:none;font-weight:800}
+.button[hidden]{display:none}
+.status{padding:12px;border:1px solid #263449;border-radius:12px;background:#0b141c;color:#b7c3d1;font-size:12px;line-height:1.55}
+.status[data-state="success"]{border-color:#245b43;color:#86efac}
+.status[data-state="error"]{border-color:#6b3737;color:#fca5a5}
+a.back{display:inline-block;margin-top:16px;color:#b9d589;text-decoration:none;font-size:12px}
+code{font:inherit}
+</style>
+</head>
+<body>
+<main>
+<p class="eyebrow">AI TRADER · SOLANA MAINNET</p>
+<h1>Deposit to your account</h1>
+<p class="muted">Review the exact asset and amount before opening your wallet. Network fees are shown by your wallet.</p>
+<section class="card" aria-label="Payment request details">
+  <div class="row"><span>Asset</span><strong id="asset">Loading…</strong></div>
+  <div class="row"><span>Exact amount</span><strong id="amount">—</strong></div>
+  <div class="row"><span>Recipient</span><strong id="recipient">—</strong></div>
+  <div class="row"><span>Request expires</span><strong id="expiry">—</strong></div>
+</section>
+<a id="wallet-link" class="button" hidden>Open in Solana wallet</a>
+<div id="status" class="status" role="status" aria-live="polite">Checking payment request…</div>
+<p class="muted">The bot checks the finalized Solana transaction and credits the exact requested asset to your account. Do not pay twice. If this request expires, create a new one in AI Trader.</p>
+<a class="back" href="/">Return to AI Trader</a>
+</main>
+<script>
+const invoiceId = location.pathname.split('/').filter(Boolean).pop();
+const statusNode = document.getElementById('status');
+const walletLink = document.getElementById('wallet-link');
+async function refreshInvoice() {
+    try {
+        const response = await fetch('/deposit/' + encodeURIComponent(invoiceId) + '/status', {cache:'no-store'});
+        const invoice = await response.json();
+        if (!response.ok || !invoice.success) throw new Error('Payment request unavailable.');
+        document.getElementById('asset').textContent = invoice.token + ' · Solana mainnet';
+        document.getElementById('amount').textContent = invoice.amount + ' ' + invoice.token;
+        document.getElementById('recipient').textContent = invoice.deposit_wallet;
+        document.getElementById('expiry').textContent = new Date(Number(invoice.expires_at) * 1000).toLocaleString('en-GB');
+        if (invoice.state === 'CREDITED') {
+            walletLink.hidden = true;
+            statusNode.textContent = 'Payment confirmed and credited to your account.';
+            statusNode.dataset.state = 'success';
+        } else if (Number(invoice.expires_at) <= Date.now() / 1000 || !invoice.solana_pay_uri) {
+            walletLink.hidden = true;
+            statusNode.textContent = 'This request has expired. Do not pay to it; create a new request in AI Trader.';
+            statusNode.dataset.state = 'error';
+        } else {
+            walletLink.href = invoice.solana_pay_uri;
+            walletLink.hidden = false;
+            statusNode.textContent = 'Waiting for payment. After you approve it, this page checks confirmation automatically. Do not send it again.';
+            statusNode.dataset.state = '';
+        }
+    } catch (_) {
+        walletLink.hidden = true;
+        statusNode.textContent = 'Could not check this payment request. No payment was sent from this page.';
+        statusNode.dataset.state = 'error';
+    }
+}
+refreshInvoice();
+setInterval(refreshInvoice, 5000);
+</script>
+</body>
+</html>

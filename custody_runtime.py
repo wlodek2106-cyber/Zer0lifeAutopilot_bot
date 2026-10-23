@@ -9,6 +9,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_CEILING
+from urllib.parse import urlencode
 
 import aiohttp
 from aiohttp import web
@@ -143,10 +144,10 @@ def memo_invoice(tx):
         if instruction.get("programId") == str(MEMO) and isinstance(instruction.get("parsed"), str):
             found.append(instruction["parsed"])
     if len(found) != 1 or not found[0].startswith("ZL1:"):
-        raise WalletError("Нужен ровно один Memo платёжного запроса.", 409)
+        raise WalletError("Exactly one payment-request memo is required.", 409)
     iid = found[0][4:]
     if len(iid) != 32 or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for c in iid):
-        raise WalletError("Некорректный идентификатор Memo.", 409)
+        raise WalletError("Invalid payment-request memo identifier.", 409)
     return iid
 
 
@@ -595,48 +596,73 @@ class CustodyRuntime(WalletRuntime):
         from solders.signature import Signature
         Signature.from_string(signature)
         if await self.rpc(session, "getGenesisHash") != GENESIS:
-            raise WalletError("Пополнение разрешено только в Solana mainnet.")
+            raise WalletError("Deposits are accepted only on Solana mainnet.")
         tx = await self.rpc(session, "getTransaction", [signature, {
             "encoding": "jsonParsed", "commitment": "finalized", "maxSupportedTransactionVersion": 0}])
-        if not tx or not tx.get("meta") or tx["meta"].get("err") is not None:
-            raise WalletError("Платёж ещё не финализирован или отклонён сетью.", 409)
+        if not tx or not tx.get("meta") or "err" not in tx["meta"]:
+            raise WalletError("Transaction details are not finalized yet.", 409)
+        if tx["meta"]["err"] is not None:
+            raise WalletError("Solana rejected the transaction.", 409)
         iid = memo_invoice(tx)
         if expected_iid is not None and iid != expected_iid:
-            raise WalletError("Подпись относится к другому платёжному запросу.", 403)
+            raise WalletError("This signature belongs to a different payment request.", 403)
         invoice = self.ledger.get_invoice(iid)
         if not invoice:
-            raise WalletError("Неизвестный Memo. Автоматическое зачисление невозможно.", 409)
+            raise WalletError("Unknown payment memo. Automatic credit is not possible.", 409)
         if not self.public_enabled and invoice["uid"] not in self.beta_users:
-            raise WalletError("Публичный приём средств закрыт.", 503)
+            raise WalletError("Public deposits are currently unavailable.", 503)
         keys = tx["transaction"]["message"]["accountKeys"]
         if any(isinstance(key, dict) and key.get("pubkey") == self.wallet and key.get("signer") for key in keys):
-            raise WalletError("Исходящая операция сервера не является депозитом.", 409)
+            raise WalletError("An outgoing server transaction cannot be credited as a deposit.", 409)
         asset = invoice["asset"]
         if asset == SOL:
             addresses = [k.get("pubkey") if isinstance(k, dict) else k for k in keys]
             if self.wallet not in addresses:
-                raise WalletError("Нет перевода SOL на общий адрес.", 409)
+                raise WalletError("No SOL transfer to the deposit address was found.", 409)
             index = addresses.index(self.wallet)
             # Token-account rent is not a native SOL deposit to the shared address.
             delta = tx["meta"]["postBalances"][index] - tx["meta"]["preBalances"][index]
         else:
             delta = self.effects(tx, self.wallet, asset)
         if delta != invoice["raw"]:
-            raise WalletError("Сумма или актив не соответствует платёжному запросу.", 409)
+            raise WalletError("The asset or amount does not match this payment request.", 409)
         # Only the memo's persisted owner gets credit. The submitting user is irrelevant.
         return self.ledger.credit_deposit(iid, signature, asset, delta, int(tx.get("blockTime") or 0))
 
     def public_invoice(self, invoice):
         token = "USDC" if invoice["asset"] == USDC else "SOL"
-        return {"invoice_id": invoice["id"], "deprecated": True,
-            "token": token, "amount": display_raw(invoice["raw"], 6 if token == "USDC" else 9),
+        amount = display_raw(invoice["raw"], 6 if token == "USDC" else 9)
+        active = invoice["state"] == "OPEN" and invoice["expires_at"] >= int(time.time())
+        params = {
+            "amount": amount,
+            "memo": "ZL1:" + invoice["id"],
+            "label": "AI Trader",
+            "message": f"Deposit {amount} {token}",
+        }
+        if token == "USDC":
+            params["spl-token"] = USDC
+        pay_uri = f"solana:{self.wallet}?{urlencode(params)}" if active else None
+        return {"invoice_id": invoice["id"], "token": token, "amount": amount,
             "deposit_wallet": self.wallet, "expires_at": invoice["expires_at"],
-            "state": invoice["state"], "payment_url": self.base_url + "/deposit/" + invoice["id"]}
+            "state": invoice["state"], "solana_pay_uri": pay_uri,
+            "payment_url": self.base_url + "/deposit/" + invoice["id"]}
 
     async def create_invoice(self, request, session):
         uid = self.uid(request)
         self.admit(uid)
-        raise WalletError("Платёжные запросы отключены. Используйте обычный перевод на общий адрес и проверку Tx.", 410)
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise WalletError("Invalid payment request.", 400)
+        token = str(body.get("token", "")).strip().upper()
+        if token not in {"USDC", "SOL"}:
+            raise WalletError("Choose USDC or SOL on Solana mainnet.", 400)
+        decimals = 6 if token == "USDC" else 9
+        try:
+            raw = amount_raw(body.get("amount", ""), decimals)
+        except WalletError:
+            raise WalletError(f"Enter a positive {token} amount with no more than {decimals} decimal places.", 400)
+        invoice = self.ledger.invoice(uid, USDC if token == "USDC" else SOL, raw)
+        return web.json_response({"success": True, **self.public_invoice(invoice)})
 
     async def deposit(self, request, session):
         uid = self.uid(request)
@@ -648,14 +674,14 @@ class CustodyRuntime(WalletRuntime):
         try:
             Signature.from_string(signature)
         except ValueError:
-            raise WalletError("Вставьте полную подпись Tx или ссылку на неё в Solscan — не адрес кошелька.", 400)
+            raise WalletError("Enter the full transaction signature or a Solscan transaction link, not a wallet address.", 400)
         async with self.lock:
             if await self.rpc(session, "getGenesisHash") != GENESIS:
-                raise WalletError("Нужна Solana mainnet.", 409)
+                raise WalletError("Use Solana mainnet.", 409)
             tx = await self.rpc(session, "getTransaction", [signature, {
                 "encoding": "jsonParsed", "commitment": "finalized", "maxSupportedTransactionVersion": 0}])
             if not tx or not tx.get("meta") or "err" not in tx["meta"] or tx["meta"]["err"] is not None:
-                raise WalletError("Tx ещё не финализирована или отклонена. Повторять перевод не нужно.", 409)
+                raise WalletError("The transaction is not finalized yet or was rejected. Do not send it again.", 409)
             # Old already-issued invoices retain their original owner and deduplication.
             try:
                 old_iid = memo_invoice(tx)
@@ -664,21 +690,21 @@ class CustodyRuntime(WalletRuntime):
                 if any(ix.get("programId") == str(MEMO) and isinstance(ix.get("parsed"), str)
                        and ix["parsed"].startswith("ZL1:")
                        for ix in tx["transaction"]["message"]["instructions"]):
-                    raise WalletError("Некорректная старая платёжная метка. Нельзя зачислить её другому счёту.", 409)
+                    raise WalletError("Invalid legacy payment reference. It cannot be credited to another account.", 409)
             if old_iid:
                 old_invoice = self.ledger.get_invoice(old_iid)
                 if not old_invoice or old_invoice["uid"] != uid:
-                    raise WalletError("Этот старый запрос принадлежит другому аккаунту.", 403)
+                    raise WalletError("This legacy payment request belongs to another account.", 403)
                 await self.apply_deposit(session, signature, old_iid)
             else:
                 sender = self.ledger.wallet_address(uid)
                 if not sender:
-                    raise WalletError("Один раз подтвердите кошелёк кнопкой выше. После этого пополнения проверяются только по Tx.", 403)
+                    raise WalletError("Verify your wallet once using the button above. Future deposits can then be checked by transaction signature.", 403)
                 amounts = incoming_amounts(tx, self.wallet, sender)
                 balances = await self.solvent(session)
                 self.ledger.credit_tx(uid, signature, sender, amounts, int(tx.get("blockTime") or 0),
                                       {asset: data["raw"] for asset, data in balances.items()})
-        return web.json_response({"success": True, "message": "Tx проверена. Поступление зачислено только вашему аккаунту."})
+        return web.json_response({"success": True, "message": "Transaction verified and credited to your account."})
 
     async def wallet_link(self, request, session):
         uid = self.uid(request)
@@ -687,7 +713,7 @@ class CustodyRuntime(WalletRuntime):
             with self.ledger.db() as db:
                 fees = db.execute("SELECT raw FROM custody_accounts WHERE account='treasury' AND asset=?", (SOL,)).fetchone()
                 if not fees or fees["raw"] < FEE_CAP:
-                    raise WalletError("Новые пополнения приостановлены: оператору нужно пополнить резерв комиссий.")
+                    raise WalletError("New deposits are paused until the operator fee reserve is funded.")
         address = self.ledger.wallet_address(uid)
         nonce = None if address else self.ledger.wallet_challenge(uid, self.base_url)
         return web.json_response({"success": True, "address": address,
@@ -696,38 +722,38 @@ class CustodyRuntime(WalletRuntime):
     async def wallet_link_status(self, request, session):
         proof = self.ledger.wallet_proof(request.match_info["nonce"])
         if not proof or proof["expires_at"] < int(time.time()):
-            raise WalletError("Ссылка подтверждения истекла. Создайте новую в боте.", 409)
+            raise WalletError("The wallet verification link expired. Create a new one in the bot.", 409)
         return web.json_response({"success": True, "message": proof["message"],
             "linked": bool(proof["used"]), "address": self.ledger.wallet_address(proof["uid"])})
 
     async def wallet_link_confirm(self, request, session):
         proof = self.ledger.wallet_proof(request.match_info["nonce"])
         if not proof or proof["used"] or proof["expires_at"] < int(time.time()):
-            raise WalletError("Ссылка уже использована или истекла.", 409)
+            raise WalletError("This wallet verification link has already been used or has expired.", 409)
         self.admit(proof["uid"])
         body = await request.json()
         address = Pubkey.from_string(str(body.get("address", "")))
         if not address.is_on_curve() or str(address) == self.wallet:
-            raise WalletError("Подтвердите личный кошелёк, не общий серверный адрес.", 400)
+            raise WalletError("Verify your own wallet, not the shared server address.", 400)
         signature = Signature.from_bytes(base64.b64decode(body.get("signature", ""), validate=True))
         if not signature.verify(address, proof["message"].encode("utf-8")):
-            raise WalletError("Подпись кошелька не подтверждена.", 403)
+            raise WalletError("Wallet signature verification failed.", 403)
         self.ledger.link_wallet(proof["nonce"], str(address))
-        return web.json_response({"success": True, "message": "Кошелёк подтверждён. Вернитесь в Telegram; дальше используйте обычный перевод и Tx."})
+        return web.json_response({"success": True, "message": "Wallet verified. Return to Telegram; future manual deposits can be checked by transaction signature."})
 
     async def deposit_transaction(self, request, session):
         iid = request.match_info["invoice"]
         invoice = self.ledger.get_invoice(iid)
         if not invoice or invoice["state"] != "OPEN" or invoice["expires_at"] < int(time.time()):
-            raise WalletError("Платёжный запрос недоступен или истёк.", 409)
+            raise WalletError("This payment request is unavailable or has expired.", 409)
         self.admit(invoice["uid"])
         if await self.rpc(session, "getGenesisHash") != GENESIS:
-            raise WalletError("Только Solana mainnet.")
+            raise WalletError("Use Solana mainnet.")
         body = await request.json()
         sender = Pubkey.from_string(str(body.get("sender", "")))
         recipient = Pubkey.from_string(self.wallet)
         if not sender.is_on_curve() or sender == recipient:
-            raise WalletError("Нужен отдельный кошелёк отправителя.", 400)
+            raise WalletError("A separate sender wallet is required.", 400)
         instructions = []
         if invoice["asset"] == SOL:
             instructions.append(transfer(TransferParams(from_pubkey=sender, to_pubkey=recipient, lamports=invoice["raw"])))
@@ -741,7 +767,7 @@ class CustodyRuntime(WalletRuntime):
             if (source_info.get("owner") != str(sender) or source_info.get("mint") != USDC
                     or source_info.get("state") != "initialized" or value.get("decimals") != 6
                     or int(value.get("amount", 0)) < invoice["raw"]):
-                raise WalletError("Недостаточно USDC на ATA кошелька отправителя.", 409)
+                raise WalletError("The sender wallet does not have enough USDC.", 409)
             if accounts[1] is None:
                 instructions.append(Instruction(ATA, bytes([1]), [
                     AccountMeta(sender, True, True), AccountMeta(dest, False, True),
@@ -750,7 +776,7 @@ class CustodyRuntime(WalletRuntime):
             else:
                 dest_info = accounts[1].get("data", {}).get("parsed", {}).get("info", {})
                 if dest_info.get("owner") != self.wallet or dest_info.get("mint") != USDC or dest_info.get("state") != "initialized":
-                    raise WalletError("Серверный USDC ATA недоступен.")
+                    raise WalletError("The deposit wallet's USDC account is unavailable.")
             instructions.append(Instruction(TOKEN, bytes([12]) + invoice["raw"].to_bytes(8, "little") + bytes([6]), [
                 AccountMeta(source, False, True), AccountMeta(mint, False, False),
                 AccountMeta(dest, False, True), AccountMeta(sender, True, False)]))
@@ -769,12 +795,12 @@ class CustodyRuntime(WalletRuntime):
             return web.json_response({"success": False, "message": str(exc)},
                 status=exc.status if isinstance(exc, WalletError) else 409)
         except Exception:
-            return web.json_response({"success": False, "message": "Платёж недоступен. Проверьте статус в боте."}, status=503)
+            return web.json_response({"success": False, "message": "Payment is unavailable. Check the status in AI Trader."}, status=503)
 
     async def payment_status(self, request, session):
         invoice = self.ledger.get_invoice(request.match_info["invoice"])
         if not invoice:
-            raise WalletError("Платёжный запрос не найден.", 404)
+            raise WalletError("Payment request not found.", 404)
         return web.json_response({"success": True, **self.public_invoice(invoice)})
 
     async def payment_confirm(self, request, session):
@@ -783,7 +809,7 @@ class CustodyRuntime(WalletRuntime):
         return await self.payment_status(request, session)
 
     async def payment_disabled(self, request, session):
-        raise WalletError("Старые страницы оплаты отключены. Вернитесь в Wallet: обычный перевод и проверка Tx.", 410)
+        raise WalletError("Legacy payment pages are disabled. Return to Wallet to use a standard transfer and transaction verification.", 410)
 
     async def reserve_fees(self, request, session):
         if self.uid(request) != self.owner_id:
@@ -2311,7 +2337,7 @@ class CustodyRuntime(WalletRuntime):
                             await self.apply_deposit(session, item["signature"])
                             permanent = True
                         except (WalletError, LedgerError, ValueError) as exc:
-                            if isinstance(exc, WalletError) and (exc.status == 503 or "ещё не" in str(exc)):
+                            if isinstance(exc, WalletError) and (exc.status == 503 or "not finalized yet" in str(exc)):
                                 raise
                             permanent = True
                     if permanent:

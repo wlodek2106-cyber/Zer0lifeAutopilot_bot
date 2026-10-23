@@ -796,6 +796,24 @@ RAW_HTML = r"""<!DOCTYPE html>
         .token-selector { display: flex; gap: 8px; margin-bottom: 12px; }
         .token-btn { flex: 1; padding: 10px; border-radius: 12px; border: 1px solid #1c2436; background: #06080e; color: #64748b; font-weight: 700; font-size: 12px; cursor: pointer; text-align: center; }
         .token-btn.active { border-color: #22c55e; color: #22c55e; background: rgba(34, 197, 94, 0.1); }
+        .solpay-panel { background:#0b141c; border:1px solid #214337; border-radius:16px; padding:14px; margin-bottom:14px; }
+        .solpay-panel h3 { margin:0 0 6px; font-size:15px; color:#f8fafc; }
+        .solpay-panel .solpay-note, .solpay-fallback-note { color:#94a5bb; font-size:11px; line-height:1.55; }
+        .solpay-panel label { display:block; color:#94a5bb; font-size:11px; margin:10px 0 6px; }
+        .solpay-panel .sig-input { box-sizing:border-box; margin-bottom:8px; }
+        .solpay-panel .token-selector { margin-bottom:8px; }
+        .solpay-presets .token-btn { padding:8px 5px; font-size:10px; }
+        .solpay-checkout { margin-top:12px; padding:12px; border:1px solid #263449; border-radius:14px; background:#080d14; }
+        .solpay-checkout[hidden] { display:none; }
+        .solpay-checkout-row { display:flex; justify-content:space-between; gap:10px; padding:7px 0; font-size:11px; color:#94a5bb; }
+        .solpay-checkout-row strong { color:#dce8da; text-align:right; overflow-wrap:anywhere; }
+        .solpay-open-wallet { display:block; margin:10px 0; text-align:center; text-decoration:none; }
+        .solpay-status { min-height:18px; color:#aebdcc; font-size:11px; line-height:1.45; }
+        .solpay-status[data-state="success"] { color:#86efac; }
+        .solpay-status[data-state="error"] { color:#fca5a5; }
+        .solpay-fallback { margin-top:12px; border:1px solid #1c2436; border-radius:14px; background:#090d14; }
+        .solpay-fallback summary { padding:13px; cursor:pointer; color:#b7c3d1; font-size:12px; font-weight:700; }
+        .solpay-fallback-content { padding:0 12px 12px; }
 
         .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(10, 12, 18, 0.95); backdrop-filter: blur(20px); border-top: 1px solid #192033; padding: 12px 16px; padding-bottom: calc(12px + env(safe-area-inset-bottom, 16px)); display: flex; justify-content: space-around; z-index: 900; }
         .nav-btn { background: transparent; border: none; color: #64748b; font-size: 11px; font-weight: 600; cursor: pointer; }
@@ -1809,9 +1827,37 @@ RAW_HTML = r"""<!DOCTYPE html>
                 </div>
 
                 <div id="section-deposit">
+                    <div class="solpay-panel">
+                        <h3>Pay with Solana Pay</h3>
+                        <div class="solpay-note">Choose USDC or native SOL on Solana mainnet. The exact amount and invoice reference are added to the wallet request.</div>
+                        <div class="token-selector" role="group" aria-label="Deposit asset" style="margin-top:12px;">
+                            <button type="button" class="token-btn active" id="deposit-token-usdc" onclick="selectDepositToken('USDC')">USDC</button>
+                            <button type="button" class="token-btn" id="deposit-token-sol" onclick="selectDepositToken('SOL')">SOL</button>
+                        </div>
+                        <label id="solpay-amount-label" for="solpay-amount">Amount in USDC</label>
+                        <input id="solpay-amount" class="sig-input" type="number" inputmode="decimal"
+                            min="0.000001" step="0.000001" value="10" autocomplete="off">
+                        <div id="solpay-presets" class="token-selector solpay-presets" role="group" aria-label="Quick amount choices"></div>
+                        <button class="btn-verify" id="solpay-create" type="button" onclick="createSolanaPayInvoice()">Create payment request</button>
+                        <p id="solpay-status" class="solpay-status" role="status" aria-live="polite">Select an asset and amount to continue.</p>
+                        <div id="solpay-checkout" class="solpay-checkout" hidden>
+                            <div class="solpay-checkout-row"><span>Pay exactly</span><strong id="solpay-checkout-amount"></strong></div>
+                            <div class="solpay-checkout-row"><span>Recipient</span><strong id="solpay-recipient"></strong></div>
+                            <div class="solpay-checkout-row"><span>Request expires</span><strong id="solpay-expiration"></strong></div>
+                            <a id="solpay-open-wallet" class="btn-green-main solpay-open-wallet">Open in Solana wallet</a>
+                            <a id="solpay-status-page" href="#" target="_blank" rel="noopener noreferrer"
+                                style="display:block;color:#86efac;font-size:11px;text-align:center;margin:8px 0;">Open payment status page</a>
+                            <div class="solpay-note">The wallet shows its network fee before you approve. The bot verifies the exact asset and amount, then credits your balance after Solana finalizes the transfer. Do not pay twice.</div>
+                        </div>
+                    </div>
+
+                    <details class="solpay-fallback">
+                        <summary>Use a standard transfer and verify its transaction</summary>
+                        <div class="solpay-fallback-content">
+                            <p class="solpay-fallback-note">For manual deposits, verify your wallet once, send USDC or SOL to the address below, then submit the transaction signature.</p>
                     <div class="banner-limit">
                         <div style="color:#4ade80; font-weight:800;">USDC / SOL · Solana mainnet</div>
-                        <div style="font-size:11px; margin-top:6px;">Verify your wallet once. Send funds, then paste the transaction signature. No Memo required.</div>
+                        <div style="font-size:11px; margin-top:6px;">Manual transfer fallback. No Memo required.</div>
                     </div>
                     <button class="btn-copy" onclick="linkDepositWallet()">Verify your wallet</button>
                     <a id="wallet-verification-link" hidden target="_blank" rel="noopener noreferrer">Open wallet verification · hold to copy link</a>
@@ -1821,6 +1867,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                     </div>
                     <input id="dep-signature" class="sig-input" placeholder="Transaction signature or Solscan link">
                     <button class="btn-verify" id="btn-verify-action" onclick="verifyOnchainDeposit()">Verify deposit</button>
+                        </div>
+                    </details>
                 </div>
 
                 <div id="section-withdraw" style="display: none;">
@@ -2258,6 +2306,161 @@ RAW_HTML = r"""<!DOCTYPE html>
                 document.getElementById('discovery-status').textContent=data.message;
             }catch(e){document.getElementById('discovery-status').textContent=e.message||'Scan unavailable.';}
             finally{button.disabled=false;}
+        }
+
+        let selectedDepositAsset = 'USDC';
+        let activeSolanaPayInvoice = null;
+        let solanaPayPollTimer = null;
+        function solanaPayStorageKey() {
+            const user = getUserData();
+            return user?.id ? 'ai-trader-solpay-invoice:' + user.id : null;
+        }
+        function setSolanaPayStatus(message, state='') {
+            const status = document.getElementById('solpay-status');
+            status.textContent = message;
+            status.dataset.state = state;
+        }
+        function lockSolanaPayInputs(locked) {
+            document.getElementById('deposit-token-usdc').disabled = locked;
+            document.getElementById('deposit-token-sol').disabled = locked;
+            document.getElementById('solpay-amount').disabled = locked;
+            document.querySelectorAll('#solpay-presets button').forEach(button => button.disabled = locked);
+            document.getElementById('solpay-create').disabled = locked;
+        }
+        function selectDepositToken(token) {
+            if (!['USDC', 'SOL'].includes(token)) return;
+            selectedDepositAsset = token;
+            const usdc = token === 'USDC';
+            document.getElementById('deposit-token-usdc').classList.toggle('active', usdc);
+            document.getElementById('deposit-token-sol').classList.toggle('active', !usdc);
+            const input = document.getElementById('solpay-amount');
+            input.step = usdc ? '0.000001' : '0.000000001';
+            input.min = usdc ? '0.000001' : '0.000000001';
+            input.value = usdc ? '10' : '0.1';
+            document.getElementById('solpay-amount-label').textContent = 'Amount in ' + token;
+            const values = usdc ? ['5', '10', '25', '50'] : ['0.05', '0.1', '0.25', '0.5'];
+            const presets = document.getElementById('solpay-presets');
+            presets.replaceChildren(...values.map(value => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'token-btn';
+                button.textContent = value + ' ' + token;
+                button.addEventListener('click', () => { input.value = value; });
+                return button;
+            }));
+        }
+        async function createSolanaPayInvoice() {
+            const button = document.getElementById('solpay-create');
+            if (activeSolanaPayInvoice?.state === 'OPEN' &&
+                Number(activeSolanaPayInvoice.expires_at) > Date.now() / 1000) {
+                setSolanaPayStatus('A payment request is already open. Use the same wallet link; do not create or pay twice.');
+                document.getElementById('solpay-checkout').hidden = false;
+                return;
+            }
+            const amount = document.getElementById('solpay-amount').value.trim();
+            const decimals = selectedDepositAsset === 'USDC' ? 6 : 9;
+            const validAmount = selectedDepositAsset === 'USDC'
+                ? /^\d+(?:\.\d{1,6})?$/.test(amount)
+                : /^\d+(?:\.\d{1,9})?$/.test(amount);
+            if (!validAmount || Number(amount) <= 0) {
+                setSolanaPayStatus('Enter a positive amount with up to ' + decimals + ' decimal places.', 'error');
+                return;
+            }
+            button.disabled = true;
+            setSolanaPayStatus('Creating your exact payment request…');
+            try {
+                const response = await apiFetch('/api/deposit_invoice', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token: selectedDepositAsset, amount})
+                });
+                const invoice = await response.json();
+                if (!response.ok || !invoice.success || !invoice.solana_pay_uri) {
+                    throw new Error('Could not create a Solana Pay request. Check your account access and try again.');
+                }
+                activeSolanaPayInvoice = invoice;
+                const storageKey = solanaPayStorageKey();
+                if (storageKey) {
+                    try { sessionStorage.setItem(storageKey, invoice.invoice_id); } catch(e) {}
+                }
+                await showSolanaPayInvoice(invoice);
+                lockSolanaPayInputs(invoice.state === 'OPEN' &&
+                    Number(invoice.expires_at) > Date.now() / 1000);
+                if (solanaPayPollTimer) clearInterval(solanaPayPollTimer);
+                solanaPayPollTimer = setInterval(refreshSolanaPayInvoice, 5000);
+            } catch(e) {
+                setSolanaPayStatus('Could not create a Solana Pay request. Check your account access and try again.', 'error');
+            } finally {
+                button.disabled = !!(activeSolanaPayInvoice?.state === 'OPEN' &&
+                    Number(activeSolanaPayInvoice.expires_at) > Date.now() / 1000);
+            }
+        }
+        async function showSolanaPayInvoice(invoice) {
+            const panel = document.getElementById('solpay-checkout');
+            panel.hidden = false;
+            document.getElementById('solpay-checkout-amount').textContent = invoice.amount + ' ' + invoice.token;
+            document.getElementById('solpay-recipient').textContent = invoice.deposit_wallet;
+            document.getElementById('solpay-expiration').textContent =
+                new Date(Number(invoice.expires_at) * 1000).toLocaleString('en-GB');
+            const openWallet = document.getElementById('solpay-open-wallet');
+            const statusPage = document.getElementById('solpay-status-page');
+            const expired = Number(invoice.expires_at) <= Date.now() / 1000;
+            if (invoice.state === 'CREDITED') {
+                openWallet.hidden = true;
+                statusPage.hidden = true;
+                setSolanaPayStatus('Payment confirmed and credited to your account.', 'success');
+                lockSolanaPayInputs(false);
+                const storageKey = solanaPayStorageKey();
+                if (storageKey) { try { sessionStorage.removeItem(storageKey); } catch(e) {} }
+                return;
+            }
+            if (expired || !invoice.solana_pay_uri) {
+                openWallet.hidden = true;
+                statusPage.hidden = true;
+                setSolanaPayStatus('This request has expired. Do not pay to it; create a new request.', 'error');
+                lockSolanaPayInputs(false);
+                const storageKey = solanaPayStorageKey();
+                if (storageKey) { try { sessionStorage.removeItem(storageKey); } catch(e) {} }
+                return;
+            }
+            openWallet.href = invoice.solana_pay_uri;
+            openWallet.hidden = false;
+            statusPage.href = invoice.payment_url;
+            statusPage.hidden = !invoice.payment_url;
+            lockSolanaPayInputs(true);
+            setSolanaPayStatus('Waiting for payment confirmation. Do not send this payment again.');
+        }
+        async function refreshSolanaPayInvoice() {
+            if (!activeSolanaPayInvoice?.invoice_id) return;
+            const previousState = activeSolanaPayInvoice.state;
+            try {
+                const response = await apiFetch('/deposit/' + encodeURIComponent(activeSolanaPayInvoice.invoice_id) + '/status',
+                    {cache: 'no-store'});
+                const invoice = await response.json();
+                if (!response.ok || !invoice.success) throw new Error(invoice.message || 'Status check unavailable.');
+                activeSolanaPayInvoice = invoice;
+                if (invoice.token === 'USDC' || invoice.token === 'SOL') {
+                    if (invoice.token !== selectedDepositAsset) selectDepositToken(invoice.token);
+                    document.getElementById('solpay-amount').value = invoice.amount;
+                }
+                await showSolanaPayInvoice(invoice);
+                if (invoice.state === 'CREDITED' && previousState !== 'CREDITED') await refresh();
+            } catch(e) {
+                setSolanaPayStatus('Payment status check is temporarily unavailable. Do not pay again.', 'error');
+            }
+        }
+        function restoreSolanaPayInvoice() {
+            const storageKey = solanaPayStorageKey();
+            if (!storageKey) return;
+            let invoiceId = '';
+            try { invoiceId = sessionStorage.getItem(storageKey) || ''; } catch(e) {}
+            if (!invoiceId) return;
+            activeSolanaPayInvoice = {invoice_id: invoiceId, state: 'OPEN'};
+            document.getElementById('solpay-checkout').hidden = false;
+            lockSolanaPayInputs(true);
+            refreshSolanaPayInvoice();
+            if (solanaPayPollTimer) clearInterval(solanaPayPollTimer);
+            solanaPayPollTimer = setInterval(refreshSolanaPayInvoice, 5000);
         }
 
         async function linkDepositWallet() {
@@ -3479,6 +3682,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                 }
             } catch(e) {}
         }
+        selectDepositToken('USDC');
+        restoreSolanaPayInvoice();
         setInterval(refresh, 5000);
     </script>
 </body>
@@ -3912,7 +4117,7 @@ async def main():
         async def handler(request):
             return await runtime.public_handle(request, action)
         return handler
-    payment_html = Path(__file__).with_name("deposit_payment.html").read_text(encoding="utf-8")
+    payment_html = Path(__file__).with_name("solana_pay_checkout.html").read_text(encoding="utf-8")
     async def payment_page(request):
         if not runtime.ledger.get_invoice(request.match_info["invoice"]):
             raise web.HTTPNotFound()

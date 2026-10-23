@@ -748,7 +748,7 @@ class CustodyLedger:
             count = db.execute("SELECT COUNT(*) FROM custody_invoices WHERE uid=? AND state='OPEN' AND expires_at>?",
                                (uid, now)).fetchone()[0]
             if count >= 10:
-                raise LedgerError("Слишком много открытых запросов пополнения.")
+                raise LedgerError("Too many open deposit requests. Wait for one to expire before creating another.")
             db.execute("INSERT INTO custody_invoices(id,uid,asset,raw,created_at,expires_at) VALUES(?,?,?,?,?,?)",
                        (iid, uid, asset, raw, now, now + 3600))
         return self.get_invoice(iid)
