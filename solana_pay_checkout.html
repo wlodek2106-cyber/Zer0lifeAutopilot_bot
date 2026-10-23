@@ -59,6 +59,11 @@ async function refreshInvoice() {
             walletLink.hidden = true;
             statusNode.textContent = 'Payment confirmed and credited to your account.';
             statusNode.dataset.state = 'success';
+        } else if (invoice.token === 'USDC') {
+            walletLink.hidden = true;
+            document.getElementById('expiry').textContent = 'Use standard transfer';
+            statusNode.textContent = 'USDC deposits use standard transfer in AI Trader. Return to Wallet, copy the deposit address, send USDC, then submit the transaction signature for verification. Do not pay this old Solana Pay request.';
+            statusNode.dataset.state = 'error';
         } else if (Number(invoice.expires_at) <= Date.now() / 1000 || !invoice.solana_pay_uri) {
             walletLink.hidden = true;
             statusNode.textContent = 'This request has expired. Do not pay to it; create a new request in AI Trader.';

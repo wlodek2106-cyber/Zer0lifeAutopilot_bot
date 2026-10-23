@@ -1828,18 +1828,14 @@ RAW_HTML = r"""<!DOCTYPE html>
 
                 <div id="section-deposit">
                     <div class="solpay-panel">
-                        <h3>Pay with Solana Pay</h3>
-                        <div class="solpay-note">Choose USDC or native SOL on Solana mainnet. The exact amount and invoice reference are added to the wallet request.</div>
-                        <div class="token-selector" role="group" aria-label="Deposit asset" style="margin-top:12px;">
-                            <button type="button" class="token-btn active" id="deposit-token-usdc" onclick="selectDepositToken('USDC')">USDC</button>
-                            <button type="button" class="token-btn" id="deposit-token-sol" onclick="selectDepositToken('SOL')">SOL</button>
-                        </div>
-                        <label id="solpay-amount-label" for="solpay-amount">Amount in USDC</label>
+                        <h3>Pay SOL with Solana Pay</h3>
+                        <div class="solpay-note">Solana Pay is available for native SOL deposits. For USDC, use the standard transfer and transaction verification below.</div>
+                        <label id="solpay-amount-label" for="solpay-amount">Amount in SOL</label>
                         <input id="solpay-amount" class="sig-input" type="number" inputmode="decimal"
-                            min="0.000001" step="0.000001" value="10" autocomplete="off">
+                            min="0.000000001" step="0.000000001" value="0.1" autocomplete="off">
                         <div id="solpay-presets" class="token-selector solpay-presets" role="group" aria-label="Quick amount choices"></div>
                         <button class="btn-verify" id="solpay-create" type="button" onclick="createSolanaPayInvoice()">Create payment request</button>
-                        <p id="solpay-status" class="solpay-status" role="status" aria-live="polite">Select an asset and amount to continue.</p>
+                        <p id="solpay-status" class="solpay-status" role="status" aria-live="polite">Enter the SOL amount to create a payment request.</p>
                         <div id="solpay-checkout" class="solpay-checkout" hidden>
                             <div class="solpay-checkout-row"><span>Pay exactly</span><strong id="solpay-checkout-amount"></strong></div>
                             <div class="solpay-checkout-row"><span>Recipient</span><strong id="solpay-recipient"></strong></div>
@@ -1851,10 +1847,10 @@ RAW_HTML = r"""<!DOCTYPE html>
                         </div>
                     </div>
 
-                    <details class="solpay-fallback">
-                        <summary>Use a standard transfer and verify its transaction</summary>
+                    <details class="solpay-fallback" open>
+                        <summary>Deposit USDC by standard transfer and verify the transaction</summary>
                         <div class="solpay-fallback-content">
-                            <p class="solpay-fallback-note">For manual deposits, verify your wallet once, send USDC or SOL to the address below, then submit the transaction signature.</p>
+                            <p class="solpay-fallback-note">For USDC deposits, verify your wallet once, copy the address below, send USDC on Solana mainnet, then submit the transaction signature. The bot credits your balance only after it verifies the finalized transfer. SOL can also be deposited by standard transfer.</p>
                     <div class="banner-limit">
                         <div style="color:#4ade80; font-weight:800;">USDC / SOL · Solana mainnet</div>
                         <div style="font-size:11px; margin-top:6px;">Manual transfer fallback. No Memo required.</div>
@@ -2308,7 +2304,6 @@ RAW_HTML = r"""<!DOCTYPE html>
             finally{button.disabled=false;}
         }
 
-        let selectedDepositAsset = 'USDC';
         let activeSolanaPayInvoice = null;
         let solanaPayPollTimer = null;
         function solanaPayStorageKey() {
@@ -2321,30 +2316,23 @@ RAW_HTML = r"""<!DOCTYPE html>
             status.dataset.state = state;
         }
         function lockSolanaPayInputs(locked) {
-            document.getElementById('deposit-token-usdc').disabled = locked;
-            document.getElementById('deposit-token-sol').disabled = locked;
             document.getElementById('solpay-amount').disabled = locked;
             document.querySelectorAll('#solpay-presets button').forEach(button => button.disabled = locked);
             document.getElementById('solpay-create').disabled = locked;
         }
-        function selectDepositToken(token) {
-            if (!['USDC', 'SOL'].includes(token)) return;
-            selectedDepositAsset = token;
-            const usdc = token === 'USDC';
-            document.getElementById('deposit-token-usdc').classList.toggle('active', usdc);
-            document.getElementById('deposit-token-sol').classList.toggle('active', !usdc);
+        function initializeSolanaPayControls() {
             const input = document.getElementById('solpay-amount');
-            input.step = usdc ? '0.000001' : '0.000000001';
-            input.min = usdc ? '0.000001' : '0.000000001';
-            input.value = usdc ? '10' : '0.1';
-            document.getElementById('solpay-amount-label').textContent = 'Amount in ' + token;
-            const values = usdc ? ['5', '10', '25', '50'] : ['0.05', '0.1', '0.25', '0.5'];
+            input.step = '0.000000001';
+            input.min = '0.000000001';
+            input.value = '0.1';
+            document.getElementById('solpay-amount-label').textContent = 'Amount in SOL';
+            const values = ['0.05', '0.1', '0.25', '0.5'];
             const presets = document.getElementById('solpay-presets');
             presets.replaceChildren(...values.map(value => {
                 const button = document.createElement('button');
                 button.type = 'button';
                 button.className = 'token-btn';
-                button.textContent = value + ' ' + token;
+                button.textContent = value + ' SOL';
                 button.addEventListener('click', () => { input.value = value; });
                 return button;
             }));
@@ -2358,10 +2346,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                 return;
             }
             const amount = document.getElementById('solpay-amount').value.trim();
-            const decimals = selectedDepositAsset === 'USDC' ? 6 : 9;
-            const validAmount = selectedDepositAsset === 'USDC'
-                ? /^\d+(?:\.\d{1,6})?$/.test(amount)
-                : /^\d+(?:\.\d{1,9})?$/.test(amount);
+            const decimals = 9;
+            const validAmount = /^\d+(?:\.\d{1,9})?$/.test(amount);
             if (!validAmount || Number(amount) <= 0) {
                 setSolanaPayStatus('Enter a positive amount with up to ' + decimals + ' decimal places.', 'error');
                 return;
@@ -2372,7 +2358,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const response = await apiFetch('/api/deposit_invoice', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({token: selectedDepositAsset, amount})
+                    body: JSON.stringify({token: 'SOL', amount})
                 });
                 const invoice = await response.json();
                 if (!response.ok || !invoice.success || !invoice.solana_pay_uri) {
@@ -2398,13 +2384,12 @@ RAW_HTML = r"""<!DOCTYPE html>
         async function showSolanaPayInvoice(invoice) {
             const panel = document.getElementById('solpay-checkout');
             panel.hidden = false;
+            const openWallet = document.getElementById('solpay-open-wallet');
+            const statusPage = document.getElementById('solpay-status-page');
             document.getElementById('solpay-checkout-amount').textContent = invoice.amount + ' ' + invoice.token;
             document.getElementById('solpay-recipient').textContent = invoice.deposit_wallet;
             document.getElementById('solpay-expiration').textContent =
                 new Date(Number(invoice.expires_at) * 1000).toLocaleString('en-GB');
-            const openWallet = document.getElementById('solpay-open-wallet');
-            const statusPage = document.getElementById('solpay-status-page');
-            const expired = Number(invoice.expires_at) <= Date.now() / 1000;
             if (invoice.state === 'CREDITED') {
                 openWallet.hidden = true;
                 statusPage.hidden = true;
@@ -2412,8 +2397,27 @@ RAW_HTML = r"""<!DOCTYPE html>
                 lockSolanaPayInputs(false);
                 const storageKey = solanaPayStorageKey();
                 if (storageKey) { try { sessionStorage.removeItem(storageKey); } catch(e) {} }
+                activeSolanaPayInvoice = null;
+                if (solanaPayPollTimer) { clearInterval(solanaPayPollTimer); solanaPayPollTimer = null; }
                 return;
             }
+            if (invoice.token === 'USDC') {
+                document.getElementById('solpay-checkout-amount').textContent = 'Use standard transfer';
+                document.getElementById('solpay-recipient').textContent = invoice.deposit_wallet;
+                document.getElementById('solpay-expiration').textContent = 'Not available for USDC';
+                openWallet.hidden = true;
+                statusPage.hidden = true;
+                setSolanaPayStatus(
+                    'USDC deposits use the standard transfer section below. Do not pay this old Solana Pay request.',
+                    'error');
+                lockSolanaPayInputs(false);
+                const storageKey = solanaPayStorageKey();
+                if (storageKey) { try { sessionStorage.removeItem(storageKey); } catch(e) {} }
+                activeSolanaPayInvoice = null;
+                if (solanaPayPollTimer) { clearInterval(solanaPayPollTimer); solanaPayPollTimer = null; }
+                return;
+            }
+            const expired = Number(invoice.expires_at) <= Date.now() / 1000;
             if (expired || !invoice.solana_pay_uri) {
                 openWallet.hidden = true;
                 statusPage.hidden = true;
@@ -2439,8 +2443,11 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const invoice = await response.json();
                 if (!response.ok || !invoice.success) throw new Error(invoice.message || 'Status check unavailable.');
                 activeSolanaPayInvoice = invoice;
-                if (invoice.token === 'USDC' || invoice.token === 'SOL') {
-                    if (invoice.token !== selectedDepositAsset) selectDepositToken(invoice.token);
+                if (invoice.token === 'USDC') {
+                    await showSolanaPayInvoice(invoice);
+                    return;
+                }
+                if (invoice.token === 'SOL') {
                     document.getElementById('solpay-amount').value = invoice.amount;
                 }
                 await showSolanaPayInvoice(invoice);
@@ -3682,7 +3689,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 }
             } catch(e) {}
         }
-        selectDepositToken('USDC');
+        initializeSolanaPayControls();
         restoreSolanaPayInvoice();
         setInterval(refresh, 5000);
     </script>

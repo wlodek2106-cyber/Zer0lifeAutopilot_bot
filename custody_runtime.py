@@ -633,15 +633,15 @@ class CustodyRuntime(WalletRuntime):
         token = "USDC" if invoice["asset"] == USDC else "SOL"
         amount = display_raw(invoice["raw"], 6 if token == "USDC" else 9)
         active = invoice["state"] == "OPEN" and invoice["expires_at"] >= int(time.time())
-        params = {
-            "amount": amount,
-            "memo": "ZL1:" + invoice["id"],
-            "label": f"AI Trader {token}",
-            "message": f"Deposit {amount} {token}",
-        }
-        if token == "USDC":
-            params["spl-token"] = USDC
-        pay_uri = f"solana:{self.wallet}?{urlencode(params)}" if active else None
+        pay_uri = None
+        if active and token == "SOL":
+            params = {
+                "amount": amount,
+                "memo": "ZL1:" + invoice["id"],
+                "label": "AI Trader SOL",
+                "message": f"Deposit {amount} SOL",
+            }
+            pay_uri = f"solana:{self.wallet}?{urlencode(params)}"
         payment_url = self.base_url.rstrip("/") + "/deposit/" + invoice["id"]
         return {"invoice_id": invoice["id"], "token": token, "amount": amount,
             "deposit_wallet": self.wallet, "expires_at": invoice["expires_at"],
@@ -655,14 +655,17 @@ class CustodyRuntime(WalletRuntime):
         if not isinstance(body, dict):
             raise WalletError("Invalid payment request.", 400)
         token = str(body.get("token", "")).strip().upper()
-        if token not in {"USDC", "SOL"}:
-            raise WalletError("Choose USDC or SOL on Solana mainnet.", 400)
-        decimals = 6 if token == "USDC" else 9
+        if token == "USDC":
+            raise WalletError(
+                "USDC deposits use the standard transfer and transaction-signature verification flow.", 400)
+        if token != "SOL":
+            raise WalletError("Choose native SOL for Solana Pay. USDC uses standard transfer verification.", 400)
+        decimals = 9
         try:
             raw = amount_raw(body.get("amount", ""), decimals)
         except WalletError:
-            raise WalletError(f"Enter a positive {token} amount with no more than {decimals} decimal places.", 400)
-        invoice = self.ledger.invoice(uid, USDC if token == "USDC" else SOL, raw)
+            raise WalletError(f"Enter a positive SOL amount with no more than {decimals} decimal places.", 400)
+        invoice = self.ledger.invoice(uid, SOL, raw)
         return web.json_response({"success": True, **self.public_invoice(invoice)})
 
     async def deposit(self, request, session):
