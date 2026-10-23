@@ -152,7 +152,8 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
             "main_market_context": {"SOL": {
                 "change_m5_pct": 0.8, "change_h1_pct": 1.5, "change_h6_pct": 0.2,
                 "buys_m5": 8, "sells_m5": 4, "chart_ready": 1, "chart_buy_setup": 1}},
-            "sniper_market_context": {"WIF": {"chart_ready": 1, "chart_buy_setup": 1}},
+            "sniper_market_context": {"WIF": {"chart_ready": 1, "chart_buy_setup": 1,
+                "change_m5_pct": 0.8, "change_h1_pct": 1.2, "change_h6_pct": -4.9}},
             "decisions": {"main": {"action": "BUY", "symbol": "SOL", "reason": "signal"},
                           "sniper": {"action": "HOLD", "symbol": None, "reason": "wait"}}}
 
@@ -198,7 +199,8 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
                 code, mint, 6, json.dumps(metrics), int(time.time())))
         self.service.restore_catalog()
         self.snapshot.setdefault("sniper_market_context", {})[code] = {
-            "chart_ready": 1, "chart_buy_setup": 1}
+            "chart_ready": 1, "chart_buy_setup": 1,
+            "change_m5_pct": 0.8, "change_h1_pct": 1.2, "change_h6_pct": -4.9}
         return code, mint
 
     async def test_discovered_asset_uses_native_capital_and_cannot_leak_into_core(self):

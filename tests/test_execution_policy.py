@@ -79,7 +79,8 @@ class PolicyTests(unittest.TestCase):
             created_at=1000, now=1001, original={"WIF": 1, "SOL": 100},
             prices={"WIF": 1, "SOL": 100}, samples={"WIF": 5, "SOL": 5},
             balance=25_000_000, order_raw=5_000_000,
-            sniper_context={"WIF": {"chart_ready": 1, "chart_buy_setup": 1}})
+            sniper_context={"WIF": {"chart_ready": 1, "chart_buy_setup": 1,
+                "change_m5_pct": 0.8, "change_h1_pct": 1.2, "change_h6_pct": -4.9}})
         four_open = [{"symbol": f"TOKEN{i}"} for i in range(4)]
         five_open = [{"symbol": f"TOKEN{i}"} for i in range(5)]
         self.assertTrue(policy.proposal(held=four_open, **proposal_values).allowed)
@@ -90,8 +91,32 @@ class PolicyTests(unittest.TestCase):
             **proposal_values, "sniper_context": {}}).code, "sniper_chart_data")
         self.assertEqual(policy.proposal(held=four_open, **{
             **proposal_values, "sniper_context": {
-                "WIF": {"chart_ready": 1, "chart_buy_setup": 0}}}).code,
+                "WIF": {"chart_ready": 1, "chart_buy_setup": 0,
+                    "change_m5_pct": 0.8, "change_h1_pct": 1.2}}}).code,
             "sniper_chart_confirmation")
+        falling_contexts = (
+            ({"change_m5_pct": -0.1, "change_h1_pct": 1.2}, "sniper_trend"),
+            ({"change_m5_pct": 0.8, "change_h1_pct": 0}, "sniper_trend"),
+            ({"change_m5_pct": 0.8}, "sniper_trend_data"),
+            ({"change_m5_pct": 0.8, "change_h1_pct": 1.2,
+              "change_h6_pct": -5.1}, "sniper_drawdown"),
+        )
+        for metrics, expected_code in falling_contexts:
+            with self.subTest(metrics=metrics):
+                blocked_context = {"WIF": {
+                    "chart_ready": 1, "chart_buy_setup": 1, **metrics}}
+                self.assertEqual(policy.proposal(
+                    held=four_open, **{**proposal_values,
+                        "sniper_context": blocked_context}).code, expected_code)
+        for six_hour_change in (-5, None):
+            metrics = {"chart_ready": 1, "chart_buy_setup": 1,
+                "change_m5_pct": 0.8, "change_h1_pct": 1.2}
+            if six_hour_change is not None:
+                metrics["change_h6_pct"] = six_hour_change
+            with self.subTest(six_hour_change=six_hour_change):
+                self.assertTrue(policy.proposal(
+                    held=four_open, **{**proposal_values,
+                        "sniper_context": {"WIF": metrics}}).allowed)
         self.assertTrue(policy.proposal(
             held=[{"symbol": "WIF"}],
             **{**proposal_values, "decision": {

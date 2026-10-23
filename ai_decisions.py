@@ -230,8 +230,10 @@ async def analyze(session, market, universes, screening=None, main_context=None,
                 "backtested and do not predict profit; never force a trade when no candidate qualifies.")},
             {"role": "system", "content": (
                 "For sniper (SOL) BUY, also require the supplied numeric sniper chart context to have "
-                "chart_ready=1 and chart_buy_setup=1. If the context is missing, stale, or unconfirmed, "
-                "choose HOLD. This is a separate entry gate; it never blocks SELL of an owned position. "
+                "chart_ready=1 and chart_buy_setup=1, positive change_m5_pct and change_h1_pct, and "
+                "change_h6_pct no lower than -5% when that value is available. If required 5-minute/hourly "
+                "changes or chart data are missing, stale, negative, or unconfirmed, choose HOLD. "
+                "This is an entry-only gate; it never blocks SELL of an owned position. "
                 "The server independently enforces the same rule.")},
             {"role": "user", "content": json.dumps({
                 "prices_usd_recent_samples": market, "permitted_symbols": universes,

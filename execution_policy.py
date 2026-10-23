@@ -9,7 +9,7 @@ from custody_ledger import USDC, SOL
 from entry_costs import MAX_COST_BPS, MAX_PRICE_IMPACT_PCT, MAX_QUOTE_AGE_SECONDS, assess_entry
 from wallet_runtime import WalletError
 
-VERSION = "independent-execution-v5-sniper-chart-gate"
+VERSION = "independent-execution-v6-sniper-trend-gate"
 MAX_POSITIONS = MappingProxyType({"main": 5, "sniper": 5})
 DECISION_SECONDS = 120
 QUOTE_SECONDS = MAX_QUOTE_AGE_SECONDS
@@ -122,7 +122,7 @@ def core_entry_signal(symbol, context):
 
 
 def sniper_entry_signal(symbol, context):
-    """Require fresh 5m/1h chart data and a deterministic buy setup for Sniper entries."""
+    """Require rising short-term momentum and chart confirmation for Sniper entries."""
     if not isinstance(context, dict) or not isinstance(context.get(symbol), dict):
         return deny("sniper_chart_data",
                     "SKIPPED: fresh 5-minute and 1-hour chart data is unavailable; Sniper BUY is blocked.")
@@ -133,6 +133,17 @@ def sniper_entry_signal(symbol, context):
     if metrics.get("chart_buy_setup") != 1:
         return deny("sniper_chart_confirmation",
                     "SKIPPED: the 5-minute/1-hour chart has no confirmed Sniper buy setup.")
+    m5, h1 = metrics.get("change_m5_pct"), metrics.get("change_h1_pct")
+    if not (bounded_pct(m5) and bounded_pct(h1)):
+        return deny("sniper_trend_data",
+                    "SKIPPED: Sniper needs valid 5-minute and 1-hour price changes.")
+    if m5 <= 0 or h1 <= 0:
+        return deny("sniper_trend",
+                    "SKIPPED: Sniper needs positive 5-minute and 1-hour price changes.")
+    h6 = metrics.get("change_h6_pct")
+    if bounded_pct(h6) and h6 < -5:
+        return deny("sniper_drawdown",
+                    "SKIPPED: Sniper 6-hour decline is below the configured trend limit.")
     return allow()
 
 
@@ -276,6 +287,8 @@ def describe():
             "max_positions": dict(MAX_POSITIONS), "liquidity_basis": "executable_route_price_impact",
             "entry_filters_never_block_exits": True,
             "sniper_buy_requires_fresh_chart_confirmation": True,
+            "sniper_buy_requires_positive_m5_h1": True,
+            "sniper_buy_max_6h_decline_pct": 5,
             "exit_policy": {"core_stop_loss_pct": CORE_STOP_LOSS_PCT,
                             "sniper_stop_loss_pct": SNIPER_STOP_LOSS_PCT,
                             "trailing_activation_pct": TRAILING_ACTIVATION_PCT,

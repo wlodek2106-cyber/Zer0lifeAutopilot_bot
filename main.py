@@ -3618,7 +3618,9 @@ RAW_HTML = r"""<!DOCTYPE html>
                           +'s / '+policy.quote_max_slot_distance+' slots · Slippage ≤ '+(policy.slippage_bps/100)
                           +'% · Buy impact ≤ '+policy.buy_max_price_impact_pct+'% · Core round-trip costs ≤ '
                           +policy.core_max_cost_pct+'% · Positions: Core '+policy.max_positions.main
-                          +' / Sniper '+policy.max_positions.sniper+'. Order sizes come from your saved settings.'
+                          +' / Sniper '+policy.max_positions.sniper
+                          +'. Sniper BUY requires positive 5m/1h changes and no 6h decline below -'
+                          +policy.sniper_buy_max_6h_decline_pct+'%. Order sizes come from your saved settings.'
                         : 'Independent policy unavailable. Do not enable real trading.';
                     const gate=s.execution_check;
                     document.getElementById('execution-policy-result').textContent=gate
