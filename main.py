@@ -2263,13 +2263,16 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const result=await response.json();output.textContent=result.message||'Check incomplete.';
             } catch(e) {output.textContent='Server did not respond. This check does not start trading.';}
         }
+        function normalizeAnalysisText(value) {
+            return String(value||'').replace(/\\r\\n/g,'\n').replace(/\\n/g,'\n').replace(/\\r/g,'\n');
+        }
         async function previewAI() {
             const box=document.getElementById('ai-decisions');box.textContent='Waiting for AI… No trades are sent.';
             try {
                 const response=await apiFetch('/api/ai_preview',{method:'POST'});
                 const result=await response.json();
                 if(!response.ok||!result.success)throw new Error(result.message);
-                box.textContent=Object.entries(result.decisions).map(([mode,d])=>(mode==='main'?'USDC':'SOL')+': '+d.action+' '+(d.symbol||'')+' — '+d.reason).join('\n');
+                box.textContent=Object.entries(result.decisions).map(([mode,d])=>(mode==='main'?'USDC':'SOL')+': '+d.action+' '+(d.symbol||'')+' — '+normalizeAnalysisText(d.reason)).join('\n');
                 await refresh();
             } catch(e) {box.textContent=e.message;}
         }
@@ -2282,7 +2285,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 return;
             }
             const price=value=>Number.isFinite(Number(value))&&Number(value)>0?Number(value).toPrecision(5):'not established';
-            output.textContent='Core chart zones · 5m entry / 1h context · USD\\n'+rows.map(([symbol,c])=>{
+            output.textContent='Core chart zones · 5m entry / 1h context · USD\n'+rows.map(([symbol,c])=>{
                 const label=(labels||{})[symbol]||symbol;
                 if(c.chart_ready!==1)
                     return label+': fresh candles unavailable ('+(c.chart_m5_candles||0)+' 5m / '+(c.chart_h1_candles||0)+' 1h); Core BUY blocked.';
@@ -2297,7 +2300,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     +' · 5m RSI '+rsi+' · relative volume '+volume
                     +' · confirmed entry '+(c.chart_buy_setup===1?'YES':'NO')
                     +(c.chart_sell_setup===1?' · exit evidence near resistance':'');
-            }).join('\\n');
+            }).join('\n');
         }
         let withdrawSending = false;
         async function scanCandidates() {
@@ -3617,7 +3620,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     const gate=s.execution_check;
                     document.getElementById('execution-policy-result').textContent=gate
                         ? new Date(gate.checked_at*1000).toLocaleString()+' · '+gate.status+' · '
-                          +gate.stage+' / '+gate.action+(gate.symbol?' '+gate.symbol:'')+'\\n'+gate.reason
+                          +gate.stage+' / '+gate.action+(gate.symbol?' '+gate.symbol:'')+'\n'+normalizeAnalysisText(gate.reason)
                         : 'No execution check recorded yet. AI suggestions are not executed trades.';
                     const ai=s.ai_status||{};
                     aiConfigured=!!ai.configured;
@@ -3632,7 +3635,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                         ai.model+' · '+Math.round(ai.interval_seconds/60)+' min interval'+(ai.last_analyzed_at?' · analyzed':' · connection unverified')
                           +(ai.last_trigger==='whale_signal'?' · whale-triggered':''):
                         'AI not connected. Operator setup required.')+whaleAIState;
-                    if(ai.last_decisions)document.getElementById('ai-decisions').textContent='Last analysis: '+new Date(ai.last_analyzed_at*1000).toLocaleString('en-GB')+'\n'+Object.entries(ai.last_decisions).map(([mode,d])=>(mode==='main'?'USDC':'SOL')+': '+d.action+' '+((ai.asset_labels||{})[d.symbol]||d.symbol||'')+' — '+d.reason).join('\n');
+                    if(ai.last_decisions)document.getElementById('ai-decisions').textContent='Last analysis: '+new Date(ai.last_analyzed_at*1000).toLocaleString('en-GB')+'\n'+Object.entries(ai.last_decisions).map(([mode,d])=>(mode==='main'?'USDC':'SOL')+': '+d.action+' '+((ai.asset_labels||{})[d.symbol]||d.symbol||'')+' — '+normalizeAnalysisText(d.reason)).join('\n');
                     renderCoreChartZones(ai.chart_context,ai.asset_labels);
                     const discovery=ai.discovery||{};
                     document.getElementById('discovery-status').textContent=discovery.entry_paused?discovery.message:

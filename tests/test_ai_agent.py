@@ -422,6 +422,10 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("not backtested", self.payload["messages"][1]["content"])
         self.assertIn("OHLCV chart features", self.payload["messages"][1]["content"])
         self.assertIn("chart data is missing or stale", self.payload["messages"][1]["content"])
+        self.assertIn("only say the floor was breached when the value is less than -5%",
+                      self.payload["messages"][1]["content"])
+        self.assertIn("relative strength versus SOL is not applicable",
+                      self.payload["messages"][1]["content"])
         self.assertTrue(any(item.startswith("5-minute EMA20/50, RSI14, MACD histogram")
                             for item in user_payload["main_chart_data_capabilities"]["available"]))
         self.assertEqual(user_payload["main_usdc_signal_evidence_numeric"]["SOL"]["change_m5_pct"], 0.8)

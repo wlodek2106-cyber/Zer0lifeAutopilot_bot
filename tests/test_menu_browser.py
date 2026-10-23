@@ -89,7 +89,15 @@ class MenuBrowserTests(unittest.TestCase):
                 assert(document.getElementById('meme-sniper-card').querySelectorAll('p.section-note').length===2,'compact sniper card');
                 fixture.ai_status={configured:true,model:'gpt-4.1-mini',interval_seconds:900,
                     last_analyzed_at:1791925101,sniper_assets:[],
-                    last_decisions:{main:{action:'HOLD',symbol:null,reason:'No significant signal.'},
+                    asset_labels:{SOL:'SOL',JUP:'JUP'},
+                    chart_context:{
+                        SOL:{chart_ready:1,chart_trend_h1:1,chart_support_low_usd:100,
+                             chart_support_high_usd:101,chart_resistance_low_usd:105,
+                             chart_resistance_high_usd:106,chart_rsi14_5m:53.8,
+                             chart_volume_ratio_5m:2.4,chart_buy_setup:1,chart_sell_setup:0},
+                        JUP:{chart_ready:0,chart_m5_candles:0,chart_h1_candles:0}
+                    },
+                    last_decisions:{main:{action:'HOLD',symbol:null,reason:'No significant signal.\\\\n6h change -0.16% is above the -5% floor.'},
                                     sniper:{action:'HOLD',symbol:null,reason:'No eligible candidates.'}}};
                 fixture.trading_active=true;fixture.sniper_active=true;
                 fixture.trading_settings.assets=['SOL','JUP','RAY','WIF','PYTH','BONK','BOME','POPCAT','MEW','PENGU','KMNO','NOS','SHDW'];
@@ -102,6 +110,15 @@ class MenuBrowserTests(unittest.TestCase):
                 assert(['KMNO','NOS','SHDW'].every(symbol=>coreAssets.includes(symbol)),
                     'validated USDC assets remain visible in the Core list');
                 assert(document.getElementById('ai-decisions').textContent.includes('No significant signal.'),'English model explanation');
+                const analysisText=document.getElementById('ai-decisions').textContent;
+                assert(analysisText.includes('No significant signal.\\n6h change -0.16%'),
+                    'escaped model newlines render as line breaks');
+                assert(!analysisText.includes('\\\\n'),'analysis does not show literal slash-n text');
+                const chartText=document.getElementById('ai-chart-zones').textContent;
+                assert(chartText.includes('USD\\nSOL:'),'chart heading ends with a real line break');
+                assert(chartText.includes('YES\\nJUP: fresh candles unavailable'),
+                    'chart rows use real line breaks');
+                assert(!chartText.includes('\\\\n'),'chart zones do not show literal slash-n text');
                 const tabs=['terminal','trading','deposit','settings'];
                 for(let i=0;i<tabs.length;i++){
                     gotoTab(tabs[i],document.querySelectorAll('.nav-btn')[i]);
