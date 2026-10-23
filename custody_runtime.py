@@ -967,12 +967,102 @@ class CustodyRuntime(WalletRuntime):
         for asset, decimals in ((USDC, 6), (SOL, 9)):
             actual = int(backing.get(asset, {}).get("raw", 0))
             owed = int(liabilities.get(asset, 0))
+            owner_available_raw = self.ledger.balance(self.owner_id, asset)
+            shortfall_raw = max(0, owed - actual)
             assets["USDC" if asset == USDC else "SOL"] = {
                 "wallet": display_raw(actual, decimals),
                 "ledger": display_raw(owed, decimals),
                 "difference": display_raw(actual - owed, decimals),
+                "shortfall": display_raw(shortfall_raw, decimals),
+                "shortfall_raw": str(shortfall_raw),
+                "owner_available": display_raw(owner_available_raw, decimals),
+                "owner_available_raw": str(owner_available_raw),
             }
         return web.json_response({"success": True, "assets": assets, "read_only": True})
+
+    async def admin_absorb_owner_shortfall(self, request, session):
+        uid = self.uid(request)
+        if uid != self.owner_id:
+            raise WalletError("Administrator only.", 403)
+        body = await request.json()
+        if body.get("confirm") is not True:
+            raise WalletError("Confirm the exact owner-only adjustment before continuing.", 400)
+
+        def raw_amount(name):
+            value = body.get(name)
+            if (type(value) is not str or not value or not value.isascii()
+                    or not value.isdigit() or len(value) > 19):
+                raise WalletError("The finalized shortfall changed. Refresh the read-only check.", 400)
+            raw = int(value)
+            if raw > 2**63 - 1:
+                raise WalletError("The adjustment amount is out of range.", 400)
+            return raw
+
+        usdc_raw = raw_amount("expected_usdc_shortfall_raw")
+        sol_raw = raw_amount("expected_sol_shortfall_raw")
+        if usdc_raw + sol_raw == 0:
+            raise WalletError("There is no wallet shortfall to absorb.", 400)
+        try:
+            request_id = str(uuid.UUID(str(body.get("request_id", ""))))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise WalletError("A valid adjustment request ID is required.", 400) from exc
+
+        async with self.lock:
+            if self.legacy_pending():
+                raise WalletError("Resolve the pending legacy operation first. No balance was changed.", 409)
+            if self.pending():
+                raise WalletError("Resolve the pending shared-wallet operation first. No balance was changed.", 409)
+            if await self.rpc(session, "getGenesisHash") != GENESIS:
+                raise WalletError("Coverage adjustments are allowed only on Solana mainnet.", 503)
+
+            self.ledger.audit()
+            backing = await self.balances(session)
+            liabilities = self.ledger.liabilities()
+            deficits = {
+                asset: max(0, int(liability) - int(backing.get(asset, {}).get("raw", 0)))
+                for asset, liability in liabilities.items()
+            }
+            usdc_deficit = deficits.get(USDC, 0)
+            sol_deficit = deficits.get(SOL, 0)
+            other_deficits = {asset: raw for asset, raw in deficits.items()
+                              if asset not in (USDC, SOL) and raw > 0}
+            if other_deficits or usdc_deficit != usdc_raw or sol_deficit != sol_raw:
+                raise WalletError(
+                    "The finalized wallet shortfall changed or includes another asset. "
+                    "No balance was changed; run the read-only check again.", 409)
+
+            recorded = self.ledger.waive_owner_shortfall(uid, usdc_raw, sol_raw, request_id, backing)
+            self.ledger.audit()
+            updated_liabilities = self.ledger.liabilities()
+            coverage = {}
+            for asset, decimals, label in ((USDC, 6, "USDC"), (SOL, 9, "SOL")):
+                actual = int(backing.get(asset, {}).get("raw", 0))
+                owed = int(updated_liabilities.get(asset, 0))
+                coverage[label] = {
+                    "wallet": display_raw(actual, decimals),
+                    "account_balances": display_raw(owed, decimals),
+                    "difference": display_raw(actual - owed, decimals),
+                }
+            fully_covered = all(
+                int(backing.get(asset, {}).get("raw", 0)) >= int(owed)
+                for asset, owed in updated_liabilities.items()
+            )
+            message = (
+                "Your available balance was reduced by the confirmed shortfall. "
+                "No on-chain transfer was sent. Existing eligible participants can enable their own trading modes."
+                if fully_covered else
+                "The owner adjustment was recorded, but the wallet is still under-backed. "
+                "Trading remains blocked; run the read-only check again."
+            )
+            return web.json_response({
+                "success": True,
+                "recorded": recorded,
+                "covered": fully_covered,
+                "owner_available_usdc": display_raw(self.ledger.balance(uid, USDC), 6),
+                "owner_available_sol": display_raw(self.ledger.balance(uid, SOL), 9),
+                "coverage": coverage,
+                "message": message,
+            })
 
     async def admin_record_external_withdrawal(self, request, session):
         uid = self.uid(request)

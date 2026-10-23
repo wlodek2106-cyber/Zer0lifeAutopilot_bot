@@ -894,6 +894,56 @@ class CustodyLedger:
                           (available(owner_uid), SOL, releasable)])
             return releasable
 
+    def waive_owner_shortfall(self, owner_uid, usdc_raw, sol_raw, request_id, backing):
+        """Record an owner-approved loss absorption from the owner's available balances."""
+        if (type(owner_uid) is not int or owner_uid <= 0
+                or type(usdc_raw) is not int or type(sol_raw) is not int
+                or not 0 <= usdc_raw <= 2**63 - 1
+                or not 0 <= sol_raw <= 2**63 - 1
+                or usdc_raw + sol_raw == 0 or not isinstance(backing, dict)):
+            raise LedgerError("Invalid owner shortfall adjustment.")
+        try:
+            request_id = str(uuid.UUID(str(request_id)))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise LedgerError("A valid adjustment request ID is required.") from exc
+
+        journal_id = "owner-shortfall-waiver:" + request_id
+        note = "owner-confirmed shared-wallet shortfall absorption; no on-chain transfer"
+        lines = []
+        if usdc_raw:
+            lines.extend([(available(owner_uid), USDC, -usdc_raw), ("external", USDC, usdc_raw)])
+        if sol_raw:
+            lines.extend([(available(owner_uid), SOL, -sol_raw), ("external", SOL, sol_raw)])
+        expected_lines = sorted(lines)
+        with self.db() as db:
+            existing = db.execute("SELECT note FROM custody_journals WHERE id=?",
+                                  (journal_id,)).fetchone()
+            if existing:
+                recorded_lines = sorted(tuple(row) for row in db.execute(
+                    "SELECT account,asset,delta FROM custody_entries WHERE journal=?",
+                    (journal_id,)).fetchall())
+                if existing["note"] == note and recorded_lines == expected_lines:
+                    return False
+                raise LedgerError("This adjustment request ID was already used for a different ledger entry.")
+
+            liabilities = {row["asset"]: int(row["raw"] or 0) for row in db.execute(
+                "SELECT asset,SUM(raw) raw FROM custody_accounts WHERE account!='external' GROUP BY asset")}
+            deficits = {}
+            for asset, owed in liabilities.items():
+                actual = int(backing.get(asset, {}).get("raw", 0))
+                if actual < 0:
+                    raise LedgerError("Invalid finalized wallet balance.")
+                deficits[asset] = max(0, owed - actual)
+            if (deficits.get(USDC, 0) != usdc_raw or deficits.get(SOL, 0) != sol_raw
+                    or any(raw > 0 for asset, raw in deficits.items() if asset not in (USDC, SOL))):
+                raise LedgerError("The finalized wallet shortfall changed. No balance was changed.")
+            if _balance(db, available(owner_uid), USDC) < usdc_raw:
+                raise LedgerError("Your available USDC balance is too low for this adjustment.")
+            if _balance(db, available(owner_uid), SOL) < sol_raw:
+                raise LedgerError("Your available SOL balance is too low for this adjustment.")
+            self.post(db, journal_id, note, lines)
+        return True
+
     def opening(self, uid, asset, raw, backing):
         with self.db() as db:
             if db.execute("SELECT id FROM custody_operations WHERE state IN ('RESERVED','PREPARED','SUBMITTED','UNKNOWN')").fetchone():

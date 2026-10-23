@@ -41,7 +41,7 @@ TELEGRAM_INIT_DATA_MAX_AGE_SECONDS = 86400
 PIN_HASH_ITERATIONS = 310000
 PIN_MAX_ATTEMPTS = 5
 PIN_LOCK_SECONDS = 900
-ADMIN_API_PATHS = {"/api/admin/status", "/api/admin/pending_operations", "/api/admin/fee_reserve", "/api/admin/release_fee_reserve", "/api/admin/opening_balance", "/api/admin/retire_legacy"}
+ADMIN_API_PATHS = {"/api/admin/status", "/api/admin/pending_operations", "/api/admin/fee_reserve", "/api/admin/release_fee_reserve", "/api/admin/opening_balance", "/api/admin/retire_legacy", "/api/admin/owner_shortfall"}
 WITHDRAW_LOCKS = {}
 CUSTODY_SAFE_MODE = True
 CUSTODY_PAUSE_MESSAGE = "Операции с реальными средствами временно приостановлены до сверки балансов и миграции реестра."
@@ -1904,6 +1904,14 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div id="shared-pending-operation-details" style="font-size:12px;overflow-wrap:anywhere;white-space:pre-wrap;margin-top:8px;"></div>
                 <button class="btn-copy" onclick="checkBalanceCoverage()">Check wallet funds against account balances (read-only)</button>
                 <div id="balance-coverage-details" class="status-output" role="status"></div>
+                <div style="margin-top:14px;padding:12px;border:1px solid #35402d;border-radius:12px;">
+                    <h3 style="margin-top:0;">Owner shortfall adjustment</h3>
+                    <p class="muted">This permanently reduces only your available bot balance by the exact finalized USDC/SOL shortfall. It sends no transaction and does not debit customer balances. Pending operations or any other asset shortfall block the adjustment.</p>
+                    <div id="owner-shortfall-preview" class="status-output" role="status">Run the read-only wallet coverage check first.</div>
+                    <label style="display:flex;gap:10px;align-items:flex-start;font-size:12px;"><input id="owner-shortfall-confirm" type="checkbox" style="width:auto;flex:0 0 auto;">I confirm the exact shortfall is being absorbed from my own available balance, not customer funds.</label>
+                    <button id="owner-shortfall-apply" class="btn-copy" onclick="applyOwnerShortfall()" disabled>Apply exact shortfall to my balance</button>
+                    <div id="owner-shortfall-result" class="status-output" role="status"></div>
+                </div>
                 <h3>Fee reserve · SOL</h3>
                 <div id="fee-status" class="status-output">Reserve not checked yet.</div>
                 <p class="muted">Allocation reduces your available SOL balance. No on-chain transfer. Only your funds may be allocated.</p>
@@ -2537,21 +2545,92 @@ RAW_HTML = r"""<!DOCTYPE html>
                 box.textContent = e.message || 'Could not read the current shared-wallet lock.';
             }
         }
+        let ownerShortfallPreview = null;
+        function rawAmountAtLeast(balance, amount) {
+            const left=String(balance||'0').replace(/^0+(?=\d)/,'');
+            const right=String(amount||'0').replace(/^0+(?=\d)/,'');
+            return left.length>right.length || (left.length===right.length && left>=right);
+        }
         async function checkBalanceCoverage() {
             const box=document.getElementById('balance-coverage-details');
+            const preview=document.getElementById('owner-shortfall-preview');
+            const applyButton=document.getElementById('owner-shortfall-apply');
+            ownerShortfallPreview=null;
+            applyButton.disabled=true;
+            document.getElementById('owner-shortfall-confirm').checked=false;
             box.textContent='Reading finalized wallet balances and the ledger…';
+            preview.textContent='Checking the exact shortfall and your available balance…';
             try {
                 const response=await apiFetch('/api/admin/balance_check');
                 const result=await response.json();
                 if(!response.ok||!result.success)throw new Error(result.message||'Balance check unavailable.');
-                box.textContent=['USDC: wallet '+result.assets.USDC.wallet+
-                    ' · account balances '+result.assets.USDC.ledger+
-                    ' · difference '+result.assets.USDC.difference,
-                    'SOL: wallet '+result.assets.SOL.wallet+
-                    ' · account balances '+result.assets.SOL.ledger+
-                    ' · difference '+result.assets.SOL.difference,
+                const usdc=result.assets.USDC, sol=result.assets.SOL;
+                ownerShortfallPreview={
+                    usdc_raw:String(usdc.shortfall_raw),
+                    sol_raw:String(sol.shortfall_raw),
+                    usdc:usdc.shortfall,
+                    sol:sol.shortfall,
+                    usdc_available_raw:String(usdc.owner_available_raw),
+                    sol_available_raw:String(sol.owner_available_raw),
+                    usdc_available:usdc.owner_available,
+                    sol_available:sol.owner_available
+                };
+                box.textContent=['USDC: wallet '+usdc.wallet+
+                    ' · account balances '+usdc.ledger+
+                    ' · difference '+usdc.difference,
+                    'SOL: wallet '+sol.wallet+
+                    ' · account balances '+sol.ledger+
+                    ' · difference '+sol.difference,
                     'Read-only: no ledger or on-chain balance was changed.'].join('\n');
+                const hasShortfall=ownerShortfallPreview.usdc_raw!=='0'||ownerShortfallPreview.sol_raw!=='0';
+                const sufficient=rawAmountAtLeast(ownerShortfallPreview.usdc_available_raw,ownerShortfallPreview.usdc_raw)&&
+                    rawAmountAtLeast(ownerShortfallPreview.sol_available_raw,ownerShortfallPreview.sol_raw);
+                preview.textContent=hasShortfall
+                    ? 'Exact proposed reduction: '+ownerShortfallPreview.usdc+' USDC and '+ownerShortfallPreview.sol+
+                      ' SOL. Your available balances: '+ownerShortfallPreview.usdc_available+' USDC and '+
+                      ownerShortfallPreview.sol_available+' SOL.'+
+                      (sufficient?' Confirm below to continue.':' Your available balance is not enough to cover both shortfalls.')
+                    : 'No wallet shortfall was found. No adjustment is available.';
+                applyButton.disabled=!hasShortfall||!sufficient;
             } catch(e) { box.textContent=e.message||'Could not read wallet coverage.'; }
+        }
+        async function applyOwnerShortfall() {
+            const button=document.getElementById('owner-shortfall-apply');
+            const resultBox=document.getElementById('owner-shortfall-result');
+            const preview=ownerShortfallPreview;
+            if(!preview||button.disabled)return;
+            if(!document.getElementById('owner-shortfall-confirm').checked){
+                resultBox.textContent='Confirm that only your own balance is being reduced.';return;
+            }
+            if(!confirm('Permanently reduce your available bot balance by '+preview.usdc+
+                ' USDC and '+preview.sol+' SOL? This sends no transaction and does not affect customer balances.'))return;
+            button.disabled=true;
+            resultBox.textContent='Rechecking finalized wallet coverage before recording the owner-only adjustment…';
+            try{
+                const response=await apiFetch('/api/admin/owner_shortfall',{method:'POST',
+                    headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({
+                        expected_usdc_shortfall_raw:preview.usdc_raw,
+                        expected_sol_shortfall_raw:preview.sol_raw,
+                        request_id:crypto.randomUUID(),
+                        confirm:true
+                    })});
+                const result=await response.json();
+                if(!response.ok||!result.success)throw new Error(result.message||'The adjustment was not confirmed.');
+                document.getElementById('owner-shortfall-confirm').checked=false;
+                resultBox.textContent=result.message+'\nUSDC difference: '+result.coverage.USDC.difference+
+                    ' · SOL difference: '+result.coverage.SOL.difference+
+                    '\nYour remaining balance: '+result.owner_available_usdc+' USDC and '+
+                    result.owner_available_sol+' SOL.';
+                ownerShortfallPreview=null;
+                await checkBalanceCoverage();
+                await refresh();
+            }catch(e){
+                resultBox.textContent=(e.message||'No response from server.')+
+                    '\nRefresh the read-only coverage check before trying again; do not repeat an uncertain adjustment.';
+            }finally{
+                button.disabled=true;
+            }
         }
         async function retireLegacyOperation(signature) {
             if (!confirm('For a legacy personal operation only. The server checks transaction absence, blockhash expiry and nonce history. Without evidence nothing changes. The record stays unconfirmed; this is not a refund or a successful trade. Continue?')) return;
@@ -4165,6 +4244,7 @@ async def main():
     app.router.add_get('/api/admin/status', wallet_handler(runtime.admin_status))
     app.router.add_get('/api/admin/pending_operations', wallet_handler(runtime.admin_pending_operations))
     app.router.add_get('/api/admin/balance_check', wallet_handler(runtime.admin_balance_check))
+    app.router.add_post('/api/admin/owner_shortfall', wallet_handler(runtime.admin_absorb_owner_shortfall))
     app.router.add_post('/api/admin/record_external_withdrawal', wallet_handler(runtime.admin_record_external_withdrawal))
     app.router.add_post('/api/admin/retire_legacy', wallet_handler(runtime.retire_legacy))
     app.router.add_post('/api/admin/fee_reserve', wallet_handler(runtime.reserve_fees))

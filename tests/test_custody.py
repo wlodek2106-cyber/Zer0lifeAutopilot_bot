@@ -128,6 +128,43 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(self.ledger.balance(101, USDC), 10_000_000)
         self.assertEqual(self.ledger.balance(202, USDC), 30_000_000)
 
+    def test_owner_shortfall_waiver_debits_only_owner_and_is_idempotent(self):
+        self.credit(101, SOL, 5_000_000)
+        request_id = str(uuid.uuid4())
+        before = self.ledger.liabilities()
+        backing = {
+            USDC: {"raw": before[USDC] - 1_000_000},
+            SOL: {"raw": before[SOL] - 5_000_000},
+        }
+        owner_usdc = self.ledger.balance(101, USDC)
+        owner_sol = self.ledger.balance(101, SOL)
+        customer_usdc = self.ledger.balance(202, USDC)
+
+        self.assertTrue(self.ledger.waive_owner_shortfall(101, 1_000_000, 5_000_000, request_id, backing))
+        self.assertFalse(self.ledger.waive_owner_shortfall(101, 1_000_000, 5_000_000, request_id, backing))
+
+        self.assertEqual(self.ledger.balance(101, USDC), owner_usdc - 1_000_000)
+        self.assertEqual(self.ledger.balance(101, SOL), owner_sol - 5_000_000)
+        self.assertEqual(self.ledger.balance(202, USDC), customer_usdc)
+        self.assertEqual(self.ledger.liabilities()[USDC], before[USDC] - 1_000_000)
+        self.assertEqual(self.ledger.liabilities()[SOL], before[SOL] - 5_000_000)
+        self.assertTrue(self.ledger.audit())
+
+    def test_owner_shortfall_waiver_cannot_exceed_owner_balance_or_reuse_request_id(self):
+        request_id = str(uuid.uuid4())
+        before = self.ledger.liabilities()
+        backing = {USDC: {"raw": before[USDC] - 10_000_001}, SOL: {"raw": before[SOL]}}
+        with self.assertRaises(LedgerError):
+            self.ledger.waive_owner_shortfall(101, 10_000_001, 0, request_id, backing)
+        self.assertEqual(self.ledger.liabilities(), before)
+        backing[USDC]["raw"] = before[USDC] - 1_000_000
+        self.ledger.waive_owner_shortfall(101, 1_000_000, 0, request_id, backing)
+        with self.assertRaises(LedgerError):
+            self.ledger.waive_owner_shortfall(
+                101, 2_000_000, 0, request_id, {USDC: {"raw": before[USDC] - 2_000_000}})
+        self.assertEqual(self.ledger.balance(101, USDC), 9_000_000)
+        self.assertTrue(self.ledger.audit())
+
     def test_no_borrowing_from_another_customer(self):
         with self.assertRaises(LedgerError):
             self.reserve(raw=11_000_000)
@@ -1739,12 +1776,83 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         response = await self.service.admin_balance_check(Request(101), None)
         result = json.loads(response.text)
         self.assertEqual(result["assets"]["USDC"]["difference"], "-0.1")
+        self.assertEqual(result["assets"]["USDC"]["shortfall_raw"], "100000")
+        self.assertEqual(result["assets"]["USDC"]["owner_available_raw"], "1000000")
         self.assertEqual(self.ledger.liabilities(), before)
         self.assertTrue(result["read_only"])
 
+    async def test_owner_can_absorb_only_the_exact_fresh_shortfall_from_own_balance(self):
+        invoice = self.ledger.invoice(101, USDC, 1_000_000)
+        self.ledger.credit_deposit(invoice["id"], str(Signature.new_unique()), USDC, 1_000_000,
+                                   invoice["created_at"])
+        sol_invoice = self.ledger.invoice(101, SOL, 20_000_000)
+        self.ledger.credit_deposit(sol_invoice["id"], str(Signature.new_unique()), SOL, 20_000_000,
+                                   sol_invoice["created_at"])
+        liabilities = self.ledger.liabilities()
+        self.service.balances = AsyncMock(return_value={
+            USDC: {"raw": liabilities[USDC] - 100_000, "decimals": 6},
+            SOL: {"raw": liabilities[SOL] - 10_000_000, "decimals": 9},
+        })
+        before_customer_usdc = self.ledger.balance(202, USDC)
+        before_owner_usdc = self.ledger.balance(101, USDC)
+        before_owner_sol = self.ledger.balance(101, SOL)
+        request_id = str(uuid.uuid4())
+        body = {
+            "expected_usdc_shortfall_raw": "100000",
+            "expected_sol_shortfall_raw": "10000000",
+            "request_id": request_id,
+            "confirm": True,
+        }
+
+        response = await self.service.handle(Request(101, body),
+                                             self.service.admin_absorb_owner_shortfall)
+        result = json.loads(response.text)
+
+        self.assertEqual(response.status, 200, response.text)
+        self.assertTrue(result["recorded"])
+        self.assertTrue(result["covered"])
+        self.assertEqual(result["coverage"]["USDC"]["difference"], "0")
+        self.assertEqual(result["coverage"]["SOL"]["difference"], "0")
+        self.assertEqual(self.ledger.balance(101, USDC), before_owner_usdc - 100_000)
+        self.assertEqual(self.ledger.balance(101, SOL), before_owner_sol - 10_000_000)
+        self.assertEqual(self.ledger.balance(202, USDC), before_customer_usdc)
+        self.assertFalse(any(method == "sendTransaction" for method, _ in self.calls))
+        self.assertTrue(self.ledger.audit())
+
+    async def test_owner_shortfall_adjustment_requires_exact_preview_and_owner_confirmation(self):
+        invoice = self.ledger.invoice(101, USDC, 1_000_000)
+        self.ledger.credit_deposit(invoice["id"], str(Signature.new_unique()), USDC, 1_000_000,
+                                   invoice["created_at"])
+        liabilities = self.ledger.liabilities()
+        self.service.balances = AsyncMock(return_value={
+            USDC: {"raw": liabilities[USDC] - 100_000, "decimals": 6},
+            SOL: {"raw": liabilities[SOL] - 10_000_000, "decimals": 9},
+        })
+        before = self.ledger.liabilities()
+        body = {
+            "expected_usdc_shortfall_raw": "99999",
+            "expected_sol_shortfall_raw": "10000000",
+            "request_id": str(uuid.uuid4()),
+            "confirm": True,
+        }
+        stale = await self.service.handle(Request(101, body),
+                                          self.service.admin_absorb_owner_shortfall)
+        self.assertEqual(stale.status, 409)
+        self.assertEqual(self.ledger.liabilities(), before)
+        unconfirmed = await self.service.handle(Request(101, {**body, "confirm": False}),
+                                                self.service.admin_absorb_owner_shortfall)
+        self.assertEqual(unconfirmed.status, 400)
+        self.assertEqual(self.ledger.liabilities(), before)
+        non_owner = await self.service.handle(Request(202, {
+            **body, "expected_usdc_shortfall_raw": "100000"
+        }), self.service.admin_absorb_owner_shortfall)
+        self.assertEqual(non_owner.status, 403)
+        self.assertEqual(self.ledger.liabilities(), before)
+
     async def test_user_cannot_allocate_fees_or_import_opening(self):
         for action in (self.service.reserve_fees, self.service.release_fee_reserve,
-                       self.service.opening_balance, self.service.admin_status):
+                       self.service.opening_balance, self.service.admin_status,
+                       self.service.admin_absorb_owner_shortfall):
             self.assertEqual((await self.service.handle(Request(202), action)).status, 403)
 
     async def test_owner_can_return_fee_reserve_excess_without_onchain_transfer(self):
