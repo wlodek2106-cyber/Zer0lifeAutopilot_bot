@@ -195,7 +195,8 @@ class CustodyRuntime(WalletRuntime):
         self.whale_stream = HeliusWhaleStream(
             os.getenv("HELIUS_API_KEY", ""), self.on_whale_signal,
             enabled=os.getenv("HELIUS_WHALE_STREAM_ENABLED", "false").strip().lower()
-                in ("1", "true", "yes", "on"))
+                in ("1", "true", "yes", "on"),
+            sol_price_provider=self.prices_fn)
         self.whale_stream_task = None
         self._jito_tip_accounts = []
         self._jito_tip_accounts_expiry = 0
@@ -2275,7 +2276,7 @@ class CustodyRuntime(WalletRuntime):
             "execution_policy": execution_policy.describe(),
             "execution_check": self.ledger.execution_report(uid),
             "trading_settings": {"order_usdc": settings["order_raw"]/1e6,
-                "max_positions": 5, "take_profit_pct": 3.5, "stop_loss_pct": 2,
+                "max_positions": 5, "take_profit_pct": 3.5, "stop_loss_pct": 5,
                 "slippage_pct": .4, "entry_dip_pct": .3, "poll_seconds": 20,
                 "assets": self.ai_universes()["main"], "warmup_samples": 5},
             "entry_cost_check": self.ledger.entry_cost_report(uid),

@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import unittest
+from unittest.mock import AsyncMock
 
 from solders.pubkey import Pubkey
 from solders.signature import Signature
@@ -9,6 +10,7 @@ from whale_stream import (
     DEX_PROGRAMS,
     MAX_WHALE_LAMPORTS,
     MIN_WHALE_LAMPORTS,
+    USDC_MINT,
     HeliusWhaleStream,
     HeliusStreamError,
     WHALE_SIGNAL_PROGRAMS,
@@ -21,6 +23,7 @@ BUYER = str(Pubkey.from_bytes(hashlib.sha256(b"whale-buyer").digest()))
 MINT = str(Pubkey.from_bytes(hashlib.sha256(b"whale-token").digest()))
 OTHER_MINT = str(Pubkey.from_bytes(hashlib.sha256(b"other-whale-token").digest()))
 TOKEN_ACCOUNT = str(Pubkey.from_bytes(hashlib.sha256(b"token-account").digest()))
+USDC_ACCOUNT = str(Pubkey.from_bytes(hashlib.sha256(b"usdc-token-account").digest()))
 SIGNATURE = str(Signature.default())
 SIGNATURE_2 = str(Signature.from_bytes(hashlib.sha512(b"whale-tx-2").digest()))
 PUMP = DEX_PROGRAMS["Pump.fun"]
@@ -71,6 +74,24 @@ def notification(sol_spend=20_000_000_000, *, program=PUMP, mint=MINT, pre_amoun
             },
         }},
     }
+
+
+def usdc_notification(usdc_spend_raw, *, signature=SIGNATURE, sol_spend=0, decimals=6,
+                      owner=BUYER):
+    payload = notification(sol_spend=sol_spend, signature=signature)
+    value = payload["params"]["result"]
+    value["transaction"]["message"]["accountKeys"].append(
+        {"pubkey": USDC_ACCOUNT, "signer": False, "writable": True})
+    value["meta"]["preBalances"].append(2_039_280)
+    value["meta"]["postBalances"].append(2_039_280)
+    usdc_before = max(500_000_000_000, usdc_spend_raw + 1_000_000)
+    pre = token_balance(USDC_MINT, usdc_before, index=3, owner=owner)
+    post = token_balance(USDC_MINT, usdc_before - usdc_spend_raw, index=3, owner=owner)
+    pre["uiTokenAmount"]["decimals"] = decimals
+    post["uiTokenAmount"]["decimals"] = decimals
+    value["meta"]["preTokenBalances"].append(pre)
+    value["meta"]["postTokenBalances"].append(post)
+    return payload
 
 
 def logs_notification(signature=SIGNATURE, *, logs=None, err=None):
@@ -141,6 +162,39 @@ class WhaleSignalTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(parse_whale_buy(notification(sol_spend=MAX_WHALE_LAMPORTS)))
         self.assertIsNone(parse_whale_buy(notification(sol_spend=MIN_WHALE_LAMPORTS - 1)))
         self.assertIsNone(parse_whale_buy(notification(sol_spend=MAX_WHALE_LAMPORTS + 1)))
+
+    def test_usdc_buys_use_the_same_live_sol_equivalent_range(self):
+        lower = parse_whale_buy(
+            usdc_notification(2_000_000_000), sol_usd_price=200.0)
+        upper = parse_whale_buy(
+            usdc_notification(200_000_000_000), sol_usd_price=200.0)
+        self.assertEqual(lower["quote_asset"], "USDC")
+        self.assertEqual(lower["quote_amount"], 2_000.0)
+        self.assertEqual(lower["sol_equivalent"], 10.0)
+        self.assertIsNone(lower["sol_lamports"])
+        self.assertEqual(upper["sol_equivalent"], 1_000.0)
+        self.assertEqual(lower["sol_price_usd"], 200.0)
+
+        self.assertIsNone(parse_whale_buy(
+            usdc_notification(1_999_990_000), sol_usd_price=200.0))
+        self.assertIsNone(parse_whale_buy(
+            usdc_notification(200_000_010_000), sol_usd_price=200.0))
+
+    def test_usdc_signals_fail_closed_without_a_valid_sol_usd_price(self):
+        payload = usdc_notification(2_000_000_000)
+        self.assertIsNone(parse_whale_buy(payload))
+        self.assertIsNone(parse_whale_buy(payload, sol_usd_price=0))
+        self.assertIsNone(parse_whale_buy(payload, sol_usd_price=float("nan")))
+        self.assertIsNone(parse_whale_buy(
+            usdc_notification(2_000_000_000, decimals=9), sol_usd_price=200.0))
+        self.assertIsNone(parse_whale_buy(
+            usdc_notification(2_000_000_000, owner=str(Pubkey.default())),
+            sol_usd_price=200.0))
+
+    def test_usdc_signal_rejects_ambiguous_whale_sized_native_spend(self):
+        payload = usdc_notification(
+            2_000_000_000, sol_spend=MIN_WHALE_LAMPORTS)
+        self.assertIsNone(parse_whale_buy(payload, sol_usd_price=200.0))
 
     def test_created_token_account_rent_is_not_counted_as_whale_spend(self):
         event = parse_whale_buy(notification(sol_spend=30_000_000_000, new_token_account=True))
@@ -216,6 +270,37 @@ class WhaleSignalTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(session.url.endswith("?api-key=unit-test-key"))
         self.assertEqual(signal[0]["mint"], MINT)
         self.assertEqual(stream.snapshot()["transaction_lookups"], 1)
+
+    async def test_usdc_transaction_uses_cached_current_sol_usd_reference(self):
+        signal = []
+        price_provider = AsyncMock(return_value={"SOL": 200.0})
+        stream = HeliusWhaleStream(
+            "unit-test-key", on_signal=signal.append, sol_price_provider=price_provider)
+        first = usdc_notification(2_000_000_000)["params"]["result"]
+        second = usdc_notification(
+            4_000_000_000, signature=SIGNATURE_2)["params"]["result"]
+
+        await stream._fetch_transaction(FakeHttpSession({"result": first}), SIGNATURE)
+        await stream._fetch_transaction(FakeHttpSession({"result": second}), SIGNATURE_2)
+
+        self.assertEqual(price_provider.await_count, 1)
+        self.assertEqual(len(signal), 2)
+        self.assertEqual(signal[0]["quote_asset"], "USDC")
+        self.assertEqual(signal[0]["quote_amount"], 2_000.0)
+        self.assertEqual(signal[1]["quote_amount"], 4_000.0)
+        self.assertEqual(stream.snapshot()["recent_signals"][0]["sol"], 20.0)
+
+    async def test_usdc_transaction_without_price_provider_is_skipped(self):
+        signal = []
+        stream = HeliusWhaleStream("unit-test-key", on_signal=signal.append)
+        transaction = usdc_notification(2_000_000_000)["params"]["result"]
+
+        await stream._fetch_transaction(FakeHttpSession({"result": transaction}), SIGNATURE)
+
+        self.assertEqual(signal, [])
+        self.assertEqual(stream.last_error, "SolUsdUnavailable")
+        stream.state = "connected"
+        self.assertIn("USDC whale-size checks were skipped", stream.snapshot()["message"])
 
     async def test_transaction_lookup_auth_failure_has_sanitized_diagnostic(self):
         stream = HeliusWhaleStream("unit-test-key")

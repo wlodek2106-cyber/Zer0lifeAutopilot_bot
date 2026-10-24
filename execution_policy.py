@@ -9,7 +9,7 @@ from custody_ledger import USDC, SOL
 from entry_costs import MAX_COST_BPS, MAX_PRICE_IMPACT_PCT, MAX_QUOTE_AGE_SECONDS, assess_entry
 from wallet_runtime import WalletError
 
-VERSION = "independent-execution-v7-support-resistance"
+VERSION = "independent-execution-v8-five-percent-stop"
 MAX_POSITIONS = MappingProxyType({"main": 5, "sniper": 5})
 DECISION_SECONDS = 120
 QUOTE_SECONDS = MAX_QUOTE_AGE_SECONDS
@@ -17,8 +17,8 @@ MAX_SLOT_DISTANCE = 75
 MAX_SLIPPAGE_BPS = 40
 MAX_IMPACT_PCT = MAX_PRICE_IMPACT_PCT
 WRAPPED_SOL = "So11111111111111111111111111111111111111112"
-CORE_STOP_LOSS_PCT = 0.10
-SNIPER_STOP_LOSS_PCT = 0.10
+CORE_STOP_LOSS_PCT = 0.05
+SNIPER_STOP_LOSS_PCT = 0.05
 TRAILING_ACTIVATION_PCT = 0.035
 TRAILING_DRAWDOWN_PCT = 0.02
 

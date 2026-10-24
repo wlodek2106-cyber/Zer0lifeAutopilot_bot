@@ -88,13 +88,13 @@ WATCHLIST = {
 TRADE_AMOUNT_USDC = 20.0
 TRADE_AMOUNT_RAW = int(TRADE_AMOUNT_USDC * 1_000_000)
 TP_PCT = 0.035
-SL_PCT = 0.020
+SL_PCT = 0.050
 MAX_SLIPPAGE_BPS = 40
 
 MEME_ALLOCATION_SOL = 0.1
 MEME_TARGET_MULTIPLIER = 10.0
 MEME_HALF_MULTIPLIER = 5.0
-MEME_STOP_LOSS_PCT = 0.80
+MEME_STOP_LOSS_PCT = 0.05
 
 IS_TRADING_ACTIVE = False
 IS_MEME_ACTIVE = False
@@ -1763,11 +1763,11 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <div class="stat-box"><div class="stat-label">Order size</div><div class="stat-val" id="sniper-order-size">Loading...</div></div>
                 </div>
                 <p id="sniper-position-cap" class="section-note">Screened Solana candidates · Checking position limit…</p>
-                <p class="section-note">Exit rules: −10% stop; from +3.5%, exit after a 2% pullback from the peak.</p>
+                <p class="section-note">Exit rules: −5% stop; from +3.5%, exit after a 2% pullback from the peak.</p>
                 <div id="discovery-status" class="section-note">Candidate scan pending.</div>
                 <button class="action-btn" id="scan-candidates" onclick="scanCandidates()">Scan candidates</button>
                 <details><summary>Candidate shortlist</summary><div id="candidate-list" class="section-note" style="white-space:pre-line">No verified shortlist yet.</div></details>
-                <details><summary>Whale buys · 10–1,000 SOL</summary><div id="whale-signal-status" class="section-note" style="white-space:pre-line">Checking Helius stream...</div></details>
+                <details><summary>Whale buys · 10–1,000 SOL equivalent (SOL/USDC)</summary><div id="whale-signal-status" class="section-note" style="white-space:pre-line">Checking Helius stream...</div></details>
                 <p id="sniper-pnl" class="section-note">Realized SOL PnL: loading...</p>
             </div>
 
@@ -1784,7 +1784,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <div class="stat-box"><div class="stat-label">Order size</div><div class="stat-val" id="strategy-order-size">Loading...</div></div>
                     <div class="stat-box"><div class="stat-label">Slippage</div><div class="stat-val" style="color: #60a5fa;">0.40%</div></div>
                     <div class="stat-box"><div class="stat-label">Profit trail</div><div class="stat-val" style="color: #4ade80;">+3.50% / −2.00%</div></div>
-                    <div class="stat-box"><div class="stat-label">Stop loss</div><div class="stat-val" style="color: #f87171;">−10.00%</div></div>
+                    <div class="stat-box"><div class="stat-label">Stop loss</div><div class="stat-val" style="color: #f87171;">−5.00%</div></div>
                 </div>
                 <p class="section-note">Core entry cost budget: 2.50% of the order. Includes quoted DEX fees, price impact, slippage, estimated network fees, Jito tips and account rent for entry/exit. Estimates do not guarantee profit or exit costs. SELL exits are not blocked by this filter.</p>
                 <p id="entry-cost-check" class="section-note" aria-live="polite">No entry cost check yet.</p>
@@ -2057,12 +2057,12 @@ RAW_HTML = r"""<!DOCTYPE html>
             <details id="strategy-help"><summary>Strategy limits &amp; risks</summary>
                 <p class="section-note">Core trades use your USDC; sniper trades use your SOL. Other users' funds and the operator fee reserve are never your trading capital. Automatic conversion or profit allocation between strategies is not implemented.</p>
                 <p class="section-note">Core / USDC pairs: SOL, JUP, RAY, PYTH, JTO, ORCA, KMNO, NOS, SHDW, PEPE, OTC; up to 5 USDC-funded positions. Sniper / SOL seeds: WIF, BONK, BOME, POPCAT, MEW, PENGU, PEPE, OTC; up to 5 SOL-funded positions, limited by your available SOL and saved order size. OTC / USDC and OTC / SOL use the verified OTC Token-2022 mint; other Token-2022 assets are not admitted. ORCA currently retains mint authority (additional tokens may be issued); no token is risk-free. Every 15 minutes a bounded DexScreener profiles/search scan checks up to 200 Solana mints, verifies up to 40 and sends at most 8 current candidates plus held assets to AI. This is not every project or a profit forecast; profiles alone do not establish meme status.</p>
-                <p class="section-note">Core and Sniper BUYs require fresh closed 5-minute/1-hour candles and a confirmed bounce from a repeated support zone; breakout chasing is disabled. A fresh bearish rejection at repeated resistance can trigger a sale when the current gross price is above entry. Existing 10% stops and 2% trailing exits remain. Chart zones are estimates, fills can slip, and this strategy is not backtested or a profit guarantee.</p>
+                <p class="section-note">Core and Sniper BUYs require fresh closed 5-minute/1-hour candles and a confirmed bounce from a repeated support zone; breakout chasing is disabled. A fresh bearish rejection at repeated resistance can trigger a sale when the current gross price is above entry. Both modes use a 5% stop and 2% trailing exits. Chart zones are estimates, fills can slip, and this strategy is not backtested or a profit guarantee.</p>
                 <p class="section-note">Confirmed buy, sell, take-profit, and stop-loss alerts are sent to each participant's own Telegram chat. Enable Telegram notifications on your phone. Alerts are sent after Solana finalizes the trade; a safely failed stop-loss sale gets a separate alert saying the position remains open.</p>
                 <p class="section-note">Sniper entry filters: approved DEX, at least $10k pool liquidity, $100k 24h volume, 200 daily trades, pool age 24h+, extreme-pump exclusion, standard SPL mints with no mint/freeze authority, or the exact approved OTC Token-2022 mint with immutable metadata and disabled mint/freeze authorities. Other Token-2022 assets are rejected. The shortlist rotates every 15 minutes through up to 40 on-chain-verified candidates; AI sees up to 8 at a time. After any completed close, all participants are blocked from re-buying that mint for 24 hours. Fresh eligibility is required for every buy. Scores rank liquidity/activity, not expected profit. Holder concentration, LP locks and every contract/market risk are not fully checked. Mint checks do not guarantee token safety.</p>
                 <p class="section-note">AI makes decisions after you enable a mode. Orders require personal funds, permitted assets, at least 5 price samples, a fresh decision and stable pricing. Only one shared-wallet operation can be pending at a time.</p>
-                <p class="section-note">Both modes use a 10% stop below entry. After a position reaches +3.5%, a trailing exit triggers after a 2% pullback from its highest tracked price. Exits are checked approximately every 20 seconds independently of AI availability. Model failures stop new AI orders. After a server restart both modes pause and need manual reactivation.</p>
-                <p class="section-note">Stops and trailing exits are execution conditions, not guaranteed fill prices. A 10% stop permits a larger loss than the former 2% stop; fast price moves, fees, slippage and liquidity can make the realized loss larger. Returns are not guaranteed.</p>
+                <p class="section-note">Both modes use a 5% stop below entry. After a position reaches +3.5%, a trailing exit triggers after a 2% pullback from its highest tracked price. Exits are checked approximately every 20 seconds independently of AI availability. Model failures stop new AI orders. After a server restart both modes pause and need manual reactivation.</p>
+                <p class="section-note">Stops and trailing exits are execution conditions, not guaranteed fill prices. A 5% stop can close a position, but fast price moves, fees, slippage and liquidity can make the realized loss larger. Returns are not guaranteed.</p>
             </details>
             <details><summary>Diagnostics</summary><p id="worker-status" class="status-output">Loading...</p></details>
             <details><summary>AI connection &amp; costs</summary>
@@ -3658,10 +3658,17 @@ RAW_HTML = r"""<!DOCTYPE html>
                     const whaleRows=(whale.recent_signals||[]).slice(0,8).map(event=>{
                         const mint=String(event.mint||'');
                         const shortMint=mint.length>14?mint.slice(0,6)+'…'+mint.slice(-5):mint;
-                        const sol=Number(event.sol||0);
+                        const quoteAsset=String(event.quote_asset||'SOL');
+                        const quoteAmount=Number(event.quote_amount!==undefined?event.quote_amount:event.sol);
+                        const solEquivalent=Number(event.sol_equivalent!==undefined?event.sol_equivalent:event.sol);
                         const seen=Number(event.seen_at||0);
+                        const amountText=quoteAsset==='USDC'
+                            ?(Number.isFinite(quoteAmount)?quoteAmount.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):'—')+' USDC'
+                            :(Number.isFinite(quoteAmount)?quoteAmount.toFixed(2):'—')+' SOL';
+                        const equivalentText=quoteAsset==='USDC'&&Number.isFinite(solEquivalent)
+                            ?' (~'+solEquivalent.toFixed(2)+' SOL equivalent)':'';
                         return (seen?new Date(seen*1000).toLocaleTimeString('en-GB'):'Time unavailable')
-                            +' · '+(Number.isFinite(sol)?sol.toFixed(2):'—')+' SOL · '+(event.program||'DEX')
+                            +' · '+amountText+equivalentText+' · '+(event.program||'DEX')
                             +' · '+shortMint;
                     });
                     const whaleQueue='RPC checks '+(whale.transaction_lookups||0)
@@ -3671,6 +3678,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                         item.mint+' — '+(item.reasons||[]).join('; '));
                     document.getElementById('whale-signal-status').textContent=(whale.message||'Whale stream status unavailable.')
                         +'\nSignal DEXs: Pump.fun, PumpSwap, Raydium, Meteora and Orca; confirmed BUY/SWAP logs are checked.'
+                        +'\nWhale range: 10–1,000 SOL equivalent. USDC buys use a fresh SOL/USD price; if unavailable, they are skipped.'
                         +'\nSignals are not orders; transactions and candidates must pass the existing safety screen.'
                         +'\n'+whaleQueue
                         +(whaleRejections.length?'\nWhy recent whale candidates were rejected:\n'+whaleRejections.join('\n'):'')

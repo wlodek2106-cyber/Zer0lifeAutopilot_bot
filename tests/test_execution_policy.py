@@ -22,11 +22,11 @@ def quote():
 
 
 class PolicyTests(unittest.TestCase):
-    def test_both_modes_share_10_percent_stop_and_peak_trailing_exit(self):
+    def test_both_modes_share_5_percent_stop_and_peak_trailing_exit(self):
         for exit_reason in (policy.risk_exit_reason, policy.sniper_exit_reason):
             with self.subTest(exit_reason=exit_reason.__name__):
-                self.assertIsNone(exit_reason(0.90001, 1.0, 1.0))
-                self.assertEqual(exit_reason(0.9, 1.0, 1.0), "STOP_LOSS")
+                self.assertIsNone(exit_reason(0.95001, 1.0, 1.0))
+                self.assertEqual(exit_reason(0.95, 1.0, 1.0), "STOP_LOSS")
                 self.assertIsNone(exit_reason(1.015, 1.0, 1.035))
                 self.assertEqual(exit_reason(1.014, 1.0, 1.035), "TRAILING_STOP")
                 self.assertIsNone(exit_reason(1.035, 1.0, 1.035))

@@ -2,6 +2,7 @@
 import asyncio
 import inspect
 import json
+import math
 import time
 from collections import deque
 from urllib.parse import quote
@@ -11,8 +12,11 @@ from solders.pubkey import Pubkey
 from solders.signature import Signature
 
 SOL_MINT = "So11111111111111111111111111111111111111112"
+USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+USDC_DECIMALS = 6
 MIN_WHALE_LAMPORTS = 10_000_000_000
 MAX_WHALE_LAMPORTS = 1_000_000_000_000
+SOL_PRICE_CACHE_SECONDS = 30
 HELIUS_WS = "wss://mainnet.helius-rpc.com/"
 HELIUS_RPC = "https://mainnet.helius-rpc.com/"
 # Keep transaction lookups at a conservative 2 requests/second until the
@@ -61,6 +65,12 @@ def _raw_token_amount(row):
     if not isinstance(amount, str) or not amount.isdigit():
         return None
     return int(amount)
+
+
+def _token_decimals(row):
+    amount = row.get("uiTokenAmount") or {}
+    decimals = amount.get("decimals")
+    return decimals if type(decimals) is int and 0 <= decimals <= 18 else None
 
 
 def _message_parts(notification):
@@ -142,12 +152,13 @@ def _program_ids(message, meta, account_keys):
     return found
 
 
-def parse_whale_buy(notification, observed_at=None):
-    """Parse one confirmed DEX transaction into a conservative SOL-buy signal.
+def parse_whale_buy(notification, observed_at=None, sol_usd_price=None, *,
+                    allow_unpriced_usdc=False):
+    """Parse a confirmed DEX buy sized at 10–1,000 SOL or its USDC equivalent.
 
-    The SOL amount is the fee- and new-token-account-rent-adjusted net debit
-    of the transaction fee payer. It is an observed transaction estimate,
-    not a decoded quote or a promise that the buy was profitable.
+    SOL spend is the fee- and new-token-account-rent-adjusted net debit of the
+    fee payer. USDC spend is converted using a fresh SOL/USD reference. The
+    result is an observed transaction estimate, not a profit forecast.
     """
     parts = _message_parts(notification)
     if not parts:
@@ -204,27 +215,55 @@ def parse_whale_buy(notification, observed_at=None):
         return None
     pre_by_account = {}
     for row in pre_token_rows:
-        if not isinstance(row, dict):
+        if not isinstance(row, dict) or row.get("owner") != payer:
             continue
         amount = _raw_token_amount(row)
         index, mint = row.get("accountIndex"), row.get("mint")
-        if type(index) is int and isinstance(mint, str) and amount is not None:
-            pre_by_account[(index, mint)] = amount
+        if type(index) is int and _pubkey(mint):
+            if amount is None and mint == USDC_MINT:
+                return None
+            if amount is not None:
+                decimals = _token_decimals(row)
+                if mint == USDC_MINT and decimals != USDC_DECIMALS:
+                    return None
+                pre_by_account[(index, mint)] = (amount, decimals)
 
-    deltas = {}
-    created_token_accounts = []
+    post_by_account = {}
     for row in post_token_rows:
         if not isinstance(row, dict) or row.get("owner") != payer:
             continue
         mint, index = row.get("mint"), row.get("accountIndex")
         amount = _raw_token_amount(row)
-        if not _pubkey(mint) or mint == SOL_MINT or type(index) is not int or amount is None:
+        if type(index) is not int or not _pubkey(mint):
             continue
-        prior = pre_by_account.get((index, mint), 0)
+        if amount is None and mint == USDC_MINT:
+            return None
+        if amount is None:
+            continue
+        decimals = _token_decimals(row)
+        if mint == USDC_MINT and decimals != USDC_DECIMALS:
+            return None
+        post_by_account[(index, mint)] = (amount, decimals)
+
+    deltas = {}
+    created_token_accounts = []
+    usdc_spend_raw = 0
+    for index, mint in pre_by_account.keys() | post_by_account.keys():
+        before = pre_by_account.get((index, mint))
+        after = post_by_account.get((index, mint))
+        prior = before[0] if before else 0
+        amount = after[0] if after else 0
+        if mint == USDC_MINT:
+            if (before and before[1] != USDC_DECIMALS) or (after and after[1] != USDC_DECIMALS):
+                return None
+            usdc_spend_raw += max(0, prior - amount)
+            continue
+        if mint == SOL_MINT:
+            continue
         delta = amount - prior
         if delta > 0:
             deltas[mint] = deltas.get(mint, 0) + delta
-            if (index, mint) not in pre_by_account:
+            if before is None and after is not None:
                 created_token_accounts.append(index)
     if len(deltas) != 1:
         return None
@@ -236,16 +275,47 @@ def parse_whale_buy(notification, observed_at=None):
         if type(pre_balances[index]) is not int or type(post_balances[index]) is not int:
             return None
         native_spend -= max(0, post_balances[index] - pre_balances[index])
-    if not MIN_WHALE_LAMPORTS <= native_spend <= MAX_WHALE_LAMPORTS:
-        return None
-
     mint = next(iter(deltas))
+    sol_usd_price = (float(sol_usd_price) if type(sol_usd_price) in (int, float)
+                     and math.isfinite(sol_usd_price) and sol_usd_price > 0 else None)
+    if usdc_spend_raw:
+        # A transaction with a whale-sized native debit and USDC input is
+        # ambiguous; do not count the same swap under either quote asset.
+        if native_spend >= MIN_WHALE_LAMPORTS:
+            return None
+        usdc_amount = usdc_spend_raw / 10**USDC_DECIMALS
+        if sol_usd_price is None:
+            if not allow_unpriced_usdc:
+                return None
+            sol_equivalent = None
+            price_pending = True
+        else:
+            sol_equivalent = usdc_amount / sol_usd_price
+            if not (MIN_WHALE_LAMPORTS / 1_000_000_000
+                    <= sol_equivalent <= MAX_WHALE_LAMPORTS / 1_000_000_000):
+                return None
+            price_pending = False
+        quote_asset, quote_amount = "USDC", usdc_amount
+        sol_lamports = None
+    else:
+        if not MIN_WHALE_LAMPORTS <= native_spend <= MAX_WHALE_LAMPORTS:
+            return None
+        sol_equivalent = native_spend / 1_000_000_000
+        price_pending = False
+        quote_asset, quote_amount = "SOL", sol_equivalent
+        sol_lamports = native_spend
+
     return {
         "signature": signature,
         "slot": slot,
         "mint": mint,
         "program": program_name,
-        "sol_lamports": native_spend,
+        "quote_asset": quote_asset,
+        "quote_amount": quote_amount,
+        "sol_equivalent": sol_equivalent,
+        "sol_price_usd": sol_usd_price if quote_asset == "USDC" else None,
+        "price_pending": price_pending,
+        "sol_lamports": sol_lamports,
         "seen_at": int(time.time() if observed_at is None else observed_at),
     }
 
@@ -259,9 +329,13 @@ class HeliusStreamError(Exception):
 class HeliusWhaleStream:
     """One reconnecting Helius subscription. It never submits or signs trades."""
 
-    def __init__(self, api_key="", on_signal=None, enabled=True):
+    def __init__(self, api_key="", on_signal=None, enabled=True, sol_price_provider=None):
         self.api_key = str(api_key or "").strip()
         self.on_signal = on_signal
+        self.sol_price_provider = sol_price_provider
+        self._sol_usd_price = None
+        self._sol_price_checked_at = 0.0
+        self._sol_price_lock = asyncio.Lock()
         self.configuration_enabled = bool(enabled)
         self.state = ("connecting" if self.api_key else "waiting_for_key"
                       ) if self.configuration_enabled else "stopped"
@@ -300,6 +374,7 @@ class HeliusWhaleStream:
             "TransactionUnavailable": "A transaction lookup returned no confirmed transaction.",
             "StaleTransaction": "The lookup queue was too busy; an old signal was dropped.",
             "ProviderUnavailable": "Helius RPC is temporarily unavailable.",
+            "SolUsdUnavailable": "A fresh SOL/USD reference was unavailable; USDC whale-size checks were skipped.",
             "SignalHandlerError": "A signal could not be queued for screening.",
             "TransactionFetchError": "A transaction lookup failed unexpectedly.",
         }
@@ -309,7 +384,8 @@ class HeliusWhaleStream:
                 return "Connected to standard logsSubscribe. " + detail
             return ("Connected to Helius standard logsSubscribe for confirmed BUY/SWAP logs from "
                     + ", ".join(WHALE_SIGNAL_PROGRAMS)
-                    + ". Transactions are validated before becoming signals; candidates still pass screening.")
+                    + ". SOL and USDC buys use the same 10–1,000 SOL-equivalent threshold. "
+                    "USDC checks require a fresh SOL/USD price; candidates still pass screening.")
         if self.state == "retrying":
             reason = (" " + detail) if detail else ""
             return ("Helius standard stream disconnected; reconnecting with bounded backoff."
@@ -345,7 +421,7 @@ class HeliusWhaleStream:
             "dropped_lookups": self.dropped_lookups,
             "lookup_limit_per_second": 2,
             "recent_signals": [
-                {**event, "sol": event["sol_lamports"] / 1_000_000_000}
+                {**event, "sol": event["sol_equivalent"]}
                 for event in self.recent_signals
             ],
         }
@@ -368,6 +444,35 @@ class HeliusWhaleStream:
         self._transaction_queue.put_nowait(
             (event["signature"], event["slot"], int(time.time())))
         return True
+
+    async def _current_sol_usd_price(self, session):
+        now = time.monotonic()
+        if now - self._sol_price_checked_at < SOL_PRICE_CACHE_SECONDS:
+            return self._sol_usd_price
+        async with self._sol_price_lock:
+            now = time.monotonic()
+            if now - self._sol_price_checked_at < SOL_PRICE_CACHE_SECONDS:
+                return self._sol_usd_price
+            self._sol_price_checked_at = now
+            self._sol_usd_price = None
+            if not callable(self.sol_price_provider):
+                self.last_error = "SolUsdUnavailable"
+                return None
+            try:
+                result = self.sol_price_provider(session)
+                if inspect.isawaitable(result):
+                    result = await result
+                price = result.get("SOL") if isinstance(result, dict) else None
+                if (isinstance(price, bool) or type(price) not in (int, float)
+                        or not math.isfinite(price) or price <= 0):
+                    raise ValueError("SOL/USD unavailable")
+                self._sol_usd_price = float(price)
+                if self.last_error == "SolUsdUnavailable":
+                    self.last_error = ""
+                return self._sol_usd_price
+            except Exception:
+                self.last_error = "SolUsdUnavailable"
+                return None
 
     async def _fetch_transaction(self, session, signature):
         self.transaction_lookups += 1
@@ -403,7 +508,16 @@ class HeliusWhaleStream:
         if not isinstance(transaction, dict):
             raise HeliusStreamError("TransactionUnavailable")
         self.last_error = ""
-        await self.handle_notification({"result": transaction})
+        payload = {"result": transaction}
+        event = parse_whale_buy(payload, allow_unpriced_usdc=True)
+        if not event:
+            return
+        if event["quote_asset"] == "USDC":
+            sol_usd_price = await self._current_sol_usd_price(session)
+            if sol_usd_price is None:
+                return
+            event = parse_whale_buy(payload, sol_usd_price=sol_usd_price)
+        await self._record_signal(event)
 
     async def _lookup_worker(self, session):
         loop = asyncio.get_running_loop()
@@ -433,7 +547,9 @@ class HeliusWhaleStream:
                 self._transaction_queue.task_done()
 
     async def handle_notification(self, payload):
-        event = parse_whale_buy(payload)
+        return await self._record_signal(parse_whale_buy(payload))
+
+    async def _record_signal(self, event):
         if not event or event["signature"] in self._seen:
             return False
         self._seen.add(event["signature"])
