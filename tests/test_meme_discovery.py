@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 from solders.pubkey import Pubkey
 from custody_ledger import CustodyLedger
 from meme_discovery import (
+    MAX_DISCOVERED_MINTS, MAX_VERIFIED_CANDIDATES, AI_SHORTLIST_SIZE,
     MemeDiscovery, TARGETED_SEARCH_TERMS, TOKEN, TOKEN_2022, pool_metrics,
 )
 
@@ -69,6 +70,35 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(len(self.discovery.candidates()),8)
         self.assertTrue(self.ledger.audit())
 
+    async def test_expanded_scan_checks_up_to_200_mints_and_40_on_chain(self):
+        self.assertEqual(MAX_DISCOVERED_MINTS, 200)
+        self.assertEqual(MAX_VERIFIED_CANDIDATES, 40)
+        mints = [str(Pubkey.from_bytes(hashlib.sha256(f"expanded-{i}".encode()).digest()))
+                 for i in range(250)]
+        source_index = 0
+
+        async def fetch(session, path):
+            nonlocal source_index
+            if path == "/metas/trending/v1":
+                return []
+            if path.startswith("/tokens/v1/solana/"):
+                requested = path.split("/tokens/v1/solana/", 1)[1].split(",")
+                return [pool(mint) for mint in requested]
+            start = source_index * 30
+            source_index += 1
+            return [{"chainId": "solana", "tokenAddress": mint}
+                    for mint in mints[start:start + 30]]
+
+        self.discovery.fetch = AsyncMock(side_effect=fetch)
+        self.discovery.rpc = AsyncMock(return_value={"value": [mint_account() for _ in range(40)]})
+
+        report = await self.discovery.scan(None)
+
+        self.assertEqual(report["scanned"], 200)
+        self.assertEqual(report["eligible"], 40)
+        self.assertEqual(len(self.discovery.rpc.await_args.args[2][0]), 40)
+        self.assertLessEqual(len(self.discovery.candidates()), AI_SHORTLIST_SIZE)
+
     async def test_scan_includes_more_targeted_memecoin_sources(self):
         await self.discovery.scan(None)
         paths = {call.args[1] for call in self.discovery.fetch.await_args_list}
@@ -109,7 +139,7 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
     def test_candidate_shortlist_rotates_across_all_verified_candidates(self):
         now = 1_800_000
         with self.ledger.db() as db:
-            for index in range(20):
+            for index in range(40):
                 code = f"M_{index}"
                 mint = str(Pubkey.from_bytes(hashlib.sha256(code.encode()).digest()))
                 metrics = {"code": code, "score": 100-index, "eligible": True}
@@ -117,14 +147,18 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
                     (code, mint, 6, json.dumps(metrics), now-30))
         self.discovery.blocked = False
 
-        first = self.discovery.candidates(now=now)
-        second = self.discovery.candidates(now=now+15*60)
-
-        self.assertEqual(len(first), 8)
-        self.assertEqual(len(second), 8)
-        self.assertEqual([row["code"] for row in first], [f"M_{i}" for i in range(8)])
-        self.assertEqual([row["code"] for row in second], [f"M_{i}" for i in range(8, 16)])
-        self.assertEqual(len({row["code"] for row in first+second}), 16)
+        batches = []
+        for rotation in range(5):
+            scan_time = now + rotation * 15 * 60
+            with self.ledger.db() as db:
+                db.execute("UPDATE custody_meme_assets SET checked_at=?", (scan_time - 30,))
+            batch = self.discovery.candidates(now=scan_time)
+            self.assertEqual(len(batch), AI_SHORTLIST_SIZE)
+            self.assertEqual([row["code"] for row in batch],
+                             [f"M_{i}" for i in range(rotation * AI_SHORTLIST_SIZE,
+                                                     (rotation + 1) * AI_SHORTLIST_SIZE)])
+            batches.extend(batch)
+        self.assertEqual(len({row["code"] for row in batches}), 40)
 
     async def test_authorities_token2022_invalid_or_uninitialized_mints_excluded(self):
         for bad in (mint_account(mintAuthority=MINT),mint_account(freezeAuthority=MINT),

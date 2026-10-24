@@ -10,7 +10,9 @@ Core mode selects SOL/JUP/RAY/PYTH/JTO/ORCA/KMNO/NOS/SHDW/PEPE/OTC using persona
 up to five positions. New Core assets still require current liquidity/volume,
 quote-impact and closed-candle chart checks before entry. The SOL-funded Sniper
 uses WIF/BONK/BOME/POPCAT/MEW/PENGU/PEPE/OTC as screened seeds alongside bounded discovery,
-up to five positions. A seed is not an eligible trade or a profit forecast.
+up to five positions. Each 15-minute discovery scan considers at most 200 unique mints,
+checks the top 40 through finalized RPC, and supplies at most eight candidates to AI.
+A seed is not an eligible trade or a profit forecast.
 PEPE and OTC are available to both universes: OTC/USDC in Core and OTC/SOL in Sniper.
 OTC uses the exact verified Token-2022 mint with immutable metadata; other Token-2022
 assets remain rejected. Each mode uses its own balance and all existing independent

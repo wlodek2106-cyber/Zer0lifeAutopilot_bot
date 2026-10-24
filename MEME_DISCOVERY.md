@@ -7,10 +7,10 @@ or future returns. WIF remains a seeded candidate but must pass current screenin
 - Latest and recently updated DexScreener profiles, up to two dynamically selected
   trending meme meta feeds, meme/pump searches and mature BONK/POPCAT/BOME searches.
   Search terms are discovery inputs, not token identity or buy recommendations.
-- Up to 90 unique mints, balanced across sources; core assets excluded.
+- Up to 200 unique mints, balanced across sources; core assets excluded.
 - Raydium/Orca/Meteora/PumpSwap, pool liquidity and 24h volume >= $100k,
   >= 200 daily swaps, pool age >= 24h, no extreme 5-minute/hour pump.
-- At most 20 screening leaders checked through finalized RPC mint data.
+- At most 40 screening leaders checked through finalized RPC mint data.
 - Dynamically discovered assets must be standard SPL, with initialized mint,
   integer decimals 0..9, and no mint/freeze authority. Token-2022 candidates are
   rejected except the exact, preapproved OTC seed; OTC requires the verified

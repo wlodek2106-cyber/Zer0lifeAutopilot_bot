@@ -17,7 +17,8 @@ TOKEN = TOKEN_PROGRAM_ID
 TOKEN_2022 = TOKEN_2022_PROGRAM_ID
 DEXES = {"raydium", "orca", "meteora", "pumpswap"}
 MIN_LIQUIDITY_USD = 10_000
-MAX_VERIFIED_CANDIDATES = 20
+MAX_DISCOVERED_MINTS = 200
+MAX_VERIFIED_CANDIDATES = 40
 AI_SHORTLIST_SIZE = 8
 SHORTLIST_ROTATION_SECONDS = 15 * 60
 # Discovery hints only. Every result remains subject to the same market and
@@ -199,7 +200,7 @@ class MemeDiscovery:
                 for mint in values:
                     if valid_mint(mint) and mint not in self.excluded and mint not in mints:
                         mints.append(mint)
-            mints = mints[:90]
+            mints = mints[:MAX_DISCOVERED_MINTS]
             if not mints:
                 raise ValueError("Sources returned no Solana candidates.")
             best = {}
@@ -227,7 +228,8 @@ class MemeDiscovery:
             mint_rejections = {}
             for item in sorted(best.values(), key=lambda row: row["score"], reverse=True)[
                     MAX_VERIFIED_CANDIDATES:]:
-                mint_rejections[item["mint"]] = ["outside the top 20 candidates checked on-chain"]
+                mint_rejections[item["mint"]] = [
+                    f"outside the top {MAX_VERIFIED_CANDIDATES} candidates checked on-chain"]
             if ranked:
                 accounts = await self.rpc(session, "getMultipleAccounts", [
                     [item["mint"] for item in ranked], {"encoding": "jsonParsed", "commitment": "finalized"}])

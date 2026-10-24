@@ -89,6 +89,7 @@ class MenuBrowserTests(unittest.TestCase):
                 const strategyText=document.getElementById('strategy-help').textContent;
                 assert(strategyText.includes('OTC / USDC')&&strategyText.includes('OTC / SOL'),'both OTC quote pairs visible');
                 assert(strategyText.includes('verified OTC Token-2022 mint'),'Token-2022 exception explained');
+                assert(strategyText.includes('up to 200 Solana mints, verifies up to 40'),'expanded scan bounds are visible');
                 assert(Array.from(document.querySelectorAll('summary')).some(el=>el.textContent==='Whale buys · 10–1,000 SOL'),'whale observation range is visible');
                 assert(document.getElementById('meme-sniper-card').querySelectorAll('p.section-note').length===3,'compact sniper card');
                 fixture.ai_status={configured:true,model:'gpt-4.1',interval_seconds:900,
