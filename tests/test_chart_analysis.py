@@ -97,6 +97,54 @@ class ChartAnalysisTests(unittest.TestCase):
         self.assertEqual(result["chart_buy_setup"], 1)
         self.assertGreater(result["chart_support_touches_h1"], 1)
 
+        extended_bounce = [dict(bar) for bar in m5]
+        extended_bounce[-1].update({
+            "open": 100.35, "high": 100.8, "low": 99.99,
+            "close": 100.7, "volume": 160,
+        })
+        extended_result = chart_analysis.analyze_charts(
+            extended_bounce, h1, now=now)
+        self.assertEqual(extended_result["chart_ready"], 1)
+        self.assertEqual(extended_result["chart_buy_setup"], 0)
+
+    def test_one_touch_is_not_a_confirmed_support_or_resistance_zone(self):
+        self.assertIsNone(chart_analysis._nearest_zone(
+            [100.0], 101.0, 0.5, support=True, minimum_touches=2))
+        repeated = chart_analysis._nearest_zone(
+            [100.0, 100.1], 101.0, 0.5, support=True, minimum_touches=2)
+        self.assertIsNotNone(repeated)
+        self.assertEqual(repeated["touches"], 2)
+
+    def test_repeated_resistance_rejection_is_sell_evidence_not_a_breakout_buy(self):
+        now = 1_000_000
+        h1 = []
+        m5 = []
+        for index in range(60):
+            close = 102 + math.sin(2 * math.pi * index / 12)
+            h1.append({
+                "timestamp": int(now - 3600 * (60 - index)),
+                "open": close, "high": close + 0.08, "low": close - 0.08,
+                "close": close, "volume": 100,
+            })
+            close_5m = 102.7 + 0.1 * math.sin(2 * math.pi * index / 12)
+            opened = close_5m - 0.02
+            high = max(opened, close_5m) + 0.04
+            if index == 59:
+                opened, close_5m, high = 103.12, 102.95, 103.4
+            m5.append({
+                "timestamp": int(now - 300 * (60 - index)),
+                "open": opened, "high": high,
+                "low": min(opened, close_5m) - 0.04,
+                "close": close_5m, "volume": 150 if index == 59 else 100,
+            })
+
+        result = chart_analysis.analyze_charts(m5, h1, now=now)
+
+        self.assertEqual(result["chart_ready"], 1)
+        self.assertGreaterEqual(result["chart_resistance_touches_h1"], 2)
+        self.assertEqual(result["chart_sell_setup"], 1)
+        self.assertEqual(result["chart_buy_setup"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

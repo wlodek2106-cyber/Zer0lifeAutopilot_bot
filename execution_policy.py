@@ -9,7 +9,7 @@ from custody_ledger import USDC, SOL
 from entry_costs import MAX_COST_BPS, MAX_PRICE_IMPACT_PCT, MAX_QUOTE_AGE_SECONDS, assess_entry
 from wallet_runtime import WalletError
 
-VERSION = "independent-execution-v6-sniper-trend-gate"
+VERSION = "independent-execution-v7-support-resistance"
 MAX_POSITIONS = MappingProxyType({"main": 5, "sniper": 5})
 DECISION_SECONDS = 120
 QUOTE_SECONDS = MAX_QUOTE_AGE_SECONDS
@@ -74,6 +74,35 @@ def sniper_exit_reason(price, entry, peak):
     return trailing_exit_reason(price, entry, peak, SNIPER_STOP_LOSS_PCT)
 
 
+def resistance_exit_reason(price, entry, current_price_usd, metrics, snapshot_created_at, now=None):
+    """Sell an owned position on a fresh, confirmed rejection at repeated resistance."""
+    now = time.time() if now is None else now
+    resistance_low = metrics.get("chart_resistance_low_usd") if isinstance(metrics, dict) else None
+    resistance_high = metrics.get("chart_resistance_high_usd") if isinstance(metrics, dict) else None
+    chart_price = metrics.get("chart_price_usd") if isinstance(metrics, dict) else None
+    near_price_zone = (
+        positive(current_price_usd) and positive(resistance_low) and positive(resistance_high)
+        and positive(chart_price) and resistance_high >= resistance_low
+        and resistance_low - (resistance_high - resistance_low) <= current_price_usd
+        <= resistance_high + (resistance_high - resistance_low)
+        and abs(current_price_usd / chart_price - 1) <= 0.01
+    )
+    if not (positive(price) and positive(entry) and price > entry
+            and isinstance(metrics, dict)
+            and metrics.get("chart_ready") == 1
+            and metrics.get("chart_sell_setup") == 1
+            and near_price_zone
+            and type(metrics.get("chart_resistance_touches_h1")) in (int, float)
+            and metrics["chart_resistance_touches_h1"] >= 2
+            and type(snapshot_created_at) in (int, float)
+            and math.isfinite(snapshot_created_at)
+            and type(metrics.get("chart_m5_age_seconds")) in (int, float)
+            and 0 <= metrics["chart_m5_age_seconds"] <= 7 * 60
+            and 0 <= now - snapshot_created_at + metrics["chart_m5_age_seconds"] <= 7 * 60):
+        return None
+    return "RESISTANCE_TARGET"
+
+
 def risk_exit(price, entry, peak=None):
     return risk_exit_reason(price, entry, peak) is not None
 
@@ -88,7 +117,7 @@ def core_entry_signal(symbol, context):
                     "SKIPPED: fresh 5-minute and 1-hour OHLCV candles are unavailable; Core BUY is blocked.")
     if metrics.get("chart_buy_setup") != 1:
         return deny("core_chart_confirmation",
-                    "SKIPPED: charts show no confirmed support hold or breakout-retest with momentum confirmation.")
+                    "SKIPPED: charts show no confirmed bounce from a repeated support zone.")
     m5, h1 = metrics.get("change_m5_pct"), metrics.get("change_h1_pct")
     if not (bounded_pct(m5) and bounded_pct(h1)):
         return deny("core_context", "SKIPPED: Core needs fresh 5-minute and 1-hour price changes.")
@@ -122,7 +151,7 @@ def core_entry_signal(symbol, context):
 
 
 def sniper_entry_signal(symbol, context):
-    """Require rising short-term momentum and chart confirmation for Sniper entries."""
+    """Require rising short-term momentum and a confirmed support bounce for Sniper entries."""
     if not isinstance(context, dict) or not isinstance(context.get(symbol), dict):
         return deny("sniper_chart_data",
                     "SKIPPED: fresh 5-minute and 1-hour chart data is unavailable; Sniper BUY is blocked.")
@@ -132,7 +161,7 @@ def sniper_entry_signal(symbol, context):
                     "SKIPPED: fresh 5-minute and 1-hour candles are unavailable; Sniper BUY is blocked.")
     if metrics.get("chart_buy_setup") != 1:
         return deny("sniper_chart_confirmation",
-                    "SKIPPED: the 5-minute/1-hour chart has no confirmed Sniper buy setup.")
+                    "SKIPPED: the chart has no confirmed bounce from a repeated support zone.")
     m5, h1 = metrics.get("change_m5_pct"), metrics.get("change_h1_pct")
     if not (bounded_pct(m5) and bounded_pct(h1)):
         return deny("sniper_trend_data",
@@ -287,6 +316,9 @@ def describe():
             "max_positions": dict(MAX_POSITIONS), "liquidity_basis": "executable_route_price_impact",
             "entry_filters_never_block_exits": True,
             "sniper_buy_requires_fresh_chart_confirmation": True,
+            "buy_requires_confirmed_support_bounce": True,
+            "breakout_chasing_disabled": True,
+            "sell_on_fresh_resistance_rejection": True,
             "sniper_buy_requires_positive_m5_h1": True,
             "sniper_buy_max_6h_decline_pct": 5,
             "exit_policy": {"core_stop_loss_pct": CORE_STOP_LOSS_PCT,

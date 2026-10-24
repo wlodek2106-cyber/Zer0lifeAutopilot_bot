@@ -439,13 +439,13 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
                 "properties"][mode]["properties"]["reason"]
             self.assertEqual(reason_schema["minLength"], 1)
             self.assertEqual(reason_schema["maxLength"], 350)
-        self.assertIn("main (USDC) only", self.payload["messages"][1]["content"])
+        self.assertIn("both Core (USDC) and Sniper (SOL)", self.payload["messages"][1]["content"])
         self.assertIn("not backtested", self.payload["messages"][1]["content"])
         self.assertIn("OHLCV chart features", self.payload["messages"][1]["content"])
         self.assertIn("chart data is missing or stale", self.payload["messages"][1]["content"])
         self.assertIn("only say the floor was breached when the value is less than -5%",
                       self.payload["messages"][1]["content"])
-        self.assertIn("chart_ready=1 and chart_buy_setup=1",
+        self.assertIn("confirmed bounce from repeated support",
                       self.payload["messages"][2]["content"])
         self.assertIn("relative strength versus SOL is not applicable",
                       self.payload["messages"][1]["content"])

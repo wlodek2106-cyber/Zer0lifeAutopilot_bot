@@ -520,6 +520,24 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(self.ledger.positions(101)[0]["state"], "CLOSED")
         self.assertTrue(self.ledger.audit())
 
+    def test_resistance_target_reason_survives_in_completed_sale_alert(self):
+        buy = self.reserve(uid=101, kind="BUY", asset=USDC, raw=1_000_000,
+            info={"output_asset": "test-mint", "symbol": "BOME", "decimals": 6})
+        self.complete(buy, spent=1_000_000, fee=0, received=2_500_000)
+        position = self.ledger.positions(101, "OPEN")[0]
+        sale = self.reserve(uid=101, kind="SELL", asset="test-mint", raw=position["raw"],
+            info={"output_asset": USDC, "exit_reason": "RESISTANCE_TARGET"},
+            position=position["id"])
+        self.ledger.prepared(sale["id"], str(Signature.new_unique()), "offline-wire")
+        self.ledger.finalize(sale["id"], position["raw"], 0, 1_100_000)
+
+        event = next(row for row in self.ledger.trade_notifications(int(time.time()))
+                     if row["operation_id"] == sale["id"])
+        payload = json.loads(event["payload"])
+        self.assertEqual(payload["exit_reason"], "RESISTANCE_TARGET")
+        self.assertIn("Resistance rejection confirmed",
+                      runtime.CustodyRuntime.trade_notification_text(payload))
+
     def test_failed_stop_loss_notification_says_position_remains_open(self):
         buy = self.reserve(uid=101, kind="BUY", asset=USDC, raw=1_000_000,
             info={"output_asset": "test-mint", "symbol": "BOME", "decimals": 6})
@@ -907,6 +925,24 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.ledger.prepared(buy["id"], str(Signature.new_unique()), "offline-wire")
         self.ledger.finalize(buy["id"], 1_000_000, 5000, 10_000_000)
         return self.ledger.positions(uid, "OPEN")[0]
+
+    def test_fresh_repeated_resistance_rejection_exits_only_above_entry(self):
+        position = self.open_position_for_close()
+        now = int(time.time())
+        metrics = {
+            "chart_ready": 1, "chart_sell_setup": 1,
+            "chart_resistance_low_usd": 103.0, "chart_resistance_high_usd": 104.0,
+            "chart_resistance_touches_h1": 2, "chart_m5_age_seconds": 30,
+            "chart_price_usd": 103.2,
+        }
+        self.assertEqual(self.service.exit_reason(
+            position, {"BOME": 103.3}, metrics=metrics,
+            snapshot_created_at=now - 100, now=now), "RESISTANCE_TARGET")
+        self.assertIsNone(self.service.exit_reason(
+            position, {"BOME": 99.0}, metrics=metrics,
+            snapshot_created_at=now - 100, now=now))
+        self.assertEqual(position["state"], "OPEN")
+        self.assertEqual(self.ledger.balance(101, USDC), 1_000_000)
 
     def pending_sell(self, uid=101, signer=None):
         invoice = self.ledger.invoice(uid, USDC, 2_000_000)

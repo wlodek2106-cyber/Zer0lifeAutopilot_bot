@@ -368,10 +368,12 @@ class CustodyRuntime(WalletRuntime):
                         }
                 except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
                     main_context = {}
-            if self.sniper_market_context_fn and screening_rows:
+            sniper_context_symbols = list(dict.fromkeys([
+                *screening_rows, *self.held_sniper_symbols()]))
+            if self.sniper_market_context_fn and sniper_context_symbols:
                 try:
                     raw_context = await self.sniper_market_context_fn(
-                        session, self.watchlist, list(screening_rows))
+                        session, self.watchlist, sniper_context_symbols)
                     if isinstance(raw_context, dict):
                         sniper_context = {
                             symbol: metrics for symbol, metrics in raw_context.items()
@@ -2622,6 +2624,8 @@ class CustodyRuntime(WalletRuntime):
                 header = "Take-profit reached — sale confirmed on Solana."
             elif reason == "TRAILING_STOP":
                 header = "Trailing stop triggered — sale confirmed on Solana."
+            elif reason == "RESISTANCE_TARGET":
+                header = "Resistance rejection confirmed — sale confirmed on Solana."
             else:
                 header = "Sale confirmed on Solana."
             details = f"Sold: {token_amount} {symbol}\nCredited: {funding_amount} {funding_name}"
@@ -2781,7 +2785,13 @@ class CustodyRuntime(WalletRuntime):
                                 uid, position["id"], max(entry, price))
                             if peak is not None:
                                 position["peak_price"] = peak
-                    reason = self.exit_reason(position, prices) if mode_enabled else None
+                    chart_key = ("sniper_market_context" if position["funding_asset"] == SOL
+                                 else "main_market_context")
+                    chart_context = ((snapshot or {}).get(chart_key, {})
+                                     if mode_enabled else {})
+                    metrics = chart_context.get(position["symbol"], {})
+                    reason = self.exit_reason(position, prices, metrics=metrics,
+                        snapshot_created_at=(snapshot or {}).get("created_at")) if mode_enabled else None
                     if reason:
                         target, target_reason = position, reason
                         break
@@ -2836,16 +2846,21 @@ class CustodyRuntime(WalletRuntime):
             return None
         return entry if math.isfinite(entry) and entry > 0 else None
 
-    def exit_reason(self, position, prices):
+    def exit_reason(self, position, prices, *, metrics=None, snapshot_created_at=None, now=None):
         price = self.position_exit_price(position, prices)
         entry = self.position_entry_price(position)
         if price is None or entry is None:
             return None
         if position["funding_asset"] == SOL:
             peak = position.get("peak_price") or entry
-            return execution_policy.sniper_exit_reason(price, entry, max(peak, entry, price))
-        peak = position.get("peak_price") or entry
-        return execution_policy.risk_exit_reason(price, entry, max(peak, entry, price))
+            reason = execution_policy.sniper_exit_reason(price, entry, max(peak, entry, price))
+        else:
+            peak = position.get("peak_price") or entry
+            reason = execution_policy.risk_exit_reason(price, entry, max(peak, entry, price))
+        if reason:
+            return reason
+        return execution_policy.resistance_exit_reason(
+            price, entry, prices.get(position["symbol"]), metrics, snapshot_created_at, now=now)
 
     def exit_triggered(self, position, prices):
         return self.exit_reason(position, prices) is not None

@@ -56,9 +56,9 @@ MAIN_CHART_DATA_CAPABILITIES = {
         "5-minute and 1-hour buy/sell transaction counts",
         "24-hour liquidity and total-volume aggregates",
         "Closed 5-minute and 1-hour OHLCV candles from the selected Solana pool",
-        "Support/resistance areas from confirmed hourly swing points",
+        "Repeated support/resistance areas from confirmed hourly swing points",
         "5-minute EMA20/50, RSI14, MACD histogram, ATR and same-timeframe relative volume",
-        "Confirmed 5-minute engulfing flags and deterministic support-hold/breakout-retest checks",
+        "Confirmed 5-minute support-bounce and resistance-rejection checks; breakout entries are disabled",
     ],
     "unavailable": [
         "Full order-book depth, news/fundamentals and token-safety guarantees",
@@ -210,9 +210,8 @@ async def analyze(session, market, universes, screening=None, main_context=None,
                 "They do not establish that a project is safe or truly a meme. "
                 "Only the independent risk controller may execute any decision.")},
             {"role": "system", "content": (
-                "Additional strategy guidance for main (USDC) only; do not apply it to sniper (SOL), "
-                "whose existing decision policy remains unchanged. Follow the supplied chart-guide principles "
-                "only where the feed supports them. Core BUY requires positive 5-minute and 1-hour trends, "
+                "Additional strategy guidance applies to both Core (USDC) and Sniper (SOL). "
+                "Follow the supplied chart-guide principles only where the feed supports them. Core BUY requires positive 5-minute and 1-hour trends, "
                 "no overextension (5-minute above 3%, 1-hour above 10%) and no 6-hour decline below -5%, "
                 "plus buyer pressure or token strength versus SOL. When describing the 6-hour rule, state the "
                 "actual change and call -5% the decline floor; only say the floor was breached when the value "
@@ -220,17 +219,20 @@ async def analyze(session, market, universes, screening=None, main_context=None,
                 "versus SOL is not applicable; do not call it negative or positive. "
                 "The server independently enforces these "
                 "checks. Fresh numeric 5-minute/1-hour OHLCV chart features are supplied when available: "
-                "hourly support/resistance areas, confirmed support-hold or breakout-retest setup flags, "
+                "repeated hourly support/resistance areas, confirmed support-bounce and resistance-rejection flags, "
                 "EMA, RSI, MACD, ATR, same-timeframe relative volume and simple engulfing flags. "
-                "Core BUY additionally requires chart_ready=1 and chart_buy_setup=1; the server enforces this. "
+                "Both modes BUY only after a confirmed bounce from repeated support; breakout chasing is disabled "
+                "and the server enforces this. A fresh chart_sell_setup at repeated resistance can trigger an "
+                "automatic sale of an owned position only when its current gross price is above entry. "
                 "Do not treat 24-hour total volume as relative volume, and do not invent candle signals when "
                 "chart data is missing or stale. Consider chart_sell_setup only as evidence for exiting an "
                 "already-owned spot position; SELL never opens a short. Server stop-loss and trailing-exit controls "
                 "remain authoritative. Missing or conflicting evidence means HOLD. These heuristics are not "
                 "backtested and do not predict profit; never force a trade when no candidate qualifies.")},
             {"role": "system", "content": (
-                "For sniper (SOL) BUY, also require the supplied numeric sniper chart context to have "
-                "chart_ready=1 and chart_buy_setup=1, positive change_m5_pct and change_h1_pct, and "
+                "For Sniper (SOL) BUY, require the supplied numeric chart context to have "
+                "chart_ready=1 and a confirmed bounce from repeated support; do not buy a breakout, "
+                "and require positive change_m5_pct and change_h1_pct, and "
                 "change_h6_pct no lower than -5% when that value is available. If required 5-minute/hourly "
                 "changes or chart data are missing, stale, negative, or unconfirmed, choose HOLD. "
                 "This is an entry-only gate; it never blocks SELL of an owned position. "

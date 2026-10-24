@@ -1,4 +1,4 @@
-"""Deterministic OHLCV chart features for the USDC Core strategy."""
+"""Deterministic OHLCV chart features for Core and Sniper strategies."""
 import math
 
 
@@ -115,7 +115,7 @@ def _pivot_levels(candles, field, is_low):
     return levels
 
 
-def _nearest_zone(levels, price, tolerance, support):
+def _nearest_zone(levels, price, tolerance, support, minimum_touches=2):
     if not levels or tolerance <= 0:
         return None
     clusters = []
@@ -126,6 +126,8 @@ def _nearest_zone(levels, price, tolerance, support):
             clusters.append([level])
     candidates = []
     for cluster in clusters:
+        if len(cluster) < minimum_touches:
+            continue
         center = sum(cluster) / len(cluster)
         if (center <= price if support else center >= price):
             candidates.append((abs(price - center), center, len(cluster)))
@@ -158,22 +160,8 @@ def _engulfing(previous, current, bullish):
             and current_body_high >= previous_body_high)
 
 
-def _breakout_retest(candles, resistance_high, tolerance):
-    if resistance_high is None or len(candles) < 6:
-        return False
-    start = max(1, len(candles) - 7)
-    for index in range(start, len(candles) - 1):
-        if candles[index - 1]["close"] <= resistance_high < candles[index]["close"]:
-            for retest in candles[index + 1:]:
-                if (retest["low"] <= resistance_high + tolerance
-                        and retest["close"] >= resistance_high
-                        and retest["close"] > retest["open"]):
-                    return True
-    return False
-
-
 def analyze_charts(m5_candles, h1_candles, *, now, m5_stale=False, h1_stale=False):
-    """Calculate numeric chart zones and conservative, closed-candle setup flags."""
+    """Calculate numeric chart zones and closed-candle support/rejection setups."""
     m5 = m5_candles if isinstance(m5_candles, list) else []
     h1 = h1_candles if isinstance(h1_candles, list) else []
     result = {
@@ -265,14 +253,18 @@ def analyze_charts(m5_candles, h1_candles, *, now, m5_stale=False, h1_stale=Fals
         support and last["low"] <= support["high"] + tolerance
         and last["close"] >= support["low"] and last["close"] > last["open"]
     )
-    breakout = _breakout_retest(
-        m5, resistance["high"] if resistance else None, tolerance)
     volume_ok = volume_ratio is not None and volume_ratio >= 1.0
+    bounce_extension = max(tolerance, min((atr_5m or 0) * 2.0, price * 0.01))
+    support_hold = bool(
+        support and last["low"] <= support["high"] + tolerance
+        and last["close"] >= support["low"] and last["close"] > last["open"]
+        and last["close"] <= support["high"] + bounce_extension
+    )
     momentum_ok = (rsi_5m is not None and 42 <= rsi_5m <= 72
                   and ema20_5m is not None and last["close"] >= ema20_5m
                   and macd_pct is not None and macd_pct >= -0.05)
     result["chart_buy_setup"] = int(
-        trend >= 0 and (support_hold or breakout) and volume_ok and momentum_ok)
+        trend >= 0 and support_hold and volume_ok and momentum_ok)
 
     near_resistance = bool(
         resistance and last["high"] >= resistance["low"] - tolerance
@@ -280,10 +272,7 @@ def analyze_charts(m5_candles, h1_candles, *, now, m5_stale=False, h1_stale=Fals
     )
     bearish_confirmation = last["close"] < last["open"] or (
         ema20_5m is not None and last["close"] < ema20_5m)
-    result["chart_sell_setup"] = int(
-        (near_resistance and bearish_confirmation)
-        or (trend < 0 and ema20_5m is not None and last["close"] < ema20_5m)
-    )
+    result["chart_sell_setup"] = int(near_resistance and bearish_confirmation)
     result["chart_bullish_engulfing_5m"] = int(
         len(m5) >= 2 and _engulfing(m5[-2], m5[-1], bullish=True))
     result["chart_bearish_engulfing_5m"] = int(

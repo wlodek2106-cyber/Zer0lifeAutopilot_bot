@@ -1296,7 +1296,8 @@ class CustodyLedger:
                     }
                 else:
                     exit_reason = info.get("exit_reason")
-                    if exit_reason not in ("STOP_LOSS", "TAKE_PROFIT", "TRAILING_STOP"):
+                    if exit_reason not in ("STOP_LOSS", "TAKE_PROFIT", "TRAILING_STOP",
+                                            "RESISTANCE_TARGET"):
                         exit_reason = None
                     notification = {
                         "kind": "SELL", "symbol": position["symbol"],

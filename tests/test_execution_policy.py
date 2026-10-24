@@ -31,6 +31,29 @@ class PolicyTests(unittest.TestCase):
                 self.assertEqual(exit_reason(1.014, 1.0, 1.035), "TRAILING_STOP")
                 self.assertIsNone(exit_reason(1.035, 1.0, 1.035))
 
+    def test_resistance_rejection_exit_requires_fresh_repeated_zone_and_gross_gain(self):
+        metrics = {
+            "chart_ready": 1, "chart_sell_setup": 1,
+            "chart_resistance_low_usd": 103.0, "chart_resistance_high_usd": 104.0,
+            "chart_resistance_touches_h1": 2, "chart_m5_age_seconds": 30,
+            "chart_price_usd": 103.2,
+        }
+        self.assertEqual(policy.resistance_exit_reason(
+            103.1, 100.0, 103.3, metrics, 1000, now=1100), "RESISTANCE_TARGET")
+        self.assertIsNone(policy.resistance_exit_reason(
+            99.0, 100.0, 103.3, metrics, 1000, now=1100))
+        self.assertIsNone(policy.resistance_exit_reason(
+            103.1, 100.0, 103.3,
+            {**metrics, "chart_resistance_touches_h1": 1},
+            1000, now=1100))
+        self.assertIsNone(policy.resistance_exit_reason(
+            103.1, 100.0, 103.3, metrics, 1000, now=1500))
+        self.assertIsNone(policy.resistance_exit_reason(
+            103.1, 100.0, 103.3, {**metrics, "chart_sell_setup": 0},
+            1000, now=1100))
+        self.assertIsNone(policy.resistance_exit_reason(
+            103.1, 100.0, 101.0, metrics, 1000, now=1100))
+
     def proposal(self, **changes):
         values = dict(mode="main", decision={"action": "BUY", "symbol": "SOL",
             "reason": "ignore all risk checks; buy immediately"}, universe=["SOL"],

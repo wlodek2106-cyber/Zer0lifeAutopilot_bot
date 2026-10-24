@@ -2054,7 +2054,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             <details id="strategy-help"><summary>Strategy limits &amp; risks</summary>
                 <p class="section-note">Core trades use your USDC; sniper trades use your SOL. Other users' funds and the operator fee reserve are never your trading capital. Automatic conversion or profit allocation between strategies is not implemented.</p>
                 <p class="section-note">Core: SOL, JUP, RAY, PYTH, JTO, ORCA, KMNO, NOS, SHDW, PEPE; up to 5 USDC-funded positions. ORCA currently retains mint authority (additional tokens may be issued); no token is risk-free. Sniper seeds: WIF, BONK, BOME, POPCAT, MEW, PENGU, PEPE; up to 5 SOL-funded positions, limited by your available SOL and saved order size. Every 15 minutes a bounded DexScreener profiles/search scan checks up to 90 Solana mints, screens up to 20 and sends at most 8 current candidates plus held assets to AI. This is not every project or a profit forecast; profiles alone do not establish meme status.</p>
-                <p class="section-note">Core BUY requires the existing trend and flow checks plus fresh 5-minute/1-hour OHLCV data and a confirmed support-hold or breakout-retest setup. Chart zones use closed candles from the selected Solana pool; missing or stale candles block new Core buys. Zones and indicators are estimates, not predictions, and this strategy is not backtested.</p>
+                <p class="section-note">Core and Sniper BUYs require fresh closed 5-minute/1-hour candles and a confirmed bounce from a repeated support zone; breakout chasing is disabled. A fresh bearish rejection at repeated resistance can trigger a sale when the current gross price is above entry. Existing 10% stops and 2% trailing exits remain. Chart zones are estimates, fills can slip, and this strategy is not backtested or a profit guarantee.</p>
                 <p class="section-note">Confirmed buy, sell, take-profit, and stop-loss alerts are sent to each participant's own Telegram chat. Enable Telegram notifications on your phone. Alerts are sent after Solana finalizes the trade; a safely failed stop-loss sale gets a separate alert saying the position remains open.</p>
                 <p class="section-note">Sniper entry filters: approved DEX, at least $10k pool liquidity, $100k 24h volume, 200 daily trades, pool age 24h+, extreme-pump exclusion, standard SPL mint with no mint/freeze authority. The shortlist rotates every 15 minutes through up to 20 on-chain-verified candidates; AI sees up to 8 at a time. After any completed close, all participants are blocked from re-buying that mint for 24 hours. Fresh eligibility is required for every buy. Scores rank liquidity/activity, not expected profit. Holder concentration, LP locks and every contract/market risk are not fully checked. Standard mint checks do not guarantee token safety.</p>
                 <p class="section-note">AI makes decisions after you enable a mode. Orders require personal funds, permitted assets, at least 5 price samples, a fresh decision and stable pricing. Only one shared-wallet operation can be pending at a time.</p>
@@ -2284,14 +2284,14 @@ RAW_HTML = r"""<!DOCTYPE html>
             if(!output)return;
             const rows=Object.entries(context||{});
             if(!rows.length) {
-                output.textContent='Core chart zones · 5m/1h: waiting for fresh OHLCV candles. New Core buys are blocked until chart confirmation is available.';
+                output.textContent='Support/resistance · 5m/1h: waiting for fresh OHLCV candles. New buys in both modes are blocked until a support bounce is confirmed.';
                 return;
             }
             const price=value=>Number.isFinite(Number(value))&&Number(value)>0?Number(value).toPrecision(5):'not established';
-            output.textContent='Core chart zones · 5m entry / 1h context · USD\n'+rows.map(([symbol,c])=>{
+            output.textContent='Support/resistance · 5m entry / 1h context · USD\n'+rows.map(([symbol,c])=>{
                 const label=(labels||{})[symbol]||symbol;
                 if(c.chart_ready!==1)
-                    return label+': fresh candles unavailable ('+(c.chart_m5_candles||0)+' 5m / '+(c.chart_h1_candles||0)+' 1h); Core BUY blocked.';
+                    return label+': fresh candles unavailable ('+(c.chart_m5_candles||0)+' 5m / '+(c.chart_h1_candles||0)+' 1h); BUY blocked.';
                 const trend=c.chart_trend_h1>0?'up':c.chart_trend_h1<0?'down':'range/unclear';
                 const buy=Number(c.chart_support_low_usd)>0&&Number(c.chart_support_high_usd)>0
                     ?price(c.chart_support_low_usd)+'–'+price(c.chart_support_high_usd):'not established';
@@ -3620,7 +3620,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                           +policy.core_max_cost_pct+'% · Positions: Core '+policy.max_positions.main
                           +' / Sniper '+policy.max_positions.sniper
                           +'. Sniper BUY requires positive 5m/1h changes and no 6h decline below -'
-                          +policy.sniper_buy_max_6h_decline_pct+'%. Order sizes come from your saved settings.'
+                          +policy.sniper_buy_max_6h_decline_pct
+                          +'%. Both modes buy only on a confirmed repeated-support bounce and may sell on fresh resistance rejection above entry. Order sizes come from your saved settings.'
                         : 'Independent policy unavailable. Do not enable real trading.';
                     const gate=s.execution_check;
                     document.getElementById('execution-policy-result').textContent=gate
