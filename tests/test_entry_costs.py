@@ -185,10 +185,17 @@ class CostRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "MEW": {"mint": "MEW1gQWJ3nEXg2qgERiKu7FAFj79PHvQVREQUzScPP5", "decimals": 5},
             "PENGU": {"mint": "2zMMhcVQEXDtdE6vsFS7S7D5oUodfJHE8vd1gnBouauv", "decimals": 6},
         }
+        from spl_token_support import TOKEN_2022_PROGRAM_ID
+        expected_otc = {
+            "mint": "MukLDtJ8Cx9DxLbeyLRSWPSposTMWuwHANbuaudpump",
+            "decimals": 6, "token_program": TOKEN_2022_PROGRAM_ID, "label": "OTC",
+        }
         for symbol, info in {**expected_core, **expected_sniper}.items():
             self.assertEqual(catalog[symbol], info)
-        self.assertEqual(set(SNIPER_SYMBOLS), {"WIF", "PEPE", *expected_sniper})
+        self.assertEqual(catalog["OTC"], expected_otc)
+        self.assertEqual(set(SNIPER_SYMBOLS), {"WIF", "PEPE", "OTC", *expected_sniper})
         self.assertIn("PEPE", CORE_SYMBOLS)
+        self.assertIn("OTC", CORE_SYMBOLS)
 
         self.service.watchlist = copy.deepcopy(catalog)
         self.service.sniper_symbols = [s for s in SNIPER_SYMBOLS if s in catalog]
@@ -197,5 +204,5 @@ class CostRuntimeTests(unittest.IsolatedAsyncioTestCase):
         universes = self.service.ai_universes()
         self.assertTrue({"JTO", "ORCA", *expected_core}.issubset(universes["main"]))
         self.assertTrue(set(SNIPER_SYMBOLS).issubset(universes["sniper"]))
-        self.assertEqual(set(SNIPER_SYMBOLS) & set(universes["main"]), {"PEPE"})
+        self.assertEqual(set(SNIPER_SYMBOLS) & set(universes["main"]), {"PEPE", "OTC"})
         self.assertEqual(catalog["PEPE"]["mint"], self.service.watchlist["PEPE"]["mint"])

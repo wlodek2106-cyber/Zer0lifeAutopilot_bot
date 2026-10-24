@@ -17,10 +17,13 @@ from solders.message import Message
 from solders.pubkey import Pubkey
 from solders.system_program import transfer, TransferParams
 from solders.transaction import Transaction, VersionedTransaction
+from spl_token_support import TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID
 
 USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 SOL = "So11111111111111111111111111111111111111112"
-TOKEN = Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
+TOKEN = Pubkey.from_string(TOKEN_PROGRAM_ID)
+TOKEN_2022 = Pubkey.from_string(TOKEN_2022_PROGRAM_ID)
+TOKEN_PROGRAMS = (TOKEN, TOKEN_2022)
 ATA = Pubkey.from_string("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
 SYSTEM = Pubkey.from_string("11111111111111111111111111111111")
 MEMO = Pubkey.from_string("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr")
@@ -46,8 +49,9 @@ def amount_raw(value, decimals):
         raise WalletError("Некорректная сумма или число знаков после запятой.", 400)
 
 
-def associated(wallet, mint):
-    return Pubkey.find_program_address([bytes(wallet), bytes(TOKEN), bytes(mint)], ATA)[0]
+def associated(wallet, mint, token_program=TOKEN):
+    return Pubkey.find_program_address(
+        [bytes(wallet), bytes(token_program), bytes(mint)], ATA)[0]
 
 
 def durable(path):
@@ -135,17 +139,22 @@ class WalletRuntime:
 
     async def balances(self, session):
         balance = await self.rpc(session, "getBalance", [self.wallet, {"commitment": "confirmed"}])
-        tokens = await self.rpc(session, "getTokenAccountsByOwner", [
-            self.wallet, {"programId": str(TOKEN)}, {"encoding": "jsonParsed", "commitment": "confirmed"}])
         assets = {}
-        for item in tokens["value"]:
-            info = item["account"]["data"]["parsed"]["info"]
-            if info.get("owner") != self.wallet:
-                continue
-            value = info["tokenAmount"]
-            entry = assets.setdefault(info["mint"], {"raw": 0, "decimals": value["decimals"]})
-            if info.get("state") == "initialized":
-                entry["raw"] += int(value["amount"])
+        for program in TOKEN_PROGRAMS:
+            tokens = await self.rpc(session, "getTokenAccountsByOwner", [
+                self.wallet, {"programId": str(program)},
+                {"encoding": "jsonParsed", "commitment": "confirmed"}])
+            for item in tokens["value"]:
+                account = item.get("account", {})
+                if account.get("owner") != str(program):
+                    raise WalletError("RPC returned a token account from an unexpected program.")
+                info = account.get("data", {}).get("parsed", {}).get("info", {})
+                if info.get("owner") != self.wallet:
+                    continue
+                value = info["tokenAmount"]
+                entry = assets.setdefault(info["mint"], {"raw": 0, "decimals": value["decimals"]})
+                if info.get("state") == "initialized":
+                    entry["raw"] += int(value["amount"])
         assets[SOL] = {"raw": balance["value"], "decimals": 9}
         assets.setdefault(USDC, {"raw": 0, "decimals": 6})
         return assets

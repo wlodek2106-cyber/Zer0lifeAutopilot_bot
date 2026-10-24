@@ -8,10 +8,13 @@ from unittest.mock import AsyncMock
 
 from solders.pubkey import Pubkey
 from custody_ledger import CustodyLedger
-from meme_discovery import MemeDiscovery, TARGETED_SEARCH_TERMS, TOKEN, pool_metrics
+from meme_discovery import (
+    MemeDiscovery, TARGETED_SEARCH_TERMS, TOKEN, TOKEN_2022, pool_metrics,
+)
 
 MINT = str(Pubkey.from_bytes(hashlib.sha256(b"first-candidate").digest()))
 OTHER = str(Pubkey.from_bytes(hashlib.sha256(b"second-candidate").digest()))
+OTC = "MukLDtJ8Cx9DxLbeyLRSWPSposTMWuwHANbuaudpump"
 
 
 def pool(mint=MINT, **updates):
@@ -27,6 +30,17 @@ def mint_account(**updates):
     info = {"isInitialized":True,"decimals":6,"mintAuthority":None,"freezeAuthority":None}
     info.update(updates)
     return {"owner":TOKEN,"data":{"parsed":{"type":"mint","info":info}}}
+
+
+def otc_mint_account():
+    return {"owner":TOKEN_2022, "data":{"parsed":{"type":"mint","info":{
+        "isInitialized":True,"decimals":6,"mintAuthority":None,"freezeAuthority":None,
+        "extensions":[
+            {"extension":"metadataPointer","state":{"authority":None,"metadataAddress":OTC}},
+            {"extension":"tokenMetadata","state":{"updateAuthority":None,"mint":OTC,
+                "name":"OTC","symbol":"OTC","additionalMetadata":[]}},
+        ],
+    }}}}
 
 
 class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
@@ -60,6 +74,37 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         paths = {call.args[1] for call in self.discovery.fetch.await_args_list}
         expected = {f"/latest/dex/search?q={term}" for term in TARGETED_SEARCH_TERMS}
         self.assertTrue(expected.issubset(paths))
+
+    async def test_only_exactly_seeded_otc_mint_can_use_supported_token_2022_metadata(self):
+        seeded = MemeDiscovery(self.ledger, AsyncMock(return_value={"value":[otc_mint_account()]}), [], {
+            "OTC":{"mint":OTC,"decimals":6,"token_program":TOKEN_2022,"label":"OTC"},
+        })
+
+        async def fetch(session, path):
+            if path.startswith("/tokens/"):
+                return [pool(OTC, baseToken={"address":OTC,"symbol":"OTC"})]
+            return [{"chainId":"solana","tokenAddress":OTC}]
+
+        seeded.fetch = AsyncMock(side_effect=fetch)
+        report = await seeded.scan(None)
+        candidate = next(row for row in report["candidates"] if row["mint"] == OTC)
+        self.assertEqual(candidate["code"], "OTC")
+        self.assertEqual(candidate["token_program"], TOKEN_2022)
+        self.assertTrue(seeded.entry_allowed("OTC"))
+
+    async def test_dynamic_token_2022_assets_remain_rejected(self):
+        unseeded = MemeDiscovery(self.ledger, AsyncMock(return_value={"value":[otc_mint_account()]}), [])
+        unseeded.queue_whale_mint(OTC)
+
+        async def fetch(session, path):
+            if path.startswith("/tokens/"):
+                return [pool(OTC, baseToken={"address":OTC,"symbol":"OTC"})]
+            return [{"chainId":"solana","tokenAddress":OTC}]
+
+        unseeded.fetch = AsyncMock(side_effect=fetch)
+        report = await unseeded.scan(None)
+        self.assertEqual(report["eligible"], 0)
+        self.assertIn("mint token program differs", report["whale_rejections"][0]["reasons"][0])
 
     def test_candidate_shortlist_rotates_across_all_verified_candidates(self):
         now = 1_800_000

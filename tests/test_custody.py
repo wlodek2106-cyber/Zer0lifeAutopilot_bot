@@ -2327,13 +2327,16 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
 class SimulationTests(unittest.IsolatedAsyncioTestCase):
     setUp = RuntimeTests.setUp
     rpc = RuntimeTests.rpc
-    def token_account(self, mint, amount, lamports=2_039_280):
+    def token_account(self, mint, amount, lamports=2_039_280, program=None, immutable_owner=False):
         data = bytearray(165)
         data[:32] = bytes(legacy.Pubkey.from_string(mint))
         data[32:64] = bytes(self.signer.pubkey())
         data[64:72] = amount.to_bytes(8, "little")
         data[108] = 1
-        return {"owner": str(legacy.TOKEN), "lamports": lamports,
+        program = program or legacy.TOKEN
+        if immutable_owner:
+            data.extend(b"\x02\x07\x00\x00\x00")
+        return {"owner": str(program), "lamports": lamports,
                 "data": [base64.b64encode(data).decode(), "base64"], "executable": False}
 
     async def simulate(self, before, after, asset=USDC, raw=1_000_000, kind="WITHDRAW", info=None, versioned=False):
@@ -2346,7 +2349,8 @@ class SimulationTests(unittest.IsolatedAsyncioTestCase):
         async def rpc(session, method, params=None):
             if method == "getTokenAccountsByOwner":
                 return {"value": [{"pubkey": str(legacy.associated(self.signer.pubkey(),
-                    legacy.Pubkey.from_bytes(base64.b64decode(item["data"][0])[:32]))), "account": item}
+                    legacy.Pubkey.from_bytes(base64.b64decode(item["data"][0])[:32]),
+                    legacy.Pubkey.from_string(item["owner"]))), "account": item}
                     for item in before[1:] if item]}
             if method == "getMultipleAccounts":
                 return {"value": before}
@@ -2365,6 +2369,31 @@ class SimulationTests(unittest.IsolatedAsyncioTestCase):
 
     def native(self, amount):
         return {"owner": str(legacy.SYSTEM), "lamports": amount, "data": ["", "base64"], "executable": False}
+
+    async def test_custody_backing_counts_token_2022_balances(self):
+        mint = "MukLDtJ8Cx9DxLbeyLRSWPSposTMWuwHANbuaudpump"
+
+        async def rpc(session, method, params=None):
+            if method == "getBalance":
+                return {"value": 200_000_000}
+            if method == "getTokenAccountsByOwner":
+                program = params[1]["programId"]
+                token_mint = USDC if program == str(legacy.TOKEN) else mint
+                return {"value": [{
+                    "account": {"owner": program, "data": {"parsed": {"info": {
+                        "owner": self.service.wallet, "mint": token_mint,
+                        "state": "initialized",
+                        "tokenAmount": {"amount": "2500000", "decimals": 6},
+                    }}}}
+                }]}
+            raise AssertionError(method)
+
+        self.service.rpc = rpc
+        del self.service.balances
+        balances = await self.service.balances(None)
+        self.assertEqual(balances[USDC]["raw"], 2_500_000)
+        self.assertEqual(balances[mint]["raw"], 2_500_000)
+        self.assertEqual(balances[SOL]["raw"], 200_000_000)
 
     async def test_simulation_accepts_exact_usdc_withdrawal(self):
         before = [self.native(50_000_000), self.token_account(USDC, 10_000_000)]
@@ -2478,6 +2507,36 @@ class SimulationTests(unittest.IsolatedAsyncioTestCase):
         after = [self.native(42_955_720), self.token_account(USDC, 10_000_000), self.token_account(mint, 2_600_000)]
         self.assertTrue(await self.simulate(before, after, asset=SOL, raw=5_000_000, kind="BUY",
             info={"output_asset": mint, "minimum_out": 2_500_000}, versioned=True))
+
+    async def test_otc_token_2022_buy_accepts_only_immutable_owner_account(self):
+        mint = "MukLDtJ8Cx9DxLbeyLRSWPSposTMWuwHANbuaudpump"
+        self.service.watchlist["OTC"] = {
+            "mint": mint, "decimals": 6, "label": "OTC",
+            "token_program": str(runtime.TOKEN_2022),
+        }
+        before = [self.native(50_000_000), self.token_account(USDC, 10_000_000), None]
+        otc = self.token_account(mint, 2_600_000, program=runtime.TOKEN_2022,
+                                  immutable_owner=True)
+        after = [self.native(42_955_720), self.token_account(USDC, 10_000_000), otc]
+        self.assertTrue(await self.simulate(
+            before, after, asset=SOL, raw=5_000_000, kind="BUY",
+            info={"output_asset": mint, "minimum_out": 2_500_000}, versioned=True))
+
+    async def test_otc_simulation_rejects_unapproved_token_2022_account_extension(self):
+        mint = "MukLDtJ8Cx9DxLbeyLRSWPSposTMWuwHANbuaudpump"
+        self.service.watchlist["OTC"] = {
+            "mint": mint, "decimals": 6, "label": "OTC",
+            "token_program": str(runtime.TOKEN_2022),
+        }
+        before = [self.native(50_000_000), self.token_account(USDC, 10_000_000), None]
+        unsafe = self.token_account(mint, 2_600_000, program=runtime.TOKEN_2022)
+        data = bytearray(base64.b64decode(unsafe["data"][0]))
+        data.extend(b"\x02\x0c\x00\x00\x00")
+        unsafe["data"][0] = base64.b64encode(data).decode()
+        after = [self.native(42_955_720), self.token_account(USDC, 10_000_000), unsafe]
+        with self.assertRaisesRegex(legacy.WalletError, "unsupported extensions"):
+            await self.simulate(before, after, asset=SOL, raw=5_000_000, kind="BUY",
+                info={"output_asset": mint, "minimum_out": 2_500_000})
 
     async def test_native_sniper_buy_cannot_spend_usdc(self):
         mint = str(Keypair().pubkey())

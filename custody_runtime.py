@@ -23,7 +23,10 @@ from solders.pubkey import Pubkey
 from solders.system_program import transfer, TransferParams
 from solders.transaction import Transaction, VersionedTransaction
 
-from wallet_runtime import WalletRuntime, WalletError, amount_raw, associated, TOKEN, ATA, SYSTEM, MEMO, GENESIS
+from wallet_runtime import (
+    WalletRuntime, WalletError, amount_raw, associated, TOKEN, TOKEN_2022,
+    ATA, SYSTEM, MEMO, GENESIS,
+)
 from custody_ledger import CustodyLedger, LedgerError, USDC, SOL, FEE_CAP, available, position_account
 from legacy_retirement import prove_retirement, RECOVERY_RPC
 from tx_deposits import incoming_amounts
@@ -34,6 +37,7 @@ import activity_log
 from entry_costs import EntryCostError, quote_amounts
 from meme_discovery import MemeDiscovery
 from whale_stream import HeliusWhaleStream
+from spl_token_support import validate_mint_account, token_account_data
 
 WRAPPED_SOL = "So11111111111111111111111111111111111111112"
 JITO_BUNDLE_SEND_URL = "https://mainnet.block-engine.jito.wtf/api/v1/transactions?bundleOnly=true"
@@ -46,8 +50,8 @@ JITO_TIP_MAX_AGE_SECONDS = 120
 JUPITER_PRIORITY_FEE_LAMPORTS = 25_000
 WHALE_AI_COOLDOWN_SECONDS = 60
 WITHDRAWAL_COMMISSION_BPS = 150
-CORE_SYMBOLS = ("SOL", "JUP", "RAY", "PYTH", "JTO", "ORCA", "KMNO", "NOS", "SHDW", "PEPE")
-SNIPER_SYMBOLS = ("WIF", "BONK", "BOME", "POPCAT", "MEW", "PENGU", "PEPE")
+CORE_SYMBOLS = ("SOL", "JUP", "RAY", "PYTH", "JTO", "ORCA", "KMNO", "NOS", "SHDW", "PEPE", "OTC")
+SNIPER_SYMBOLS = ("WIF", "BONK", "BOME", "POPCAT", "MEW", "PENGU", "PEPE", "OTC")
 
 
 def operation_failure_reason(exc):
@@ -202,9 +206,18 @@ class CustodyRuntime(WalletRuntime):
     def restore_catalog(self):
         for row in self.discovery.assets():
             metrics = json.loads(row["metrics"])
+            existing = self.watchlist.get(row["code"], {})
             self.watchlist[row["code"]] = {"mint": row["mint"], "decimals": row["decimals"],
-                                           "label": metrics["symbol"]}
+                "label": metrics["symbol"],
+                "token_program": metrics.get("token_program")
+                    or existing.get("token_program") or str(TOKEN)}
             self.history.setdefault(row["code"], [])
+
+    def token_program_for_mint(self, mint):
+        for info in self.watchlist.values():
+            if info.get("mint") == mint:
+                return Pubkey.from_string(info.get("token_program", str(TOKEN)))
+        return TOKEN
 
     def held_sniper_symbols(self):
         with self.ledger.db() as db:
@@ -561,16 +574,21 @@ class CustodyRuntime(WalletRuntime):
     async def balances(self, session):
         native = (await self.rpc(session, "getBalance", [self.wallet, {"commitment": "finalized"}]))["value"]
         # Backing is a finalized snapshot, never a quote or a user-provided number.
-        tokens = (await self.rpc(session, "getTokenAccountsByOwner", [
-            self.wallet, {"programId": str(TOKEN)}, {"encoding": "jsonParsed", "commitment": "finalized"}]))["value"]
         balances = {SOL: {"raw": native, "decimals": 9}, USDC: {"raw": 0, "decimals": 6}}
-        for account in tokens:
-            info = account["account"]["data"]["parsed"]["info"]
-            if info.get("owner") == self.wallet and info.get("state") == "initialized":
-                mint = info["mint"]
-                asset = asset_for_mint(mint)
-                entry = balances.setdefault(asset, {"raw": 0, "decimals": info["tokenAmount"]["decimals"]})
-                entry["raw"] += int(info["tokenAmount"]["amount"])
+        for program in (TOKEN, TOKEN_2022):
+            tokens = (await self.rpc(session, "getTokenAccountsByOwner", [
+                self.wallet, {"programId": str(program)},
+                {"encoding": "jsonParsed", "commitment": "finalized"}]))["value"]
+            for account in tokens:
+                value = account.get("account", {})
+                if value.get("owner") != str(program):
+                    raise WalletError("RPC returned a token account from an unexpected program.")
+                info = value.get("data", {}).get("parsed", {}).get("info", {})
+                if info.get("owner") == self.wallet and info.get("state") == "initialized":
+                    mint = info["mint"]
+                    asset = asset_for_mint(mint)
+                    entry = balances.setdefault(asset, {"raw": 0, "decimals": info["tokenAmount"]["decimals"]})
+                    entry["raw"] += int(info["tokenAmount"]["amount"])
         # The parent transaction builder expects the wrapped mint key for native SOL.
         balances[WRAPPED_SOL] = balances[SOL]
         return balances
@@ -1441,12 +1459,10 @@ class CustodyRuntime(WalletRuntime):
     def token_data(account):
         if not account:
             return None
-        if account.get("owner") != str(TOKEN) or not isinstance(account.get("data"), list):
-            raise WalletError("Симуляция вернула неподдерживаемый token account.")
-        data = base64.b64decode(account["data"][0])
-        if len(data) != 165:
-            raise WalletError("Неподдерживаемый SPL account.")
-        return data
+        try:
+            return token_account_data(account)
+        except ValueError as exc:
+            raise WalletError("Simulation returned an unsupported token account: " + str(exc)) from exc
 
     async def safe_simulation(self, session, tx, row, info):
         """Constrain user-owned accounts without exceeding narrow RPC account limits."""
@@ -1460,16 +1476,20 @@ class CustodyRuntime(WalletRuntime):
                 addresses.append(str(associated(
                     Pubkey.from_string(self.wallet), Pubkey.from_string(row["asset"]))))
         else:
-            tokens = (await self.rpc(session, "getTokenAccountsByOwner", [
-                self.wallet, {"programId": str(TOKEN)},
-                {"encoding": "base64", "commitment": "confirmed"}]))["value"]
+            tokens = []
+            for program in (TOKEN, TOKEN_2022):
+                tokens.extend((await self.rpc(session, "getTokenAccountsByOwner", [
+                    self.wallet, {"programId": str(program)},
+                    {"encoding": "base64", "commitment": "confirmed"}]))["value"])
             addresses = [self.wallet] + [item["pubkey"] for item in tokens]
             for asset in {row["asset"], info.get("output_asset")}:
                 if asset and asset != SOL:
                     address = str(associated(
-                        Pubkey.from_string(self.wallet), Pubkey.from_string(asset)))
+                        Pubkey.from_string(self.wallet), Pubkey.from_string(asset),
+                        self.token_program_for_mint(asset)))
                     if address not in addresses:
                         addresses.append(address)
+            addresses = list(dict.fromkeys(addresses))
         if len(addresses) > 100:
             raise WalletError("Слишком много token accounts для полной безопасной симуляции.")
         before = (await self.rpc(session, "getMultipleAccounts", [addresses, {
@@ -1501,19 +1521,28 @@ class CustodyRuntime(WalletRuntime):
         owner_bytes = bytes(Pubkey.from_string(self.wallet))
         for old, new in zip(before[1:], after[1:]):
             old_data, new_data = self.token_data(old), self.token_data(new)
+            old_program = old.get("owner") if old else None
+            new_program = new.get("owner") if new else None
+            if old_data and new_data and old_program != new_program:
+                raise WalletError("Simulation changes the owner program of a token account.")
             if old_data and old_data[32:64] != owner_bytes:
                 raise WalletError("Token account принадлежит другому владельцу.")
             if new_data and new_data[32:64] != owner_bytes:
                 raise WalletError("Симуляция меняет владельца token account.")
             if old_data and new_data and (old_data[:64] != new_data[:64] or old_data[72:] != new_data[72:]):
                 raise WalletError("Симуляция меняет права, mint или состояние token account.")
-            if not old_data and new_data and (any(new_data[72:108]) or any(new_data[129:])):
+            if not old_data and new_data and (
+                    any(new_data[72:108]) or int.from_bytes(new_data[121:129], "little")
+                    or any(new_data[129:165])):
                 raise WalletError("Симуляция создаёт token account с делегатом.")
             if new_data and new_data[108] != 1:
                 raise WalletError("Симуляция возвращает неинициализированный или замороженный token account.")
             if not old_data and not new_data:
                 continue
             mint = str(Pubkey.from_bytes((new_data or old_data)[:32]))
+            program = new_program or old_program
+            if program != str(self.token_program_for_mint(mint)):
+                raise WalletError("Simulation used an unexpected token program for a mint.")
             old_raw = int.from_bytes(old_data[64:72], "little") if old_data else 0
             new_raw = int.from_bytes(new_data[64:72], "little") if new_data else 0
             if mint != WRAPPED_SOL:
@@ -2067,6 +2096,15 @@ class CustodyRuntime(WalletRuntime):
         if self.pending():
             raise WalletError("Ожидается подтверждение предыдущей операции.", 409)
         await self.solvent(session)
+        if kind == "BUY":
+            token_2022_asset = next(
+                ((symbol, watch) for symbol, watch in self.watchlist.items()
+                 if watch.get("mint") == output_asset
+                 and watch.get("token_program") == str(TOKEN_2022)),
+                None,
+            )
+            if token_2022_asset:
+                await self.verify_asset_mint(session, token_2022_asset[0])
         self.authorize_execution_order(uid, asset, output_asset, raw, kind, metadata, position_id)
         try:
             tip_quote = await self.get_jito_tip_quote(
@@ -2865,20 +2903,22 @@ class CustodyRuntime(WalletRuntime):
     def exit_triggered(self, position, prices):
         return self.exit_reason(position, prices) is not None
 
-    async def verify_sniper_mint(self, session, symbol):
+    async def verify_asset_mint(self, session, symbol):
         watch = self.watchlist[symbol]
         account = (await self.rpc(session, "getAccountInfo", [
             watch["mint"], {"encoding": "jsonParsed", "commitment": "finalized"}]))["value"]
-        if not account or account.get("owner") != str(TOKEN):
-            raise WalletError("Снайпер разрешает только стандартный SPL Token mint.", 409)
-        if not isinstance(account.get("data"), dict):
-            raise WalletError("RPC не подтвердил параметры mint.", 409)
-        data = account["data"].get("parsed", {})
-        info = data.get("info", {})
-        if (data.get("type") != "mint" or info.get("decimals") != watch["decimals"]
-                or not info.get("isInitialized") or info.get("mintAuthority") is not None
-                or info.get("freezeAuthority") is not None):
-            raise WalletError("Mint снайпера не прошёл проверку decimals/authority.", 409)
+        try:
+            validate_mint_account(
+                account, watch["mint"], expected_decimals=watch["decimals"],
+                expected_symbol=(watch.get("label") or symbol)
+                    if watch.get("token_program") == str(TOKEN_2022) else None,
+                expected_program=watch.get("token_program", str(TOKEN)),
+                allow_token_2022=watch.get("token_program") == str(TOKEN_2022))
+        except ValueError as exc:
+            raise WalletError("Token identity check failed: " + str(exc), 409) from exc
+
+    async def verify_sniper_mint(self, session, symbol):
+        return await self.verify_asset_mint(session, symbol)
 
     async def apply_ai_decision(self, session, uid, settings, positions, prices, snapshot):
         # No provider output can select an amount, wallet, owner, or non-allowlisted mint.

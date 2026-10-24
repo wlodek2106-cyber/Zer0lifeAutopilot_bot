@@ -29,6 +29,7 @@ from english_text import english_json_middleware
 from account_security import AccountSecurity
 from web_access import WebAccess
 from wallet_runtime import WalletError
+from spl_token_support import TOKEN_2022_PROGRAM_ID
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -79,7 +80,9 @@ WATCHLIST = {
     "MEW": {"mint": "MEW1gQWJ3nEXg2qgERiKu7FAFj79PHvQVREQUzScPP5", "decimals": 5},
     "PENGU": {"mint": "2zMMhcVQEXDtdE6vsFS7S7D5oUodfJHE8vd1gnBouauv", "decimals": 6},
     # CoinGecko Pepe on SOL; verified on finalized Solana RPC.
-    "PEPE": {"mint": "B5WTLaRwaUQpKk7ir1wniNB6m5o8GgMrimhKMYan2R6B", "decimals": 6}
+    "PEPE": {"mint": "B5WTLaRwaUQpKk7ir1wniNB6m5o8GgMrimhKMYan2R6B", "decimals": 6},
+    "OTC": {"mint": "MukLDtJ8Cx9DxLbeyLRSWPSposTMWuwHANbuaudpump",
+            "decimals": 6, "token_program": TOKEN_2022_PROGRAM_ID, "label": "OTC"},
 }
 
 TRADE_AMOUNT_USDC = 20.0

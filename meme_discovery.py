@@ -9,8 +9,12 @@ from urllib.parse import quote
 
 import aiohttp
 from solders.pubkey import Pubkey
+from spl_token_support import (
+    TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, validate_mint_account,
+)
 
-TOKEN = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+TOKEN = TOKEN_PROGRAM_ID
+TOKEN_2022 = TOKEN_2022_PROGRAM_ID
 DEXES = {"raydium", "orca", "meteora", "pumpswap"}
 MIN_LIQUIDITY_USD = 10_000
 MAX_VERIFIED_CANDIDATES = 20
@@ -232,37 +236,27 @@ class MemeDiscovery:
                     raise ValueError("RPC did not confirm all candidate mint accounts.")
                 for item, account in zip(ranked, values):
                     reasons = []
-                    if not account:
-                        reasons.append("on-chain mint account not found")
-                    elif account.get("owner") != TOKEN:
-                        reasons.append("not a standard SPL token (Token-2022/other program)")
-                    elif not isinstance(account.get("data"), dict):
-                        reasons.append("on-chain mint data unavailable")
-                    if reasons:
-                        mint_rejections[item["mint"]] = reasons
+                    code = self.aliases.get(item["mint"])
+                    seed = self.seeds.get(code) if code else None
+                    expected_program = (seed or {}).get("token_program", TOKEN)
+                    expected_symbol = (seed or {}).get("label") or (seed or {}).get("symbol")
+                    try:
+                        program = validate_mint_account(
+                            account, item["mint"],
+                            expected_decimals=(seed or {}).get("decimals"),
+                            expected_symbol=expected_symbol,
+                            expected_program=expected_program,
+                            allow_token_2022=bool(seed and expected_program == TOKEN_2022))
+                        decimals = account["data"]["parsed"]["info"]["decimals"]
+                    except (ValueError, KeyError, TypeError) as exc:
+                        mint_rejections[item["mint"]] = [str(exc)]
                         continue
-                    parsed = account["data"].get("parsed") or {}
-                    info = parsed.get("info") or {}
-                    decimals = info.get("decimals")
-                    if parsed.get("type") != "mint":
-                        reasons.append("on-chain account is not a mint")
-                    if not info.get("isInitialized"):
-                        reasons.append("mint is not initialized")
-                    if (not isinstance(decimals, int) or isinstance(decimals, bool)
-                            or not 0 <= decimals <= 9):
-                        reasons.append("mint decimals are outside the supported 0–9 range")
-                    if info.get("mintAuthority") is not None:
-                        reasons.append("mint authority is still enabled")
-                    if info.get("freezeAuthority") is not None:
-                        reasons.append("freeze authority is still enabled")
-                    if reasons:
-                        mint_rejections[item["mint"]] = reasons
-                        continue
-                    code = self.aliases.get(item["mint"]) or "M_" + hashlib.sha256(item["mint"].encode()).hexdigest()[:16]
+                    code = code or "M_" + hashlib.sha256(item["mint"].encode()).hexdigest()[:16]
                     if code in self.seeds and decimals != self.seeds[code]["decimals"]:
                         mint_rejections[item["mint"]] = ["mint decimals do not match the saved asset identity"]
                         continue
-                    accepted.append({**item, "code": code, "decimals": decimals})
+                    accepted.append({**item, "code": code, "decimals": decimals,
+                                     "token_program": program})
             now = int(time.time())
             with self.ledger.db() as db:
                 # Retain old registry identities for open positions and cached decisions.
