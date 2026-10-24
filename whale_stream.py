@@ -11,8 +11,8 @@ from solders.pubkey import Pubkey
 from solders.signature import Signature
 
 SOL_MINT = "So11111111111111111111111111111111111111112"
-MIN_WHALE_LAMPORTS = 1_000_000_000
-MAX_WHALE_LAMPORTS = 10_000_000_000
+MIN_WHALE_LAMPORTS = 10_000_000_000
+MAX_WHALE_LAMPORTS = 1_000_000_000_000
 HELIUS_WS = "wss://mainnet.helius-rpc.com/"
 HELIUS_RPC = "https://mainnet.helius-rpc.com/"
 # Keep transaction lookups at a conservative 2 requests/second until the
