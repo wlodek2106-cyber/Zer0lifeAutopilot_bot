@@ -1897,6 +1897,36 @@ RAW_HTML = r"""<!DOCTYPE html>
                 </div>
             </div>
 
+            <div class="card" id="monthly-trading-fee-card" style="background:#0b0d14;border-color:#243023;">
+                <div style="font-size:13px;font-weight:800;color:#fff;margin-bottom:8px;">Monthly trading fee</div>
+                <div id="monthly-trading-fee-status" role="status" aria-live="polite"
+                    style="font-size:12px;color:#94a3b8;">Loading fee status…</div>
+                <div id="monthly-trading-fee-consent" hidden>
+                    <div id="monthly-trading-fee-quote" style="font-size:12px;color:#d9f99d;margin-top:10px;">
+                        Current SOL amount: checking…
+                    </div>
+                    <div style="font-size:11px;line-height:1.55;color:#94a3b8;margin-top:9px;">
+                        This is an additional $5 USD-equivalent fee, separate from your access package.
+                        It is charged in SOL from your in-app balance immediately after you agree if you have
+                        already deposited, then every 30 days. If you agree before your first verified deposit,
+                        the first charge is taken after that deposit. The SOL amount is calculated from a fresh
+                        SOL/USD quote. The fee is an internal transfer to the administrator's in-app SOL balance;
+                        no on-chain transfer is sent. Cancel any time to stop future charges. A paid period remains
+                        active until its end. If a due fee cannot be paid, new buys pause; sells and withdrawals remain available.
+                    </div>
+                    <label style="display:flex;gap:9px;align-items:flex-start;font-size:11px;line-height:1.45;color:#e2e8f0;margin-top:11px;">
+                        <input id="monthly-trading-fee-agree" type="checkbox" style="margin-top:2px;">
+                        <span>I agree to this recurring fee and authorize the in-app SOL balance transfer described above.</span>
+                    </label>
+                    <button class="btn-verify" id="monthly-trading-fee-accept" type="button"
+                        onclick="acceptMonthlyTradingFee()" disabled style="margin-top:10px;">Accept and activate</button>
+                </div>
+                <button class="btn-copy" id="monthly-trading-fee-cancel" type="button"
+                    onclick="cancelMonthlyTradingFee()" hidden style="margin-top:10px;">
+                    Cancel future monthly charges
+                </button>
+            </div>
+
             <div class="card" style="background: #0b0d14; border-color: #1c2333;">
                 <div style="font-size: 13px; font-weight: 800; color: #fff; margin-bottom: 12px;">Transactions</div>
                 <div id="wallet-history-box" style="font-size: 11px; color: #64748b; text-align: center;">No transactions yet.</div>
@@ -3074,6 +3104,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 document.getElementById('telegram-tariff-view').hidden=false;
                 refreshTelegramTariffs();
             }
+            if(id==='wallet')refreshMonthlyTradingFee(true);
         }
 
         function switchWalletTab(tab) {
@@ -3083,6 +3114,132 @@ RAW_HTML = r"""<!DOCTYPE html>
             document.getElementById('section-deposit').style.display = isDep ? 'block' : 'none';
             document.getElementById('section-withdraw').style.display = !isDep ? 'block' : 'none';
             document.getElementById('wallet-modal-title').innerText = isDep ? 'Deposit Crypto (USDC)' : 'Withdraw Crypto';
+        }
+
+        let monthlyFeeLastRefresh=0,monthlyFeeLoading=false,monthlyFeeQuoteAvailable=false,monthlyFeeState=null;
+        function updateMonthlyFeeAcceptButton(){
+            const button=document.getElementById('monthly-trading-fee-accept');
+            const checkbox=document.getElementById('monthly-trading-fee-agree');
+            if(button&&checkbox)button.disabled=!monthlyFeeQuoteAvailable||!checkbox.checked||monthlyFeeLoading;
+        }
+        function monthlyFeeDate(value){
+            const stamp=Number(value||0);
+            return stamp>0?new Date(stamp*1000).toLocaleString():'Not scheduled';
+        }
+        async function refreshMonthlyTradingFee(force=false){
+            if(monthlyFeeLoading||!getUserData()||(!force&&Date.now()-monthlyFeeLastRefresh<5000))return;
+            monthlyFeeLoading=true;
+            try{
+                const response=await apiFetch('/api/monthly-trading-fee',{cache:'no-store'});
+                const data=await response.json();
+                if(!response.ok||!data.success)throw Error(data.error||data.message||'Could not load fee status.');
+                monthlyFeeState=data;
+                monthlyFeeLastRefresh=Date.now();
+                monthlyFeeQuoteAvailable=data.quote_available===true&&Number.isSafeInteger(data.quote_raw);
+                const statusEl=document.getElementById('monthly-trading-fee-status');
+                const quoteEl=document.getElementById('monthly-trading-fee-quote');
+                const consentBox=document.getElementById('monthly-trading-fee-consent');
+                const cancelButton=document.getElementById('monthly-trading-fee-cancel');
+                if(data.is_owner){
+                    statusEl.textContent='Administrator account: this recurring trading fee does not apply.';
+                    consentBox.hidden=true;cancelButton.hidden=true;
+                    return;
+                }
+                quoteEl.textContent=monthlyFeeQuoteAvailable
+                    ?`Current charge: ${data.quote_sol} SOL (SOL/USD $${Number(data.sol_usd).toFixed(2)}).`
+                    :'Current SOL/USD price is unavailable. No charge will be made until a fresh quote is available.';
+                const now=Math.floor(Date.now()/1000);
+                const paidUntil=Number(data.paid_until||0);
+                const active=data.consent_status==='ACTIVE';
+                const canceled=data.consent_status==='CANCELED';
+                consentBox.hidden=active&&paidUntil>now;
+                cancelButton.hidden=!active;
+                if(active&&paidUntil>now){
+                    statusEl.textContent=`Active. Your next $5 USD-equivalent SOL charge is due around ${monthlyFeeDate(data.next_due_at)}.`;
+                }else if(canceled&&paidUntil>now){
+                    statusEl.textContent=`Canceled. No future charges will be made. Current paid access remains until ${monthlyFeeDate(paidUntil)}.`;
+                    consentBox.hidden=true;cancelButton.hidden=true;
+                }else if(canceled){
+                    statusEl.textContent='Canceled. No future charges will be made. Accept again only if you want to restart the 30-day fee.';
+                    consentBox.hidden=false;cancelButton.hidden=true;
+                }else if(active&&!data.funded){
+                    statusEl.textContent='Accepted. The first fee will be charged after your first verified deposit; no balance has been charged yet.';
+                    consentBox.hidden=true;cancelButton.hidden=false;
+                }else if(active&&paidUntil<=now&&data.funded){
+                    statusEl.textContent=`Payment due. Available balance: ${(Number(data.balance_raw||0)/1e9).toFixed(9)} SOL. Add enough SOL to retry. New buys pause; sells and withdrawals remain available.`;
+                    consentBox.hidden=true;cancelButton.hidden=false;
+                }else{
+                    statusEl.textContent=data.funded
+                        ?'Not active. Review the recurring fee details and explicitly agree before using new buys.'
+                        :'Not active. You can review and accept now; the first fee is collected after your first verified deposit.';
+                    consentBox.hidden=false;cancelButton.hidden=true;
+                }
+                const checkbox=document.getElementById('monthly-trading-fee-agree');
+                if(checkbox)checkbox.onchange=updateMonthlyFeeAcceptButton;
+                updateMonthlyFeeAcceptButton();
+            }catch(error){
+                const statusEl=document.getElementById('monthly-trading-fee-status');
+                if(statusEl)statusEl.textContent='Fee status unavailable. No fee charge is confirmed; refresh before accepting.';
+                monthlyFeeQuoteAvailable=false;
+                updateMonthlyFeeAcceptButton();
+            }finally{monthlyFeeLoading=false;updateMonthlyFeeAcceptButton();}
+        }
+        async function acceptMonthlyTradingFee(){
+            if(!monthlyFeeState||!monthlyFeeQuoteAvailable||
+                    !document.getElementById('monthly-trading-fee-agree').checked){
+                alert('Review the current quote and check the agreement box before continuing.');
+                return;
+            }
+            const button=document.getElementById('monthly-trading-fee-accept');
+            monthlyFeeLoading=true;updateMonthlyFeeAcceptButton();
+            try{
+                const response=await apiFetch('/api/monthly-trading-fee',{
+                    method:'POST',headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({action:'accept',consent:true,quote_raw:monthlyFeeState.quote_raw,
+                        terms_version:monthlyFeeState.terms_version})
+                });
+                const data=await response.json();
+                if(response.status===409){
+                    alert(data.error||'The SOL/USD quote changed. Review the updated amount before agreeing.');
+                    monthlyFeeLastRefresh=0;
+                    monthlyFeeLoading=false;
+                    await refreshMonthlyTradingFee(true);
+                    return;
+                }
+                if(!response.ok||!data.success)throw Error(data.error||'Could not save your agreement.');
+                const result=data.charge?.state;
+                const feeMessage=result==='charged'
+                    ?'Agreement saved and the first fee was transferred from your in-app SOL balance.'
+                    :result==='waiting_for_funding'
+                        ?'Agreement saved. The first fee will be charged after your first verified deposit.'
+                        :result==='insufficient_funds'
+                            ?'Agreement saved, but no fee was charged. Add enough SOL to your bot balance; new buys pause until payment. Sells and withdrawals remain available.'
+                            :result==='reactivated'
+                                ?'Agreement reactivated. Your already-paid period remains active; no immediate charge was made.'
+                                :result==='paused_for_coverage_or_price'
+                                    ?'Agreement saved, but no charge was made because wallet coverage or a fresh price could not be verified. No buys will run until billing can be confirmed.'
+                                    :'Agreement saved. No charge was made yet; it will be retried after the account is funded and verified.';
+                alert(feeMessage);
+                document.getElementById('monthly-trading-fee-agree').checked=false;
+                monthlyFeeLastRefresh=0;
+                monthlyFeeLoading=false;
+                await refreshMonthlyTradingFee(true);
+                refresh();
+            }catch(error){alert(error.message||'Could not save the monthly fee agreement.');}
+            finally{monthlyFeeLoading=false;updateMonthlyFeeAcceptButton();}
+        }
+        async function cancelMonthlyTradingFee(){
+            if(!confirm('Cancel future monthly trading fee charges? Any already-paid period remains active until its end. New buys will pause after that date; sells and withdrawals remain available.'))return;
+            try{
+                const response=await apiFetch('/api/monthly-trading-fee',{
+                    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'cancel'})
+                });
+                const data=await response.json();
+                if(!response.ok||!data.success)throw Error(data.error||'Could not cancel future charges.');
+                monthlyFeeLastRefresh=0;
+                await refreshMonthlyTradingFee(true);
+                alert('Future monthly charges are canceled.');
+            }catch(error){alert(error.message||'Could not cancel future charges.');}
         }
 
         function selectWithdrawToken(token) {
@@ -3505,6 +3662,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                 alert(d.message);
                 if (d.success) {
                     document.getElementById('dep-signature').value = "";
+                    monthlyFeeLastRefresh=0;
+                    refreshMonthlyTradingFee(true);
                     refresh();
                 }
             } catch (e) { alert("Connection error."); }
@@ -3541,6 +3700,7 @@ RAW_HTML = r"""<!DOCTYPE html>
 
                 const user = getUserData();
                 if (!user) return;
+                refreshMonthlyTradingFee();
                 const customNick = accountState?.nickname || user.username;
                 const params = new URLSearchParams({ username: customNick });
                 const s = await apiFetch('/api/stats?' + params.toString()).then(r => r.json());
@@ -3722,8 +3882,10 @@ RAW_HTML = r"""<!DOCTYPE html>
                     if (s.wallet_history && s.wallet_history.length > 0) {
                         document.getElementById('wallet-history-box').innerHTML = s.wallet_history.map(h => {
                             const isDep = h.type === 'DEPOSIT';
-                            const color = isDep ? '#4ade80' : '#f87171';
-                            const sign = isDep ? '+' : '-';
+                            const isFeeIncome = h.type === 'TRADING_FEE_INCOME';
+                            const color = isDep || isFeeIncome ? '#4ade80' : '#f87171';
+                            const sign = isDep || isFeeIncome ? '+' : '-';
+                            const label = h.label || (isDep ? 'Deposit' : h.type === 'WITHDRAW' ? 'Withdrawal' : 'Transaction');
                             const txLink = (h.tx && h.tx !== 'SIMULATED_TX' && h.tx.length > 20) 
                                 ? `<a href="https://solscan.io/tx/${encodeURIComponent(h.tx)}" target="_blank" rel="noopener noreferrer" style="color: #60a5fa; text-decoration: none; font-size: 11px;">Tx ↗</a>`
                                 : `<span style="color: #64748b; font-size: 10px;">${h.status}</span>`;
@@ -3732,6 +3894,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                                 <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #1c2333; text-align: left;">
                                     <div>
                                         <div style="color: ${color}; font-weight: 800; font-size: 13px;">${sign} ${h.amount}</div>
+                                        <div style="font-size: 10px; color: #94a3b8; margin-top: 2px;">${label}</div>
                                         <div style="font-size: 10px; color: #64748b; margin-top: 2px;">${h.time}</div>
                                     </div>
                                     <div style="text-align: right;">
@@ -4252,6 +4415,8 @@ async def main():
     app.router.add_get('/api/partners', wallet_handler(runtime.partner_program))
     app.router.add_post('/api/partners/retry', wallet_handler(runtime.retry_partner_payout))
     app.router.add_get('/api/stats', wallet_handler(runtime.stats))
+    app.router.add_get('/api/monthly-trading-fee', wallet_handler(runtime.monthly_trading_fee))
+    app.router.add_post('/api/monthly-trading-fee', wallet_handler(runtime.monthly_trading_fee))
     app.router.add_post('/api/toggle_trading', wallet_handler(runtime.toggle))
     app.router.add_post('/api/trading_settings', wallet_handler(runtime.save_trading_settings))
     app.router.add_post('/api/trading_readiness', wallet_handler(runtime.trading_readiness))

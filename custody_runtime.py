@@ -8,7 +8,7 @@ import random
 import time
 import uuid
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_CEILING
+from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 from urllib.parse import urlencode
 
 import aiohttp
@@ -27,7 +27,11 @@ from wallet_runtime import (
     WalletRuntime, WalletError, amount_raw, associated, TOKEN, TOKEN_2022,
     ATA, SYSTEM, MEMO, GENESIS,
 )
-from custody_ledger import CustodyLedger, LedgerError, USDC, SOL, FEE_CAP, available, position_account
+from custody_ledger import (
+    CustodyLedger, LedgerError, USDC, SOL, FEE_CAP, available, position_account,
+    MONTHLY_TRADING_FEE_USD_CENTS, MONTHLY_TRADING_FEE_PERIOD_SECONDS,
+    MONTHLY_TRADING_FEE_TERMS_VERSION,
+)
 from legacy_retirement import prove_retirement, RECOVERY_RPC
 from tx_deposits import incoming_amounts
 from solders.signature import Signature
@@ -164,8 +168,12 @@ class CustodyRuntime(WalletRuntime):
         self.market_context_fn = market_context_fn
         self.sniper_market_context_fn = sniper_market_context_fn
         self._notification_lock = asyncio.Lock()
+        self._monthly_fee_quote_lock = asyncio.Lock()
+        self._monthly_fee_quote_cache = None
+        self._monthly_fee_worker_status = "idle"
         self.legacy_runtime = WalletRuntime(*args, **kwargs)
         self.ledger = CustodyLedger(self.db_file)
+        self.ledger.user(self.owner_id)
         self.ledger.tx_epoch()
         self.base_url = base_url.rstrip("/")
         self.public_enabled = os.getenv("PUBLIC_CUSTODY_ENABLED", "").lower() == "true"
@@ -326,6 +334,208 @@ class CustodyRuntime(WalletRuntime):
             except Exception:
                 self.discovery.fail()
         return prices
+
+    async def monthly_trading_fee_quote(self, session, force=False):
+        now = time.monotonic()
+        cached = self._monthly_fee_quote_cache
+        if not force and cached and now - cached["cached_at"] < 60:
+            return cached
+        async with self._monthly_fee_quote_lock:
+            now = time.monotonic()
+            cached = self._monthly_fee_quote_cache
+            if not force and cached and now - cached["cached_at"] < 60:
+                return cached
+            prices = await self.prices_fn(session)
+            price = Decimal(str(prices.get("SOL"))) if isinstance(prices, dict) else Decimal(0)
+            if not price.is_finite() or price <= 0:
+                raise WalletError("A fresh SOL/USD price is unavailable; no monthly fee was charged.", 503)
+            fee_usd = Decimal(MONTHLY_TRADING_FEE_USD_CENTS) / Decimal(100)
+            raw = int((fee_usd / price * Decimal(1_000_000_000)).quantize(
+                Decimal("1"), rounding=ROUND_HALF_UP))
+            if raw <= 0 or raw > 2**63 - 1:
+                raise WalletError("The current SOL/USD quote is outside the supported range.", 503)
+            quote = {
+                "price_usd": str(price),
+                "amount_raw": raw,
+                "amount_sol": raw / 1_000_000_000,
+                "cached_at": now,
+            }
+            self._monthly_fee_quote_cache = quote
+            return quote
+
+    async def monthly_trading_fee_status(self, uid, session):
+        status = self.ledger.monthly_fee_status(uid, self.owner_id)
+        now = int(time.time())
+        status.update({
+            "terms_version": MONTHLY_TRADING_FEE_TERMS_VERSION,
+            "fee_usd": MONTHLY_TRADING_FEE_USD_CENTS / 100,
+            "period_seconds": MONTHLY_TRADING_FEE_PERIOD_SECONDS,
+            "billing_status": self._monthly_fee_worker_status,
+            "fee_access": bool(status["is_owner"] or not status["funded"]
+                               or (status["paid_until"] and status["paid_until"] > now)),
+        })
+        status["history"] = self.ledger.monthly_fee_charges(uid, self.owner_id)
+        if not status["is_owner"]:
+            try:
+                quote = await self.monthly_trading_fee_quote(session)
+                status.update({
+                    "quote_available": True,
+                    "quote_raw": quote["amount_raw"],
+                    "quote_sol": f'{quote["amount_sol"]:.9f}',
+                    "sol_usd": quote["price_usd"],
+                })
+            except (WalletError, aiohttp.ClientError, asyncio.TimeoutError, ValueError, TypeError):
+                status.update({"quote_available": False, "quote_raw": None,
+                               "quote_sol": None, "sol_usd": None})
+        return status
+
+    async def _charge_monthly_trading_fee(self, session, uid):
+        status = self.ledger.monthly_fee_status(uid, self.owner_id)
+        if status["is_owner"] or not status["funded"]:
+            return {"state": "waiting_for_funding" if not status["is_owner"] else "exempt"}
+        await self.solvent(session)
+        quote = await self.monthly_trading_fee_quote(session)
+        return self.ledger.charge_monthly_fee(
+            uid, self.owner_id, quote["amount_raw"], quote["price_usd"])
+
+    async def process_due_monthly_trading_fees(self, session):
+        due_users = self.ledger.monthly_fee_due_users()
+        if not due_users:
+            return
+        try:
+            await self.solvent(session)
+            quote = await self.monthly_trading_fee_quote(session)
+        except Exception:
+            self._monthly_fee_worker_status = "paused_pending_coverage_or_price"
+            return
+        charged = 0
+        insufficient = 0
+        for uid in due_users:
+            try:
+                result = self.ledger.charge_monthly_fee(
+                    uid, self.owner_id, quote["amount_raw"], quote["price_usd"])
+                charged += result.get("state") == "charged"
+                insufficient += result.get("state") == "insufficient_funds"
+            except Exception:
+                self._monthly_fee_worker_status = "paused_pending_ledger_check"
+                continue
+        if insufficient:
+            self._monthly_fee_worker_status = "some_accounts_need_SOL"
+        elif charged:
+            self._monthly_fee_worker_status = "billing_current"
+        else:
+            self._monthly_fee_worker_status = "checked"
+
+    async def deliver_monthly_fee_notifications(self, session):
+        if not self.notification_token:
+            return
+        async with self._notification_lock:
+            for event in self.ledger.monthly_fee_notifications(int(time.time())):
+                charge_id = event["charge_id"]
+                now = int(time.time())
+                if not self.ledger.claim_monthly_fee_notification(charge_id, now):
+                    continue
+                outcome, retry_after = "UNKNOWN", 60
+                error = "Delivery outcome unknown; not retried to avoid a duplicate message."
+                try:
+                    payload = json.loads(event["payload"])
+                    amount = display_raw(int(payload["amount_raw"]), 9)
+                    next_due = int(payload["paid_until"])
+                    due_text = datetime.fromtimestamp(next_due, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+                    text = (
+                        "Zer0Life AI Trader\n"
+                        "Monthly trading fee charged from your in-app balance.\n"
+                        f"Charged: {amount} SOL (about $5 USD)\n"
+                        f"Next charge: {due_text}\n"
+                        "This was an internal balance transfer to the administrator; "
+                        "no on-chain transfer was sent."
+                    )
+                    async with session.post(
+                            f"https://api.telegram.org/bot{self.notification_token}/sendMessage",
+                            json={"chat_id": event["uid"], "text": text,
+                                  "disable_web_page_preview": True},
+                            timeout=aiohttp.ClientTimeout(total=8)) as response:
+                        result = await response.json()
+                        if (response.status == 200 and result.get("ok") is True
+                                and isinstance(result.get("result"), dict)
+                                and type(result["result"].get("message_id")) is int):
+                            outcome, error = "DELIVERED", None
+                        elif response.status == 429 and result.get("ok") is False:
+                            outcome, error = "RETRY", "Telegram rate limited the fee receipt."
+                            delay = result.get("parameters", {}).get("retry_after")
+                            if type(delay) is int and delay > 0:
+                                retry_after = min(delay, 3600)
+                        elif response.status < 500 and result.get("ok") is False:
+                            outcome, error = "FAILED", "Telegram rejected the fee receipt."
+                except Exception:
+                    outcome = "UNKNOWN"
+                self.ledger.monthly_fee_notification_result(
+                    charge_id, outcome, int(time.time()), retry_after, error)
+
+    async def ensure_monthly_trading_fee(self, session, uid):
+        status = self.ledger.monthly_fee_status(uid, self.owner_id)
+        if status["is_owner"] or not status["funded"]:
+            return
+        if status["paid_until"] and status["paid_until"] > int(time.time()):
+            return
+        if status["consent_status"] != "ACTIVE":
+            raise WalletError(
+                "Accept the monthly trading fee in Wallet before starting new buys.", 409)
+        if status["due"]:
+            try:
+                result = await self._charge_monthly_trading_fee(session, uid)
+            except WalletError as exc:
+                raise WalletError(
+                    "Monthly fee is due, but charging is paused until wallet coverage and a fresh SOL/USD price can be verified.",
+                    409) from exc
+            if result.get("state") not in ("charged", "already_charged", "not_due"):
+                if result.get("state") == "insufficient_funds":
+                    raise WalletError(
+                        "Monthly fee is due. Add enough SOL to your bot balance; new buys are paused, while sells and withdrawals remain available.",
+                        409)
+                raise WalletError(
+                    "Monthly fee is due and could not be confirmed. New buys are paused; sells and withdrawals remain available.",
+                    409)
+        refreshed = self.ledger.monthly_fee_status(uid, self.owner_id)
+        if not (refreshed["paid_until"] and refreshed["paid_until"] > int(time.time())):
+            raise WalletError(
+                "Monthly trading fee is not paid. New buys are paused; sells and withdrawals remain available.",
+                409)
+
+    async def monthly_trading_fee(self, request, session):
+        uid = self.uid(request)
+        if request.method == "GET":
+            return web.json_response({
+                "success": True, **await self.monthly_trading_fee_status(uid, session)})
+        body = await request.json()
+        action = body.get("action")
+        if action == "cancel":
+            result = self.ledger.cancel_monthly_fee(uid, self.owner_id)
+            return web.json_response({
+                "success": True, "action": result,
+                **await self.monthly_trading_fee_status(uid, session)})
+        if action != "accept" or body.get("consent") is not True:
+            raise WalletError("Explicit agreement to the monthly fee is required.", 400)
+        if type(body.get("terms_version")) is not str or body["terms_version"] != MONTHLY_TRADING_FEE_TERMS_VERSION:
+            raise WalletError("The fee terms changed. Review the current terms and try again.", 409)
+        quote = await self.monthly_trading_fee_quote(session, force=True)
+        if type(body.get("quote_raw")) is not int or body["quote_raw"] != quote["amount_raw"]:
+            return web.json_response({
+                "success": False, "error": "The SOL/USD quote changed. Review the updated amount and confirm again.",
+                "quote_raw": quote["amount_raw"], "quote_sol": f'{quote["amount_sol"]:.9f}',
+                "sol_usd": quote["price_usd"], "terms_version": MONTHLY_TRADING_FEE_TERMS_VERSION,
+            }, status=409)
+        acceptance = self.ledger.accept_monthly_fee(
+            uid, self.owner_id, MONTHLY_TRADING_FEE_TERMS_VERSION)
+        charge = {"state": acceptance["state"]}
+        if acceptance["state"] in ("accepted", "already_active") and acceptance.get("next_due_at", 0) <= int(time.time()):
+            try:
+                charge = await self._charge_monthly_trading_fee(session, uid)
+            except (WalletError, aiohttp.ClientError, asyncio.TimeoutError):
+                charge = {"state": "paused_for_coverage_or_price"}
+        return web.json_response({
+            "success": True, "acceptance": acceptance, "charge": charge,
+            **await self.monthly_trading_fee_status(uid, session)})
 
     def ai_universes(self, whale_symbols=None):
         discovery = getattr(self, "discovery", None)
@@ -2098,6 +2308,8 @@ class CustodyRuntime(WalletRuntime):
             raise WalletError("Ожидается подтверждение предыдущей операции.", 409)
         await self.solvent(session)
         if kind == "BUY":
+            await self.ensure_monthly_trading_fee(session, uid)
+        if kind == "BUY":
             token_2022_asset = next(
                 ((symbol, watch) for symbol, watch in self.watchlist.items()
                  if watch.get("mint") == output_asset
@@ -2230,8 +2442,17 @@ class CustodyRuntime(WalletRuntime):
                 history.append({"type": "DEPOSIT", "amount": display_raw(raw, 6 if asset == USDC else 9) +
                     (" USDC" if asset == USDC else " SOL"), "tx": receipt["signature"],
                     "time": datetime.fromtimestamp(receipt["block_time"], timezone.utc).isoformat(), "status": "VERIFIED"})
+        for fee in self.ledger.monthly_fee_charges(uid, self.owner_id):
+            income = fee["type"] == "TRADING_FEE_INCOME"
+            history.append({
+                "type": fee["type"],
+                "amount": display_raw(fee["amount_raw"], 9) + " SOL",
+                "tx": "",
+                "time": datetime.fromtimestamp(fee["created_at"], timezone.utc).isoformat(),
+                "status": "COMPLETED",
+                "label": "Monthly trading fee income" if income else "Monthly trading fee",
+            })
         history.sort(key=lambda row: row["time"], reverse=True)
-        history.sort(key=lambda r: r["time"], reverse=True)
         user_usdc, user_sol = self.ledger.balance(uid, USDC) / 1e6, self.ledger.balance(uid, SOL) / 1e9
         withdrawable_usdc = self.ledger.withdrawal_capacity(uid, USDC) / 1e6
         withdrawable_sol = self.ledger.withdrawal_capacity(uid, SOL) / 1e9
@@ -2333,6 +2554,16 @@ class CustodyRuntime(WalletRuntime):
 
     async def trading_readiness(self, request, session):
         uid = self.uid(request)
+        fee_status = self.ledger.monthly_fee_status(uid, self.owner_id)
+        if (fee_status["funded"] and not
+                (fee_status["paid_until"] and fee_status["paid_until"] > int(time.time()))):
+            if fee_status["consent_status"] != "ACTIVE":
+                raise WalletError(
+                    "Accept the additional monthly trading fee in Wallet before enabling new buys. This readiness check does not charge you.",
+                    409)
+            raise WalletError(
+                "The monthly fee is due. A new-buy activation will retry the $5 USD-equivalent SOL charge; this readiness check does not charge you.",
+                409)
         raw = self.ledger.settings(uid)["order_raw"]
         if raw > self.ledger.balance(uid, USDC) and not self.ledger.positions(uid, "OPEN"):
             raise WalletError("Недостаточно личных USDC для выбранного размера покупки.", 409)
@@ -2350,6 +2581,7 @@ class CustodyRuntime(WalletRuntime):
                 self.admit_trading(uid)
                 if getattr(self, "web_access", None):
                     self.web_access.trading_request(request)
+                await self.ensure_monthly_trading_fee(session, uid)
                 symbols = self.ai_universes()["sniper"]
                 if not symbols:
                     raise WalletError("No verified shortlist yet. Use Scan candidates, then retry.", 409)
@@ -2388,6 +2620,7 @@ class CustodyRuntime(WalletRuntime):
             self.admit_trading(uid)
             if getattr(self, "web_access", None):
                 self.web_access.trading_request(request)
+            await self.ensure_monthly_trading_fee(session, uid)
             body = await request.json()
             raw = amount_raw(body.get("trade_amount_usdc", "1"), 6)
             if raw > self.ledger.balance(uid, USDC) and not self.ledger.positions(uid, "OPEN"):
@@ -2720,6 +2953,7 @@ class CustodyRuntime(WalletRuntime):
                 async with aiohttp.ClientSession() as session:
                     await self.deliver_recovery_notifications(session)
                     await self.deliver_withdrawal_notifications(session)
+                    await self.deliver_monthly_fee_notifications(session)
             except Exception:
                 self.log("Recovery notification worker unavailable; queued alerts are retained.")
             await asyncio.sleep(20)
@@ -2784,6 +3018,7 @@ class CustodyRuntime(WalletRuntime):
         close_queue_active = await self.process_close_queues(session)
         await self.scan_deposits(session)
         self.ledger.credit_safe_partner_earnings()
+        await self.process_due_monthly_trading_fees(session)
         if close_queue_active:
             return
         users = self.ledger.active_users()

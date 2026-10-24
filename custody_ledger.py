@@ -13,6 +13,9 @@ from decimal import Decimal, InvalidOperation
 USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 SOL = "SOL"
 FEE_CAP = 5_000_000
+MONTHLY_TRADING_FEE_USD_CENTS = 500
+MONTHLY_TRADING_FEE_PERIOD_SECONDS = 30 * 24 * 60 * 60
+MONTHLY_TRADING_FEE_TERMS_VERSION = "monthly-trading-fee-v1"
 ACTIVE = ("RESERVED", "PREPARED", "SUBMITTED", "UNKNOWN")
 PARTNER_LEVEL_BPS = (100, 50, 25)
 REENTRY_COOLDOWN_SECONDS = 24 * 60 * 60
@@ -168,6 +171,58 @@ class CustodyLedger:
                     last_error TEXT);
                 CREATE INDEX IF NOT EXISTS custody_trade_notifications_queue
                     ON custody_trade_notifications(state,next_attempt,operation_id);
+                CREATE TABLE IF NOT EXISTS custody_monthly_trading_fee_consents (
+                    uid INTEGER PRIMARY KEY REFERENCES custody_users(uid),
+                    accepted_at INTEGER NOT NULL,
+                    terms_version TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'ACTIVE'
+                        CHECK(status IN ('ACTIVE','CANCELED')),
+                    next_due_at INTEGER NOT NULL,
+                    paid_until INTEGER NOT NULL DEFAULT 0,
+                    retry_after INTEGER NOT NULL DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS custody_monthly_trading_fee_consent_events (
+                    id INTEGER PRIMARY KEY,
+                    uid INTEGER NOT NULL REFERENCES custody_users(uid),
+                    event TEXT NOT NULL CHECK(event IN ('ACCEPTED','CANCELED')),
+                    terms_version TEXT NOT NULL,
+                    created_at INTEGER NOT NULL);
+                CREATE TRIGGER IF NOT EXISTS custody_monthly_fee_consent_events_immutable_update
+                    BEFORE UPDATE ON custody_monthly_trading_fee_consent_events
+                    BEGIN SELECT RAISE(ABORT,'immutable fee consent audit'); END;
+                CREATE TRIGGER IF NOT EXISTS custody_monthly_fee_consent_events_immutable_delete
+                    BEFORE DELETE ON custody_monthly_trading_fee_consent_events
+                    BEGIN SELECT RAISE(ABORT,'immutable fee consent audit'); END;
+                CREATE TABLE IF NOT EXISTS custody_monthly_trading_fee_charges (
+                    id TEXT PRIMARY KEY,
+                    uid INTEGER NOT NULL REFERENCES custody_users(uid),
+                    owner_uid INTEGER NOT NULL REFERENCES custody_users(uid),
+                    cycle_due_at INTEGER NOT NULL,
+                    amount_raw INTEGER NOT NULL CHECK(amount_raw>0),
+                    price_usd TEXT NOT NULL,
+                    journal_id TEXT NOT NULL UNIQUE REFERENCES custody_journals(id),
+                    created_at INTEGER NOT NULL,
+                    UNIQUE(uid,cycle_due_at));
+                CREATE TRIGGER IF NOT EXISTS custody_monthly_fee_charges_immutable_update
+                    BEFORE UPDATE ON custody_monthly_trading_fee_charges
+                    BEGIN SELECT RAISE(ABORT,'immutable fee charge'); END;
+                CREATE TRIGGER IF NOT EXISTS custody_monthly_fee_charges_immutable_delete
+                    BEFORE DELETE ON custody_monthly_trading_fee_charges
+                    BEGIN SELECT RAISE(ABORT,'immutable fee charge'); END;
+                CREATE INDEX IF NOT EXISTS custody_monthly_trading_fee_due
+                    ON custody_monthly_trading_fee_consents(status,next_due_at,retry_after);
+                CREATE TABLE IF NOT EXISTS custody_monthly_fee_notifications (
+                    charge_id TEXT PRIMARY KEY REFERENCES custody_monthly_trading_fee_charges(id),
+                    uid INTEGER NOT NULL REFERENCES custody_users(uid),
+                    payload TEXT NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'QUEUED'
+                        CHECK(state IN ('QUEUED','SENDING','DELIVERED','FAILED','UNKNOWN')),
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    next_attempt INTEGER NOT NULL DEFAULT 0,
+                    last_attempt_at INTEGER NOT NULL DEFAULT 0,
+                    delivered_at INTEGER,
+                    last_error TEXT);
+                CREATE INDEX IF NOT EXISTS custody_monthly_fee_notifications_queue
+                    ON custody_monthly_fee_notifications(state,next_attempt,charge_id);
                 CREATE UNIQUE INDEX IF NOT EXISTS custody_one_active_operation
                     ON custody_operations((1)) WHERE state IN ('RESERVED','PREPARED','SUBMITTED','UNKNOWN');
                 CREATE TABLE IF NOT EXISTS custody_positions (
@@ -478,6 +533,238 @@ class CustodyLedger:
             return row["raw"] if row else 0
 
     @staticmethod
+    def _has_monthly_fee_funding(db, uid):
+        invoice = db.execute("""SELECT 1 FROM custody_invoices
+            WHERE uid=? AND state='CREDITED' LIMIT 1""", (uid,)).fetchone()
+        if invoice:
+            return True
+        if db.execute("SELECT 1 FROM custody_tx_deposits WHERE uid=? LIMIT 1", (uid,)).fetchone():
+            return True
+        return bool(db.execute("""SELECT 1 FROM custody_entries
+            WHERE account=? AND delta>0 AND journal IN (
+                'opening:SOL','opening:USDC',
+                'legacy-opening:SOL:' || ?, 'legacy-opening:USDC:' || ?)
+            LIMIT 1""", (available(uid), uid, uid)).fetchone())
+
+    def monthly_fee_status(self, uid, owner_uid, now=None):
+        if type(uid) is not int or uid <= 0 or type(owner_uid) is not int or owner_uid <= 0:
+            raise LedgerError("Invalid monthly trading fee status request.")
+        now = int(time.time()) if now is None else int(now)
+        if uid == owner_uid:
+            return {
+                "is_owner": True, "funded": False, "consent_status": "EXEMPT",
+                "accepted_at": None, "next_due_at": None, "paid_until": None,
+                "retry_after": None, "balance_raw": self.balance(uid, SOL),
+                "last_charge": None,
+            }
+        with self.db() as db:
+            consent = db.execute(
+                "SELECT * FROM custody_monthly_trading_fee_consents WHERE uid=?", (uid,)
+            ).fetchone()
+            funded = self._has_monthly_fee_funding(db, uid)
+            balance = db.execute(
+                "SELECT raw FROM custody_accounts WHERE account=? AND asset=?",
+                (available(uid), SOL)).fetchone()
+            last_charge = db.execute("""SELECT amount_raw,price_usd,created_at
+                FROM custody_monthly_trading_fee_charges WHERE uid=?
+                ORDER BY created_at DESC,id DESC LIMIT 1""", (uid,)).fetchone()
+            return {
+                "is_owner": False,
+                "funded": funded,
+                "consent_status": consent["status"] if consent else "NOT_ACCEPTED",
+                "accepted_at": consent["accepted_at"] if consent else None,
+                "next_due_at": consent["next_due_at"] if consent else None,
+                "paid_until": consent["paid_until"] if consent else None,
+                "retry_after": consent["retry_after"] if consent else None,
+                "balance_raw": balance["raw"] if balance else 0,
+                "last_charge": dict(last_charge) if last_charge else None,
+                "due": bool(consent and consent["status"] == "ACTIVE"
+                            and consent["next_due_at"] <= now),
+            }
+
+    def accept_monthly_fee(self, uid, owner_uid, terms_version, now=None):
+        if (type(uid) is not int or uid <= 0 or type(owner_uid) is not int or owner_uid <= 0
+                or uid == owner_uid or terms_version != MONTHLY_TRADING_FEE_TERMS_VERSION):
+            raise LedgerError("Monthly fee consent is invalid.")
+        now = int(time.time()) if now is None else int(now)
+        with self.db() as db:
+            if not db.execute("SELECT 1 FROM custody_users WHERE uid=?", (uid,)).fetchone():
+                raise LedgerError("Account not found.")
+            old = db.execute(
+                "SELECT * FROM custody_monthly_trading_fee_consents WHERE uid=?", (uid,)
+            ).fetchone()
+            if old and old["status"] == "ACTIVE":
+                return {"state": "already_active", "next_due_at": old["next_due_at"]}
+            if old and old["paid_until"] > now:
+                db.execute("""UPDATE custody_monthly_trading_fee_consents
+                    SET accepted_at=?,terms_version=?,status='ACTIVE',
+                        next_due_at=paid_until,retry_after=0 WHERE uid=?""",
+                    (now, terms_version, uid))
+                db.execute("""INSERT INTO custody_monthly_trading_fee_consent_events
+                    (uid,event,terms_version,created_at) VALUES(?,'ACCEPTED',?,?)""",
+                    (uid, terms_version, now))
+                return {"state": "reactivated", "next_due_at": old["paid_until"]}
+            db.execute("""INSERT INTO custody_monthly_trading_fee_consents
+                (uid,accepted_at,terms_version,status,next_due_at,paid_until,retry_after)
+                VALUES(?,?,?,'ACTIVE',?,0,0)
+                ON CONFLICT(uid) DO UPDATE SET accepted_at=excluded.accepted_at,
+                    terms_version=excluded.terms_version,status='ACTIVE',
+                    next_due_at=excluded.next_due_at,paid_until=0,retry_after=0""",
+                (uid, now, terms_version, now))
+            db.execute("""INSERT INTO custody_monthly_trading_fee_consent_events
+                (uid,event,terms_version,created_at) VALUES(?,'ACCEPTED',?,?)""",
+                (uid, terms_version, now))
+            return {"state": "accepted", "next_due_at": now}
+
+    def cancel_monthly_fee(self, uid, owner_uid, now=None):
+        if (type(uid) is not int or uid <= 0 or type(owner_uid) is not int or owner_uid <= 0
+                or uid == owner_uid):
+            raise LedgerError("Monthly fee cancellation is invalid.")
+        now = int(time.time()) if now is None else int(now)
+        with self.db() as db:
+            consent = db.execute(
+                "SELECT * FROM custody_monthly_trading_fee_consents WHERE uid=?", (uid,)
+            ).fetchone()
+            if not consent or consent["status"] == "CANCELED":
+                return {"state": "already_canceled",
+                        "paid_until": consent["paid_until"] if consent else 0}
+            db.execute("""UPDATE custody_monthly_trading_fee_consents
+                SET status='CANCELED',retry_after=0 WHERE uid=?""", (uid,))
+            db.execute("""INSERT INTO custody_monthly_trading_fee_consent_events
+                (uid,event,terms_version,created_at) VALUES(?,'CANCELED',?,?)""",
+                (uid, consent["terms_version"], now))
+            return {"state": "canceled", "paid_until": consent["paid_until"]}
+
+    def monthly_fee_due_users(self, now=None):
+        now = int(time.time()) if now is None else int(now)
+        with self.db() as db:
+            return [row["uid"] for row in db.execute("""SELECT c.uid
+                FROM custody_monthly_trading_fee_consents c
+                WHERE c.status='ACTIVE' AND c.next_due_at<=? AND c.retry_after<=?
+                AND (EXISTS (SELECT 1 FROM custody_invoices i
+                             WHERE i.uid=c.uid AND i.state='CREDITED')
+                     OR EXISTS (SELECT 1 FROM custody_tx_deposits d WHERE d.uid=c.uid)
+                     OR EXISTS (SELECT 1 FROM custody_entries e
+                                WHERE e.account='user:' || c.uid AND e.delta>0 AND e.journal IN (
+                                    'opening:SOL','opening:USDC',
+                                    'legacy-opening:SOL:' || c.uid,
+                                    'legacy-opening:USDC:' || c.uid)))
+                ORDER BY c.next_due_at,c.uid""", (now, now))]
+
+    def charge_monthly_fee(self, uid, owner_uid, amount_raw, price_usd, now=None):
+        if (type(uid) is not int or uid <= 0 or type(owner_uid) is not int or owner_uid <= 0
+                or uid == owner_uid or type(amount_raw) is not int or amount_raw <= 0):
+            raise LedgerError("Monthly fee charge is invalid.")
+        try:
+            price = Decimal(str(price_usd))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise LedgerError("A valid SOL/USD price is required for monthly billing.") from exc
+        if not price.is_finite() or price <= 0:
+            raise LedgerError("A valid SOL/USD price is required for monthly billing.")
+        now = int(time.time()) if now is None else int(now)
+        with self.db() as db:
+            consent = db.execute(
+                "SELECT * FROM custody_monthly_trading_fee_consents WHERE uid=?", (uid,)
+            ).fetchone()
+            if not consent or consent["status"] != "ACTIVE":
+                return {"state": "not_active"}
+            if consent["next_due_at"] > now:
+                return {"state": "not_due", "next_due_at": consent["next_due_at"]}
+            cycle_due_at = consent["next_due_at"]
+            existing = db.execute("""SELECT * FROM custody_monthly_trading_fee_charges
+                WHERE uid=? AND cycle_due_at=?""", (uid, cycle_due_at)).fetchone()
+            if existing:
+                next_due = existing["created_at"] + MONTHLY_TRADING_FEE_PERIOD_SECONDS
+                db.execute("""UPDATE custody_monthly_trading_fee_consents
+                    SET next_due_at=?,paid_until=?,retry_after=0 WHERE uid=?""",
+                    (next_due, next_due, uid))
+                return {"state": "already_charged", "charge": dict(existing),
+                        "next_due_at": next_due}
+            if not self._has_monthly_fee_funding(db, uid):
+                return {"state": "waiting_for_funding"}
+            balance = db.execute("SELECT raw FROM custody_accounts WHERE account=? AND asset=?",
+                                 (available(uid), SOL)).fetchone()
+            available_raw = balance["raw"] if balance else 0
+            if available_raw < amount_raw:
+                retry_after = now + 60 * 60
+                db.execute("""UPDATE custody_monthly_trading_fee_consents
+                    SET retry_after=? WHERE uid=?""", (retry_after, uid))
+                return {"state": "insufficient_funds", "balance_raw": available_raw,
+                        "required_raw": amount_raw, "retry_after": retry_after}
+            journal_id = f"monthly-trading-fee:{uid}:{cycle_due_at}"
+            charge_id = journal_id
+            self.post(db, journal_id, "monthly $5 USD-equivalent trading fee", [
+                (available(uid), SOL, -amount_raw),
+                (available(owner_uid), SOL, amount_raw),
+            ])
+            db.execute("""INSERT INTO custody_monthly_trading_fee_charges
+                (id,uid,owner_uid,cycle_due_at,amount_raw,price_usd,journal_id,created_at)
+                VALUES(?,?,?,?,?,?,?,?)""",
+                (charge_id, uid, owner_uid, cycle_due_at, amount_raw, str(price), journal_id, now))
+            next_due = now + MONTHLY_TRADING_FEE_PERIOD_SECONDS
+            db.execute("""UPDATE custody_monthly_trading_fee_consents
+                SET next_due_at=?,paid_until=?,retry_after=0 WHERE uid=?""",
+                (next_due, next_due, uid))
+            db.execute("""INSERT INTO custody_monthly_fee_notifications
+                (charge_id,uid,payload) VALUES(?,?,?)""",
+                (charge_id, uid, json.dumps({
+                    "amount_raw": amount_raw, "price_usd": str(price),
+                    "paid_until": next_due,
+                }, sort_keys=True, separators=(",", ":"))))
+            return {"state": "charged", "charge": {
+                "id": charge_id, "uid": uid, "owner_uid": owner_uid,
+                "cycle_due_at": cycle_due_at, "amount_raw": amount_raw,
+                "price_usd": str(price), "journal_id": journal_id, "created_at": now,
+            }, "next_due_at": next_due}
+
+    def monthly_fee_charges(self, uid, owner_uid, limit=20):
+        if type(uid) is not int or uid <= 0 or type(owner_uid) is not int or owner_uid <= 0:
+            raise LedgerError("Invalid monthly fee history request.")
+        limit = max(1, min(int(limit), 100))
+        with self.db() as db:
+            if uid == owner_uid:
+                rows = db.execute("""SELECT amount_raw,price_usd,created_at,uid
+                    FROM custody_monthly_trading_fee_charges WHERE owner_uid=?
+                    ORDER BY created_at DESC,id DESC LIMIT ?""", (owner_uid, limit)).fetchall()
+                return [{"type": "TRADING_FEE_INCOME", "amount_raw": row["amount_raw"],
+                         "price_usd": row["price_usd"], "created_at": row["created_at"]}
+                        for row in rows]
+            rows = db.execute("""SELECT amount_raw,price_usd,created_at
+                FROM custody_monthly_trading_fee_charges WHERE uid=?
+                ORDER BY created_at DESC,id DESC LIMIT ?""", (uid, limit)).fetchall()
+            return [{"type": "TRADING_FEE", "amount_raw": row["amount_raw"],
+                     "price_usd": row["price_usd"], "created_at": row["created_at"]}
+                    for row in rows]
+
+    def monthly_fee_notifications(self, now=None):
+        now = int(time.time()) if now is None else int(now)
+        with self.db() as db:
+            return [dict(row) for row in db.execute("""SELECT * FROM custody_monthly_fee_notifications
+                WHERE state='QUEUED' AND next_attempt<=? ORDER BY next_attempt,charge_id LIMIT 25""",
+                (now,)).fetchall()]
+
+    def claim_monthly_fee_notification(self, charge_id, now=None):
+        now = int(time.time()) if now is None else int(now)
+        with self.db() as db:
+            return db.execute("""UPDATE custody_monthly_fee_notifications
+                SET state='SENDING',attempts=attempts+1,last_attempt_at=?
+                WHERE charge_id=? AND state='QUEUED' AND next_attempt<=?""",
+                (now, charge_id, now)).rowcount == 1
+
+    def monthly_fee_notification_result(self, charge_id, outcome, now=None, retry_after=60, error=None):
+        now = int(time.time()) if now is None else int(now)
+        if outcome not in ("DELIVERED", "FAILED", "UNKNOWN", "RETRY"):
+            raise LedgerError("Invalid monthly fee notification outcome.")
+        state = "QUEUED" if outcome == "RETRY" else outcome
+        with self.db() as db:
+            db.execute("""UPDATE custody_monthly_fee_notifications
+                SET state=?,next_attempt=?,delivered_at=?,last_error=?
+                WHERE charge_id=? AND state='SENDING'""",
+                (state, now + max(1, int(retry_after)) if outcome == "RETRY" else 0,
+                 now if outcome == "DELIVERED" else None,
+                 str(error or "")[:300] or None, charge_id))
+
+    @staticmethod
     def _withdrawal_entitlement(db, uid, asset):
         """Return the user's lifetime withdrawable entitlement for one settlement asset."""
         deposits = db.execute("""SELECT COALESCE(SUM(raw),0) FROM custody_invoices
@@ -517,12 +804,17 @@ class CustodyLedger:
             WHERE e.account=? AND e.asset=? AND o.kind='WITHDRAW'
               AND o.asset=? AND o.state='COMPLETED'""",
             (available(uid), asset, asset)).fetchone()[0]
+        monthly_fee_income = 0
+        if asset == SOL:
+            monthly_fee_income = db.execute("""SELECT COALESCE(SUM(amount_raw),0)
+                FROM custody_monthly_trading_fee_charges WHERE owner_uid=?""",
+                (uid,)).fetchone()[0]
         completed_withdrawals = db.execute("""SELECT COALESCE(SUM(raw),0)
             FROM custody_operations WHERE uid=? AND asset=?
             AND kind IN ('WITHDRAW','PARTNER_PAYOUT') AND state='COMPLETED'""",
             (uid, asset)).fetchone()[0]
         return max(0, deposits + opening + realized_profit + partner_income
-                   + withdrawal_commissions - completed_withdrawals)
+                   + withdrawal_commissions + monthly_fee_income - completed_withdrawals)
 
     def withdrawal_entitlement(self, uid, asset):
         if type(uid) is not int or uid <= 0 or asset not in (USDC, SOL):
@@ -684,6 +976,8 @@ class CustodyLedger:
                 if not self.post(db, journal_id, "owner-confirmed backed legacy real balance", [
                         ("external", USDC, -raw), (available(uid), USDC, raw)]):
                     raise LedgerError("A legacy balance was already imported; refresh the preview.")
+                db.execute("""UPDATE custody_monthly_trading_fee_consents
+                    SET retry_after=0 WHERE uid=? AND status='ACTIVE'""", (uid,))
                 imported += 1
                 amount += raw
             return {"imported_count": imported, "amount_raw": amount}
@@ -832,6 +1126,8 @@ class CustodyLedger:
             self.post(db, "deposit:" + signature, "verified sender Tx deposit", lines)
             db.execute("INSERT INTO custody_tx_deposits VALUES(?,?,?,?,?)",
                        (signature, uid, sender, json.dumps(amounts), block_time))
+            db.execute("""UPDATE custody_monthly_trading_fee_consents
+                SET retry_after=0 WHERE uid=? AND status='ACTIVE'""", (uid,))
             return True
 
     def credit_deposit(self, iid, signature, asset, raw, block_time):
@@ -852,6 +1148,8 @@ class CustodyLedger:
             self.post(db, "deposit:" + signature, "confirmed deposit", [
                 ("external", asset, -raw), (available(invoice["uid"]), asset, raw)])
             db.execute("UPDATE custody_invoices SET signature=?,state='CREDITED' WHERE id=?", (signature, iid))
+            db.execute("""UPDATE custody_monthly_trading_fee_consents
+                SET retry_after=0 WHERE uid=? AND status='ACTIVE'""", (invoice["uid"],))
             return invoice["uid"]
 
     def seed_fees(self, raw, backing, owner_uid=None):
@@ -958,6 +1256,8 @@ class CustodyLedger:
                 raise LedgerError("Нет нераспределённого остатка для переноса.")
             self.post(db, jid, "operator confirms old unassigned own funds", [
                 ("external", asset, -raw), (available(uid), asset, raw)])
+            db.execute("""UPDATE custody_monthly_trading_fee_consents
+                SET retry_after=0 WHERE uid=? AND status='ACTIVE'""", (uid,))
 
     def find_request(self, uid, request_id):
         with self.db() as db:

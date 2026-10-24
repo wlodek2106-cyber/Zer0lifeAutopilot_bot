@@ -25,7 +25,10 @@ from solders.transaction import Transaction, VersionedTransaction
 
 import activity_log
 import custody_runtime as runtime
-from custody_ledger import CustodyLedger, LedgerError, USDC, SOL, FEE_CAP, available, position_account
+from custody_ledger import (
+    CustodyLedger, LedgerError, USDC, SOL, FEE_CAP, available, position_account,
+    MONTHLY_TRADING_FEE_TERMS_VERSION,
+)
 import wallet_runtime as legacy
 
 
@@ -127,6 +130,65 @@ class LedgerTests(unittest.TestCase):
     def test_separate_balances_on_one_wallet(self):
         self.assertEqual(self.ledger.balance(101, USDC), 10_000_000)
         self.assertEqual(self.ledger.balance(202, USDC), 30_000_000)
+
+    def test_monthly_trading_fee_requires_consent_is_idempotent_and_credits_owner(self):
+        now = int(time.time())
+        self.credit(202, SOL, 1_000_000_000)
+        owner_before = self.ledger.balance(101, SOL)
+        user_before = self.ledger.balance(202, SOL)
+        liabilities_before = self.ledger.liabilities()[SOL]
+
+        consent = self.ledger.accept_monthly_fee(
+            202, 101, MONTHLY_TRADING_FEE_TERMS_VERSION, now)
+        self.assertEqual(consent["state"], "accepted")
+        first = self.ledger.charge_monthly_fee(202, 101, 50_000_000, "100", now)
+        second = self.ledger.charge_monthly_fee(202, 101, 50_000_000, "100", now)
+
+        self.assertEqual(first["state"], "charged")
+        self.assertEqual(second["state"], "not_due")
+        self.assertEqual(self.ledger.balance(202, SOL), user_before - 50_000_000)
+        self.assertEqual(self.ledger.balance(101, SOL), owner_before + 50_000_000)
+        self.assertEqual(self.ledger.liabilities()[SOL], liabilities_before)
+        self.assertEqual(self.ledger.withdrawal_entitlement(101, SOL), 50_000_000)
+        self.assertEqual(len(self.ledger.monthly_fee_charges(202, 101)), 1)
+        self.assertEqual(len(self.ledger.monthly_fee_charges(101, 101)), 1)
+        self.assertTrue(self.ledger.audit())
+
+    def test_monthly_fee_insufficient_sol_is_atomic_and_retries_after_topup(self):
+        now = int(time.time())
+        self.credit(202, SOL, 20_000_000)
+        self.ledger.accept_monthly_fee(202, 101, MONTHLY_TRADING_FEE_TERMS_VERSION, now)
+        before = self.ledger.balance(202, SOL)
+
+        result = self.ledger.charge_monthly_fee(202, 101, 50_000_000, "100", now)
+        self.assertEqual(result["state"], "insufficient_funds")
+        self.assertEqual(self.ledger.balance(202, SOL), before)
+        self.assertEqual(self.ledger.balance(101, SOL), 0)
+        self.assertEqual(self.ledger.monthly_fee_due_users(now + 3600), [202])
+
+        self.credit(202, SOL, 100_000_000)
+        status = self.ledger.monthly_fee_status(202, 101)
+        self.assertEqual(status["retry_after"], 0)
+        retried = self.ledger.charge_monthly_fee(202, 101, 50_000_000, "100", now + 3600)
+        self.assertEqual(retried["state"], "charged")
+        self.assertEqual(self.ledger.balance(101, SOL), 50_000_000)
+        self.assertTrue(self.ledger.audit())
+
+    def test_monthly_fee_cancellation_preserves_paid_time_but_stops_renewals(self):
+        now = int(time.time())
+        self.credit(202, SOL, 1_000_000_000)
+        self.ledger.accept_monthly_fee(202, 101, MONTHLY_TRADING_FEE_TERMS_VERSION, now)
+        charged = self.ledger.charge_monthly_fee(202, 101, 50_000_000, "100", now)
+        paid_until = charged["next_due_at"]
+
+        result = self.ledger.cancel_monthly_fee(202, 101, now + 5)
+        status = self.ledger.monthly_fee_status(202, 101, now + 5)
+        self.assertEqual(result["state"], "canceled")
+        self.assertEqual(status["paid_until"], paid_until)
+        self.assertEqual(status["consent_status"], "CANCELED")
+        self.assertNotIn(202, self.ledger.monthly_fee_due_users(paid_until + 1))
+        self.assertEqual(self.ledger.balance(101, SOL), 50_000_000)
+        self.assertTrue(self.ledger.audit())
 
     def test_owner_shortfall_waiver_debits_only_owner_and_is_idempotent(self):
         self.credit(101, SOL, 5_000_000)
@@ -754,6 +816,91 @@ class LedgerTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_monthly_fee_requires_explicit_consent_and_charges_exact_current_sol_quote(self):
+        invoice = self.ledger.invoice(202, SOL, 200_000_000)
+        self.ledger.credit_deposit(
+            invoice["id"], str(Signature.new_unique()), SOL, 200_000_000, invoice["created_at"])
+        self.service.prices_fn = AsyncMock(return_value={"SOL": 100})
+        self.service.solvent = AsyncMock(return_value=None)
+
+        rejected = await self.service.handle(
+            Request(202, {"action": "accept", "consent": False}), self.service.monthly_trading_fee)
+        self.assertEqual(rejected.status, 400)
+        self.assertEqual(self.ledger.balance(202, SOL), 200_000_000)
+
+        response = await self.service.monthly_trading_fee(Request(202, {
+            "action": "accept", "consent": True, "quote_raw": 50_000_000,
+            "terms_version": MONTHLY_TRADING_FEE_TERMS_VERSION,
+        }), None)
+        data = json.loads(response.text)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(data["charge"]["state"], "charged")
+        self.assertEqual(self.ledger.balance(202, SOL), 150_000_000)
+        self.assertEqual(self.ledger.balance(101, SOL), 50_000_000)
+        self.assertEqual(self.ledger.withdrawal_entitlement(101, SOL), 50_000_000)
+
+    async def test_stale_monthly_fee_quote_does_not_record_consent_or_charge(self):
+        invoice = self.ledger.invoice(202, SOL, 200_000_000)
+        self.ledger.credit_deposit(
+            invoice["id"], str(Signature.new_unique()), SOL, 200_000_000, invoice["created_at"])
+        self.service.prices_fn = AsyncMock(return_value={"SOL": 100})
+
+        response = await self.service.monthly_trading_fee(Request(202, {
+            "action": "accept", "consent": True, "quote_raw": 40_000_000,
+            "terms_version": MONTHLY_TRADING_FEE_TERMS_VERSION,
+        }), None)
+        data = json.loads(response.text)
+        self.assertEqual(response.status, 409)
+        self.assertEqual(data["quote_raw"], 50_000_000)
+        self.assertEqual(self.ledger.balance(202, SOL), 200_000_000)
+        self.assertEqual(
+            self.ledger.monthly_fee_status(202, 101)["consent_status"], "NOT_ACCEPTED")
+
+    async def test_consented_fee_waits_for_first_deposit_then_bills_with_modes_off(self):
+        self.service.prices_fn = AsyncMock(return_value={"SOL": 100})
+        self.service.solvent = AsyncMock(return_value=None)
+        accepted = await self.service.handle(Request(202, {
+            "action": "accept", "consent": True, "quote_raw": 50_000_000,
+            "terms_version": MONTHLY_TRADING_FEE_TERMS_VERSION,
+        }), self.service.monthly_trading_fee)
+        self.assertEqual(json.loads(accepted.text)["charge"]["state"], "waiting_for_funding")
+        self.assertEqual(self.ledger.balance(202, SOL), 0)
+        self.assertFalse(self.ledger.settings(202)["trading"])
+        self.assertFalse(self.ledger.settings(202)["sniper_trading"])
+
+        invoice = self.ledger.invoice(202, SOL, 100_000_000)
+        self.ledger.credit_deposit(
+            invoice["id"], str(Signature.new_unique()), SOL, 100_000_000, invoice["created_at"])
+        self.service.reconcile = AsyncMock()
+        self.service.scan_deposits = AsyncMock()
+        await self.service.worker_cycle(None)
+
+        self.assertEqual(self.ledger.balance(202, SOL), 50_000_000)
+        self.assertEqual(self.ledger.balance(101, SOL), 50_000_000)
+        self.assertFalse(self.ledger.settings(202)["trading"])
+        self.assertFalse(self.ledger.settings(202)["sniper_trading"])
+
+    async def test_monthly_fee_receipt_is_sent_to_the_charged_participant_once(self):
+        invoice = self.ledger.invoice(202, SOL, 200_000_000)
+        self.ledger.credit_deposit(
+            invoice["id"], str(Signature.new_unique()), SOL, 200_000_000, invoice["created_at"])
+        self.ledger.accept_monthly_fee(202, 101, MONTHLY_TRADING_FEE_TERMS_VERSION)
+        self.ledger.charge_monthly_fee(202, 101, 50_000_000, "100")
+        self.service.notification_token = "test-notification-token"
+
+        session = NotificationSession()
+        await self.service.deliver_monthly_fee_notifications(session)
+        await self.service.deliver_monthly_fee_notifications(session)
+        self.assertEqual(len(session.calls), 1)
+        message = session.calls[0][1]["json"]["text"]
+        self.assertIn("Charged:", message)
+        self.assertIn("no on-chain transfer was sent", message)
+        self.assertEqual(session.calls[0][1]["json"]["chat_id"], 202)
+        with self.ledger.db() as db:
+            state = db.execute(
+                "SELECT state FROM custody_monthly_fee_notifications").fetchone()[0]
+        self.assertEqual(state, "DELIVERED")
+
     async def test_trade_pushes_are_account_scoped_and_not_resent_after_success(self):
         self.service.notification_token = "test-notification-token"
         for uid, symbol in ((101, "ALPHA"), (202, "BETA")):
@@ -1603,6 +1750,11 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.service.trading_preflight = AsyncMock()
         invoice, sig, tx = self.payment(uid=202, raw=7_000_000)
         await self.service.apply_deposit(None, sig)
+        fee_invoice = self.ledger.invoice(202, SOL, 100_000_000)
+        self.ledger.credit_deposit(fee_invoice["id"], str(Signature.new_unique()), SOL,
+                                   100_000_000, fee_invoice["created_at"])
+        self.ledger.accept_monthly_fee(202, 101, MONTHLY_TRADING_FEE_TERMS_VERSION)
+        self.ledger.charge_monthly_fee(202, 101, 50_000_000, "100")
         await self.service.handle(Request(202, {"trade_amount_usdc": "1"}), self.service.toggle)
         self.assertTrue(self.ledger.settings(202)["trading"])
         self.assertFalse(self.ledger.settings(101)["trading"])
@@ -1619,6 +1771,11 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.service.trading_preflight = AsyncMock()
         invoice, sig, tx = self.payment(uid=202, raw=1_000_000)
         await self.service.apply_deposit(None, sig)
+        fee_invoice = self.ledger.invoice(202, SOL, 100_000_000)
+        self.ledger.credit_deposit(fee_invoice["id"], str(Signature.new_unique()), SOL,
+                                   100_000_000, fee_invoice["created_at"])
+        self.ledger.accept_monthly_fee(202, 101, MONTHLY_TRADING_FEE_TERMS_VERSION)
+        self.ledger.charge_monthly_fee(202, 101, 50_000_000, "100")
         buy = self.ledger.reserve(202, str(uuid.uuid4()), "BUY", USDC, 1_000_000,
             {"output_asset": SOL, "symbol": "SOL", "decimals": 9})
         self.ledger.prepared(buy["id"], "buy-signature", "offline-wire")
