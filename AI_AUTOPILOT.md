@@ -6,13 +6,15 @@ This is a callable OpenAI adapter plus independent custodial execution controlle
 not a promise of profitable trading. No live model call, live trade, or withdrawal
 has been validated by the automated tests.
 
-Core mode selects SOL/JUP/RAY/PYTH/JTO/ORCA/KMNO/NOS/SHDW/PEPE using personal USDC,
+Core mode selects SOL/JUP/RAY/PYTH/JTO/ORCA/KMNO/NOS/SHDW/PEPE/OTC using personal USDC,
 up to five positions. New Core assets still require current liquidity/volume,
 quote-impact and closed-candle chart checks before entry. The SOL-funded Sniper
-uses WIF/BONK/BOME/POPCAT/MEW/PENGU/PEPE as screened seeds alongside bounded discovery,
+uses WIF/BONK/BOME/POPCAT/MEW/PENGU/PEPE/OTC as screened seeds alongside bounded discovery,
 up to five positions. A seed is not an eligible trade or a profit forecast.
-PEPE is available to both universes, but each mode uses its own balance and all
-existing independent entry checks remain in force.
+PEPE and OTC are available to both universes: OTC/USDC in Core and OTC/SOL in Sniper.
+OTC uses the exact verified Token-2022 mint with immutable metadata; other Token-2022
+assets remain rejected. Each mode uses its own balance and all existing independent
+entry checks remain in force.
 SOL proceeds return to the same user's SOL balance. There is no automatic
 cross-mode profit conversion or allocation.
 

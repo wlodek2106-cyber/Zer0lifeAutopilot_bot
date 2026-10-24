@@ -253,7 +253,7 @@ TEXT = {
     "Подтвердите закрытие только своих позиций.": "Confirm closing only your own positions.",
     "Закрытие ваших подтверждённых позиций поставлено в очередь.": "Closing your confirmed positions queued.",
     "ещё не": "not yet",
-    "Снайпер разрешает только стандартный SPL Token mint.": "Sniper allows only standard SPL Token mints.",
+    "Снайпер разрешает стандартные SPL Token mint и только проверенный OTC Token-2022 mint.": "Sniper allows standard SPL Token mints and only the verified OTC Token-2022 mint.",
     "RPC не подтвердил параметры mint.": "RPC did not confirm mint parameters.",
     "Mint снайпера не прошёл проверку decimals/authority.": "Sniper mint failed decimals/authority validation.",
     "Код должен содержать от 6 до 128 символов.": "Code must contain 6–128 characters.",

@@ -11,8 +11,11 @@ or future returns. WIF remains a seeded candidate but must pass current screenin
 - Raydium/Orca/Meteora/PumpSwap, pool liquidity and 24h volume >= $100k,
   >= 200 daily swaps, pool age >= 24h, no extreme 5-minute/hour pump.
 - At most 20 screening leaders checked through finalized RPC mint data.
-- Standard SPL only, initialized mint, integer decimals 0..9,
-  no mint authority or freeze authority. Token-2022 is not supported.
+- Dynamically discovered assets must be standard SPL, with initialized mint,
+  integer decimals 0..9, and no mint/freeze authority. Token-2022 candidates are
+  rejected except the exact, preapproved OTC seed; OTC requires the verified
+  Token-2022 program, six decimals, disabled mint/freeze/update authorities,
+  immutable metadata pointer, and matching immutable OTC name/symbol.
 - Liquidity/activity score is a screening priority, NOT expected return.
 - At most 8 current candidates plus up to 32 held identities in the AI universe.
   At most 30 recent 20-second price samples per symbol in the model input.
