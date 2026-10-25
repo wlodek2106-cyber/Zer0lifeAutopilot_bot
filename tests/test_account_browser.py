@@ -89,6 +89,43 @@ class AccountBrowserTests(unittest.TestCase):
             assert(!window.requests.some(r=>r.url==='/api/withdraw'),'signup never withdraws funds');
         """)
 
+    def test_support_form_posts_private_authenticated_request(self):
+        source=ast.parse((ROOT/"main.py").read_text())
+        page=next(ast.literal_eval(node.value) for node in source.body if isinstance(node,ast.Assign)
+                  and any(isinstance(target,ast.Name) and target.id=="RAW_HTML" for target in node.targets))
+        page=re.sub(r'<script src="[^"]+"></script>','',page)
+        stub="""<script>
+        window.Telegram={WebApp:{initData:'fixture',initDataUnsafe:{user:{id:101,username:'TelegramName'}},expand(){},ready(){}}};
+        window.supportSubmission=null;
+        window.fetch=async(url,options={})=>{
+            if(url==='/api/support'){
+                window.supportSubmission={url,body:options.body,headers:options.headers};
+                return new Response(JSON.stringify({success:true,message:'Your support request was sent privately to the administrator.'}),
+                    {headers:{'Content-Type':'application/json'}});
+            }
+            return new Response(JSON.stringify({success:true,registered:false,partner_terms_required:false}),
+                {headers:{'Content-Type':'application/json'}});
+        };
+        </script>"""
+        page=page.replace("</head>",stub+"</head>")
+        self.run_page(page,"""
+            assert(document.getElementById('support-overlay').hidden,'support form starts closed');
+            assert(document.querySelectorAll('.support-quick-link').length>=2,
+                'support is reachable from the launch and signup screens');
+            openSupport();
+            assert(!document.getElementById('support-overlay').hidden,'support form opens');
+            document.getElementById('support-message').value='The deposit button does not respond.';
+            await sendSupportRequest();
+            assert(window.supportSubmission.url==='/api/support','support uses its private API route');
+            assert(window.supportSubmission.body instanceof FormData,'support submits as multipart form data');
+            assert(window.supportSubmission.body.get('message')==='The deposit button does not respond.',
+                'the support description is sent');
+            assert(window.supportSubmission.headers['X-Telegram-Init-Data']==='fixture',
+                'the request carries verified Telegram identity');
+            assert(document.getElementById('support-status').textContent.includes('sent privately'),
+                'successful delivery is confirmed to the user');
+        """)
+
     def test_browser_requires_second_click_and_supports_cancel_retry(self):
         page=(ROOT/"passkey.html").read_text()
         stub="""<script>

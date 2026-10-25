@@ -30,6 +30,7 @@ from account_security import AccountSecurity
 from web_access import WebAccess
 from wallet_runtime import WalletError
 from spl_token_support import TOKEN_2022_PROGRAM_ID
+from support_inbox import SupportInbox, MAX_SUPPORT_REQUEST_BYTES
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -977,6 +978,37 @@ RAW_HTML = r"""<!DOCTYPE html>
         #account-signup #account-error {
             min-height: 1.5em; margin: 10px 0 0; color: #ffaaa9;
         }
+        .support-quick-link {
+            display: block; margin: 10px auto 0; padding: 10px 14px; border: 1px solid #36524e;
+            border-radius: 12px; background: rgba(13, 31, 31, .55); color: #8de6bd;
+            font-size: 13px; font-weight: 700; cursor: pointer;
+        }
+        #support-overlay[hidden] { display: none !important; }
+        #support-overlay:not([hidden]) { display: grid; }
+        .support-overlay {
+            position: fixed; inset: 0; z-index: 11000; place-items: center;
+            padding: 16px; background: rgba(3, 7, 10, .82); backdrop-filter: blur(10px);
+        }
+        .support-dialog {
+            width: min(460px, 100%); max-height: min(88dvh, 760px); overflow-y: auto;
+            padding: 20px; border: 1px solid #30434d; border-radius: 20px;
+            background: #111c26; color: #e6eef0; box-shadow: 0 24px 70px rgba(0,0,0,.55);
+        }
+        .support-dialog-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+        .support-dialog-head h2 { margin:0; font-size:21px; }
+        .support-close {
+            flex:0 0 40px; width:40px; height:40px; border:1px solid #354954; border-radius:12px;
+            background:#172530; color:#e6eef0; font-size:22px; cursor:pointer;
+        }
+        .support-dialog textarea {
+            display:block; width:100%; min-height:130px; resize:vertical; padding:12px;
+            border:1px solid #354954; border-radius:12px; background:#09131b; color:#eef5f4;
+            font:14px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;
+        }
+        .support-dialog input[type="file"] { display:block; width:100%; margin-top:8px; color:#c6d4d7; }
+        .support-dialog .support-status { min-height:1.5em; margin:10px 0 0; color:#a9bac0; }
+        .support-dialog .support-status[data-state="error"] { color:#ffaaa9; }
+        .support-dialog .support-status[data-state="success"] { color:#7de0b2; }
         .card, .deposit-modal {
             color: var(--ink); background: var(--surface-raised) !important;
             border: 1px solid var(--line) !important; border-radius: 20px;
@@ -1709,6 +1741,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <h1 id="splash-title" class="zl-prism__title">Zer0Life<br><em>AI Trader</em></h1>
                 <p class="splash-caption">See what the AI sees. Stay in control of every move.</p>
                 <button id="launch-terminal" class="start-btn zl-prism__launch" onclick="openTerminal()">Launch Terminal</button>
+                <button class="support-quick-link" type="button" onclick="openSupport()">Contact technical support</button>
                 <p class="zl-prism__note"><span class="zl-prism__pulse"></span> SOLANA · USDC <i></i> DIRECT CONTROL</p>
             </div>
         </section>
@@ -1727,7 +1760,25 @@ RAW_HTML = r"""<!DOCTYPE html>
         </div>
         <button id="account-create" class="btn-green-main" onclick="createAccount()">Create account</button>
         <p id="account-error" class="status-output" role="alert" aria-live="assertive"></p>
+        <button class="support-quick-link" type="button" onclick="openSupport()">Contact technical support</button>
     </section>
+    <div id="support-overlay" class="support-overlay" hidden>
+        <section class="support-dialog" role="dialog" aria-modal="true" aria-labelledby="support-title">
+            <div class="support-dialog-head">
+                <h2 id="support-title">Contact technical support</h2>
+                <button class="support-close" type="button" aria-label="Close support form" onclick="closeSupport()">×</button>
+            </div>
+            <p class="section-note">Your message and optional screenshot will be sent privately to the administrator's Telegram chat. Your verified Telegram ID and username are included so the issue can be identified.</p>
+            <p class="muted">Do not send passwords, security codes, recovery codes, private keys, or seed phrases.</p>
+            <label class="settings-label" for="support-message">Describe the issue · up to 700 characters</label>
+            <textarea id="support-message" maxlength="700" placeholder="What happened, and what did you expect?"></textarea>
+            <label class="settings-label" for="support-photo">Screenshot · optional</label>
+            <input id="support-photo" type="file" accept=".jpg,.jpeg,.png,image/jpeg,image/png">
+            <p class="muted">One JPG or PNG image, up to 5 MB. Images are sent directly and are not stored by the app.</p>
+            <button id="support-submit" class="btn-green-main" type="button" onclick="sendSupportRequest()">Send to support</button>
+            <p id="support-status" class="support-status" role="status" aria-live="polite"></p>
+        </section>
+    </div>
     <div id="app" data-ui-version="console-ai-v1" style="display: none;">
         <div id="tab-terminal" class="tab-panel active">
             <header class="page-heading"><div><p class="eyebrow">AI Trader · Personal account</p><h1>Overview</h1></div></header>
@@ -2035,6 +2086,11 @@ RAW_HTML = r"""<!DOCTYPE html>
         </div>
         <div id="tab-settings" class="tab-panel">
             <header class="page-heading"><div><p class="eyebrow">Account preferences</p><h1>Settings</h1></div></header>
+            <div class="card" id="support-card">
+                <h3 style="margin-top:0">Technical support</h3>
+                <p class="section-note">Send a private message and an optional screenshot directly to the administrator.</p>
+                <button class="btn-copy" type="button" onclick="openSupport()">Contact support</button>
+            </div>
             <div class="card" id="passkey-settings"><h3>Account protection</h3>
                 <p id="passkey-state" class="status-output">Withdrawals use a one-time Telegram code. A passkey is required for standalone browser sign-in.</p>
                 <button class="btn-copy" onclick="setupPasskey()">Set up / add browser passkey</button>
@@ -2857,6 +2913,58 @@ RAW_HTML = r"""<!DOCTYPE html>
             if (!tg?.initData) throw new Error('Open this app through Telegram.');
             const headers = Object.assign({}, options.headers || {}, { 'X-Telegram-Init-Data': tg.initData });
             return fetch(url, Object.assign({}, options, { headers }));
+        }
+
+        function openSupport(){
+            const overlay=document.getElementById('support-overlay');
+            overlay.hidden=false;
+            document.getElementById('support-status').textContent='';
+            document.getElementById('support-status').dataset.state='';
+            setTimeout(()=>document.getElementById('support-message').focus(),0);
+        }
+        function closeSupport(){
+            document.getElementById('support-overlay').hidden=true;
+        }
+        async function sendSupportRequest(){
+            const message=document.getElementById('support-message').value.trim();
+            const photo=document.getElementById('support-photo').files?.[0]||null;
+            const button=document.getElementById('support-submit');
+            const status=document.getElementById('support-status');
+            const showError=text=>{status.textContent=text;status.dataset.state='error';};
+            if(!message){showError('Describe the issue before sending.');return;}
+            if(message.length>700){showError('Keep your message under 700 characters.');return;}
+            if(photo){
+                const allowedType=['image/jpeg','image/png'].includes(photo.type);
+                const allowedName=/\.(jpe?g|png)$/i.test(photo.name||'');
+                if(!allowedType&&!allowedName){showError('Attach a JPG or PNG image.');return;}
+                if(photo.size>5*1024*1024){showError('Choose an image under 5 MB.');return;}
+            }
+            button.disabled=true;
+            button.textContent='Sending…';
+            status.textContent='Sending privately to the administrator…';
+            status.dataset.state='';
+            const form=new FormData();
+            form.append('message',message);
+            if(photo)form.append('photo',photo,photo.name);
+            try{
+                const response=await apiFetch('/api/support',{method:'POST',body:form});
+                let data;
+                try{data=await response.json();}
+                catch{
+                    if(response.status===413)throw Error('Choose an image under 5 MB.');
+                    throw Error('Could not read the support service response. Please try again later.');
+                }
+                if(!response.ok||!data.success)throw Error(data.message||'Could not send the support request.');
+                status.textContent=data.message||'Your support request was sent.';
+                status.dataset.state='success';
+                document.getElementById('support-message').value='';
+                document.getElementById('support-photo').value='';
+            }catch(error){
+                showError(error.message||'Could not send the support request. Please try again later.');
+            }finally{
+                button.disabled=false;
+                button.textContent='Send to support';
+            }
         }
 
         let telegramTariffState=null,telegramTariffClockOffset=0,telegramTariffBusy=false;
@@ -4400,7 +4508,8 @@ async def set_telegram_webhook():
 async def main():
     init_db()
     app = web.Application(middlewares=[
-        security_headers_middleware, english_json_middleware, telegram_auth_middleware])
+        security_headers_middleware, english_json_middleware, telegram_auth_middleware],
+        client_max_size=MAX_SUPPORT_REQUEST_BYTES)
     runtime = CustodyRuntime(DB_FILE, SOLANA_RPC, ADMIN_TELEGRAM_ID, SHARED_DEPOSIT_WALLET,
         get_signer_keypair, verify_user_pin, get_token_prices, WATCHLIST, add_log,
         base_url=RENDER_URL, notification_token=TELEGRAM_TOKEN,
@@ -4450,6 +4559,8 @@ async def main():
     app.router.add_get('/api/stats', wallet_handler(runtime.stats))
     app.router.add_get('/api/monthly-trading-fee', wallet_handler(runtime.monthly_trading_fee))
     app.router.add_post('/api/monthly-trading-fee', wallet_handler(runtime.monthly_trading_fee))
+    support_inbox = SupportInbox(TELEGRAM_TOKEN, ADMIN_TELEGRAM_ID)
+    app.router.add_post('/api/support', support_inbox.handle)
     app.router.add_post('/api/toggle_trading', wallet_handler(runtime.toggle))
     app.router.add_post('/api/trading_settings', wallet_handler(runtime.save_trading_settings))
     app.router.add_post('/api/trading_readiness', wallet_handler(runtime.trading_readiness))
