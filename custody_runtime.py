@@ -1675,6 +1675,14 @@ class CustodyRuntime(WalletRuntime):
         except ValueError as exc:
             raise WalletError("Simulation returned an unsupported token account: " + str(exc)) from exc
 
+    @staticmethod
+    def same_account_snapshot(before, after):
+        """Compare fields that can affect ownership, balances, or token state."""
+        if not isinstance(before, dict) or not isinstance(after, dict):
+            return False
+        return all(before.get(key) == after.get(key)
+                   for key in ("owner", "lamports", "data", "executable"))
+
     async def safe_simulation(self, session, tx, row, info):
         """Constrain user-owned accounts without exceeding narrow RPC account limits."""
         if row["kind"] in ("WITHDRAW", "PARTNER_PAYOUT"):
@@ -1731,7 +1739,18 @@ class CustodyRuntime(WalletRuntime):
         wrapped_delta = 0
         owner_bytes = bytes(Pubkey.from_string(self.wallet))
         for old, new in zip(before[1:], after[1:]):
-            old_data, new_data = self.token_data(old), self.token_data(new)
+            try:
+                old_data, new_data = self.token_data(old), self.token_data(new)
+            except WalletError as exc:
+                # A shared wallet may contain an unrelated Token-2022 account
+                # with extensions this release does not support. Ignore it
+                # only when simulation proves its full account state unchanged.
+                # Any creation, deletion, lamport movement, or data change
+                # still fails closed.
+                if ("Token-2022 account has unsupported extensions" in str(exc)
+                        and self.same_account_snapshot(old, new)):
+                    continue
+                raise
             old_program = old.get("owner") if old else None
             new_program = new.get("owner") if new else None
             if old_data and new_data and old_program != new_program:

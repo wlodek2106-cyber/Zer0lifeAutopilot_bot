@@ -2695,6 +2695,68 @@ class SimulationTests(unittest.IsolatedAsyncioTestCase):
             await self.simulate(before, after, asset=SOL, raw=5_000_000, kind="BUY",
                 info={"output_asset": mint, "minimum_out": 2_500_000})
 
+    async def test_simulation_allows_an_unchanged_unrelated_token_2022_account(self):
+        unrelated_mint = "MukLDtJ8Cx9DxLbeyLRSWPSposTMWuwHANbuaudpump"
+        self.service.watchlist["OTC"] = {
+            "mint": unrelated_mint, "decimals": 6, "label": "OTC",
+            "token_program": str(runtime.TOKEN_2022),
+        }
+        unrelated = self.token_account(
+            unrelated_mint, 25, program=runtime.TOKEN_2022)
+        data = bytearray(base64.b64decode(unrelated["data"][0]))
+        data.extend(b"\x02\x0c\x00\x00\x00")
+        unrelated["data"][0] = base64.b64encode(data).decode()
+        target_mint = str(Keypair().pubkey())
+        before = [
+            self.native(50_000_000),
+            self.token_account(USDC, 10_000_000),
+            unrelated,
+            None,
+        ]
+        after = [
+            self.native(42_955_720),
+            self.token_account(USDC, 10_000_000),
+            dict(unrelated),
+            self.token_account(target_mint, 2_600_000),
+        ]
+        self.assertTrue(await self.simulate(
+            before, after, asset=SOL, raw=5_000_000, kind="BUY",
+            info={"output_asset": target_mint, "minimum_out": 2_500_000}))
+
+    async def test_simulation_still_rejects_changes_to_an_unsupported_token_2022_account(self):
+        unrelated_mint = "MukLDtJ8Cx9DxLbeyLRSWPSposTMWuwHANbuaudpump"
+        self.service.watchlist["OTC"] = {
+            "mint": unrelated_mint, "decimals": 6, "label": "OTC",
+            "token_program": str(runtime.TOKEN_2022),
+        }
+        before_account = self.token_account(
+            unrelated_mint, 25, program=runtime.TOKEN_2022)
+        data = bytearray(base64.b64decode(before_account["data"][0]))
+        data.extend(b"\x02\x0c\x00\x00\x00")
+        before_account["data"][0] = base64.b64encode(data).decode()
+        after_account = dict(before_account)
+        changed = bytearray(base64.b64decode(after_account["data"][0]))
+        changed[64] += 1
+        after_account["data"] = [base64.b64encode(changed).decode(), "base64"]
+        target_mint = str(Keypair().pubkey())
+        before = [
+            self.native(50_000_000),
+            self.token_account(USDC, 10_000_000),
+            before_account,
+            None,
+        ]
+        after = [
+            self.native(42_955_720),
+            self.token_account(USDC, 10_000_000),
+            after_account,
+            self.token_account(target_mint, 2_600_000),
+        ]
+        with self.assertRaisesRegex(
+                legacy.WalletError, "unsupported token account"):
+            await self.simulate(
+                before, after, asset=SOL, raw=5_000_000, kind="BUY",
+                info={"output_asset": target_mint, "minimum_out": 2_500_000})
+
     async def test_native_sniper_buy_cannot_spend_usdc(self):
         mint = str(Keypair().pubkey())
         before = [self.native(50_000_000), self.token_account(USDC, 10_000_000), self.token_account(mint, 0)]
