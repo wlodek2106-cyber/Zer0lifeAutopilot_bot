@@ -960,6 +960,23 @@ RAW_HTML = r"""<!DOCTYPE html>
         #account-signup h2 { margin: 0 0 8px; font-size: 24px; letter-spacing: -.04em; }
         #account-signup label { color: #354e54; font-size: 13px; line-height: 1.55; }
         #account-signup .muted { color: var(--muted); font-size: 13px; line-height: 1.55; }
+        #account-signup .signup-consent {
+            display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: start;
+            gap: 12px; margin: 14px 0 0; padding: 14px; border: 1px solid #40535e;
+            border-radius: 14px; background: rgba(8, 16, 23, .55); cursor: pointer;
+        }
+        #account-signup .signup-consent input[type="checkbox"] {
+            appearance: auto; -webkit-appearance: checkbox; width: 22px !important;
+            min-width: 22px; height: 22px; margin: 1px 0 0; accent-color: #36d9a2;
+            cursor: pointer;
+        }
+        #account-signup .signup-terms-heading {
+            margin: 16px 0 0; color: #79e2bb; font-size: 11px; font-weight: 800;
+            letter-spacing: .08em; text-transform: uppercase;
+        }
+        #account-signup #account-error {
+            min-height: 1.5em; margin: 10px 0 0; color: #ffaaa9;
+        }
         .card, .deposit-modal {
             color: var(--ink); background: var(--surface-raised) !important;
             border: 1px solid var(--line) !important; border-radius: 20px;
@@ -1703,12 +1720,13 @@ RAW_HTML = r"""<!DOCTYPE html>
         <label for="account-nickname">Nickname</label>
         <input id="account-nickname" class="sig-input" autocomplete="nickname" minlength="3" maxlength="24" pattern="[A-Za-z0-9_]{3,24}" placeholder="Your nickname">
         <p class="muted">3–24 letters, numbers or underscores. Your balance stays linked to your Telegram account, not this name.</p>
-        <label style="display:flex;gap:10px"><input id="account-risk" type="checkbox" style="width:auto">I understand trading can lose money and returns are not guaranteed.</label>
+        <label class="signup-consent"><input id="account-risk" type="checkbox" required><span>I understand trading can lose money and returns are not guaranteed.</span></label>
         <div id="affiliate-terms" hidden>
-            <label style="display:flex;gap:10px;margin-top:12px"><input id="account-partner-terms" type="checkbox" style="width:auto">I understand this account was referred. Up to 1.75% of realized trading profit may be paid to its referral partners: 1% / 0.5% / 0.25% by level, after prior trading losses are recovered. Profit means sale proceeds minus recorded purchase cost; separately paid network fees are not netted here. Deposits and open trades are excluded; USDC and SOL are accounted for separately.</label>
+            <p class="signup-terms-heading">Required for this referred account</p>
+            <label class="signup-consent"><input id="account-partner-terms" type="checkbox" required><span>I understand this account was referred. Up to 1.75% of realized trading profit may be paid to its referral partners: 1% / 0.5% / 0.25% by level, after prior trading losses are recovered. Profit means sale proceeds minus recorded purchase cost; separately paid network fees are not netted here. Deposits and open trades are excluded; USDC and SOL are accounted for separately.</span></label>
         </div>
         <button id="account-create" class="btn-green-main" onclick="createAccount()">Create account</button>
-        <p id="account-error" class="status-output" role="status"></p>
+        <p id="account-error" class="status-output" role="alert" aria-live="assertive"></p>
     </section>
     <div id="app" data-ui-version="console-ai-v1" style="display: none;">
         <div id="tab-terminal" class="tab-panel active">
@@ -3007,16 +3025,31 @@ RAW_HTML = r"""<!DOCTYPE html>
             finally{launch.disabled=false;launch.textContent='Launch Terminal';}
         }
         async function createAccount() {
-            const button=document.getElementById('account-create');button.disabled=true;
+            const button=document.getElementById('account-create');
+            const error=document.getElementById('account-error');
+            const risk=document.getElementById('account-risk');
+            const partnerTerms=document.getElementById('account-partner-terms');
+            const partnerTermsSection=document.getElementById('affiliate-terms');
+            error.textContent='';
+            if(!risk.checked){
+                error.textContent='Please acknowledge the trading risk before creating your account.';
+                risk.focus();return;
+            }
+            if(!partnerTermsSection.hidden&&!partnerTerms.checked){
+                error.textContent='Please check the required referral commission agreement above to continue.';
+                partnerTerms.closest('label')?.scrollIntoView({block:'center',behavior:'smooth'});
+                partnerTerms.focus({preventScroll:true});return;
+            }
+            button.disabled=true;
             try{
                 const response=await apiFetch('/api/account/register',{method:'POST',headers:{'Content-Type':'application/json'},
                     body:JSON.stringify({nickname:document.getElementById('account-nickname').value,
-                        accept_risk:document.getElementById('account-risk').checked,
-                        accept_partner_terms:document.getElementById('account-partner-terms').checked})});
+                        accept_risk:risk.checked,
+                        accept_partner_terms:partnerTerms.checked})});
                 const data=await response.json();if(!response.ok||!data.success)throw Error(data.message||'Could not create account.');
                 accountState=data;document.getElementById('account-signup').style.display='none';
                 await finishAccount();
-            }catch(e){document.getElementById('account-error').textContent=e.message;document.getElementById('account-signup').style.display='block';}
+            }catch(e){error.textContent=e.message;document.getElementById('account-signup').style.display='block';}
             finally{button.disabled=false;}
         }
         async function finishAccount(){

@@ -60,9 +60,19 @@ class AccountBrowserTests(unittest.TestCase):
             const submit=document.getElementById('account-create'),submitBox=submit.getBoundingClientRect();
             assert(document.elementFromPoint(submitBox.x+submitBox.width/2,submitBox.y+submitBox.height/2)===submit,
                 'create account button receives touch');
+            const partnerBox=document.getElementById('account-partner-terms');
+            assert(partnerBox.getBoundingClientRect().width>=20&&partnerBox.getBoundingClientRect().height>=20,
+                'referral consent checkbox is visibly large enough to tap');
             assert(!document.getElementById('launch-terminal').disabled,'launch state restored after loading');
             document.getElementById('account-nickname').value='TraderNew';
             document.getElementById('account-risk').checked=true;
+            await createAccount();
+            assert(!window.requests.some(r=>r.url==='/api/account/register'),
+                'registration is not sent before referral terms are accepted');
+            assert(document.getElementById('account-error').textContent.includes('referral commission agreement'),
+                'missing referral consent is explained next to the form');
+            assert(document.getElementById('account-signup').style.display==='block',
+                'signup stays visible until required consent is checked');
             document.getElementById('account-partner-terms').checked=true;
             await createAccount();await refresh();
             assert(document.getElementById('account-signup').style.display==='none','signup hidden after server acceptance');
