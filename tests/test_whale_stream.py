@@ -38,7 +38,7 @@ def token_balance(mint, amount, index=2, owner=BUYER):
     }
 
 
-def notification(sol_spend=20_000_000_000, *, program=PUMP, mint=MINT, pre_amount=10, post_amount=20,
+def notification(sol_spend=5_000_000_000, *, program=PUMP, mint=MINT, pre_amount=10, post_amount=20,
                  err=None, extra_post=None, signature=SIGNATURE, new_token_account=False):
     fee = 5_000
     rent = 2_039_280 if new_token_account else 0
@@ -148,16 +148,16 @@ class WhaleSignalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status["state"], "stopped")
         self.assertIn("Scheduled candidate scanning remains available", status["message"])
 
-    def test_valid_confirmed_program_buy_in_10_to_1000_sol_range(self):
-        event = parse_whale_buy(notification(sol_spend=25_000_000_000), observed_at=100)
+    def test_valid_confirmed_program_buy_in_1_to_10_sol_range(self):
+        event = parse_whale_buy(notification(sol_spend=5_000_000_000), observed_at=100)
         self.assertEqual(event["mint"], MINT)
         self.assertEqual(event["program"], "Pump.fun")
-        self.assertEqual(event["sol_lamports"], 25_000_000_000)
+        self.assertEqual(event["sol_lamports"], 5_000_000_000)
         self.assertEqual(event["seen_at"], 100)
 
     def test_inclusive_thresholds_and_out_of_range_buys(self):
-        self.assertEqual(MIN_WHALE_LAMPORTS, 10_000_000_000)
-        self.assertEqual(MAX_WHALE_LAMPORTS, 1_000_000_000_000)
+        self.assertEqual(MIN_WHALE_LAMPORTS, 1_000_000_000)
+        self.assertEqual(MAX_WHALE_LAMPORTS, 10_000_000_000)
         self.assertIsNotNone(parse_whale_buy(notification(sol_spend=MIN_WHALE_LAMPORTS)))
         self.assertIsNotNone(parse_whale_buy(notification(sol_spend=MAX_WHALE_LAMPORTS)))
         self.assertIsNone(parse_whale_buy(notification(sol_spend=MIN_WHALE_LAMPORTS - 1)))
@@ -165,20 +165,20 @@ class WhaleSignalTests(unittest.IsolatedAsyncioTestCase):
 
     def test_usdc_buys_use_the_same_live_sol_equivalent_range(self):
         lower = parse_whale_buy(
-            usdc_notification(2_000_000_000), sol_usd_price=200.0)
+            usdc_notification(200_000_000), sol_usd_price=200.0)
         upper = parse_whale_buy(
-            usdc_notification(200_000_000_000), sol_usd_price=200.0)
+            usdc_notification(2_000_000_000), sol_usd_price=200.0)
         self.assertEqual(lower["quote_asset"], "USDC")
-        self.assertEqual(lower["quote_amount"], 2_000.0)
-        self.assertEqual(lower["sol_equivalent"], 10.0)
+        self.assertEqual(lower["quote_amount"], 200.0)
+        self.assertEqual(lower["sol_equivalent"], 1.0)
         self.assertIsNone(lower["sol_lamports"])
-        self.assertEqual(upper["sol_equivalent"], 1_000.0)
+        self.assertEqual(upper["sol_equivalent"], 10.0)
         self.assertEqual(lower["sol_price_usd"], 200.0)
 
         self.assertIsNone(parse_whale_buy(
-            usdc_notification(1_999_990_000), sol_usd_price=200.0))
+            usdc_notification(199_999_000), sol_usd_price=200.0))
         self.assertIsNone(parse_whale_buy(
-            usdc_notification(200_000_010_000), sol_usd_price=200.0))
+            usdc_notification(2_000_010_000), sol_usd_price=200.0))
 
     def test_usdc_signals_fail_closed_without_a_valid_sol_usd_price(self):
         payload = usdc_notification(2_000_000_000)
@@ -197,8 +197,8 @@ class WhaleSignalTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(parse_whale_buy(payload, sol_usd_price=200.0))
 
     def test_created_token_account_rent_is_not_counted_as_whale_spend(self):
-        event = parse_whale_buy(notification(sol_spend=30_000_000_000, new_token_account=True))
-        self.assertEqual(event["sol_lamports"], 30_000_000_000)
+        event = parse_whale_buy(notification(sol_spend=5_000_000_000, new_token_account=True))
+        self.assertEqual(event["sol_lamports"], 5_000_000_000)
 
     def test_rejects_failed_unsupported_sell_and_ambiguous_transactions(self):
         self.assertIsNone(parse_whale_buy(notification(err={"InstructionError": [0, "failed"]})))
@@ -276,9 +276,9 @@ class WhaleSignalTests(unittest.IsolatedAsyncioTestCase):
         price_provider = AsyncMock(return_value={"SOL": 200.0})
         stream = HeliusWhaleStream(
             "unit-test-key", on_signal=signal.append, sol_price_provider=price_provider)
-        first = usdc_notification(2_000_000_000)["params"]["result"]
+        first = usdc_notification(200_000_000)["params"]["result"]
         second = usdc_notification(
-            4_000_000_000, signature=SIGNATURE_2)["params"]["result"]
+            400_000_000, signature=SIGNATURE_2)["params"]["result"]
 
         await stream._fetch_transaction(FakeHttpSession({"result": first}), SIGNATURE)
         await stream._fetch_transaction(FakeHttpSession({"result": second}), SIGNATURE_2)
@@ -286,9 +286,9 @@ class WhaleSignalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(price_provider.await_count, 1)
         self.assertEqual(len(signal), 2)
         self.assertEqual(signal[0]["quote_asset"], "USDC")
-        self.assertEqual(signal[0]["quote_amount"], 2_000.0)
-        self.assertEqual(signal[1]["quote_amount"], 4_000.0)
-        self.assertEqual(stream.snapshot()["recent_signals"][0]["sol"], 20.0)
+        self.assertEqual(signal[0]["quote_amount"], 200.0)
+        self.assertEqual(signal[1]["quote_amount"], 400.0)
+        self.assertEqual(stream.snapshot()["recent_signals"][0]["sol"], 2.0)
 
     async def test_usdc_transaction_without_price_provider_is_skipped(self):
         signal = []
@@ -312,14 +312,14 @@ class WhaleSignalTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("check the Render secret", stream.snapshot()["message"])
 
     def test_lookup_table_program_address_is_resolved_before_filtering(self):
-        payload = notification(sol_spend=20_000_000_000)
+        payload = notification(sol_spend=5_000_000_000)
         value = payload["params"]["result"]
         message = value["transaction"]["message"]
         message["accountKeys"] = [message["accountKeys"][0], message["accountKeys"][2]]
         message["instructions"] = [{"programIdIndex": 2}]
         value["meta"]["loadedAddresses"] = {"writable": [], "readonly": [PUMP]}
         value["meta"]["preBalances"] = [200_000_000_000, 2_039_280, 0]
-        value["meta"]["postBalances"] = [179_999_995_000, 2_039_280, 0]
+        value["meta"]["postBalances"] = [194_999_995_000, 2_039_280, 0]
         value["meta"]["preTokenBalances"][0]["accountIndex"] = 1
         value["meta"]["postTokenBalances"][0]["accountIndex"] = 1
         self.assertIsNotNone(parse_whale_buy(payload))
@@ -341,7 +341,7 @@ class WhaleSignalTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await stream.handle_notification(payload))
         self.assertEqual(len(seen), 1)
         self.assertEqual(stream.snapshot()["signals_seen"], 1)
-        self.assertEqual(stream.snapshot()["recent_signals"][0]["sol"], 20.0)
+        self.assertEqual(stream.snapshot()["recent_signals"][0]["sol"], 5.0)
 
 
 if __name__ == "__main__":

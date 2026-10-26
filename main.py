@@ -1836,7 +1836,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div id="discovery-status" class="section-note">Candidate scan pending.</div>
                 <button class="action-btn" id="scan-candidates" onclick="scanCandidates()">Scan candidates</button>
                 <details><summary>Candidate shortlist</summary><div id="candidate-list" class="section-note" style="white-space:pre-line">No verified shortlist yet.</div></details>
-                <details><summary>Whale buys · 10–1,000 SOL equivalent (SOL/USDC)</summary><div id="whale-signal-status" class="section-note" style="white-space:pre-line">Checking Helius stream...</div></details>
+                <details><summary>Whale buys · 1–10 SOL equivalent (SOL/USDC)</summary><div id="whale-signal-status" class="section-note" style="white-space:pre-line">Checking Helius stream...</div></details>
                 <p id="sniper-pnl" class="section-note">Realized SOL PnL: loading...</p>
             </div>
 
@@ -3979,7 +3979,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                         item.mint+' — '+(item.reasons||[]).join('; '));
                     document.getElementById('whale-signal-status').textContent=(whale.message||'Whale stream status unavailable.')
                         +'\nSignal DEXs: Pump.fun, PumpSwap, Raydium, Meteora and Orca; confirmed BUY/SWAP logs are checked.'
-                        +'\nWhale range: 10–1,000 SOL equivalent. USDC buys use a fresh SOL/USD price; if unavailable, they are skipped.'
+                        +'\nWhale range: 1–10 SOL equivalent. USDC buys use a fresh SOL/USD price; if unavailable, they are skipped.'
                         +'\nSignals are not orders; transactions and candidates must pass the existing safety screen.'
                         +'\n'+whaleQueue
                         +(whaleRejections.length?'\nWhy recent whale candidates were rejected:\n'+whaleRejections.join('\n'):'')

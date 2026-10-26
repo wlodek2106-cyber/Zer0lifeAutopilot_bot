@@ -14,8 +14,8 @@ from solders.signature import Signature
 SOL_MINT = "So11111111111111111111111111111111111111112"
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 USDC_DECIMALS = 6
-MIN_WHALE_LAMPORTS = 10_000_000_000
-MAX_WHALE_LAMPORTS = 1_000_000_000_000
+MIN_WHALE_LAMPORTS = 1_000_000_000
+MAX_WHALE_LAMPORTS = 10_000_000_000
 SOL_PRICE_CACHE_SECONDS = 30
 HELIUS_WS = "wss://mainnet.helius-rpc.com/"
 HELIUS_RPC = "https://mainnet.helius-rpc.com/"
@@ -154,7 +154,7 @@ def _program_ids(message, meta, account_keys):
 
 def parse_whale_buy(notification, observed_at=None, sol_usd_price=None, *,
                     allow_unpriced_usdc=False):
-    """Parse a confirmed DEX buy sized at 10–1,000 SOL or its USDC equivalent.
+    """Parse a confirmed DEX buy sized at 1–10 SOL or its USDC equivalent.
 
     SOL spend is the fee- and new-token-account-rent-adjusted net debit of the
     fee payer. USDC spend is converted using a fresh SOL/USD reference. The
@@ -384,7 +384,7 @@ class HeliusWhaleStream:
                 return "Connected to standard logsSubscribe. " + detail
             return ("Connected to Helius standard logsSubscribe for confirmed BUY/SWAP logs from "
                     + ", ".join(WHALE_SIGNAL_PROGRAMS)
-                    + ". SOL and USDC buys use the same 10–1,000 SOL-equivalent threshold. "
+                    + ". SOL and USDC buys use the same 1–10 SOL-equivalent threshold. "
                     "USDC checks require a fresh SOL/USD price; candidates still pass screening.")
         if self.state == "retrying":
             reason = (" " + detail) if detail else ""
