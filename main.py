@@ -3942,7 +3942,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                           +(whaleAI.message?' · '+whaleAI.message:'')
                         : '';
                     document.getElementById('ai-status').textContent=(aiConfigured?
-                        ai.model+' · '+Math.round(ai.interval_seconds/60)+' min interval'+(ai.last_analyzed_at?' · analyzed':' · connection unverified')
+                        ai.model+' · '+ai.interval_seconds+' sec interval'+(ai.last_analyzed_at?' · analyzed':' · connection unverified')
                           +(ai.last_trigger==='whale_signal'?' · whale-triggered':''):
                         'AI not connected. Operator setup required.')+whaleAIState;
                     if(ai.last_decisions)document.getElementById('ai-decisions').textContent='Last analysis: '+new Date(ai.last_analyzed_at*1000).toLocaleString('en-GB')+'\n'+Object.entries(ai.last_decisions).map(([mode,d])=>(mode==='main'?'USDC':'SOL')+': '+d.action+' '+((ai.asset_labels||{})[d.symbol]||d.symbol||'')+' — '+normalizeAnalysisText(d.reason)).join('\n');

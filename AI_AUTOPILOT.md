@@ -33,8 +33,10 @@ OpenAI API billing is separate and belongs to the operator.
 Optional variables:
 
 - `OPENAI_MODEL`: defaults to `gpt-4.1-mini`; provider access must be checked live.
-- `AI_INTERVAL_SECONDS`: defaults to 900; minimum 300.
-- `AI_MAX_CALLS_PER_DAY`: defaults to 96; hard maximum 288.
+- AI analysis interval is fixed at 90 seconds to stay below the
+  120-second execution-decision freshness limit.
+- The service-wide daily AI-call cap is fixed at 960 attempts. At a 90-second
+  interval, the service can use about 960 calls per UTC day.
 
 The quota counts attempts (including failed calls), is persisted, applies service-wide,
 and resets at UTC midnight. Results are shared across users and both modes.
@@ -48,7 +50,9 @@ It does not construct, sign or submit a swap.
 
 Then test readiness, allocate operator SOL fee reserve if needed, save personal
 purchase sizes, and start modes manually. Defaults: 1 USDC and 0.005 SOL.
-First analysis can HOLD while prices warm up; AI refresh interval is 15 minutes.
+First analysis can HOLD while prices warm up; AI refreshes every 90 seconds.
+This cadence can increase provider costs relative to the previous 15-minute interval; use the
+provider's separate spending limit because this call-count cap is not a dollar budget.
 
 ## Execution guards
 

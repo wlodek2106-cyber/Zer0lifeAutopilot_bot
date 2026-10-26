@@ -72,8 +72,11 @@ def configuration():
     return {
         "configured": bool(os.getenv("OPENAI_API_KEY")),
         "model": os.getenv("OPENAI_MODEL", "gpt-4.1"),
-        "interval_seconds": max(300, int(os.getenv("AI_INTERVAL_SECONDS", "900"))),
-        "max_calls_per_day": max(1, min(288, int(os.getenv("AI_MAX_CALLS_PER_DAY", "96")))),
+        # Execution proposals expire after 120 seconds. Keep this cadence and
+        # service-wide quota fixed so a legacy Render override cannot silently
+        # restore the 15-minute schedule or the old 96-call daily cap.
+        "interval_seconds": 90,
+        "max_calls_per_day": 960,
     }
 
 

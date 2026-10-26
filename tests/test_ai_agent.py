@@ -164,6 +164,20 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-4.1-mini"}):
             self.assertEqual(ai_decisions.configuration()["model"], "gpt-4.1-mini")
 
+    async def test_analysis_refresh_defaults_before_decision_expiry(self):
+        config = ai_decisions.configuration()
+        self.assertEqual(config["interval_seconds"], 90)
+        self.assertEqual(config["max_calls_per_day"], 960)
+
+    async def test_legacy_environment_overrides_cannot_restore_stale_schedule(self):
+        with patch.dict(os.environ, {
+            "AI_INTERVAL_SECONDS": "900",
+            "AI_MAX_CALLS_PER_DAY": "96",
+        }):
+            config = ai_decisions.configuration()
+        self.assertEqual(config["interval_seconds"], 90)
+        self.assertEqual(config["max_calls_per_day"], 960)
+
     async def apply(self, snapshot=None, prices=None, positions=None):
         await self.service.apply_ai_decision(None, 101, self.service.ledger.settings(101),
             positions or [], prices or self.prices, snapshot or self.snapshot)
