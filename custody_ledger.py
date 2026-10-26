@@ -171,6 +171,11 @@ class CustodyLedger:
                     last_error TEXT);
                 CREATE INDEX IF NOT EXISTS custody_trade_notifications_queue
                     ON custody_trade_notifications(state,next_attempt,operation_id);
+                CREATE TABLE IF NOT EXISTS custody_exit_retries (
+                    position_id TEXT PRIMARY KEY REFERENCES custody_positions(id),
+                    attempts INTEGER NOT NULL,
+                    next_attempt INTEGER NOT NULL,
+                    last_error TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS custody_monthly_trading_fee_consents (
                     uid INTEGER PRIMARY KEY REFERENCES custody_users(uid),
                     accepted_at INTEGER NOT NULL,
@@ -1367,13 +1372,25 @@ class CustodyLedger:
                 info = json.loads(row["metadata"])
                 exit_reason = info.get("exit_reason")
                 if exit_reason in ("STOP_LOSS", "TRAILING_STOP"):
-                    db.execute("""INSERT OR IGNORE INTO custody_trade_notifications
+                    # Each retry has a new operation ID. Deduplicate by position,
+                    # not operation, including already-delivered/ambiguous alerts.
+                    recent_alert = db.execute("""SELECT 1
+                        FROM custody_trade_notifications n
+                        JOIN custody_operations o ON o.id=n.operation_id
+                        WHERE o.position_id=? AND o.uid=? AND o.kind='SELL'
+                        AND json_extract(n.payload,'$.kind') IN
+                            ('STOP_LOSS_FAILED','TRAILING_STOP_FAILED')
+                        AND o.created_at>=? LIMIT 1""",
+                        (row["position_id"], row["uid"], int(time.time()) - 900)).fetchone()
+                    if not recent_alert:
+                        db.execute("""INSERT OR IGNORE INTO custody_trade_notifications
                         (operation_id,uid,payload) VALUES(?,?,?)""",
                         (oid, row["uid"], json.dumps({
                             "kind": "TRAILING_STOP_FAILED" if exit_reason == "TRAILING_STOP"
                                 else "STOP_LOSS_FAILED",
                             "symbol": info.get("symbol", "TOKEN"),
                             "signature": row["signature"],
+                            "failure_reason": row["failure_reason"] or str(failure_reason or "")[:300],
                         }, separators=(",", ":"))))
             if recovery_audit is not None:
                 db.execute("""CREATE TABLE IF NOT EXISTS custody_operation_recovery_audit(
@@ -1450,6 +1467,25 @@ class CustodyLedger:
                 WHERE operation_id=? AND delivered_at IS NULL""",
                 (now if delivered else None, now + retry_after,
                  None if delivered else error, oid))
+
+    def exit_retry_due(self, position_id, now):
+        with self.db() as db:
+            row = db.execute("SELECT next_attempt FROM custody_exit_retries WHERE position_id=?",
+                             (position_id,)).fetchone()
+            return row is None or row["next_attempt"] <= now
+
+    def record_exit_failure(self, position_id, reason, now):
+        with self.db() as db:
+            row = db.execute("SELECT attempts FROM custody_exit_retries WHERE position_id=?",
+                             (position_id,)).fetchone()
+            attempts = (row["attempts"] if row else 0) + 1
+            delay = min(300, 20 * 2 ** min(attempts - 1, 4))
+            db.execute("""INSERT INTO custody_exit_retries
+                (position_id,attempts,next_attempt,last_error) VALUES(?,?,?,?)
+                ON CONFLICT(position_id) DO UPDATE SET attempts=excluded.attempts,
+                next_attempt=excluded.next_attempt,last_error=excluded.last_error""",
+                (position_id, attempts, now + delay, str(reason)[:300]))
+            return delay
 
     def trade_notifications(self, now):
         with self.db() as db:

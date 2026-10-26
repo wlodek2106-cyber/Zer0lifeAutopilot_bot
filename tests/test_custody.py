@@ -12,7 +12,7 @@ import uuid
 from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlencode
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
@@ -618,6 +618,29 @@ class LedgerTests(unittest.TestCase):
                       runtime.CustodyRuntime.trade_notification_text(payload))
         self.assertEqual(self.ledger.positions(101, "OPEN")[0]["id"], position["id"])
 
+    def test_failed_exit_retries_do_not_spam_and_backoff_survives_restart(self):
+        buy = self.reserve(uid=101, kind="BUY", asset=USDC, raw=1_000_000,
+            info={"output_asset": "retry-mint", "symbol": "BOME", "decimals": 6})
+        self.complete(buy, spent=1_000_000, fee=0, received=2_500_000)
+        position = self.ledger.positions(101, "OPEN")[0]
+        now = int(time.time())
+        for attempt in range(4):
+            sale = self.reserve(uid=101, kind="SELL", asset="retry-mint", raw=position["raw"],
+                info={"output_asset": USDC, "exit_reason": "STOP_LOSS", "symbol": "BOME"},
+                position=position["id"])
+            self.ledger.fail(sale["id"], failure_reason="Jupiter quote unavailable (HTTP 429).")
+            delay = self.ledger.record_exit_failure(position["id"], "HTTP 429", now)
+            self.assertEqual(delay, 20 * 2 ** attempt)
+        events = [json.loads(e["payload"]) for e in self.ledger.trade_notifications(now)
+                  if json.loads(e["payload"])["kind"] == "STOP_LOSS_FAILED"]
+        self.assertEqual(len(events), 1)
+        self.assertIn("HTTP 429", events[0]["failure_reason"])
+        reopened = CustodyLedger(self.path)
+        self.assertFalse(reopened.exit_retry_due(position["id"], now + 159))
+        self.assertTrue(reopened.exit_retry_due(position["id"], now + 160))
+        self.assertEqual(reopened.positions(101, "OPEN")[0]["id"], position["id"])
+        self.assertTrue(reopened.audit())
+
     def test_trailing_stop_notification_is_preserved_and_says_position_remains_open_on_failure(self):
         self.credit(101, SOL, 20_000_000)
         buy = self.reserve(uid=101, kind="BUY", asset=SOL, raw=5_000_000,
@@ -816,6 +839,55 @@ class LedgerTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_failed_protective_exit_does_not_abort_other_participants(self):
+        users = [{"uid": uid, "trading": True, "sniper_trading": True}
+                 for uid in (101, 202)]
+        positions = {uid: [{"id": f"position-{uid}", "uid": uid, "asset": "mint",
+            "funding_asset": USDC, "symbol": "TEST", "raw": 100,
+            "decimals": 6, "cost_raw": 100}] for uid in (101, 202)}
+        self.service.reconcile = AsyncMock()
+        self.service.process_close_queues = AsyncMock(return_value=False)
+        self.service.scan_deposits = AsyncMock()
+        self.service.process_due_monthly_trading_fees = AsyncMock()
+        self.service.poll_discovery = Mock()
+        self.service.current_prices = AsyncMock(return_value={})
+        self.service.poll_ai = Mock(return_value=None)
+        self.service.exit_reason = Mock(return_value="STOP_LOSS")
+        self.service.trade = AsyncMock(side_effect=[
+            legacy.WalletError("Jupiter quote unavailable (HTTP 429)."),
+            {"state": "SUBMITTED"}])
+        with patch.object(self.ledger, "active_users", return_value=users), \
+             patch.object(self.ledger, "settings", side_effect=lambda uid: users[uid == 202]), \
+             patch.object(self.ledger, "positions", side_effect=lambda uid, state: positions[uid]), \
+             patch.object(self.ledger, "exit_retry_due", return_value=True), \
+             patch.object(self.ledger, "record_exit_failure", return_value=20) as retry, \
+             patch.object(runtime.activity_log, "record_event"):
+            await self.service.worker_cycle(None)
+        self.assertEqual(self.service.trade.await_count, 2)
+        self.assertEqual(retry.call_args.args[0], "position-101")
+
+    async def test_protective_retry_wait_blocks_new_buys_not_other_exit_checks(self):
+        user = {"uid": 101, "trading": True, "sniper_trading": True}
+        position = {"id": "position-101", "asset": "mint", "symbol": "TEST",
+                    "funding_asset": USDC}
+        self.service.reconcile = AsyncMock()
+        self.service.process_close_queues = AsyncMock(return_value=False)
+        self.service.scan_deposits = AsyncMock()
+        self.service.process_due_monthly_trading_fees = AsyncMock()
+        self.service.poll_discovery = Mock()
+        self.service.current_prices = AsyncMock(return_value={})
+        self.service.poll_ai = Mock(return_value={"created_at": int(time.time())})
+        self.service.exit_reason = Mock(return_value="STOP_LOSS")
+        self.service.trade = AsyncMock()
+        self.service.apply_ai_decision = AsyncMock()
+        with patch.object(self.ledger, "active_users", return_value=[user]), \
+             patch.object(self.ledger, "settings", return_value=user), \
+             patch.object(self.ledger, "positions", return_value=[position]), \
+             patch.object(self.ledger, "exit_retry_due", return_value=False):
+            await self.service.worker_cycle(None)
+        self.service.trade.assert_not_awaited()
+        self.service.apply_ai_decision.assert_not_awaited()
+
     async def test_monthly_fee_requires_explicit_consent_and_charges_exact_current_sol_quote(self):
         invoice = self.ledger.invoice(202, SOL, 200_000_000)
         self.ledger.credit_deposit(
@@ -2664,6 +2736,32 @@ class SimulationTests(unittest.IsolatedAsyncioTestCase):
         after = [self.native(42_955_720), self.token_account(USDC, 10_000_000), self.token_account(mint, 2_600_000)]
         self.assertTrue(await self.simulate(before, after, asset=SOL, raw=5_000_000, kind="BUY",
             info={"output_asset": mint, "minimum_out": 2_500_000}, versioned=True))
+
+    async def test_exit_allows_unchanged_uncatalogued_token_2022_but_not_its_spend(self):
+        unrelated_mint = str(Keypair().pubkey())
+        sold_mint = str(Keypair().pubkey())
+        unrelated = self.token_account(unrelated_mint, 25, program=runtime.TOKEN_2022,
+                                       immutable_owner=True)
+        before = [self.native(50_000_000), self.token_account(sold_mint, 1_000_000),
+                  unrelated]
+        after = [self.native(54_995_000), self.token_account(sold_mint, 0),
+                 copy.deepcopy(unrelated)]
+        self.assertTrue(await self.simulate(before, after, asset=sold_mint,
+            raw=1_000_000, kind="SELL",
+            info={"output_asset": SOL, "minimum_out": 4_900_000}, versioned=True))
+        after[2] = self.token_account(unrelated_mint, 24, program=runtime.TOKEN_2022,
+                                     immutable_owner=True)
+        with self.assertRaisesRegex(legacy.WalletError, "unexpected token program"):
+            await self.simulate(before, after, asset=sold_mint,
+                raw=1_000_000, kind="SELL",
+                info={"output_asset": SOL, "minimum_out": 4_900_000}, versioned=True)
+        # Even a rent-only change is not allowed to bypass validation.
+        after[2] = copy.deepcopy(unrelated)
+        after[2]["lamports"] += 1
+        with self.assertRaisesRegex(legacy.WalletError, "unexpected token program"):
+            await self.simulate(before, after, asset=sold_mint,
+                raw=1_000_000, kind="SELL",
+                info={"output_asset": SOL, "minimum_out": 4_900_000}, versioned=True)
 
     async def test_otc_token_2022_buy_accepts_only_immutable_owner_account(self):
         mint = "MukLDtJ8Cx9DxLbeyLRSWPSposTMWuwHANbuaudpump"

@@ -1790,6 +1790,13 @@ class CustodyRuntime(WalletRuntime):
                 continue
             mint = str(Pubkey.from_bytes((new_data or old_data)[:32]))
             program = new_program or old_program
+            # The shared wallet can contain tokens absent from today's catalog.
+            # Do not apply the catalog's legacy-program fallback to an unrelated
+            # account that the transaction provably leaves entirely unchanged.
+            # Relevant mints and every changed account still fail closed below.
+            if (mint not in {row["asset"], info.get("output_asset"), WRAPPED_SOL}
+                    and self.same_account_snapshot(old, new)):
+                continue
             if program != str(self.token_program_for_mint(mint)):
                 raise WalletError("Simulation used an unexpected token program for a mint.")
             old_raw = int.from_bytes(old_data[64:72], "little") if old_data else 0
@@ -2385,7 +2392,7 @@ class CustodyRuntime(WalletRuntime):
             async with session.get("https://api.jup.ag/swap/v1/quote", headers=headers, params={
                 "inputMint": mint_in, "outputMint": mint_out, "amount": raw, "slippageBps": 40}) as response:
                 if response.status != 200:
-                    raise WalletError("Jupiter quote недоступен.")
+                    raise WalletError(f"Jupiter quote unavailable (HTTP {response.status}).")
                 quote = await response.json()
             if (quote.get("inputMint") != mint_in or quote.get("outputMint") != mint_out
                     or int(quote.get("inAmount", 0)) != raw or int(quote.get("slippageBps", 0)) > 40
@@ -2403,7 +2410,8 @@ class CustodyRuntime(WalletRuntime):
                         headers=headers, json=jupiter_swap_instructions_payload(quote, self.wallet),
                         timeout=aiohttp.ClientTimeout(total=8)) as response:
                     if response.status != 200:
-                        raise WalletError("Jupiter swap instructions are unavailable.")
+                        raise WalletError(
+                            f"Jupiter swap instructions unavailable (HTTP {response.status}).")
                     return await response.json()
 
             instructions_data, tip_account = await asyncio.gather(
@@ -2902,6 +2910,11 @@ class CustodyRuntime(WalletRuntime):
             reason = "Trailing stop" if kind == "TRAILING_STOP_FAILED" else "Stop-loss"
             text = (f"Zer0Life AI Trader\n{reason} triggered for {symbol}, "
                     "but the sale was not confirmed. The position remains open.")
+            failure = activity_log.safe_failure_reason(payload.get("failure_reason"))
+            if failure:
+                text += f"\nCause: {failure}"
+            text += ("\nAutomatic exit checks continue with bounded retry delays. "
+                     "An unresolved transaction must be checked before another sale is sent.")
             if (isinstance(signature, str) and 64 <= len(signature) <= 100
                     and all(c in "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
                             for c in signature)):
@@ -3086,6 +3099,7 @@ class CustodyRuntime(WalletRuntime):
                 positions = self.ledger.positions(uid, "OPEN")
                 target = None
                 target_reason = None
+                protection_waiting = False
                 for position in positions:
                     mode_enabled = (current["sniper_trading"] if position["funding_asset"] == SOL
                                     else current["trading"])
@@ -3107,14 +3121,33 @@ class CustodyRuntime(WalletRuntime):
                     reason = self.exit_reason(position, prices, metrics=metrics,
                         snapshot_created_at=exit_snapshot.get("created_at")) if mode_enabled else None
                     if reason:
+                        if not self.ledger.exit_retry_due(position["id"], int(time.time())):
+                            protection_waiting = True
+                            continue
                         target, target_reason = position, reason
                         break
                 if target:
-                    await self.trade(session, uid, target["asset"], target["funding_asset"],
-                        target["raw"], "SELL", {"output_asset": target["funding_asset"],
-                            "exit_reason": target_reason, "symbol": target["symbol"]},
-                        target["id"], manual=False)
-                elif snapshot:
+                    try:
+                        sale = await self.trade(session, uid, target["asset"], target["funding_asset"],
+                            target["raw"], "SELL", {"output_asset": target["funding_asset"],
+                                "exit_reason": target_reason, "symbol": target["symbol"]},
+                            target["id"], manual=False)
+                        if sale and sale.get("state") == "FAILED":
+                            raise WalletError(sale.get("failure_reason") or
+                                              "The network confirmed a failed sale.")
+                    except Exception as exc:
+                        reason = operation_failure_reason(exc)
+                        delay = self.ledger.record_exit_failure(
+                            target["id"], reason, int(time.time()))
+                        activity_log.record_event(self, uid, f"exit-error-{uuid.uuid4()}",
+                            "protective_exit_retry",
+                            f"Protective sale has no confirmed success: {reason}. "
+                            f"Next retry no sooner than {delay} seconds; unresolved transactions "
+                            "remain locked against resubmission.")
+                        # One participant's failed exit must not abort exit checks
+                        # for every later participant in this worker cycle.
+                        continue
+                elif snapshot and not protection_waiting:
                     await self.apply_ai_decision(session, uid, current, positions, prices, snapshot)
 
     async def worker(self):
