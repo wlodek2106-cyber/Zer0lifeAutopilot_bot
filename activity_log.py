@@ -114,7 +114,7 @@ def safe_failure_reason(value):
 def report(runtime, uid):
     """Read-only diagnostics. Never invokes AI, quotes, signing or sendTransaction."""
     settings = runtime.ledger.settings(uid)
-    latest = runtime.ledger.ai_latest()
+    latest = runtime.ledger.ai_latest(trigger="scheduled")
     config = ai_decisions.configuration()
     active = settings["trading"] or settings["sniper_trading"]
     pending = runtime.pending()

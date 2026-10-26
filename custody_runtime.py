@@ -545,7 +545,8 @@ class CustodyRuntime(WalletRuntime):
                      if symbol in current_codes or discovery and discovery.entry_allowed(symbol)]
         sniper_assets = list(dict.fromkeys(preferred + [row["code"] for row in candidates]))[:8]
         sniper_assets += sorted(self.held_sniper_symbols())[:32]
-        return {"main": getattr(self, "main_symbols", [s for s in CORE_SYMBOLS if s in self.watchlist]),
+        return {"main": [] if whale_symbols else getattr(
+                    self, "main_symbols", [s for s in CORE_SYMBOLS if s in self.watchlist]),
                 "sniper": list(dict.fromkeys(sniper_assets)) if discovery else self.sniper_symbols}
 
     async def ai_snapshot(self, session, prices, whale_symbols=None):
@@ -555,9 +556,10 @@ class CustodyRuntime(WalletRuntime):
         whale_symbols = list(dict.fromkeys(symbol for symbol in (whale_symbols or ())
                                            if isinstance(symbol, str)))[:8]
         whale_triggered = bool(whale_symbols)
+        trigger = "whale_signal" if whale_triggered else "scheduled"
         min_interval = WHALE_AI_COOLDOWN_SECONDS if whale_triggered else config["interval_seconds"]
         async with self.ai_lock:
-            latest = self.ledger.ai_latest()
+            latest = self.ledger.ai_latest(trigger=trigger)
             if latest and time.time() - latest["created_at"] < min_interval:
                 if whale_triggered:
                     raise WalletError("Whale-triggered AI analysis is waiting for its 60-second request limit.", 429)
@@ -609,9 +611,14 @@ class CustodyRuntime(WalletRuntime):
             if whale_triggered and any(symbol not in market for symbol in whale_symbols):
                 raise WalletError("Whale candidate has no fresh market price; AI analysis was not sent.", 409)
             try:
-                aid = self.ledger.ai_allow_call(min_interval, config["max_calls_per_day"])
+                aid = self.ledger.ai_allow_call(min_interval, config["max_calls_per_day"], trigger=trigger)
                 decisions = await ai_decisions.analyze(
                     session, market, universes, screening, main_context, sniper_context)
+                if whale_triggered:
+                    decisions["main"] = {
+                        "action": "HOLD", "symbol": None,
+                        "reason": "Helius signals apply only to Meme Sniper. Core uses its scheduled chart analysis.",
+                    }
             except LedgerError as exc:
                 raise WalletError(str(exc), 429) from None
             except ai_decisions.AIError as exc:
@@ -623,7 +630,7 @@ class CustodyRuntime(WalletRuntime):
                       "main_market_context": ai_decisions.sanitize_main_context(main_context, universes["main"]),
                       "sniper_market_context": ai_decisions.sanitize_main_context(
                           sniper_context, universes["sniper"]),
-                      "trigger": "whale_signal" if whale_triggered else "scheduled",
+                      "trigger": trigger,
                       "whale_symbols": whale_symbols if whale_triggered else []}
             self.ledger.ai_record(aid, record)
             return {"id": aid, "created_at": int(time.time()), **record}
@@ -666,9 +673,17 @@ class CustodyRuntime(WalletRuntime):
     def ai_status(self):
         latest = self.ledger.ai_latest()
         latest_record = json.loads(latest["decisions"]) if latest else {}
+        scheduled = self.ledger.ai_latest(trigger="scheduled")
+        scheduled_record = json.loads(scheduled["decisions"]) if scheduled else {}
+        decisions = dict(latest_record.get("decisions") or {})
+        if scheduled_record.get("decisions"):
+            decisions["main"] = scheduled_record["decisions"]["main"]
         return {**ai_decisions.configuration(), "last_analyzed_at": latest["created_at"] if latest else None,
-                "last_decisions": latest_record.get("decisions") if latest else None,
-                "chart_context": latest_record.get("main_market_context", {}) if latest else {},
+                "last_decisions": decisions or None,
+                "decision_created_at": {
+                    "main": scheduled["created_at"] if scheduled else None,
+                    "sniper": latest["created_at"] if latest else None},
+                "chart_context": scheduled_record.get("main_market_context", {}),
                 "last_trigger": latest_record.get("trigger", "scheduled") if latest else None,
                 "sniper_assets": self.ai_universes()["sniper"],
                 "asset_labels": {s: info.get("label", s) + (" · "+info["mint"][:4]+"…"+info["mint"][-4:]
@@ -708,13 +723,17 @@ class CustodyRuntime(WalletRuntime):
                 self.ai_activity_error = ("Last AI refresh failed. Displayed decisions may be from an earlier "
                                           "analysis; inspect their timestamps.")
             self.ai_task = None
-        latest = self.ledger.ai_latest()
-        if latest and time.time() - latest["created_at"] < config["interval_seconds"]:
-            return {**latest, **json.loads(latest["decisions"])}
-        if self.ai_task is None:
+        latest = self.ledger.ai_latest(trigger="scheduled")
+        if (not latest or time.time() - latest["created_at"] >= config["interval_seconds"]) and self.ai_task is None:
             self.ai_task = asyncio.create_task(self.background_ai(dict(prices)))
             self.ai_task.add_done_callback(lambda task: task.exception() if not task.cancelled() else None)
-        return None
+        whale = self.ledger.ai_latest(trigger="whale_signal")
+        if not latest:
+            return {**whale, **json.loads(whale["decisions"])} if whale else None
+        snapshot = {**latest, **json.loads(latest["decisions"])}
+        if whale and whale["created_at"] > latest["created_at"]:
+            snapshot["sniper_snapshot"] = {**whale, **json.loads(whale["decisions"])}
+        return snapshot
 
     def owner(self, request):
         user = request["telegram_user"]
@@ -3080,11 +3099,13 @@ class CustodyRuntime(WalletRuntime):
                                 position["peak_price"] = peak
                     chart_key = ("sniper_market_context" if position["funding_asset"] == SOL
                                  else "main_market_context")
-                    chart_context = ((snapshot or {}).get(chart_key, {})
+                    exit_snapshot = ((snapshot or {}).get("sniper_snapshot", snapshot or {})
+                                     if position["funding_asset"] == SOL else snapshot or {})
+                    chart_context = (exit_snapshot.get(chart_key, {})
                                      if mode_enabled else {})
                     metrics = chart_context.get(position["symbol"], {})
                     reason = self.exit_reason(position, prices, metrics=metrics,
-                        snapshot_created_at=(snapshot or {}).get("created_at")) if mode_enabled else None
+                        snapshot_created_at=exit_snapshot.get("created_at")) if mode_enabled else None
                     if reason:
                         target, target_reason = position, reason
                         break
@@ -3177,23 +3198,17 @@ class CustodyRuntime(WalletRuntime):
 
     async def apply_ai_decision(self, session, uid, settings, positions, prices, snapshot):
         # No provider output can select an amount, wallet, owner, or non-allowlisted mint.
-        ai_decisions.validate_decisions(snapshot["decisions"], snapshot.get("universes", self.ai_universes()))
-        if not execution_policy.fresh(snapshot["created_at"], time.time(), execution_policy.DECISION_SECONDS):
-            for mode, flag in (("main", "trading"), ("sniper", "sniper_trading")):
-                if settings[flag]:
-                    activity_log.observe(self, uid, snapshot, mode)
-                    activity_log.record(self, uid, snapshot, mode, "stale",
-                        "SKIPPED: AI decision is older than 120 seconds. Waiting for a fresh analysis.")
-                    self.record_execution_check(uid, execution_policy.deny("stale",
-                        "BLOCKED: AI decision timestamp is stale or invalid."),
-                        "proposal", snapshot["decisions"][mode]["action"],
-                        snapshot["decisions"][mode]["symbol"] or "")
-            return
+        scheduled_snapshot = snapshot
         for mode, funding, flag, size_key in [
                 ("main", USDC, "trading", "order_raw"),
                 ("sniper", SOL, "sniper_trading", "sniper_order_raw")]:
             if not settings[flag]:
                 continue
+            snapshot = (scheduled_snapshot.get("sniper_snapshot", scheduled_snapshot)
+                        if mode == "sniper" else scheduled_snapshot)
+            if mode == "main" and snapshot.get("trigger") == "whale_signal":
+                continue
+            ai_decisions.validate_decisions(snapshot["decisions"], snapshot.get("universes", self.ai_universes()))
             activity_log.observe(self, uid, snapshot, mode)
             def note(code, message):
                 activity_log.record(self, uid, snapshot, mode, code, message)
@@ -3201,6 +3216,9 @@ class CustodyRuntime(WalletRuntime):
                                             "proposal", action, symbol or "")
             decision = snapshot["decisions"][mode]
             symbol, action = decision["symbol"], decision["action"]
+            if not execution_policy.fresh(snapshot["created_at"], time.time(), execution_policy.DECISION_SECONDS):
+                note("stale", "SKIPPED: AI decision is older than 120 seconds. Waiting for a fresh analysis.")
+                continue
             if (mode == "sniper" and action == "BUY" and
                     getattr(self, "discovery", None) and not self.discovery.entry_allowed(symbol)):
                 note("candidate", "SKIPPED: candidate screening is stale or the asset is no longer eligible.")

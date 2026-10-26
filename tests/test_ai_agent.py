@@ -96,6 +96,22 @@ class AILedgerTests(unittest.TestCase):
         self.assertTrue(self.ledger.ai_claim("analysis", 202, "main"))
         self.assertTrue(self.ledger.ai_claim("analysis", 101, "sniper"))
 
+    def test_whale_and_scheduled_cadences_are_separate_with_shared_daily_limit(self):
+        with patch("custody_ledger.time.time", return_value=100000):
+            scheduled = self.ledger.ai_allow_call(90, 3, trigger="scheduled")
+            self.ledger.ai_record(scheduled, {"trigger": "scheduled"})
+        with patch("custody_ledger.time.time", return_value=100060):
+            whale = self.ledger.ai_allow_call(60, 3, trigger="whale_signal")
+            self.ledger.ai_record(whale, {"trigger": "whale_signal"})
+            with self.assertRaises(LedgerError):
+                self.ledger.ai_allow_call(60, 3, trigger="whale_signal")
+        with patch("custody_ledger.time.time", return_value=100090):
+            self.ledger.ai_allow_call(90, 3, trigger="scheduled")
+            self.assertEqual(self.ledger.ai_latest(trigger="scheduled")["id"], scheduled)
+            self.assertEqual(self.ledger.ai_latest(trigger="whale_signal")["id"], whale)
+            with self.assertRaises(LedgerError):
+                self.ledger.ai_allow_call(60, 3, trigger="whale_signal")
+
     def test_restart_disables_both_modes_preserving_funds(self):
         self.ledger.settings(101, enabled=True, sniper_enabled=True)
         self.ledger.restart_pause()
@@ -151,7 +167,8 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
             "prices": self.prices.copy(), "samples": {"SOL": 5, "WIF": 5},
             "main_market_context": {"SOL": {
                 "change_m5_pct": 0.8, "change_h1_pct": 1.5, "change_h6_pct": 0.2,
-                "buys_m5": 8, "sells_m5": 4, "chart_ready": 1, "chart_buy_setup": 1}},
+                "buys_m5": 8, "sells_m5": 4, "chart_ready": 1, "chart_buy_setup": 1,
+                "chart_trend_h1": 1}},
             "sniper_market_context": {"WIF": {"chart_ready": 1, "chart_buy_setup": 1,
                 "change_m5_pct": 0.8, "change_h1_pct": 1.2, "change_h6_pct": -4.9}},
             "decisions": {"main": {"action": "BUY", "symbol": "SOL", "reason": "signal"},
@@ -194,6 +211,55 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.apply()
         self.service.verify_sniper_mint.assert_awaited_once_with(None, "WIF")
         self.assertEqual(self.service.trade.await_args.args[2:6], (SOL, self.mint, 5_000_000, "BUY"))
+
+    async def test_whale_snapshot_cannot_buy_usdc_even_with_a_core_buy_proposal(self):
+        self.snapshot["trigger"] = "whale_signal"
+        await self.apply()
+        self.service.trade.assert_not_awaited()
+
+    async def test_stale_core_does_not_hide_fresh_sniper_or_refresh_core_timestamp(self):
+        whale = copy.deepcopy(self.snapshot)
+        whale.update(id="whale-only", trigger="whale_signal")
+        whale["decisions"]["main"] = {"action": "HOLD", "symbol": None, "reason": "Sniper only"}
+        whale["decisions"]["sniper"] = {"action": "BUY", "symbol": "WIF", "reason": "screened"}
+        self.snapshot["created_at"] -= 121
+        self.snapshot["sniper_snapshot"] = whale
+        await self.apply()
+        self.assertEqual(self.service.trade.await_count, 1)
+        self.assertEqual(self.service.trade.await_args.args[2:6], (SOL, self.mint, 5_000_000, "BUY"))
+        self.assertEqual(self.service.trade.await_args.args[6]["ai_analysis"], "whale-only")
+
+    async def test_fresh_core_keeps_its_own_decision_despite_a_newer_whale_snapshot(self):
+        whale = copy.deepcopy(self.snapshot)
+        whale.update(id="whale-only", trigger="whale_signal")
+        whale["decisions"]["main"] = {"action": "HOLD", "symbol": None, "reason": "Sniper only"}
+        self.snapshot["sniper_snapshot"] = whale
+        await self.apply()
+        self.assertEqual(self.service.trade.await_args.args[2:6], (USDC, SOL, 1_000_000, "BUY"))
+        self.assertEqual(self.service.trade.await_args.args[6]["ai_analysis"], "test-analysis")
+
+    async def test_repeated_whale_results_do_not_postpone_scheduled_core_refresh(self):
+        now = int(time.time())
+        record = {key: copy.deepcopy(value) for key, value in self.snapshot.items()
+                  if key not in ("id", "created_at")}
+        self.service.ledger.ai_record("scheduled", record)
+        whale = copy.deepcopy(record)
+        whale["trigger"] = "whale_signal"
+        whale["decisions"]["main"] = {"action": "HOLD", "symbol": None, "reason": "Sniper only"}
+        self.service.ledger.ai_record("whale", whale)
+        with self.service.ledger.db() as db:
+            db.execute("UPDATE custody_ai_analyses SET created_at=? WHERE id='scheduled'", (now - 91,))
+        self.service.background_ai = AsyncMock(return_value=None)
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-not-real"}):
+            snapshot = self.service.poll_ai(self.prices)
+            self.assertIsNotNone(self.service.ai_task)
+            await self.service.ai_task
+        self.assertEqual(snapshot["id"], "scheduled")
+        self.assertEqual(snapshot["sniper_snapshot"]["id"], "whale")
+        status = self.service.ai_status()
+        self.assertEqual(status["last_decisions"]["main"]["action"], "BUY")
+        self.assertEqual(status["decision_created_at"]["main"], now - 91)
+        self.assertEqual(status["chart_context"], self.snapshot["main_market_context"])
 
     async def test_sniper_chart_gate_blocks_missing_chart_for_buys(self):
         self.snapshot["decisions"]["main"] = {"action": "HOLD", "symbol": None, "reason": "wait"}
@@ -265,6 +331,7 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
             await self.service.background_discovery()
 
         analyze.assert_awaited_once()
+        self.assertEqual(analyze.await_args.args[2]["main"], [])
         self.assertIn(code, analyze.await_args.args[2]["sniper"])
         self.assertIn(code, analyze.await_args.args[3])
         self.assertEqual(self.service.whale_analysis_status["state"], "complete")
@@ -341,6 +408,8 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
                 await self.service.ai_snapshot(None, self.prices, whale_symbols=["WIF"])
 
         analyze.assert_awaited_once()
+        self.assertEqual(snapshot["universes"]["main"], [])
+        self.assertEqual(snapshot["decisions"]["main"]["action"], "HOLD")
         self.service.market_context_fn.assert_not_awaited()
         self.service.trade.assert_not_awaited()
 
@@ -429,7 +498,8 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-not-real"}):
             await ai_decisions.analyze(Session(), {"SOL": [100]*5, "WIF": [2]*5},
                 self.service.ai_universes(), main_context={
-                    "SOL": {"change_m5_pct": 0.8, "change_h1_pct": 2.1, "buys_h1": 12},
+                    "SOL": {"change_m5_pct": 0.8, "change_h1_pct": 2.1, "buys_h1": 12,
+                            "chart_trend_h1": 1},
                     "WIF": {"change_h1_pct": 999},
                     "UNKNOWN": {"change_h1_pct": 500},
                     "SOL_BAD": {"change_h1_pct": float("nan")},
@@ -442,7 +512,8 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.payload["store"])
         user_payload = json.loads(self.payload["messages"][3]["content"])
         self.assertEqual(user_payload["main_dex_market_context_numeric"], {
-            "SOL": {"change_m5_pct": 0.8, "change_h1_pct": 2.1, "buys_h1": 12}
+            "SOL": {"change_m5_pct": 0.8, "change_h1_pct": 2.1, "buys_h1": 12,
+                    "chart_trend_h1": 1}
         })
         self.assertEqual(user_payload["main_dex_context_applies_only_to"],
                          "main (USDC), never sniper (SOL)")
@@ -474,6 +545,7 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
             {"SOL": [100.0] * 15 + [101.0], "JUP": [100.0] * 15 + [103.0]},
             {"JUP": {
                 "change_m5_pct": 1.2, "change_h1_pct": 2.5,
+                "chart_trend_h1": 1,
                 "buys_m5": 14, "sells_m5": 8,
                 "liquidity_usd": 250_000, "volume_24h_usd": 80_000,
             }},

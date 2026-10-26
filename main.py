@@ -1836,7 +1836,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div id="discovery-status" class="section-note">Candidate scan pending.</div>
                 <button class="action-btn" id="scan-candidates" onclick="scanCandidates()">Scan candidates</button>
                 <details><summary>Candidate shortlist</summary><div id="candidate-list" class="section-note" style="white-space:pre-line">No verified shortlist yet.</div></details>
-                <details><summary>Whale buys · 1–10 SOL equivalent (SOL/USDC)</summary><div id="whale-signal-status" class="section-note" style="white-space:pre-line">Checking Helius stream...</div></details>
+                <details><summary>Whale buys · 1–10 SOL equivalent · Meme Sniper only</summary><div id="whale-signal-status" class="section-note" style="white-space:pre-line">Checking Helius stream...</div></details>
                 <p id="sniper-pnl" class="section-note">Realized SOL PnL: loading...</p>
             </div>
 
@@ -3945,7 +3945,10 @@ RAW_HTML = r"""<!DOCTYPE html>
                         ai.model+' · '+ai.interval_seconds+' sec interval'+(ai.last_analyzed_at?' · analyzed':' · connection unverified')
                           +(ai.last_trigger==='whale_signal'?' · whale-triggered':''):
                         'AI not connected. Operator setup required.')+whaleAIState;
-                    if(ai.last_decisions)document.getElementById('ai-decisions').textContent='Last analysis: '+new Date(ai.last_analyzed_at*1000).toLocaleString('en-GB')+'\n'+Object.entries(ai.last_decisions).map(([mode,d])=>(mode==='main'?'USDC':'SOL')+': '+d.action+' '+((ai.asset_labels||{})[d.symbol]||d.symbol||'')+' — '+normalizeAnalysisText(d.reason)).join('\n');
+                    if(ai.last_decisions)document.getElementById('ai-decisions').textContent=Object.entries(ai.last_decisions).map(([mode,d])=>{
+                        const analyzedAt=ai.decision_created_at?ai.decision_created_at[mode]:ai.last_analyzed_at;
+                        return (mode==='main'?'Core · USDC':'Meme Sniper · SOL')+' · '+(analyzedAt?new Date(analyzedAt*1000).toLocaleString('en-GB'):'Awaiting analysis')+'\n'+d.action+' '+((ai.asset_labels||{})[d.symbol]||d.symbol||'')+' — '+normalizeAnalysisText(d.reason);
+                    }).join('\n');
                     renderCoreChartZones(ai.chart_context,ai.asset_labels);
                     const discovery=ai.discovery||{};
                     document.getElementById('discovery-status').textContent=discovery.entry_paused?discovery.message:
@@ -3980,6 +3983,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     document.getElementById('whale-signal-status').textContent=(whale.message||'Whale stream status unavailable.')
                         +'\nSignal DEXs: Pump.fun, PumpSwap, Raydium, Meteora and Orca; confirmed BUY/SWAP logs are checked.'
                         +'\nWhale range: 1–10 SOL equivalent. USDC buys use a fresh SOL/USD price; if unavailable, they are skipped.'
+                        +'\nHelius signals feed SOL-funded Meme Sniper only. Core USDC uses independent scheduled chart analysis and requires a confirmed rising trend.'
                         +'\nSignals are not orders; transactions and candidates must pass the existing safety screen.'
                         +'\n'+whaleQueue
                         +(whaleRejections.length?'\nWhy recent whale candidates were rejected:\n'+whaleRejections.join('\n'):'')

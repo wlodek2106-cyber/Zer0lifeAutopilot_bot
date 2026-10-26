@@ -61,7 +61,7 @@ class PolicyTests(unittest.TestCase):
             samples={"SOL": 5}, held=[], balance=1_000_000, order_raw=1_000_000,
             main_context={"SOL": {"change_m5_pct": 0.8, "change_h1_pct": 1.5,
                 "change_h6_pct": 1.0, "buys_m5": 8, "sells_m5": 4,
-                "chart_ready": 1, "chart_buy_setup": 1}})
+                "chart_ready": 1, "chart_buy_setup": 1, "chart_trend_h1": 1}})
         values.update(changes)
         return policy.proposal(**values)
 
@@ -164,7 +164,7 @@ class PolicyTests(unittest.TestCase):
 
     def test_core_requires_aligned_trend_and_independent_confirmation(self):
         self.assertEqual(self.proposal(main_context={}).code, "core_context")
-        chart_ok = {"chart_ready": 1, "chart_buy_setup": 1}
+        chart_ok = {"chart_ready": 1, "chart_buy_setup": 1, "chart_trend_h1": 1}
         falling = {"SOL": {**chart_ok, "change_m5_pct": 0.8, "change_h1_pct": -0.1}}
         self.assertEqual(self.proposal(main_context=falling).code, "core_trend")
         extended = {"SOL": {**chart_ok, "change_m5_pct": 3.1, "change_h1_pct": 2.0}}
@@ -184,8 +184,20 @@ class PolicyTests(unittest.TestCase):
         missing_chart = {"SOL": {"change_m5_pct": 0.8, "change_h1_pct": 1.5}}
         self.assertEqual(self.proposal(main_context=missing_chart).code, "core_chart_data")
         no_setup = {"SOL": {"change_m5_pct": 0.8, "change_h1_pct": 1.5,
-                            "chart_ready": 1, "chart_buy_setup": 0}}
+                            "chart_ready": 1, "chart_buy_setup": 0, "chart_trend_h1": 1}}
         self.assertEqual(self.proposal(main_context=no_setup).code, "core_chart_confirmation")
+
+    def test_core_requires_rising_hourly_chart_even_when_aggregates_are_positive(self):
+        metrics = {"change_m5_pct": 0.8, "change_h1_pct": 1.5,
+                   "chart_ready": 1, "chart_buy_setup": 1, "buys_m5": 8, "sells_m5": 4}
+        for trend in (None, -1, 0):
+            with self.subTest(trend=trend):
+                context = {"SOL": {**metrics, "chart_trend_h1": trend}}
+                self.assertEqual(self.proposal(main_context=context).code, "core_trend")
+                self.assertTrue(self.proposal(main_context=context, decision={
+                    "action": "SELL", "symbol": "SOL", "reason": "exit"},
+                    held=[{"symbol": "SOL"}]).allowed)
+        self.assertTrue(self.proposal(main_context={"SOL": {**metrics, "chart_trend_h1": 1}}).allowed)
 
     def test_order_requires_saved_size_allowlisted_mint_and_enabled_mode(self):
         self.assertTrue(self.order().allowed)

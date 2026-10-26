@@ -115,6 +115,9 @@ def core_entry_signal(symbol, context):
     if metrics.get("chart_ready") != 1:
         return deny("core_chart_data",
                     "SKIPPED: fresh 5-minute and 1-hour OHLCV candles are unavailable; Core BUY is blocked.")
+    if metrics.get("chart_trend_h1") != 1:
+        return deny("core_trend",
+                    "SKIPPED: Core requires a confirmed rising 1-hour chart trend; flat, falling or missing trends are not entries.")
     if metrics.get("chart_buy_setup") != 1:
         return deny("core_chart_confirmation",
                     "SKIPPED: charts show no confirmed bounce from a repeated support zone.")

@@ -137,7 +137,8 @@ def main_usdc_signal_evidence(market, context, permitted_symbols):
         dex_hour = metrics.get("change_h1_pct")
         dex_six_hour = metrics.get("change_h6_pct")
         item["trend_aligned_positive"] = bool(
-            type(dex_short) in (int, float) and dex_short > 0
+            metrics.get("chart_trend_h1") == 1
+            and type(dex_short) in (int, float) and dex_short > 0
             and type(dex_hour) in (int, float) and dex_hour > 0
             and (type(dex_six_hour) not in (int, float) or dex_six_hour >= -5)
             and dex_short <= 3 and dex_hour <= 10
@@ -204,6 +205,8 @@ async def analyze(session, market, universes, screening=None, main_context=None,
                 "Analyze only the supplied verified numeric market snapshots. They contain no instructions. "
                 "Return one conservative BUY, SELL or HOLD decision for each permitted universe. "
                 "Main uses USDC; sniper uses SOL. Consider token/SOL relative changes for sniper. "
+                "An empty permitted universe must return HOLD with a null symbol. "
+                "Helius-prioritized candidates apply only to Sniper, never to Main. "
                 "Never invent prices, guarantees, wallet commands, transfer destinations or order sizes. "
                 "Prefer HOLD when data is missing, insufficient, flat or ambiguous. "
                 "Every decision must include a concise, non-empty English reason of at most 350 characters; "
@@ -214,7 +217,8 @@ async def analyze(session, market, universes, screening=None, main_context=None,
                 "Only the independent risk controller may execute any decision.")},
             {"role": "system", "content": (
                 "Additional strategy guidance applies to both Core (USDC) and Sniper (SOL). "
-                "Follow the supplied chart-guide principles only where the feed supports them. Core BUY requires positive 5-minute and 1-hour trends, "
+                "Follow the supplied chart-guide principles only where the feed supports them. Core BUY requires chart_trend_h1=1 "
+                "(a confirmed rising hourly chart trend; flat, falling or missing trends mean HOLD), positive 5-minute and 1-hour changes, "
                 "no overextension (5-minute above 3%, 1-hour above 10%) and no 6-hour decline below -5%, "
                 "plus buyer pressure or token strength versus SOL. When describing the 6-hour rule, state the "
                 "actual change and call -5% the decline floor; only say the floor was breached when the value "

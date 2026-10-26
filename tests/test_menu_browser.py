@@ -90,7 +90,7 @@ class MenuBrowserTests(unittest.TestCase):
                 assert(strategyText.includes('OTC / USDC')&&strategyText.includes('OTC / SOL'),'both OTC quote pairs visible');
                 assert(strategyText.includes('verified OTC Token-2022 mint'),'Token-2022 exception explained');
                 assert(strategyText.includes('up to 200 Solana mints, verifies up to 40'),'expanded scan bounds are visible');
-                assert(Array.from(document.querySelectorAll('summary')).some(el=>el.textContent==='Whale buys · 1–10 SOL equivalent (SOL/USDC)'),'whale observation range is visible');
+                assert(Array.from(document.querySelectorAll('summary')).some(el=>el.textContent==='Whale buys · 1–10 SOL equivalent · Meme Sniper only'),'whale observation range and Sniper-only scope are visible');
                 assert(document.getElementById('meme-sniper-card').querySelectorAll('p.section-note').length===3,'compact sniper card');
                 fixture.ai_status={configured:true,model:'gpt-4.1',interval_seconds:900,
                     last_analyzed_at:1791925101,sniper_assets:[],
@@ -119,6 +119,10 @@ class MenuBrowserTests(unittest.TestCase):
                 assert(analysisText.includes('No significant signal.\\n6h change -0.16%'),
                     'escaped model newlines render as line breaks');
                 assert(!analysisText.includes('\\\\n'),'analysis does not show literal slash-n text');
+                fixture.ai_status.decision_created_at={main:null,sniper:fixture.ai_status.last_analyzed_at};
+                await refresh();
+                assert(document.getElementById('ai-decisions').textContent.includes('Core · USDC · Awaiting analysis'),
+                    'a whale timestamp cannot masquerade as a Core analysis timestamp');
                 const chartText=document.getElementById('ai-chart-zones').textContent;
                 assert(chartText.includes('USD\\nSOL:'),'chart heading ends with a real line break');
                 assert(chartText.includes('YES\\nJUP: fresh candles unavailable'),

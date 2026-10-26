@@ -1670,20 +1670,27 @@ class CustodyLedger:
         for oid in unsent:
             self.fail(oid)
 
-    def ai_latest(self):
+    def ai_latest(self, trigger=None):
         with self.db() as db:
-            row = db.execute("SELECT * FROM custody_ai_analyses ORDER BY created_at DESC,rowid DESC LIMIT 1").fetchone()
+            where = (" WHERE COALESCE(json_extract(decisions,'$.trigger'),'scheduled')=?"
+                     if trigger is not None else "")
+            row = db.execute("SELECT * FROM custody_ai_analyses" + where +
+                             " ORDER BY created_at DESC,rowid DESC LIMIT 1",
+                             (trigger,) if trigger is not None else ()).fetchone()
             return dict(row) if row else None
 
-    def ai_allow_call(self, interval, daily_limit):
+    def ai_allow_call(self, interval, daily_limit, trigger=None):
         now = int(time.time())
         with self.db() as db:
             latest_attempt = db.execute("SELECT MAX(created_at) FROM custody_ai_calls").fetchone()[0]
             latest_success = db.execute("SELECT MAX(created_at) FROM custody_ai_analyses").fetchone()[0]
+            latest_scope = latest_success if trigger is None else db.execute(
+                "SELECT MAX(created_at) FROM custody_ai_analyses WHERE "
+                "COALESCE(json_extract(decisions,'$.trigger'),'scheduled')=?", (trigger,)).fetchone()[0]
             count = db.execute("SELECT COUNT(*) FROM custody_ai_calls WHERE created_at>=?", (now - now % 86400,)).fetchone()[0]
             if count >= daily_limit:
                 raise LedgerError("Дневной лимит обращений к AI исчерпан. Новые входы остановлены.")
-            if latest_success is not None and now - latest_success < interval:
+            if latest_scope is not None and now - latest_scope < interval:
                 raise LedgerError("AI ожидает следующего интервала анализа. Новые входы пока остановлены.")
             if (latest_attempt is not None
                     and (latest_success is None or latest_attempt > latest_success)
