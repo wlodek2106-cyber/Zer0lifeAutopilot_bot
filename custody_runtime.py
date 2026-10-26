@@ -185,6 +185,7 @@ class CustodyRuntime(WalletRuntime):
         self.ledger.restart_pause()
         self.ai_lock = asyncio.Lock()
         self.ai_task = None
+        self._worker_wakeup = asyncio.Event()
         self.sniper_symbols = [symbol for symbol in SNIPER_SYMBOLS if symbol in self.watchlist]
         self.watchlist = {symbol: dict(info) for symbol, info in self.watchlist.items()}
         self.main_symbols = [symbol for symbol in CORE_SYMBOLS if symbol in self.watchlist]
@@ -556,6 +557,7 @@ class CustodyRuntime(WalletRuntime):
         config = ai_decisions.configuration()
         if not config["configured"]:
             raise WalletError("Добавьте OPENAI_API_KEY в Environment на Render. AI-торговля пока не запущена.", 503)
+        analysis_started = time.monotonic()
         whale_symbols = list(dict.fromkeys(symbol for symbol in (whale_symbols or ())
                                            if isinstance(symbol, str)))[:8]
         whale_triggered = bool(whale_symbols)
@@ -620,8 +622,10 @@ class CustodyRuntime(WalletRuntime):
             for outcome in outcomes:
                 outcome["mode"] = "sniper" if outcome["funding_asset"] == SOL else "main"
             learning = trade_learning.summarize(outcomes, permitted_mints)
+            market_data_ms = round((time.monotonic() - analysis_started) * 1000)
             try:
                 aid = self.ledger.ai_allow_call(min_interval, config["max_calls_per_day"], trigger=trigger)
+                analyst_started = time.monotonic()
                 decisions = await ai_decisions.analyze(
                     session, market, universes, screening, main_context, sniper_context,
                     learning=learning)
@@ -636,8 +640,17 @@ class CustodyRuntime(WalletRuntime):
                 raise WalletError(str(exc), 503) from None
             except (aiohttp.ClientError, asyncio.TimeoutError):
                 raise WalletError("Нет безопасного ответа AI API. Новые входы остановлены.", 503) from None
+            analyst_ms = round((time.monotonic() - analyst_started) * 1000)
+            review_started = time.monotonic()
             review = await self.review_ai_buys(
                 session, aid, decisions, main_context, sniper_context, learning, config)
+            timings_ms = {
+                "market_data": market_data_ms,
+                "analyst": analyst_ms,
+                "risk_controller": round((time.monotonic() - review_started) * 1000),
+                "total": round((time.monotonic() - analysis_started) * 1000),
+            }
+            completed_at = int(time.time())
             record = {"decisions": decisions, "universes": universes, "prices": {s: h[-1] for s, h in market.items()},
                       "samples": {s: len(h) for s, h in market.items()},
                       "main_market_context": ai_decisions.sanitize_main_context(main_context, universes["main"]),
@@ -645,6 +658,7 @@ class CustodyRuntime(WalletRuntime):
                           sniper_context, universes["sniper"]),
                       "trigger": trigger,
                       "risk_review": review, "learning": learning,
+                      "timings_ms": timings_ms, "completed_at": completed_at,
                       "whale_symbols": whale_symbols if whale_triggered else []}
             self.ledger.ai_record(aid, record)
             return {"id": aid, "created_at": int(time.time()), **record}
@@ -741,6 +755,8 @@ class CustodyRuntime(WalletRuntime):
                     "max_outcomes": trade_learning.MAX_OUTCOMES,
                     "limitations": "Not proof of profit; separately paid operator fees are excluded.",
                 },
+                 "timings_ms": latest_record.get("timings_ms"),
+                 "completed_at": latest_record.get("completed_at"),
                 "chart_context": scheduled_record.get("main_market_context", {}),
                 "last_trigger": latest_record.get("trigger", "scheduled") if latest else None,
                 "sniper_assets": self.ai_universes()["sniper"],
@@ -769,7 +785,11 @@ class CustodyRuntime(WalletRuntime):
 
     async def background_ai(self, prices):
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=35)) as session:
-            return await self.ai_snapshot(session, prices)
+            snapshot = await self.ai_snapshot(session, prices)
+            # The result is already persisted. Wake the worker now rather than
+            # waiting for the next 20-second maintenance tick.
+            self._worker_wakeup.set()
+            return snapshot
 
     def poll_ai(self, prices):
         """Never block position risk management on a model HTTP request."""
@@ -1954,6 +1974,7 @@ class CustodyRuntime(WalletRuntime):
                 "Could not verify a fresh blockhash; no transaction was sent.") from None
 
     async def send_reserved(self, session, tx, row, info):
+        prepare_started = time.monotonic()
         try:
             wire = await self.safe_simulation(session, tx, row, info)
             if getattr(self, "web_access", None) and row["kind"] in ("BUY", "SELL"):
@@ -1969,10 +1990,22 @@ class CustodyRuntime(WalletRuntime):
                 wire = base64.b64encode(bytes(tx)).decode()
             signature = str(tx.signatures[0])
             self.ledger.prepared(row["id"], signature, wire)
+            if row["kind"] in ("BUY", "SELL"):
+                activity_log.record_event(self, row["uid"], "latency-prepare:" + row["id"],
+                    "execution_latency",
+                    f"Simulation, final quote check and preparation: "
+                    f"{round((time.monotonic() - prepare_started) * 1000)} ms. "
+                    "Prepared is not an on-chain sale or purchase.")
         except Exception as exc:
+            if row["kind"] in ("BUY", "SELL"):
+                activity_log.record_event(self, row["uid"], "latency-prepare:" + row["id"],
+                    "execution_latency",
+                    f"Preparation stopped after {round((time.monotonic() - prepare_started) * 1000)} ms. "
+                    "Nothing was broadcast from this reservation.")
             # Still RESERVED: no possible broadcast; safe to return its own reservation.
             self.ledger.fail(row["id"], failure_reason=operation_failure_reason(exc))
             raise
+        send_started = time.monotonic()
         try:
             if row["kind"] in ("BUY", "SELL"):
                 returned = await self.send_via_jito(session, wire, signature)
@@ -1997,6 +2030,12 @@ class CustodyRuntime(WalletRuntime):
                     "); the transaction outcome is unknown. Do not resend.")
             if row["kind"] == "WITHDRAW":
                 self.log("Withdrawal RPC outcome unknown; reserve retained (" + type(exc).__name__ + ").")
+        finally:
+            if row["kind"] in ("BUY", "SELL"):
+                activity_log.record_event(self, row["uid"], "latency-jito:" + row["id"],
+                    "execution_latency",
+                    f"Private Jito send request: {round((time.monotonic() - send_started) * 1000)} ms. "
+                    "Acknowledgment is not proof of block inclusion or finality.")
         if row["kind"] == "WITHDRAW":
             # Return the signature as soon as the RPC accepts (or ambiguously
             # rejects) the broadcast. Finality is reconciled by the next
@@ -2320,7 +2359,10 @@ class CustodyRuntime(WalletRuntime):
             except Exception as exc:
                 self.ledger.fail(row["id"], failure_reason=operation_failure_reason(exc))
                 raise
-            return self.result(await self.send_reserved(session, tx, row, {}))
+            # Simulation must validate the same net amount that was used to
+            # construct the transfer. The gross reservation still includes the
+            # retained commission, credited only after finalized success.
+            return self.result(await self.send_reserved(session, tx, row, metadata))
 
     def record_entry_cost_error(self, uid, exc, symbol=""):
         self.record_execution_check(uid, execution_policy.deny("cost", str(exc)), "cost", "BUY", symbol)
@@ -2422,6 +2464,7 @@ class CustodyRuntime(WalletRuntime):
         self.record_execution_check(uid, verdict, "quote", kind, info.get("symbol", "")).require()
 
     async def trade(self, session, uid, asset, output_asset, raw, kind, metadata, position_id=None, manual=False):
+        execution_started = time.monotonic()
         if getattr(self, "web_access", None):
             self.web_access.require(uid, kind, position_id, manual)
         self.admit(uid)
@@ -2467,6 +2510,7 @@ class CustodyRuntime(WalletRuntime):
                 headers["x-api-key"] = os.environ["JUPITER_API_KEY"]
             mint_in = WRAPPED_SOL if asset == SOL else asset
             mint_out = WRAPPED_SOL if output_asset == SOL else output_asset
+            quote_started = time.monotonic()
             quote_received_at = time.time()
             async with session.get("https://api.jup.ag/swap/v1/quote", headers=headers, params={
                 "inputMint": mint_in, "outputMint": mint_out, "amount": raw, "slippageBps": 40}) as response:
@@ -2480,6 +2524,12 @@ class CustodyRuntime(WalletRuntime):
                 raise WalletError("Неверная котировка Jupiter.")
             info = {**metadata, "minimum_out": int(quote["otherAmountThreshold"]), "manual_close": manual,
                     "risk_quote": quote, "quote_received_at": quote_received_at}
+            if kind in ("BUY", "SELL"):
+                activity_log.record_event(self, uid, "latency-quote:" + row["id"],
+                    "execution_latency",
+                    f"Preflight before quote: {round((quote_started - execution_started) * 1000)} ms; "
+                    f"Jupiter quote: {round((time.monotonic() - quote_started) * 1000)} ms. "
+                    "No broadcast yet.")
             await self.authorize_execution_quote(session, uid, kind, asset, output_asset, raw, info)
             if kind == "BUY" and asset == USDC:
                 info["entry_cost_context"] = await self.core_entry_cost_context(
@@ -3167,15 +3217,23 @@ class CustodyRuntime(WalletRuntime):
                 self.history_seen[symbol] = time.time()
         snapshot = self.poll_ai(prices) if any(
             user["trading"] or user["sniper_trading"] for user in users) else None
+        # Check every participant's protective exits before any participant
+        # starts a potentially slow BUY. A separate pass avoids starving later
+        # users' stops behind an earlier user's quote/simulation/Jito request.
+        entry_blocked = set()
+        checked = {}
         for settings in users:
             uid = settings["uid"]
             async with self.lock:
                 if self.pending():
-                    break
+                    return
                 if getattr(self, "web_access", None):
                     self.web_access.pause_expired(uid)
                 current = self.ledger.settings(uid)
                 positions = self.ledger.positions(uid, "OPEN")
+                checked[uid] = (
+                    current["trading"], current["sniper_trading"],
+                    frozenset(position["id"] for position in positions))
                 target = None
                 target_reason = None
                 protection_waiting = False
@@ -3206,6 +3264,7 @@ class CustodyRuntime(WalletRuntime):
                         target, target_reason = position, reason
                         break
                 if target:
+                    entry_blocked.add(uid)
                     try:
                         sale = await self.trade(session, uid, target["asset"], target["funding_asset"],
                             target["raw"], "SELL", {"output_asset": target["funding_asset"],
@@ -3226,12 +3285,41 @@ class CustodyRuntime(WalletRuntime):
                         # One participant's failed exit must not abort exit checks
                         # for every later participant in this worker cycle.
                         continue
-                elif snapshot and not protection_waiting:
-                    await self.apply_ai_decision(session, uid, current, positions, prices, snapshot)
+                if protection_waiting:
+                    entry_blocked.add(uid)
+        # A model may finish during the protective pass. Use its new persisted
+        # decision now instead of executing an older (possibly still fresh) one.
+        if self._worker_wakeup.is_set():
+            snapshot = self.poll_ai(prices)
+        if not snapshot:
+            return
+        # A newly queued manual close always has precedence over new entries.
+        if any(user.get("close_requested") for user in self.ledger.active_users()):
+            return
+        for settings in users:
+            uid = settings["uid"]
+            if uid in entry_blocked:
+                continue
+            async with self.lock:
+                if self.pending():
+                    return
+                if getattr(self, "web_access", None):
+                    self.web_access.pause_expired(uid)
+                current = self.ledger.settings(uid)
+                positions = self.ledger.positions(uid, "OPEN")
+                if current["close_requested"] or checked.get(uid) != (
+                        current["trading"], current["sniper_trading"],
+                        frozenset(position["id"] for position in positions)):
+                    continue  # Refresh exit checks after a concurrent state change.
+                await self.apply_ai_decision(session, uid, current, positions, prices, snapshot)
 
     async def worker(self):
         # Settings are paused on restart. Explicit close queues run before market scans.
         while True:
+            # Clearing before the pass is safe: a completed analysis is persisted,
+            # so this pass will read it. An analysis finishing during the pass
+            # sets the event and prevents the following sleep.
+            self._worker_wakeup.clear()
             stream = getattr(self, "whale_stream", None)
             stream_task = getattr(self, "whale_stream_task", None)
             if stream and stream.enabled and (stream_task is None or stream_task.done()):
@@ -3246,7 +3334,10 @@ class CustodyRuntime(WalletRuntime):
                     self.last_error = message
             else:
                 self.last_error = ""
-            await asyncio.sleep(20)
+            try:
+                await asyncio.wait_for(self._worker_wakeup.wait(), timeout=20)
+            except asyncio.TimeoutError:
+                pass
 
     def position_exit_price(self, position, prices):
         price = prices.get(position["symbol"], 0)

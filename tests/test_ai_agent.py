@@ -138,6 +138,24 @@ class AILedgerTests(unittest.TestCase):
 
 
 class AIControllerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_finished_analysis_wakes_worker_without_waiting_for_next_tick(self):
+        self.service.ai_snapshot = AsyncMock(return_value={"id": "new-analysis"})
+        self.assertFalse(self.service._worker_wakeup.is_set())
+        await self.service.background_ai({})
+        self.assertTrue(self.service._worker_wakeup.is_set())
+        cycles = 0
+        async def cycle(_session):
+            nonlocal cycles
+            cycles += 1
+            if cycles == 1:
+                self.service._worker_wakeup.set()
+            else:
+                raise asyncio.CancelledError()
+        self.service.worker_cycle = AsyncMock(side_effect=cycle)
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(self.service.worker(), timeout=0.5)
+        self.assertEqual(cycles, 2)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -667,6 +685,11 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         })
         self.assertEqual(analyze.await_args.args[5], sniper_context)
         self.assertEqual(snapshot["sniper_market_context"], sniper_context)
+        timing = snapshot["timings_ms"]
+        self.assertEqual(set(timing), {"market_data", "analyst", "risk_controller", "total"})
+        self.assertTrue(all(type(value) is int and value >= 0 for value in timing.values()))
+        self.assertGreaterEqual(timing["total"], max(timing.values()))
+        self.assertEqual(self.service.ai_status()["timings_ms"], timing)
 
     async def test_model_failure_does_not_consume_user_funds(self):
         before = self.service.ledger.balance(101, SOL)

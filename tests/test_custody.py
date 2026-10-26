@@ -839,6 +839,35 @@ class LedgerTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_all_protective_exits_are_checked_before_any_new_entry(self):
+        users = [{"uid": uid, "trading": True, "sniper_trading": True,
+                  "close_requested": False} for uid in (101, 202)]
+        events = []
+        self.service.reconcile = AsyncMock()
+        self.service.process_close_queues = AsyncMock(return_value=False)
+        self.service.scan_deposits = AsyncMock()
+        self.service.process_due_monthly_trading_fees = AsyncMock()
+        self.service.poll_discovery = Mock()
+        self.service.current_prices = AsyncMock(return_value={})
+        self.service.poll_ai = Mock(return_value={"created_at": int(time.time())})
+        self.service.exit_reason = Mock(return_value="STOP_LOSS")
+        async def sell(*args, **kwargs):
+            events.append("exit-202")
+            return {"state": "SUBMITTED"}
+        async def entry(*args, **kwargs):
+            events.append("entry-" + str(args[1]))
+        self.service.trade = AsyncMock(side_effect=sell)
+        self.service.apply_ai_decision = AsyncMock(side_effect=entry)
+        position = {"id": "position-202", "uid": 202, "asset": "mint",
+                    "funding_asset": USDC, "symbol": "TEST", "raw": 100}
+        with patch.object(self.ledger, "active_users", return_value=users), \
+             patch.object(self.ledger, "settings", side_effect=lambda uid: users[uid == 202]), \
+             patch.object(self.ledger, "positions", side_effect=lambda uid, state:
+                          [position] if uid == 202 else []), \
+             patch.object(self.ledger, "exit_retry_due", return_value=True):
+            await self.service.worker_cycle(None)
+        self.assertEqual(events, ["exit-202", "entry-101"])
+
     async def test_failed_protective_exit_does_not_abort_other_participants(self):
         users = [{"uid": uid, "trading": True, "sniper_trading": True}
                  for uid in (101, 202)]
@@ -2428,8 +2457,22 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         sent_raw = requested_raw - fee_raw
         genesis_rpc = self.rpc
         finalized = not timeout
+        def simulated_accounts(token_raw, native_raw):
+            data = bytearray(165)
+            data[:32] = bytes(Pubkey.from_string(USDC))
+            data[32:64] = bytes(self.signer.pubkey())
+            data[64:72] = token_raw.to_bytes(8, "little")
+            data[108] = 1
+            return [
+                {"owner": str(legacy.SYSTEM), "lamports": native_raw,
+                 "data": ["", "base64"], "executable": False},
+                {"owner": str(legacy.TOKEN), "lamports": 2_039_280,
+                 "data": [base64.b64encode(data).decode(), "base64"], "executable": False},
+            ]
         async def rpc(session, method, params=None):
             if method == "getMultipleAccounts":
+                if params[1]["encoding"] == "base64":
+                    return {"value": simulated_accounts(100_000_000, 50_000_000)}
                 def account(owner):
                     return {"owner": str(legacy.TOKEN), "data": {"parsed": {"info": {
                         "owner": str(owner), "mint": USDC, "state": "initialized",
@@ -2439,6 +2482,14 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                 return {"value": {"blockhash": str(Hash.new_unique())}}
             if method == "getFeeForMessage":
                 return {"value": 5000}
+            if method == "simulateTransaction":
+                transaction = Transaction.from_bytes(base64.b64decode(params[0]))
+                transfer_instruction = transaction.message.instructions[-1]
+                self.assertEqual(transfer_instruction.data[0], 12)
+                actual_net_raw = int.from_bytes(transfer_instruction.data[1:9], "little")
+                self.assertEqual(actual_net_raw, sent_raw)
+                return {"value": {"err": None, "accounts":
+                    simulated_accounts(100_000_000 - actual_net_raw, 49_995_000)}}
             if method == "sendTransaction":
                 row = self.ledger.pending()[0]
                 self.assertEqual(params[1]["preflightCommitment"], "confirmed")
@@ -2471,9 +2522,8 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                                                 else str(100_000_000 - sent_raw)}}]}}
             return await genesis_rpc(session, method, params)
         self.service.rpc = rpc
-        async def simulate(session, transaction, row, info):
-            return base64.b64encode(bytes(transaction)).decode()
-        self.service.safe_simulation = simulate
+        # Exercise the real simulation guard, not a stub: otherwise loss of
+        # gross/net commission metadata goes unnoticed until live withdrawals.
         request = Request(uid, {"token": "USDC", "amount": "1", "recipient_address": str(self.recipient),
             "telegram_code": "123456", "request_id": str(uuid.uuid4())})
         response = await self.service.handle(request, self.service.withdraw)
@@ -2598,6 +2648,26 @@ class SimulationTests(unittest.IsolatedAsyncioTestCase):
 
     def native(self, amount):
         return {"owner": str(legacy.SYSTEM), "lamports": amount, "data": ["", "base64"], "executable": False}
+
+    async def test_commission_withdrawal_simulation_requires_exact_net_for_usdc_and_sol(self):
+        gross, net = 1_000_000, 985_000
+        info = {"withdrawal_net_raw": net, "withdrawal_fee_raw": gross - net}
+        for asset in (USDC, SOL):
+            for transferred in (net, gross, net - 1):
+                with self.subTest(asset=asset, transferred=transferred):
+                    if asset == USDC:
+                        before = [self.native(50_000_000), self.token_account(USDC, 10_000_000)]
+                        after = [self.native(49_995_000),
+                                 self.token_account(USDC, 10_000_000 - transferred)]
+                    else:
+                        before = [self.native(50_000_000)]
+                        after = [self.native(50_000_000 - transferred - 5000)]
+                    if transferred == net:
+                        self.assertTrue(await self.simulate(
+                            before, after, asset=asset, raw=gross, info=info))
+                    else:
+                        with self.assertRaises(legacy.WalletError):
+                            await self.simulate(before, after, asset=asset, raw=gross, info=info)
 
     async def test_custody_backing_counts_token_2022_balances(self):
         mint = "MukLDtJ8Cx9DxLbeyLRSWPSposTMWuwHANbuaudpump"

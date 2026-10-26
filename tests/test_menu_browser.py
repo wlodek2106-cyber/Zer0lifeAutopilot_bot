@@ -105,11 +105,14 @@ class MenuBrowserTests(unittest.TestCase):
                     last_decisions:{main:{action:'HOLD',symbol:null,reason:'No significant signal.\\\\n6h change -0.16% is above the -5% floor.'},
                                     sniper:{action:'HOLD',symbol:null,reason:'No eligible candidates.'}}};
                 fixture.ai_status.market_discovery={provider:'DexScreener + GeckoTerminal',scan_interval_seconds:300};
+                fixture.ai_status.timings_ms={market_data:12,analyst:430,risk_controller:75,total:517};
                 fixture.trading_active=true;fixture.sniper_active=true;
                 fixture.trading_settings.assets=['SOL','JUP','RAY','WIF','PYTH','BONK','BOME','POPCAT','MEW','PENGU','KMNO','NOS','SHDW'];
                 await refresh();
                 assert(document.getElementById('toggle-text').textContent==='Autopilot: ON','enabled core status in English');
                 assert(document.getElementById('meme-toggle-text').textContent==='AI: ON','enabled sniper status in English');
+                assert(document.getElementById('ai-latency').textContent.includes('risk controller 75 ms'),
+                    'real analysis stages displayed in milliseconds');
                 const sourceText=document.getElementById('whale-signal-status').textContent;
                 assert(sourceText.includes('Helius WebSocket OFF'),'paid stream is visibly disabled');
                 assert(sourceText.includes('every 300 seconds'),'bounded replacement cadence is visible');

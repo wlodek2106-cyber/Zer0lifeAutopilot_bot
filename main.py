@@ -2044,6 +2044,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             <div id="trading-controls"></div>
             <div class="card"><h3 style="margin-top:0">AI activity</h3>
                 <p id="ai-status" class="status-output">Checking AI status...</p>
+                <p id="ai-latency" class="section-note">Analysis timings: awaiting a fresh analysis.</p>
                 <button class="btn-copy" onclick="previewAI()">Check AI · no trade</button>
                 <p id="ai-decisions" class="status-output"></p>
                 <p id="ai-risk-review" class="status-output">Risk controller: awaiting analysis.</p>
@@ -3949,6 +3950,14 @@ RAW_HTML = r"""<!DOCTYPE html>
                         ai.model+' · '+ai.interval_seconds+' sec interval'+(ai.last_analyzed_at?' · analyzed':' · connection unverified')
                           +(ai.last_trigger==='whale_signal'?' · whale-triggered':''):
                         'AI not connected. Operator setup required.')+whaleAIState;
+                    const timings=ai.timings_ms||{};
+                    document.getElementById('ai-latency').textContent=
+                        Number.isFinite(timings.total)
+                        ?'Last analysis timings · market data '+timings.market_data+' ms'
+                          +' · analyst '+timings.analyst+' ms'
+                          +' · risk controller '+timings.risk_controller+' ms'
+                          +' · total '+timings.total+' ms. Network confirmation is separate.'
+                        :'Analysis timings: awaiting a fresh analysis.';
                     if(ai.last_decisions)document.getElementById('ai-decisions').textContent=Object.entries(ai.last_decisions).map(([mode,d])=>{
                         const analyzedAt=ai.decision_created_at?ai.decision_created_at[mode]:ai.last_analyzed_at;
                         return (mode==='main'?'Core · USDC':'Meme Sniper · SOL')+' · '+(analyzedAt?new Date(analyzedAt*1000).toLocaleString('en-GB'):'Awaiting analysis')+'\n'+d.action+' '+((ai.asset_labels||{})[d.symbol]||d.symbol||'')+' — '+normalizeAnalysisText(d.reason);
