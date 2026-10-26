@@ -90,7 +90,7 @@ class MenuBrowserTests(unittest.TestCase):
                 assert(strategyText.includes('OTC / USDC')&&strategyText.includes('OTC / SOL'),'both OTC quote pairs visible');
                 assert(strategyText.includes('verified OTC Token-2022 mint'),'Token-2022 exception explained');
                 assert(strategyText.includes('up to 200 Solana mints, verifies up to 40'),'expanded scan bounds are visible');
-                assert(Array.from(document.querySelectorAll('summary')).some(el=>el.textContent==='Whale buys · 1–10 SOL equivalent · Meme Sniper only'),'whale observation range and Sniper-only scope are visible');
+                assert(Array.from(document.querySelectorAll('summary')).some(el=>el.textContent==='Market discovery · DexScreener + charts'),'replacement market source is visible');
                 assert(document.getElementById('meme-sniper-card').querySelectorAll('p.section-note').length===3,'compact sniper card');
                 fixture.ai_status={configured:true,model:'gpt-4.1',interval_seconds:900,
                     last_analyzed_at:1791925101,sniper_assets:[],
@@ -104,11 +104,17 @@ class MenuBrowserTests(unittest.TestCase):
                     },
                     last_decisions:{main:{action:'HOLD',symbol:null,reason:'No significant signal.\\\\n6h change -0.16% is above the -5% floor.'},
                                     sniper:{action:'HOLD',symbol:null,reason:'No eligible candidates.'}}};
+                fixture.ai_status.market_discovery={provider:'DexScreener + GeckoTerminal',scan_interval_seconds:300};
                 fixture.trading_active=true;fixture.sniper_active=true;
                 fixture.trading_settings.assets=['SOL','JUP','RAY','WIF','PYTH','BONK','BOME','POPCAT','MEW','PENGU','KMNO','NOS','SHDW'];
                 await refresh();
                 assert(document.getElementById('toggle-text').textContent==='Autopilot: ON','enabled core status in English');
                 assert(document.getElementById('meme-toggle-text').textContent==='AI: ON','enabled sniper status in English');
+                const sourceText=document.getElementById('whale-signal-status').textContent;
+                assert(sourceText.includes('Helius WebSocket OFF'),'paid stream is visibly disabled');
+                assert(sourceText.includes('every 300 seconds'),'bounded replacement cadence is visible');
+                assert(sourceText.includes('Neither waits for whale events'),'scheduled entries do not wait for whales');
+                assert(sourceText.includes('RPC and AI requests can still incur costs'),'remaining costs are disclosed');
                 const coreAssets=document.getElementById('strategy-assets').textContent;
                 assert(!['WIF','BONK','BOME','POPCAT','MEW','PENGU'].some(symbol=>coreAssets.includes(symbol)),
                     'core asset list excludes every sniper-only seed when there are no live candidates');

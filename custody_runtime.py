@@ -55,6 +55,7 @@ JITO_TIP_CACHE_SECONDS = 15
 JITO_TIP_MAX_AGE_SECONDS = 120
 JUPITER_PRIORITY_FEE_LAMPORTS = 25_000
 WHALE_AI_COOLDOWN_SECONDS = 60
+MARKET_SCAN_INTERVAL_SECONDS = 300
 WITHDRAWAL_COMMISSION_BPS = 150
 CORE_SYMBOLS = ("SOL", "JUP", "RAY", "PYTH", "JTO", "ORCA", "KMNO", "NOS", "SHDW", "PEPE", "OTC")
 SNIPER_SYMBOLS = ("WIF", "BONK", "BOME", "POPCAT", "MEW", "PENGU", "PEPE", "OTC")
@@ -199,14 +200,14 @@ class CustodyRuntime(WalletRuntime):
         self.discovery_started = 0
         self.discovery_failures = 0
         self.whale_analysis_status = {
-            "state": "idle", "checked_at": None, "symbols": [],
-            "message": "Waiting for a screened whale candidate.",
+            "state": "replaced", "checked_at": None, "symbols": [],
+            "message": "Market scanning replaced the Helius whale stream; no whale event is required.",
         }
+        # Retain the legacy status shape, but never open broad paid subscriptions.
+        # An old Render HELIUS_WHALE_STREAM_ENABLED=true must not restart spending.
+        # Normal execution RPC is separate and is deliberately left unchanged.
         self.whale_stream = HeliusWhaleStream(
-            os.getenv("HELIUS_API_KEY", ""), self.on_whale_signal,
-            enabled=os.getenv("HELIUS_WHALE_STREAM_ENABLED", "false").strip().lower()
-                in ("1", "true", "yes", "on"),
-            sol_price_provider=self.prices_fn)
+            "", enabled=False)
         self.whale_stream_task = None
         self._jito_tip_accounts = []
         self._jito_tip_accounts_expiry = 0
@@ -238,7 +239,7 @@ class CustodyRuntime(WalletRuntime):
     async def background_discovery(self):
         whale_mints = set()
         scan_succeeded = False
-        retry_delay = 900
+        retry_delay = MARKET_SCAN_INTERVAL_SECONDS
         try:
             whale_mints = set(self.discovery.pending_whale_mints())
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=75)) as session:
@@ -746,6 +747,15 @@ class CustodyRuntime(WalletRuntime):
                 "asset_labels": {s: info.get("label", s) + (" · "+info["mint"][:4]+"…"+info["mint"][-4:]
                                  if s.startswith("M_") else "") for s, info in self.watchlist.items()},
                 "discovery": self.discovery.report if getattr(self, "discovery", None) else None,
+                "market_discovery": {
+                    "provider": "DexScreener + GeckoTerminal",
+                    "mode": "scheduled_market_scan",
+                    "scan_interval_seconds": MARKET_SCAN_INTERVAL_SECONDS,
+                    "helius_websocket_enabled": False,
+                    "message": "Bounded market scanning, liquidity/activity screening and fresh 5m/1h charts. "
+                               "No Helius WebSocket or whale-event requirement. "
+                               "Normal Solana RPC and AI requests still have their own costs.",
+                },
                 "whale_analysis": getattr(self, "whale_analysis_status", {"state": "idle"}),
                 "whale_stream": self.whale_stream.snapshot() if getattr(self, "whale_stream", None) else None}
 

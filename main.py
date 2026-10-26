@@ -1836,7 +1836,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div id="discovery-status" class="section-note">Candidate scan pending.</div>
                 <button class="action-btn" id="scan-candidates" onclick="scanCandidates()">Scan candidates</button>
                 <details><summary>Candidate shortlist</summary><div id="candidate-list" class="section-note" style="white-space:pre-line">No verified shortlist yet.</div></details>
-                <details><summary>Whale buys · 1–10 SOL equivalent · Meme Sniper only</summary><div id="whale-signal-status" class="section-note" style="white-space:pre-line">Checking Helius stream...</div></details>
+                <details><summary>Market discovery · DexScreener + charts</summary><div id="whale-signal-status" class="section-note" style="white-space:pre-line">Scheduled market scanning replaces the Helius whale stream. No whale event is required.</div></details>
                 <p id="sniper-pnl" class="section-note">Realized SOL PnL: loading...</p>
             </div>
 
@@ -3938,7 +3938,9 @@ RAW_HTML = r"""<!DOCTYPE html>
                     aiConfigured=!!ai.configured;
                     updateMemeToggleUI(s.sniper_active);
                     const whaleAI=ai.whale_analysis||{};
-                    const whaleAIState=whaleAI.state&&whaleAI.state!=='idle'
+                    const whaleAIState=ai.market_discovery
+                        ? '\nCandidate source: scheduled market scanning; Helius WebSocket OFF.'
+                        : whaleAI.state&&whaleAI.state!=='idle'
                         ? '\nWhale-triggered analysis: '+whaleAI.state
                           +((whaleAI.symbols||[]).length?' · '+whaleAI.symbols.map(code=>(ai.asset_labels||{})[code]||code).join(', '):'')
                           +(whaleAI.message?' · '+whaleAI.message:'')
@@ -3976,36 +3978,15 @@ RAW_HTML = r"""<!DOCTYPE html>
                         const row=(discovery.candidates||[]).find(item=>item.code===code);
                         return ((ai.asset_labels||{})[code]||code)+(row?' · liquidity $'+Math.round(row.liquidity_usd).toLocaleString('en-US'):' · held asset');
                     }).join('\n')||'No verified shortlist yet.';
-                    const whale=ai.whale_stream||{};
-                    const whaleRows=(whale.recent_signals||[]).slice(0,8).map(event=>{
-                        const mint=String(event.mint||'');
-                        const shortMint=mint.length>14?mint.slice(0,6)+'…'+mint.slice(-5):mint;
-                        const quoteAsset=String(event.quote_asset||'SOL');
-                        const quoteAmount=Number(event.quote_amount!==undefined?event.quote_amount:event.sol);
-                        const solEquivalent=Number(event.sol_equivalent!==undefined?event.sol_equivalent:event.sol);
-                        const seen=Number(event.seen_at||0);
-                        const amountText=quoteAsset==='USDC'
-                            ?(Number.isFinite(quoteAmount)?quoteAmount.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):'—')+' USDC'
-                            :(Number.isFinite(quoteAmount)?quoteAmount.toFixed(2):'—')+' SOL';
-                        const equivalentText=quoteAsset==='USDC'&&Number.isFinite(solEquivalent)
-                            ?' (~'+solEquivalent.toFixed(2)+' SOL equivalent)':'';
-                        return (seen?new Date(seen*1000).toLocaleTimeString('en-GB'):'Time unavailable')
-                            +' · '+amountText+equivalentText+' · '+(event.program||'DEX')
-                            +' · '+shortMint;
-                    });
-                    const whaleQueue='RPC checks '+(whale.transaction_lookups||0)
-                        +' · queued '+(whale.queued_lookups||0)
-                        +(whale.dropped_lookups?' · dropped '+whale.dropped_lookups:'');
-                    const whaleRejections=(discovery.whale_rejections||[]).slice(0,4).map(item=>
-                        item.mint+' — '+(item.reasons||[]).join('; '));
-                    document.getElementById('whale-signal-status').textContent=(whale.message||'Whale stream status unavailable.')
-                        +'\nSignal DEXs: Pump.fun, PumpSwap, Raydium, Meteora and Orca; confirmed BUY/SWAP logs are checked.'
-                        +'\nWhale range: 1–10 SOL equivalent. USDC buys use a fresh SOL/USD price; if unavailable, they are skipped.'
-                        +'\nHelius signals feed SOL-funded Meme Sniper only. Core USDC uses independent scheduled chart analysis and requires a confirmed rising trend.'
-                        +'\nSignals are not orders; transactions and candidates must pass the existing safety screen.'
-                        +'\n'+whaleQueue
-                        +(whaleRejections.length?'\nWhy recent whale candidates were rejected:\n'+whaleRejections.join('\n'):'')
-                        +(whaleRows.length?'\n'+whaleRows.join('\n'):'\nNo qualifying signals received yet.');
+                    const marketSource=ai.market_discovery||{};
+                    document.getElementById('whale-signal-status').textContent=
+                        (marketSource.provider||'DexScreener + GeckoTerminal')
+                        +' · Helius WebSocket OFF'
+                        +'\nCandidate refresh: every '+(marketSource.scan_interval_seconds||300)+' seconds; bounded to 200 discovered / 40 checked.'
+                        +'\nLiquidity and activity screening → fresh 5m/1h charts → AI analyst → risk controller → execution checks.'
+                        +'\nMeme Sniper uses SOL. Core uses USDC and independent rising-trend analysis. Neither waits for whale events.'
+                        +'\nCandidates are not orders. Unavailable or stale data blocks new entries, never position exits.'
+                        +'\nNo Helius streaming traffic from this source. Normal Solana RPC and AI requests can still incur costs.';
                     const sniper=s.sniper_settings||{order_sol:.005};
                     document.getElementById('sniper-order-size').textContent=sniper.order_sol+' SOL';
                     const sniperInput=document.getElementById('settings-sniper-order');

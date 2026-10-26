@@ -210,6 +210,38 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.apply()
         self.assertEqual(self.service.trade.await_count, 1)
 
+    async def test_market_replacement_ignores_legacy_paid_stream_setting(self):
+        key = Keypair()
+        with patch.dict(os.environ, {
+                "HELIUS_API_KEY": "not-a-real-key",
+                "HELIUS_WHALE_STREAM_ENABLED": "true"}):
+            runtime = CustodyRuntime(
+                self.tmp.name + "/no-stream-db", "https://invalid.example", 101,
+                str(key.pubkey()), lambda: key, lambda uid, pin: (True, ""),
+                AsyncMock(), {"SOL": {"mint": WRAPPED_SOL, "decimals": 9}}, lambda msg: None,
+                base_url="https://invalid.example")
+        self.assertFalse(runtime.whale_stream.enabled)
+        with patch.object(runtime.whale_stream, "_connect_once", AsyncMock()) as connect:
+            await runtime.whale_stream.run()
+        connect.assert_not_awaited()
+        status = runtime.ai_status()
+        self.assertFalse(status["whale_stream"]["enabled"])
+        self.assertFalse(status["market_discovery"]["helius_websocket_enabled"])
+        self.assertEqual(status["market_discovery"]["scan_interval_seconds"], 300)
+        self.assertEqual(runtime.whale_stream.transaction_lookups, 0)
+        self.assertIsNone(runtime.whale_stream_task)
+
+    async def test_scheduled_sniper_buy_needs_no_whale_event(self):
+        self.snapshot["decisions"]["main"] = {
+            "action": "HOLD", "symbol": None, "reason": "Core waits."}
+        self.snapshot["decisions"]["sniper"] = {
+            "action": "BUY", "symbol": "WIF", "reason": "Scheduled market signal."}
+        self.assertFalse(self.service.whale_stream.enabled)
+        self.assertEqual(self.service.discovery.pending_whale_mints(), [])
+        await self.apply()
+        self.service.trade.assert_awaited_once()
+        self.assertEqual(self.service.trade.await_args.args[2], SOL)
+
     async def test_no_buy_without_a_fresh_matching_independent_approval(self):
         approved = copy.deepcopy(self.snapshot["risk_review"])
         invalid = [None, {**approved, "checked_at": int(time.time()) - 121},
@@ -435,7 +467,8 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(self.service.discovery.blocked)
         self.assertEqual(self.service.discovery_failures, 0)
-        self.assertGreaterEqual(self.service.discovery_due - time.time(), 899)
+        self.assertGreaterEqual(self.service.discovery_due - time.time(), 299)
+        self.assertLessEqual(self.service.discovery_due - time.time(), 300)
 
     async def test_whale_ai_bypasses_scheduled_cache_but_respects_one_minute_quota(self):
         self.service.market_context_fn = AsyncMock(return_value={
