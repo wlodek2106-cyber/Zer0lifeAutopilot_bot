@@ -115,6 +115,17 @@ class MenuBrowserTests(unittest.TestCase):
                 assert(['KMNO','NOS','SHDW'].every(symbol=>coreAssets.includes(symbol)),
                     'validated USDC assets remain visible in the Core list');
                 assert(document.getElementById('ai-decisions').textContent.includes('No significant signal.'),'English model explanation');
+                fixture.ai_status.risk_controller={enabled:true,verdicts:{
+                    main:{approved:false,trend:'DOWN',reason:'Hourly trend is declining.'},
+                    sniper:{approved:true,trend:'UP',reason:'Fresh support bounce confirmed.'}}};
+                fixture.ai_status.learning={sample_count:7,minimum_sample:20,max_outcomes:500};
+                await refresh();
+                assert(document.getElementById('ai-risk-review').textContent.includes('BLOCKED · DOWN'),
+                    'risk rejection visible in English');
+                assert(document.getElementById('ai-risk-review').textContent.includes('APPROVED · UP'),
+                    'approved independent sniper review visible');
+                assert(document.getElementById('ai-learning').textContent.includes('7 finalized closed trades'),
+                    'honest outcome memory count visible');
                 const analysisText=document.getElementById('ai-decisions').textContent;
                 assert(analysisText.includes('No significant signal.\\n6h change -0.16%'),
                     'escaped model newlines render as line breaks');

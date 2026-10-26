@@ -2046,6 +2046,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <p id="ai-status" class="status-output">Checking AI status...</p>
                 <button class="btn-copy" onclick="previewAI()">Check AI · no trade</button>
                 <p id="ai-decisions" class="status-output"></p>
+                <p id="ai-risk-review" class="status-output">Risk controller: awaiting analysis.</p>
+                <p id="ai-learning" class="section-note">Outcome memory: awaiting finalized trade history.</p>
                 <p id="ai-chart-zones" class="status-output"></p>
                 <details>
                     <summary>Independent execution guard</summary>
@@ -3949,6 +3951,22 @@ RAW_HTML = r"""<!DOCTYPE html>
                         const analyzedAt=ai.decision_created_at?ai.decision_created_at[mode]:ai.last_analyzed_at;
                         return (mode==='main'?'Core · USDC':'Meme Sniper · SOL')+' · '+(analyzedAt?new Date(analyzedAt*1000).toLocaleString('en-GB'):'Awaiting analysis')+'\n'+d.action+' '+((ai.asset_labels||{})[d.symbol]||d.symbol||'')+' — '+normalizeAnalysisText(d.reason);
                     }).join('\n');
+                    const risk=ai.risk_controller||{};
+                    document.getElementById('ai-risk-review').textContent='Independent risk & trend review · BUY only\n'
+                        +['main','sniper'].map(mode=>{
+                            const v=(risk.verdicts||{})[mode];
+                            const name=mode==='main'?'Core · USDC':'Meme Sniper · SOL';
+                            if(!v)return name+': no BUY review in this analysis.';
+                            return name+': '+(v.approved?'APPROVED':'BLOCKED')+' · '+v.trend
+                                +' — '+normalizeAnalysisText(v.reason);
+                        }).join('\n');
+                    const learning=ai.learning||{};
+                    const outcomeCount=Number(learning.sample_count||0);
+                    document.getElementById('ai-learning').textContent='Outcome memory · '+outcomeCount
+                        +' finalized closed trades included in the latest analysis (up to '+(learning.max_outcomes||500)+'). '
+                        +'Fewer than '+(learning.minimum_sample||20)+' outcomes per token/mode is limited evidence. '
+                        +'Historical feedback, not model training or proof of profit; separate operator fees excluded. '
+                        +'The second AI request shares the existing daily budget. Exits do not require its approval.';
                     renderCoreChartZones(ai.chart_context,ai.asset_labels);
                     const discovery=ai.discovery||{};
                     document.getElementById('discovery-status').textContent=discovery.entry_paused?discovery.message:

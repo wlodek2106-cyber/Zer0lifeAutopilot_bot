@@ -36,6 +36,8 @@ from legacy_retirement import prove_retirement, RECOVERY_RPC
 from tx_deposits import incoming_amounts
 from solders.signature import Signature
 import ai_decisions
+import ai_risk_review
+import trade_learning
 import execution_policy
 import activity_log
 from entry_costs import EntryCostError, quote_amounts
@@ -610,10 +612,18 @@ class CustodyRuntime(WalletRuntime):
                     sniper_context = {}
             if whale_triggered and any(symbol not in market for symbol in whale_symbols):
                 raise WalletError("Whale candidate has no fresh market price; AI analysis was not sent.", 409)
+            permitted_mints = {
+                mode: {self.watchlist[s]["mint"]: s for s in symbols if s in self.watchlist}
+                for mode, symbols in universes.items()}
+            outcomes = self.ledger.closed_trade_outcomes()
+            for outcome in outcomes:
+                outcome["mode"] = "sniper" if outcome["funding_asset"] == SOL else "main"
+            learning = trade_learning.summarize(outcomes, permitted_mints)
             try:
                 aid = self.ledger.ai_allow_call(min_interval, config["max_calls_per_day"], trigger=trigger)
                 decisions = await ai_decisions.analyze(
-                    session, market, universes, screening, main_context, sniper_context)
+                    session, market, universes, screening, main_context, sniper_context,
+                    learning=learning)
                 if whale_triggered:
                     decisions["main"] = {
                         "action": "HOLD", "symbol": None,
@@ -625,15 +635,49 @@ class CustodyRuntime(WalletRuntime):
                 raise WalletError(str(exc), 503) from None
             except (aiohttp.ClientError, asyncio.TimeoutError):
                 raise WalletError("Нет безопасного ответа AI API. Новые входы остановлены.", 503) from None
+            review = await self.review_ai_buys(
+                session, aid, decisions, main_context, sniper_context, learning, config)
             record = {"decisions": decisions, "universes": universes, "prices": {s: h[-1] for s, h in market.items()},
                       "samples": {s: len(h) for s, h in market.items()},
                       "main_market_context": ai_decisions.sanitize_main_context(main_context, universes["main"]),
                       "sniper_market_context": ai_decisions.sanitize_main_context(
                           sniper_context, universes["sniper"]),
                       "trigger": trigger,
+                      "risk_review": review, "learning": learning,
                       "whale_symbols": whale_symbols if whale_triggered else []}
             self.ledger.ai_record(aid, record)
             return {"id": aid, "created_at": int(time.time()), **record}
+
+    async def review_ai_buys(self, session, aid, decisions, main_context, sniper_context,
+                             learning, config):
+        checked_at = int(time.time())
+        contexts = {"main": main_context, "sniper": sniper_context}
+        verdicts, eligible = {}, {}
+        for mode, decision in decisions.items():
+            if decision["action"] != "BUY":
+                continue
+            metrics = contexts[mode].get(decision["symbol"], {})
+            if (metrics.get("chart_ready") != 1 or metrics.get("chart_trend_h1") != 1
+                    or metrics.get("chart_buy_setup") != 1):
+                verdicts[mode] = ai_risk_review.blocked(
+                    decision, "Fresh confirmed upward chart trend and support setup are required.")
+            else:
+                eligible[mode] = decision
+        if eligible:
+            try:
+                self.ledger.ai_reserve_review_call(aid, config["max_calls_per_day"])
+                verdicts.update(await ai_risk_review.review(
+                    session, eligible, main_context, sniper_context, learning))
+            except LedgerError:
+                for mode, decision in eligible.items():
+                    verdicts[mode] = ai_risk_review.blocked(
+                        decision, "Shared AI budget unavailable; no new BUY is permitted.")
+            except (ai_risk_review.ReviewError, aiohttp.ClientError, asyncio.TimeoutError):
+                for mode, decision in eligible.items():
+                    verdicts[mode] = ai_risk_review.blocked(
+                        decision, "Independent risk review unavailable or invalid; no new BUY is permitted.")
+        return {"analysis_id": aid, "checked_at": checked_at,
+                "model": config["model"], "verdicts": verdicts}
 
     async def analyze_whale_candidates(self, session, symbols):
         symbols = list(dict.fromkeys(symbol for symbol in symbols if isinstance(symbol, str)))[:8]
@@ -683,6 +727,19 @@ class CustodyRuntime(WalletRuntime):
                 "decision_created_at": {
                     "main": scheduled["created_at"] if scheduled else None,
                     "sniper": latest["created_at"] if latest else None},
+                "risk_controller": {
+                    "enabled": True, "scope": "New BUY proposals only; never exits or withdrawals",
+                    "verdicts": {
+                        "main": scheduled_record.get("risk_review", {}).get("verdicts", {}).get("main"),
+                        "sniper": latest_record.get("risk_review", {}).get("verdicts", {}).get("sniper")},
+                },
+                "learning": {
+                    "method": "Rolling finalized outcome memory; no model fine-tuning",
+                    "sample_count": latest_record.get("learning", {}).get("sample_count", 0),
+                    "minimum_sample": trade_learning.MIN_SAMPLE,
+                    "max_outcomes": trade_learning.MAX_OUTCOMES,
+                    "limitations": "Not proof of profit; separately paid operator fees are excluded.",
+                },
                 "chart_context": scheduled_record.get("main_market_context", {}),
                 "last_trigger": latest_record.get("trigger", "scheduled") if latest else None,
                 "sniper_assets": self.ai_universes()["sniper"],
@@ -2326,6 +2383,18 @@ class CustodyRuntime(WalletRuntime):
         if verdict.allowed and info.get("ai_analysis") and not execution_policy.fresh(
                 info.get("ai_created_at"), time.time(), execution_policy.DECISION_SECONDS):
             verdict = execution_policy.deny("stale", "BLOCKED: AI decision expired before execution.")
+        if verdict.allowed and kind == "BUY" and info.get("ai_analysis"):
+            try:
+                source = self.ledger.ai_analysis(info["ai_analysis"])
+                record = json.loads(source["decisions"]) if source else {}
+                mode = "sniper" if asset == SOL else "main"
+                decision = record.get("decisions", {}).get(mode, {})
+                if decision.get("action") != "BUY" or decision.get("symbol") != info.get("symbol"):
+                    raise ai_risk_review.ReviewError("Risk review has no matching stored BUY proposal.")
+                ai_risk_review.require_approval(
+                    record.get("risk_review"), info["ai_analysis"], mode, decision)
+            except ai_risk_review.ReviewError as exc:
+                verdict = execution_policy.deny("risk_review", str(exc))
         self.record_execution_check(uid, verdict, "pre_send" if reserved else "order",
                                     kind, info.get("symbol", "")).require()
 
@@ -3279,6 +3348,13 @@ class CustodyRuntime(WalletRuntime):
             if not verdict.allowed:
                 note(verdict.code, verdict.reason)
                 continue
+            if action == "BUY":
+                try:
+                    ai_risk_review.require_approval(
+                        snapshot.get("risk_review"), snapshot["id"], mode, decision)
+                except ai_risk_review.ReviewError as exc:
+                    note("risk_review", str(exc))
+                    continue
             if action == "SELL":
                 position = next((p for p in held if p["symbol"] == symbol), None)
                 if position and self.ledger.ai_claim(snapshot["id"], uid, mode):

@@ -173,6 +173,11 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
                 "change_m5_pct": 0.8, "change_h1_pct": 1.2, "change_h6_pct": -4.9}},
             "decisions": {"main": {"action": "BUY", "symbol": "SOL", "reason": "signal"},
                           "sniper": {"action": "HOLD", "symbol": None, "reason": "wait"}}}
+        self.snapshot["risk_review"] = {
+            "analysis_id": self.snapshot["id"], "checked_at": int(time.time()),
+            "verdicts": {mode: {"symbol": symbol, "approved": True, "trend": "UP",
+                               "reason": "Independent test review passed."}
+                         for mode, symbol in (("main", "SOL"), ("sniper", "WIF"))}}
 
     async def test_default_analysis_model_is_gpt_41_and_can_be_overridden(self):
         with patch.dict(os.environ, {}, clear=False):
@@ -205,6 +210,44 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.apply()
         self.assertEqual(self.service.trade.await_count, 1)
 
+    async def test_no_buy_without_a_fresh_matching_independent_approval(self):
+        approved = copy.deepcopy(self.snapshot["risk_review"])
+        invalid = [None, {**approved, "checked_at": int(time.time()) - 121},
+                   {**approved, "analysis_id": "other"}]
+        rejected = copy.deepcopy(approved)
+        rejected["verdicts"]["main"]["approved"] = False
+        invalid.append(rejected)
+        for value in invalid:
+            self.snapshot["risk_review"] = value
+            await self.apply()
+        self.service.trade.assert_not_awaited()
+        self.snapshot["risk_review"] = approved
+        await self.apply()
+        self.service.trade.assert_awaited_once()
+
+    async def test_execution_boundary_rechecks_persisted_review_not_metadata_override(self):
+        ledger = self.service.ledger
+        info = {"symbol": "SOL", "decimals": 9, "ai_analysis": self.snapshot["id"],
+                "ai_created_at": self.snapshot["created_at"],
+                "risk_review": self.snapshot["risk_review"]}
+        ledger.ai_record(self.snapshot["id"], {
+            "decisions": self.snapshot["decisions"], "risk_review": None})
+        with self.assertRaisesRegex(WalletError, "Risk review"):
+            self.service.authorize_execution_order(101, USDC, SOL, 1_000_000, "BUY", info)
+        with ledger.db() as db:
+            db.execute("UPDATE custody_ai_analyses SET decisions=? WHERE id=?",
+                (json.dumps({"decisions": self.snapshot["decisions"],
+                             "risk_review": self.snapshot["risk_review"]}), self.snapshot["id"]))
+        self.service.authorize_execution_order(101, USDC, SOL, 1_000_000, "BUY", info)
+        with ledger.db() as db:
+            record = {"decisions": self.snapshot["decisions"],
+                      "risk_review": copy.deepcopy(self.snapshot["risk_review"])}
+            record["risk_review"]["checked_at"] = int(time.time()) - 121
+            db.execute("UPDATE custody_ai_analyses SET decisions=? WHERE id=?",
+                       (json.dumps(record), self.snapshot["id"]))
+        with self.assertRaisesRegex(WalletError, "stale"):
+            self.service.authorize_execution_order(101, USDC, SOL, 1_000_000, "BUY", info)
+
     async def test_sniper_uses_saved_sol_not_usdc(self):
         self.snapshot["decisions"]["main"] = {"action": "HOLD", "symbol": None, "reason": "wait"}
         self.snapshot["decisions"]["sniper"] = {"action": "BUY", "symbol": "WIF", "reason": "signal"}
@@ -220,6 +263,7 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
     async def test_stale_core_does_not_hide_fresh_sniper_or_refresh_core_timestamp(self):
         whale = copy.deepcopy(self.snapshot)
         whale.update(id="whale-only", trigger="whale_signal")
+        whale["risk_review"]["analysis_id"] = "whale-only"
         whale["decisions"]["main"] = {"action": "HOLD", "symbol": None, "reason": "Sniper only"}
         whale["decisions"]["sniper"] = {"action": "BUY", "symbol": "WIF", "reason": "screened"}
         self.snapshot["created_at"] -= 121
@@ -290,6 +334,7 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.snapshot["decisions"]={"main":{"action":"HOLD","symbol":None,"reason":"wait"},
                                    "sniper":{"action":"BUY","symbol":code,"reason":"signal"}}
         self.snapshot["universes"]=self.service.ai_universes()
+        self.snapshot["risk_review"]["verdicts"]["sniper"]["symbol"] = code
         self.snapshot["prices"][code]=.01
         self.snapshot["samples"][code]=5
         await self.apply(prices={**self.prices,code:.01})
@@ -510,7 +555,7 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("telegram", content.lower())
         self.assertNotIn("test-key-not-real", content)
         self.assertFalse(self.payload["store"])
-        user_payload = json.loads(self.payload["messages"][3]["content"])
+        user_payload = json.loads(self.payload["messages"][-1]["content"])
         self.assertEqual(user_payload["main_dex_market_context_numeric"], {
             "SOL": {"change_m5_pct": 0.8, "change_h1_pct": 2.1, "buys_h1": 12,
                     "chart_trend_h1": 1}

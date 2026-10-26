@@ -1706,6 +1706,25 @@ class CustodyLedger:
         for oid in unsent:
             self.fail(oid)
 
+    def closed_trade_outcomes(self, limit=500):
+        """Read-only training evidence: finalized round trips, never open PnL."""
+        with self.db() as db:
+            return [dict(row) for row in db.execute("""
+                SELECT p.asset AS mint, p.funding_asset, p.cost_raw, p.proceeds_raw
+                FROM custody_positions p
+                JOIN custody_operations b ON b.id=p.id AND b.kind='BUY' AND b.state='COMPLETED'
+                WHERE p.state='CLOSED' AND p.sell_tx IS NOT NULL
+                    AND EXISTS (SELECT 1 FROM custody_operations s
+                        WHERE s.position_id=p.id AND s.signature=p.sell_tx
+                        AND s.kind='SELL' AND s.state='COMPLETED')
+                ORDER BY p.closed_at DESC,p.id DESC LIMIT ?""",
+                (max(1, min(int(limit), 500)),))]
+
+    def ai_analysis(self, aid):
+        with self.db() as db:
+            row = db.execute("SELECT * FROM custody_ai_analyses WHERE id=?", (aid,)).fetchone()
+            return dict(row) if row else None
+
     def ai_latest(self, trigger=None):
         with self.db() as db:
             where = (" WHERE COALESCE(json_extract(decisions,'$.trigger'),'scheduled')=?"
@@ -1737,6 +1756,21 @@ class CustodyLedger:
             aid = str(uuid.uuid4())
             db.execute("INSERT INTO custody_ai_calls VALUES(?,?)", (aid, now))
             return aid
+
+    def ai_reserve_review_call(self, parent_id, daily_limit):
+        """Count the second request against the same cap, once per analyst call."""
+        now = int(time.time())
+        with self.db() as db:
+            if not db.execute("SELECT 1 FROM custody_ai_calls WHERE id=? AND created_at>=?",
+                              (parent_id, now - now % 86400)).fetchone():
+                raise LedgerError("Risk review has no current parent analysis request.")
+            count = db.execute("SELECT COUNT(*) FROM custody_ai_calls WHERE created_at>=?",
+                               (now - now % 86400,)).fetchone()[0]
+            if count >= daily_limit:
+                raise LedgerError("Shared daily AI request limit reached; BUY review unavailable.")
+            if db.execute("SELECT 1 FROM custody_ai_calls WHERE id=?", (parent_id + ":risk",)).fetchone():
+                raise LedgerError("Risk review was already requested for this analysis.")
+            db.execute("INSERT INTO custody_ai_calls VALUES(?,?)", (parent_id + ":risk", now))
 
     def ai_record(self, aid, decisions):
         with self.db() as db:

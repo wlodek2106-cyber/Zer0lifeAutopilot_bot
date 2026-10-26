@@ -60,6 +60,11 @@ class ActivityTests(unittest.IsolatedAsyncioTestCase):
             "decisions": {
                 "main": {"action": "HOLD", "symbol": None, "reason": "No trend"},
                 "sniper": {"action": "SELL", "symbol": "WIF", "reason": "Weak momentum"}}}
+        self.snapshot["risk_review"] = {
+            "analysis_id": "one", "checked_at": int(time.time()),
+            "verdicts": {mode: {"symbol": symbol, "approved": True,
+                               "trend": "UP", "reason": "Independent fixture approval."}
+                         for mode, symbol in (("main", "SOL"), ("sniper", "WIF"))}}
 
     async def apply(self, positions=None, prices=None):
         await self.runtime.apply_ai_decision(None, 101, self.ledger.settings(101),
