@@ -1,6 +1,7 @@
 import asyncio
 import math
 import aiohttp
+import certifi
 from aiohttp import web
 import sqlite3
 import os
@@ -4139,6 +4140,7 @@ async def health_handler(request):
     flags = runtime.readiness()
     return web.json_response({"status": "custody_beta", **flags,
         "build_commit": os.getenv("RENDER_GIT_COMMIT", ""),
+        "certifi_version": certifi.__version__,
         "deposit_parser_version": "phantom-authority-v1",
         "ai_configured": bool(os.getenv("OPENAI_API_KEY")),
         "web_terminal_version": "access-packages-v2",
