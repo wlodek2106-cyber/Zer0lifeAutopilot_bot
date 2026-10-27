@@ -628,6 +628,10 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
                       self.payload["messages"][1]["content"])
         self.assertIn("confirmed bounce from repeated support",
                       self.payload["messages"][2]["content"])
+        self.assertIn("bounded rising-trend continuation",
+                      self.payload["messages"][2]["content"])
+        self.assertIn("chart_trend_continuation=1",
+                      self.payload["messages"][1]["content"])
         self.assertIn("relative strength versus SOL is not applicable",
                       self.payload["messages"][1]["content"])
         self.assertTrue(any(item.startswith("5-minute EMA20/50, RSI14, MACD histogram")

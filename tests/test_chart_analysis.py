@@ -2,9 +2,85 @@ import math
 import unittest
 
 import chart_analysis
+import execution_policy
 
 
 class ChartAnalysisTests(unittest.TestCase):
+    def continuation_candles(self, now):
+        h1 = self.make_candles(3600, 60, now, base=98, step=0.02)
+        m5 = []
+        for index in range(60):
+            close = 100 + index * 0.002 + 0.08 * math.sin(
+                2 * math.pi * (index + 2) / 10)
+            m5.append({
+                "timestamp": int(now - 300 * (60 - index)),
+                "open": close - 0.01, "high": close + 0.04,
+                "low": close - 0.04, "close": close,
+                "volume": 85 if index == 59 else 100,
+            })
+        return m5, h1
+
+    def test_bounded_continuation_can_enter_both_modes_without_support_zone(self):
+        now = 1_000_000
+        m5, h1 = self.continuation_candles(now)
+        metrics = chart_analysis.analyze_charts(m5, h1, now=now)
+        self.assertEqual(metrics["chart_trend_h1"], 1)
+        self.assertEqual(metrics["chart_support_bounce"], 0)
+        self.assertNotIn("chart_support_low_usd", metrics)
+        self.assertEqual(metrics["chart_trend_continuation"], 1)
+        self.assertEqual(metrics["chart_buy_setup"], 1)
+        self.assertAlmostEqual(metrics["chart_volume_ratio_5m"], 0.85)
+        metrics.update(change_m5_pct=0.3, change_h1_pct=1.0,
+                       change_h6_pct=0.5, buys_m5=12, sells_m5=8)
+        for signal in (execution_policy.core_entry_signal,
+                       execution_policy.sniper_entry_signal):
+            with self.subTest(mode=signal.__name__):
+                self.assertTrue(signal("SOL", {"SOL": metrics}).allowed)
+
+    def test_continuation_still_rejects_weak_volume_red_candles_and_overextension(self):
+        now = 1_000_000
+        for scenario in ("weak_volume", "red_last", "red_previous",
+                         "falling_close", "overextended"):
+            with self.subTest(scenario=scenario):
+                m5, h1 = self.continuation_candles(now)
+                if scenario == "weak_volume":
+                    m5[-1]["volume"] = 79
+                elif scenario == "red_last":
+                    m5[-1]["open"] = m5[-1]["close"] + 0.01
+                elif scenario == "red_previous":
+                    m5[-2]["open"] = m5[-2]["close"] + 0.01
+                elif scenario == "falling_close":
+                    m5[-1]["close"] = m5[-2]["close"] - 0.01
+                    m5[-1]["open"] = m5[-1]["close"] - 0.01
+                else:
+                    m5[-1].update(open=102, close=102.1, high=102.2, low=101.99)
+                result = chart_analysis.analyze_charts(m5, h1, now=now)
+                self.assertEqual(result["chart_trend_continuation"], 0)
+                self.assertEqual(result["chart_buy_setup"], 0)
+
+    def test_continuation_still_requires_fresh_and_rising_hourly_chart(self):
+        now = 1_000_000
+        for scenario in ("provider_stale", "expired", "flat_hourly", "falling_hourly"):
+            with self.subTest(scenario=scenario):
+                m5, h1 = self.continuation_candles(now)
+                options = {}
+                if scenario == "provider_stale":
+                    options["m5_stale"] = True
+                elif scenario == "expired":
+                    for bar in m5:
+                        bar["timestamp"] -= 1200
+                elif scenario == "flat_hourly":
+                    h1 = self.make_candles(3600, 60, now, base=100, step=0)
+                else:
+                    # Valid falling hourly candles, with current price below their EMAs.
+                    for index, bar in enumerate(h1):
+                        close = 102 - index * 0.02
+                        bar.update(open=close + 0.01, high=close + 0.04,
+                                   low=close - 0.04, close=close)
+                result = chart_analysis.analyze_charts(m5, h1, now=now, **options)
+                self.assertEqual(result["chart_trend_continuation"], 0)
+                self.assertEqual(result["chart_buy_setup"], 0)
+
     def make_candles(self, interval, count, now, base=100.0, step=0.1):
         candles = []
         for index in range(count):

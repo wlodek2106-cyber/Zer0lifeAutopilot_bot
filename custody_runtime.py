@@ -675,7 +675,7 @@ class CustodyRuntime(WalletRuntime):
             if (metrics.get("chart_ready") != 1 or metrics.get("chart_trend_h1") != 1
                     or metrics.get("chart_buy_setup") != 1):
                 verdicts[mode] = ai_risk_review.blocked(
-                    decision, "Fresh confirmed upward chart trend and support setup are required.")
+                    decision, "Fresh upward chart trend and a confirmed support bounce or trend-continuation setup are required.")
             else:
                 eligible[mode] = decision
         if eligible:

@@ -23,6 +23,8 @@ MAIN_CONTEXT_LIMITS = {
     "sells_h1": (0, 1_000_000_000),
     "chart_ready": (0, 1),
     "chart_buy_setup": (0, 1),
+    "chart_support_bounce": (0, 1),
+    "chart_trend_continuation": (0, 1),
     "chart_sell_setup": (0, 1),
     "chart_trend_h1": (-1, 1),
     "chart_rsi14_5m": (0, 100),
@@ -58,7 +60,7 @@ MAIN_CHART_DATA_CAPABILITIES = {
         "Closed 5-minute and 1-hour OHLCV candles from the selected Solana pool",
         "Repeated support/resistance areas from confirmed hourly swing points",
         "5-minute EMA20/50, RSI14, MACD histogram, ATR and same-timeframe relative volume",
-        "Confirmed 5-minute support-bounce and resistance-rejection checks; breakout entries are disabled",
+        "Confirmed 5-minute support-bounce or bounded rising-trend continuation entries; resistance-rejection exits",
     ],
     "unavailable": [
         "Full order-book depth, news/fundamentals and token-safety guarantees",
@@ -229,7 +231,12 @@ async def analyze(session, market, universes, screening=None, main_context=None,
                 "checks. Fresh numeric 5-minute/1-hour OHLCV chart features are supplied when available: "
                 "repeated hourly support/resistance areas, confirmed support-bounce and resistance-rejection flags, "
                 "EMA, RSI, MACD, ATR, same-timeframe relative volume and simple engulfing flags. "
-                "Both modes BUY only after a confirmed bounce from repeated support; breakout chasing is disabled "
+                "Both modes require chart_buy_setup=1: a confirmed bounce from repeated support "
+                "(chart_support_bounce=1) OR bounded rising-trend continuation "
+                "(chart_trend_continuation=1). Continuation does not require a support zone; it requires "
+                "a rising hourly trend, aligned 5m EMAs, two closed bullish candles, RSI 45–68, nonnegative MACD, "
+                "relative volume at least 0.8x, limited extension and room below known resistance. "
+                "A support bounce still requires relative volume at least 1.0x. Breakout chasing is disabled "
                 "and the server enforces this. A fresh chart_sell_setup at repeated resistance can trigger an "
                 "automatic sale of an owned position only when its current gross price is above entry. "
                 "Do not treat 24-hour total volume as relative volume, and do not invent candle signals when "
@@ -239,7 +246,8 @@ async def analyze(session, market, universes, screening=None, main_context=None,
                 "backtested and do not predict profit; never force a trade when no candidate qualifies.")},
             {"role": "system", "content": (
                 "For Sniper (SOL) BUY, require the supplied numeric chart context to have "
-                "chart_ready=1 and a confirmed bounce from repeated support; do not buy a breakout, "
+                "chart_ready=1 and chart_buy_setup=1, either a confirmed bounce from repeated support "
+                "or bounded rising-trend continuation; do not buy an overextended breakout, "
                 "and require positive change_m5_pct and change_h1_pct, and "
                 "change_h6_pct no lower than -5% when that value is available. If required 5-minute/hourly "
                 "changes or chart data are missing, stale, negative, or unconfirmed, choose HOLD. "

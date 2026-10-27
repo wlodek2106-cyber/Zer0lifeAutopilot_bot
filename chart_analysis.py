@@ -167,6 +167,8 @@ def analyze_charts(m5_candles, h1_candles, *, now, m5_stale=False, h1_stale=Fals
     result = {
         "chart_ready": 0,
         "chart_buy_setup": 0,
+        "chart_support_bounce": 0,
+        "chart_trend_continuation": 0,
         "chart_sell_setup": 0,
         "chart_m5_candles": len(m5),
         "chart_h1_candles": len(h1),
@@ -249,10 +251,6 @@ def analyze_charts(m5_candles, h1_candles, *, now, m5_stale=False, h1_stale=Fals
         })
 
     last = m5[-1]
-    support_hold = bool(
-        support and last["low"] <= support["high"] + tolerance
-        and last["close"] >= support["low"] and last["close"] > last["open"]
-    )
     volume_ok = volume_ratio is not None and volume_ratio >= 1.0
     bounce_extension = max(tolerance, min((atr_5m or 0) * 2.0, price * 0.01))
     support_hold = bool(
@@ -263,8 +261,28 @@ def analyze_charts(m5_candles, h1_candles, *, now, m5_stale=False, h1_stale=Fals
     momentum_ok = (rsi_5m is not None and 42 <= rsi_5m <= 72
                   and ema20_5m is not None and last["close"] >= ema20_5m
                   and macd_pct is not None and macd_pct >= -0.05)
-    result["chart_buy_setup"] = int(
-        trend >= 0 and support_hold and volume_ok and momentum_ok)
+    support_bounce = bool(trend >= 0 and support_hold and volume_ok and momentum_ok)
+    # A separate continuation setup need not revisit a repeated hourly support.
+    # Require two closed bullish bars, aligned EMAs and bounded extension; never
+    # turn a wick, falling chart or overbought breakout into an entry signal.
+    extension_limit = min((atr_5m or 0) * 2.0, price * 0.01)
+    resistance_room = max(atr_5m or 0, price * 0.005)
+    trend_continuation = bool(
+        trend == 1 and len(m5) >= 2
+        and ema20_5m is not None and ema50_5m is not None
+        and price >= ema20_5m > ema50_5m
+        and extension_limit > 0 and price - ema20_5m <= extension_limit
+        and last["close"] > last["open"]
+        and m5[-2]["close"] > m5[-2]["open"]
+        and last["close"] > m5[-2]["close"]
+        and rsi_5m is not None and 45 <= rsi_5m <= 68
+        and macd_pct is not None and macd_pct >= 0
+        and volume_ratio is not None and volume_ratio >= 0.8
+        and (not resistance or price + resistance_room < resistance["low"])
+    )
+    result["chart_support_bounce"] = int(support_bounce)
+    result["chart_trend_continuation"] = int(trend_continuation)
+    result["chart_buy_setup"] = int(support_bounce or trend_continuation)
 
     near_resistance = bool(
         resistance and last["high"] >= resistance["low"] - tolerance

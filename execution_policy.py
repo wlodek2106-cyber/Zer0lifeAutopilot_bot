@@ -9,7 +9,7 @@ from custody_ledger import USDC, SOL
 from entry_costs import MAX_COST_BPS, MAX_PRICE_IMPACT_PCT, MAX_QUOTE_AGE_SECONDS, assess_entry
 from wallet_runtime import WalletError
 
-VERSION = "independent-execution-v8-five-percent-stop"
+VERSION = "independent-execution-v9-bounded-continuation"
 MAX_POSITIONS = MappingProxyType({"main": 5, "sniper": 5})
 DECISION_SECONDS = 120
 QUOTE_SECONDS = MAX_QUOTE_AGE_SECONDS
@@ -120,7 +120,7 @@ def core_entry_signal(symbol, context):
                     "SKIPPED: Core requires a confirmed rising 1-hour chart trend; flat, falling or missing trends are not entries.")
     if metrics.get("chart_buy_setup") != 1:
         return deny("core_chart_confirmation",
-                    "SKIPPED: charts show no confirmed bounce from a repeated support zone.")
+                    "SKIPPED: charts show neither a confirmed support bounce nor a bounded rising-trend continuation.")
     m5, h1 = metrics.get("change_m5_pct"), metrics.get("change_h1_pct")
     if not (bounded_pct(m5) and bounded_pct(h1)):
         return deny("core_context", "SKIPPED: Core needs fresh 5-minute and 1-hour price changes.")
@@ -154,7 +154,7 @@ def core_entry_signal(symbol, context):
 
 
 def sniper_entry_signal(symbol, context):
-    """Require rising short-term momentum and a confirmed support bounce for Sniper entries."""
+    """Require rising momentum and a confirmed bounce or continuation for Sniper entries."""
     if not isinstance(context, dict) or not isinstance(context.get(symbol), dict):
         return deny("sniper_chart_data",
                     "SKIPPED: fresh 5-minute and 1-hour chart data is unavailable; Sniper BUY is blocked.")
@@ -164,7 +164,7 @@ def sniper_entry_signal(symbol, context):
                     "SKIPPED: fresh 5-minute and 1-hour candles are unavailable; Sniper BUY is blocked.")
     if metrics.get("chart_buy_setup") != 1:
         return deny("sniper_chart_confirmation",
-                    "SKIPPED: the chart has no confirmed bounce from a repeated support zone.")
+                    "SKIPPED: the chart has neither a confirmed support bounce nor a bounded rising-trend continuation.")
     m5, h1 = metrics.get("change_m5_pct"), metrics.get("change_h1_pct")
     if not (bounded_pct(m5) and bounded_pct(h1)):
         return deny("sniper_trend_data",
@@ -319,7 +319,9 @@ def describe():
             "max_positions": dict(MAX_POSITIONS), "liquidity_basis": "executable_route_price_impact",
             "entry_filters_never_block_exits": True,
             "sniper_buy_requires_fresh_chart_confirmation": True,
-            "buy_requires_confirmed_support_bounce": True,
+            "buy_requires_confirmed_support_bounce": False,
+            "buy_requires_confirmed_setup": True,
+            "buy_setups": ["support_bounce", "bounded_trend_continuation"],
             "breakout_chasing_disabled": True,
             "sell_on_fresh_resistance_rejection": True,
             "sniper_buy_requires_positive_m5_h1": True,
