@@ -253,6 +253,28 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
             db.execute("UPDATE custody_meme_assets SET checked_at=?",(int(time.time())-1801,))
         self.assertFalse(self.discovery.entry_allowed(code))
 
+    async def test_status_distinguishes_historical_counts_from_expired_shortlist(self):
+        report = await self.discovery.scan(None)
+        checked = report["checked_at"]
+        self.assertFalse(self.discovery.status_report(checked + 1)["entry_paused"])
+        expired = self.discovery.status_report(checked + 1800)
+        self.assertTrue(expired["entry_paused"])
+        self.assertIn("expired", expired["message"])
+        self.assertEqual(expired["current_shortlist_count"], 0)
+        self.assertEqual(expired["eligible"], 2)
+        self.assertEqual(expired["checked_at"], checked)
+        self.assertFalse(self.discovery.blocked)
+
+    async def test_status_exposes_failed_price_check_without_re_admitting_candidates(self):
+        await self.discovery.scan(None)
+        self.discovery.fail("market-data HTTP 429")
+        self.discovery.provider_cooldown_until = time.monotonic() + 120
+        status = self.discovery.status_report()
+        self.assertTrue(status["entry_paused"])
+        self.assertIn("HTTP 429", status["message"])
+        self.assertEqual(status["current_shortlist_count"], 0)
+        self.assertGreaterEqual(status["retry_after_seconds"], 119)
+
     async def test_price_refresh_cannot_re_admit_or_delete_held_assets(self):
         report=await self.discovery.scan(None)
         code=report["candidates"][0]["code"]

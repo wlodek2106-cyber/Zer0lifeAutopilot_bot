@@ -331,11 +331,11 @@ class CustodyRuntime(WalletRuntime):
         if cooldown:
             return web.json_response({"success": True, "message":
                 f"Market-data rate limit: retry available in {cooldown} seconds. No trade is submitted.",
-                "discovery": self.discovery.report})
+                "discovery": self.discovery.status_report()})
         return web.json_response({"success": True, "message":
             "Candidate scan running. Refresh shortly. No trade is submitted." if self.discovery_task else
             "Recent scan available; manual refresh has a 60-second cooldown. No trade is submitted.",
-                                  "discovery": self.discovery.report})
+                                  "discovery": self.discovery.status_report()})
 
     async def current_prices(self, session, extra_symbols=()):
         prices = await self.prices_fn(session)
@@ -343,8 +343,16 @@ class CustodyRuntime(WalletRuntime):
             try:
                 prices.update(await self.discovery.prices(
                     session, [*self.held_sniper_symbols(), *extra_symbols]))
-            except Exception:
-                self.discovery.fail()
+            except Exception as exc:
+                reason = self.discovery.failure_category(exc)
+                was_blocked = self.discovery.blocked
+                self.discovery.fail(reason)
+                retry = max(60, self.discovery.cooldown_remaining())
+                self.discovery_due = min(self.discovery_due or time.time() + retry,
+                                         time.time() + retry)
+                if not was_blocked:
+                    self.log("Candidate price refresh failed (" + reason +
+                             "); new sniper entries paused; automatic scan retry scheduled.")
         return prices
 
     async def monthly_trading_fee_quote(self, session, force=False):
@@ -770,7 +778,7 @@ class CustodyRuntime(WalletRuntime):
                 "sniper_assets": self.ai_universes()["sniper"],
                 "asset_labels": {s: info.get("label", s) + (" · "+info["mint"][:4]+"…"+info["mint"][-4:]
                                  if s.startswith("M_") else "") for s, info in self.watchlist.items()},
-                "discovery": self.discovery.report if getattr(self, "discovery", None) else None,
+                "discovery": self.discovery.status_report() if getattr(self, "discovery", None) else None,
                 "market_discovery": {
                     "provider": "DexScreener + GeckoTerminal",
                     "mode": "scheduled_market_scan",
@@ -2767,7 +2775,17 @@ class CustodyRuntime(WalletRuntime):
                 await self.ensure_monthly_trading_fee(session, uid)
                 symbols = self.ai_universes()["sniper"]
                 if not symbols:
-                    raise WalletError("No verified shortlist yet. Use Scan candidates, then retry.", 409)
+                    status = self.discovery.status_report()
+                    cooldown = status["retry_after_seconds"]
+                    if cooldown:
+                        raise WalletError(
+                            f"Market-data rate limit. Retry in {cooldown} seconds. "
+                            "No mode was enabled and no trade was submitted.", 409)
+                    self.discovery_due = 0
+                    self.poll_discovery()
+                    raise WalletError(status["message"] +
+                        " A candidate refresh has been requested; retry after it completes. "
+                        "No mode was enabled and no trade was submitted.", 409)
                 if settings["sniper_order_raw"] > self.ledger.balance(uid, SOL) and not any(
                         p["funding_asset"] == SOL for p in self.ledger.positions(uid, "OPEN")):
                     raise WalletError("Недостаточно ваших SOL для снайпера.", 409)

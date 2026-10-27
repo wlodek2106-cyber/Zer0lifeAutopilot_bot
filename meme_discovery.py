@@ -378,6 +378,28 @@ class MemeDiscovery:
         start = (int(now // SHORTLIST_ROTATION_SECONDS) * AI_SHORTLIST_SIZE) % len(ranked)
         return [ranked[(start + offset) % len(ranked)] for offset in range(AI_SHORTLIST_SIZE)]
 
+    def status_report(self, now=None):
+        """Current admission state, not the historical scan counter."""
+        now = time.time() if now is None else now
+        current = self.candidates(now)
+        report = {**self.report, "current_shortlist_count": len(current),
+                  "retry_after_seconds": self.cooldown_remaining()}
+        checked = report.get("checked_at")
+        if self.blocked:
+            report.update(entry_paused=True, message=report.get("message")
+                          or "Candidate checks unavailable. New sniper entries paused.")
+        elif checked is not None and not 0 <= now - checked < 1800:
+            report.update(entry_paused=True, message=
+                "Candidate checks expired (valid for 30 minutes). "
+                "The displayed scan counts are historical. Refresh candidates before new buys.")
+        elif not current:
+            report.update(entry_paused=True, message=
+                "No candidates currently pass the verified shortlist. "
+                "Previous scan counts do not guarantee current eligibility.")
+        else:
+            report["entry_paused"] = False
+        return report
+
     @staticmethod
     def failure_category(exc):
         if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):

@@ -138,6 +138,37 @@ class AILedgerTests(unittest.TestCase):
 
 
 class AIControllerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_shortlist_requests_refresh_without_enabling_mode_or_trading(self):
+        self.service.ledger.settings(101, sniper_enabled=False)
+        self.service.discovery.fail("network timeout")
+        self.service.ensure_monthly_trading_fee = AsyncMock()
+        self.service.background_discovery = AsyncMock()
+        with patch.object(self.service, "uid", return_value=101), patch.object(
+                self.service, "admit_trading"):
+            with self.assertRaisesRegex(WalletError, "network timeout"):
+                await self.service.toggle_sniper(object(), None)
+        await self.service.discovery_task
+        self.service.background_discovery.assert_awaited_once()
+        self.assertFalse(self.service.ledger.settings(101)["sniper_trading"])
+        self.service.trade.assert_not_awaited()
+
+    async def test_candidate_price_failure_is_sanitized_and_schedules_scan_recovery(self):
+        self.service.prices_fn = AsyncMock(return_value={"SOL": 100})
+        self.service.discovery.prices = AsyncMock(
+            side_effect=ValueError("DexScreener unavailable: HTTP 429"))
+        self.service.discovery_due = time.time() + 300
+        messages = []
+        self.service.log = messages.append
+        prices = await self.service.current_prices(None)
+        self.assertEqual(prices, {"SOL": 100})
+        self.assertTrue(self.service.discovery.blocked)
+        self.assertIn("market-data HTTP 429", self.service.discovery.status_report()["message"])
+        self.assertLessEqual(self.service.discovery_due - time.time(), 60)
+        self.assertEqual(len(messages), 1)
+        await self.service.current_prices(None)
+        self.assertEqual(len(messages), 1)
+        self.service.trade.assert_not_awaited()
+
     async def test_finished_analysis_wakes_worker_without_waiting_for_next_tick(self):
         self.service.ai_snapshot = AsyncMock(return_value={"id": "new-analysis"})
         self.assertFalse(self.service._worker_wakeup.is_set())

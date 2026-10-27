@@ -3991,6 +3991,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                     const discovery=ai.discovery||{};
                     document.getElementById('discovery-status').textContent=discovery.entry_paused?discovery.message:
                         discovery.checked_at?(discovery.eligible||0)+' screened · '+(discovery.scanned||0)+' scanned · refreshed '+new Date(discovery.checked_at*1000).toLocaleTimeString('en-GB'):discovery.message||'Candidate scan pending.';
+                    if(discovery.entry_paused&&discovery.checked_at)document.getElementById('discovery-status').textContent+=' Last scan: '+new Date(discovery.checked_at*1000).toLocaleTimeString('en-GB')+' · '+(discovery.eligible||0)+' previously screened (not current eligibility).';
+                    if(discovery.retry_after_seconds)document.getElementById('discovery-status').textContent+=' Provider cooldown: '+discovery.retry_after_seconds+' seconds.';
                     if(discovery.whale_prioritized)document.getElementById('discovery-status').textContent+=' · whale mints screened: '+discovery.whale_prioritized+' ('+(discovery.whale_candidates||0)+' eligible)';
                     document.getElementById('candidate-list').textContent=(ai.sniper_assets||[]).map(code=>{
                         const row=(discovery.candidates||[]).find(item=>item.code===code);
