@@ -488,6 +488,26 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(self.service.discovery_due - time.time(), 299)
         self.assertLessEqual(self.service.discovery_due - time.time(), 300)
 
+    async def test_scan_retry_respects_provider_cooldown_even_with_whale_pending(self):
+        self.service.discovery.provider_cooldown_until = time.monotonic() + 240
+        self.service.discovery.scan = AsyncMock(
+            side_effect=ValueError("DexScreener unavailable: HTTP 429"))
+        self.service.discovery.pending_whale_mints = lambda: ["pending"]
+        self.service.log = lambda message: None
+        await self.service.background_discovery()
+        self.assertGreater(self.service.discovery_due - time.time(), 238)
+        self.assertTrue(self.service.discovery.blocked)
+        self.service.trade.assert_not_awaited()
+
+    async def test_poll_discovery_cannot_bypass_provider_cooldown(self):
+        self.service.discovery.provider_cooldown_until = time.monotonic() + 240
+        self.service.discovery_due = 0
+        self.service.discovery_task = None
+        self.service.background_discovery = AsyncMock()
+        self.service.poll_discovery()
+        self.assertIsNone(self.service.discovery_task)
+        self.service.background_discovery.assert_not_called()
+
     async def test_whale_ai_bypasses_scheduled_cache_but_respects_one_minute_quota(self):
         self.service.market_context_fn = AsyncMock(return_value={
             "SOL": {"change_m5_pct": 1.2}

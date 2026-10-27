@@ -282,6 +282,7 @@ class CustodyRuntime(WalletRuntime):
                 retry_delay = min(900, 60 * (2 ** (self.discovery_failures - 1)))
                 if self.discovery.pending_whale_mints():
                     retry_delay = 60
+                retry_delay = max(retry_delay, self.discovery.cooldown_remaining())
                 reason = self.discovery.failure_category(exc)
                 self.discovery.fail(reason)
                 self.log("Candidate scan failed (" + reason +
@@ -295,6 +296,7 @@ class CustodyRuntime(WalletRuntime):
         finally:
             if self.discovery.pending_whale_mints():
                 retry_delay = 60
+            retry_delay = max(retry_delay, self.discovery.cooldown_remaining())
             self.discovery_due = time.time() + retry_delay
 
     def on_whale_signal(self, event):
@@ -315,15 +317,21 @@ class CustodyRuntime(WalletRuntime):
     def poll_discovery(self):
         if self.discovery_task and self.discovery_task.done():
             self.discovery_task = None
-        if self.discovery_task is None and time.time() >= self.discovery_due:
+        if (self.discovery_task is None and time.time() >= self.discovery_due
+                and not self.discovery.cooldown_remaining()):
             self.discovery_started = time.time()
             self.discovery_task = asyncio.create_task(self.background_discovery())
 
     async def scan_candidates(self, request, session):
         self.admit(self.uid(request))
-        if time.time()-self.discovery_started >= 60:
+        cooldown = self.discovery.cooldown_remaining()
+        if time.time()-self.discovery_started >= 60 and not cooldown:
             self.discovery_due = 0
         self.poll_discovery()
+        if cooldown:
+            return web.json_response({"success": True, "message":
+                f"Market-data rate limit: retry available in {cooldown} seconds. No trade is submitted.",
+                "discovery": self.discovery.report})
         return web.json_response({"success": True, "message":
             "Candidate scan running. Refresh shortly. No trade is submitted." if self.discovery_task else
             "Recent scan available; manual refresh has a 60-second cooldown. No trade is submitted.",

@@ -4,7 +4,7 @@ import json
 import tempfile
 import time
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from solders.pubkey import Pubkey
 from custody_ledger import CustodyLedger
@@ -57,6 +57,78 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
                 return [pool(),pool(OTHER)]
             return [{"chainId":"solana","tokenAddress":MINT},{"chainId":"solana","tokenAddress":OTHER}]
         self.discovery.fetch = AsyncMock(side_effect=fetch)
+
+    def provider_session(self, status=200, headers=None):
+        class Response:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+            async def json(self):
+                return {"pairs": []}
+
+        response = Response()
+        response.status = status
+        response.headers = headers or {}
+        from unittest.mock import Mock
+        return Mock(get=Mock(return_value=response))
+
+    async def test_provider_429_stops_requests_and_respects_retry_after(self):
+        discovery = MemeDiscovery(self.ledger, self.rpc, [])
+        session = self.provider_session(429, {"Retry-After": "240"})
+        with patch("meme_discovery.time.monotonic", return_value=1000):
+            with self.assertRaisesRegex(ValueError, "HTTP 429"):
+                await discovery.fetch(session, "/token-profiles/latest/v1")
+            self.assertEqual(discovery.cooldown_remaining(), 240)
+            with self.assertRaisesRegex(ValueError, "HTTP 429"):
+                await discovery.fetch(session, "/tokens/v1/solana/" + MINT)
+        self.assertEqual(session.get.call_count, 1)
+        self.assertEqual(discovery.hint_cache, {})
+
+    async def test_hint_cache_is_fresh_only_and_never_caches_pool_prices(self):
+        discovery = MemeDiscovery(self.ledger, self.rpc, [])
+        session = self.provider_session()
+        with patch("meme_discovery.time.monotonic", return_value=1000):
+            await discovery.fetch(session, "/token-profiles/latest/v1")
+            await discovery.fetch(session, "/token-profiles/latest/v1")
+        self.assertEqual(session.get.call_count, 1)
+        with patch("meme_discovery.time.monotonic", return_value=1301), patch(
+                "meme_discovery.asyncio.sleep", new_callable=AsyncMock) as sleep:
+            await discovery.fetch(session, "/token-profiles/latest/v1")
+            await discovery.fetch(session, "/tokens/v1/solana/" + MINT)
+            await discovery.fetch(session, "/tokens/v1/solana/" + MINT)
+            self.assertEqual(sleep.await_args.args[0], 1.0)
+        self.assertEqual(session.get.call_count, 4)
+
+    async def test_scan_stops_immediately_on_provider_cooldown(self):
+        discovery = MemeDiscovery(self.ledger, self.rpc, [])
+        session = self.provider_session(429)
+        with self.assertRaisesRegex(ValueError, "HTTP 429"):
+            await discovery.scan(session)
+        self.assertEqual(session.get.call_count, 1)
+        self.assertTrue(discovery.blocked)
+        self.rpc.assert_not_awaited()
+
+    async def test_cooldown_expiry_allows_request_and_clears_failure_count(self):
+        discovery = MemeDiscovery(self.ledger, self.rpc, [])
+        with patch("meme_discovery.time.monotonic", return_value=1000):
+            with self.assertRaises(ValueError):
+                await discovery.fetch(self.provider_session(429), "/tokens/v1/solana/" + MINT)
+        with patch("meme_discovery.time.monotonic", return_value=1061):
+            await discovery.fetch(self.provider_session(), "/tokens/v1/solana/" + MINT)
+        self.assertEqual(discovery.rate_limit_failures, 0)
+        self.assertEqual(discovery.cooldown_remaining(), 0)
+
+    def test_retry_after_accepts_http_date_and_rejects_invalid_values(self):
+        from datetime import datetime, timezone
+        with patch("meme_discovery.datetime") as clock:
+            clock.now.return_value = datetime(2026, 10, 27, tzinfo=timezone.utc)
+            self.assertEqual(MemeDiscovery.retry_after_seconds(
+                "Tue, 27 Oct 2026 00:02:00 GMT"), 120)
+        for value in (None, "invalid", "nan", "inf", "-2"):
+            self.assertEqual(MemeDiscovery.retry_after_seconds(value), 0)
 
     async def test_scan_is_bounded_verified_and_not_a_profit_forecast(self):
         report = await self.discovery.scan(None)

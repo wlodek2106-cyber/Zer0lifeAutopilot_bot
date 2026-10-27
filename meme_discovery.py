@@ -5,6 +5,8 @@ import json
 import math
 import re
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from urllib.parse import quote
 
 import aiohttp
@@ -106,6 +108,12 @@ class MemeDiscovery:
         self.whale_seen = {}
         self.blocked = True
         self.lock = asyncio.Lock()
+        # Shared by discovery and price refreshes, not per participant.
+        self.request_lock = asyncio.Lock()
+        self.next_request_at = 0
+        self.provider_cooldown_until = 0
+        self.rate_limit_failures = 0
+        self.hint_cache = {}
         self.report = {"source": "DexScreener profiles + meme/pump search", "complete": False,
                        "message": "Candidate scan has not run yet.", "eligible": 0}
         with ledger.db() as db:
@@ -139,13 +147,53 @@ class MemeDiscovery:
         return [mint for mint, _ in sorted(
             self.whale_priorities.items(), key=lambda item: item[1])[:30]]
 
+    def cooldown_remaining(self):
+        return max(0, math.ceil(self.provider_cooldown_until - time.monotonic()))
+
+    @staticmethod
+    def retry_after_seconds(value):
+        try:
+            seconds = float(value)
+            if math.isfinite(seconds):
+                return max(0, seconds)
+        except (ValueError, TypeError):
+            pass
+        try:
+            date = parsedate_to_datetime(value)
+            if date.tzinfo is None:
+                date = date.replace(tzinfo=timezone.utc)
+            return max(0, (date - datetime.now(timezone.utc)).total_seconds())
+        except (ValueError, TypeError, OverflowError):
+            return 0
+
     async def fetch(self, session, path):
-        async with session.get("https://api.dexscreener.com" + path,
-                headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
-                timeout=aiohttp.ClientTimeout(total=10)) as response:
-            if response.status != 200:
-                raise ValueError("DexScreener unavailable: HTTP " + str(response.status))
-            return await response.json()
+        # Cache discovery leads only. Prices and eligibility still require fresh
+        # pool responses and the existing on-chain/chart/execution checks.
+        hint = not path.startswith("/tokens/")
+        async with self.request_lock:
+            now = time.monotonic()
+            if self.cooldown_remaining():
+                raise ValueError("DexScreener unavailable: HTTP 429")
+            cached = self.hint_cache.get(path) if hint else None
+            if cached and now - cached[0] < 300:
+                return cached[1]
+            await asyncio.sleep(max(0, self.next_request_at - now))
+            self.next_request_at = time.monotonic() + 1.0
+            async with session.get("https://api.dexscreener.com" + path,
+                    headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+                    timeout=aiohttp.ClientTimeout(total=10)) as response:
+                if response.status == 429:
+                    self.rate_limit_failures = min(6, self.rate_limit_failures + 1)
+                    delay = max(60 * 2 ** (self.rate_limit_failures - 1),
+                                self.retry_after_seconds(response.headers.get("Retry-After")))
+                    self.provider_cooldown_until = time.monotonic() + delay
+                if response.status != 200:
+                    raise ValueError("DexScreener unavailable: HTTP " + str(response.status))
+                data = await response.json()
+                self.rate_limit_failures = 0
+                if hint:
+                    self.hint_cache[path] = (time.monotonic(), data)
+                return data
 
     def assets(self):
         with self.ledger.db() as db:
@@ -172,15 +220,23 @@ class MemeDiscovery:
                     and "meme" in str(row.get("name", "")).lower()][:2]
             except Exception:
                 pass
-            results = await asyncio.gather(
-                self.fetch(session, "/token-profiles/latest/v1"),
-                self.fetch(session, "/token-profiles/recent-updates/v1"),
-                self.fetch(session, "/latest/dex/search?q=" + quote("meme")),
-                self.fetch(session, "/latest/dex/search?q=" + quote("pump")),
-                *[self.fetch(session, "/latest/dex/search?q=" + term)
+            # Do not queue a burst ahead of protective position-price refreshes.
+            paths = [
+                "/token-profiles/latest/v1",
+                "/token-profiles/recent-updates/v1",
+                "/latest/dex/search?q=" + quote("meme"),
+                "/latest/dex/search?q=" + quote("pump"),
+                *["/latest/dex/search?q=" + term
                   for term in ("BONK", "POPCAT", "BOME", *TARGETED_SEARCH_TERMS)],
-                *[self.fetch(session, path) for path in meta_paths],
-                return_exceptions=True)
+                *meta_paths]
+            results = []
+            for path in paths:
+                try:
+                    results.append(await self.fetch(session, path))
+                except Exception as exc:
+                    results.append(exc)
+                    if self.cooldown_remaining():
+                        raise
             mints, failures, sources = list(dict.fromkeys([*whale_mints, *self.aliases])), 0, []
             for result in results:
                 if isinstance(result, BaseException):
