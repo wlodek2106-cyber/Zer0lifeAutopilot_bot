@@ -1783,6 +1783,7 @@ RAW_HTML = r"""<!DOCTYPE html>
     <div id="app" data-ui-version="console-ai-v1" style="display: none;">
         <div id="tab-terminal" class="tab-panel active">
             <header class="page-heading"><div><p class="eyebrow">AI Trader · Personal account</p><h1>Overview</h1></div></header>
+            <button id="btn-ai-crypto-investors" type="button" class="btn-green-main" onclick="gotoTab('ai-crypto-investors', null)">Ai Crypto Investors</button>
             <div class="banner-limit" style="border-color:#ef4444; background:#2a1014; margin-bottom:12px;">
                 <div style="color:#4ade80; font-size:13px; font-weight:800;">Your account · USDC / SOL</div>
                 <div id="wallet-runtime-status" style="color:#cbd5e1; font-size:11px; margin-top:4px;">Personal funds. Trading carries risk.</div>
@@ -2178,6 +2179,11 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <p class="section-note">Default: one analysis every 15 minutes, up to 96 attempted API calls per UTC day across the service, including failed calls. OpenAI API billing is separate and paid by the operator. Only market prices are sent to the model, not keys, Telegram identities or personal balances.</p>
             </details>
             <details id="operator-settings" style="display:none;"><summary>Operator tools · fees &amp; migration</summary><div id="settings-admin"></div></details>
+        </div>
+        <div id="tab-ai-crypto-investors" class="tab-panel">
+            <section class="card" aria-label="Ai Crypto Investors">
+                <h1>Coming Soon</h1>
+            </section>
         </div>
     </div>
 
