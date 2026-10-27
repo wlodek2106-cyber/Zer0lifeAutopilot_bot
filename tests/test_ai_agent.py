@@ -683,6 +683,11 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
                       self.payload["messages"][2]["content"])
         self.assertIn("chart_trend_continuation=1",
                       self.payload["messages"][1]["content"])
+        self.assertIn("one closed bullish 5m candle",
+                      self.payload["messages"][1]["content"])
+        self.assertIn("previous candle need not be bullish",
+                      self.payload["messages"][1]["content"])
+        self.assertNotIn("two closed bullish", json.dumps(self.payload["messages"]))
         self.assertIn("relative strength versus SOL is not applicable",
                       self.payload["messages"][1]["content"])
         self.assertTrue(any(item.startswith("5-minute EMA20/50, RSI14, MACD histogram")

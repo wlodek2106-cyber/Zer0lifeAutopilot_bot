@@ -127,6 +127,9 @@ class ReviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("telegram_user", payload)
             self.assertNotIn("test-not-real", payload)
             self.assertFalse(session.payload["store"])
+            self.assertIn("one closed bullish 5m candle", payload)
+            self.assertIn("previous candle need not be bullish", payload)
+            self.assertNotIn("two closed bullish", payload)
             verdict["sniper"]["amount"] = 999
             with self.assertRaises(ai_risk_review.ReviewError):
                 await ai_risk_review.review(session, decisions, {}, context, {})

@@ -39,7 +39,7 @@ class ChartAnalysisTests(unittest.TestCase):
 
     def test_continuation_still_rejects_weak_volume_red_candles_and_overextension(self):
         now = 1_000_000
-        for scenario in ("weak_volume", "red_last", "red_previous",
+        for scenario in ("weak_volume", "red_last", "doji_last",
                          "falling_close", "overextended"):
             with self.subTest(scenario=scenario):
                 m5, h1 = self.continuation_candles(now)
@@ -47,8 +47,8 @@ class ChartAnalysisTests(unittest.TestCase):
                     m5[-1]["volume"] = 79
                 elif scenario == "red_last":
                     m5[-1]["open"] = m5[-1]["close"] + 0.01
-                elif scenario == "red_previous":
-                    m5[-2]["open"] = m5[-2]["close"] + 0.01
+                elif scenario == "doji_last":
+                    m5[-1]["open"] = m5[-1]["close"]
                 elif scenario == "falling_close":
                     m5[-1]["close"] = m5[-2]["close"] - 0.01
                     m5[-1]["open"] = m5[-1]["close"] - 0.01
@@ -57,6 +57,22 @@ class ChartAnalysisTests(unittest.TestCase):
                 result = chart_analysis.analyze_charts(m5, h1, now=now)
                 self.assertEqual(result["chart_trend_continuation"], 0)
                 self.assertEqual(result["chart_buy_setup"], 0)
+
+    def test_one_closed_green_candle_after_red_can_enter_both_modes(self):
+        now = 1_000_000
+        m5, h1 = self.continuation_candles(now)
+        m5[-2]["open"] = m5[-2]["close"] + 0.01
+        metrics = chart_analysis.analyze_charts(m5, h1, now=now)
+        self.assertLess(m5[-2]["close"], m5[-2]["open"])
+        self.assertGreater(m5[-1]["close"], m5[-1]["open"])
+        self.assertEqual(metrics["chart_trend_continuation"], 1)
+        self.assertEqual(metrics["chart_support_bounce"], 0)
+        metrics.update(change_m5_pct=0.3, change_h1_pct=1.0,
+                       change_h6_pct=0.5, buys_m5=12, sells_m5=8)
+        for signal in (execution_policy.core_entry_signal,
+                       execution_policy.sniper_entry_signal):
+            with self.subTest(mode=signal.__name__):
+                self.assertTrue(signal("SOL", {"SOL": metrics}).allowed)
 
     def test_continuation_still_requires_fresh_and_rising_hourly_chart(self):
         now = 1_000_000
