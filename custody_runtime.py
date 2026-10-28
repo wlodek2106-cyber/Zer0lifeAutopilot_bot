@@ -38,6 +38,7 @@ from solders.signature import Signature
 import ai_decisions
 import ai_risk_review
 import trade_learning
+import trade_audit
 import execution_policy
 import activity_log
 from entry_costs import EntryCostError, quote_amounts
@@ -2483,7 +2484,8 @@ class CustodyRuntime(WalletRuntime):
         execution_started = time.monotonic()
         # The caller's explicit manual action is authoritative, never metadata
         # supplied by a model. Check before RPC, reservation and signing.
-        metadata = {**metadata, "manual_close": manual is True}
+        metadata = {**metadata, "manual_close": manual is True,
+                    "execution_policy_version": execution_policy.VERSION}
         if kind == "SELL":
             self.record_execution_check(uid, execution_policy.sell_authorization(metadata),
                 "exit_policy", kind, metadata.get("symbol", "")).require()
@@ -2583,6 +2585,9 @@ class CustodyRuntime(WalletRuntime):
         await self.reconcile(session)
         self.ledger.audit()
         positions = self.ledger.positions(uid)
+        trade_reviews = {}
+        for review in self.ledger.trade_review_history(uid):
+            trade_reviews.setdefault(review["position_id"], {})[review["kind"]] = review
         with self.ledger.db() as db:
             operations = [dict(r) for r in db.execute(
                 """SELECT o.*, n.delivered_at AS telegram_notice_delivered_at
@@ -2608,6 +2613,9 @@ class CustodyRuntime(WalletRuntime):
                 "profit_usdc": profit if not native else 0, "profit_units": profit,
                 "partner_commission": p["partner_commission_raw"] / scale,
                 "funding_currency": "SOL" if native else "USDC", "profit_pct": profit / cost * 100,
+                "trade_review": trade_reviews.get(p["id"], {}),
+                "closed_at": (datetime.fromtimestamp(p["closed_at"], timezone.utc).isoformat()
+                              if p.get("closed_at") else None),
                 "timestamp": datetime.fromtimestamp(p["created_at"], timezone.utc).isoformat(),
                 "buy_tx": p["buy_tx"], "sell_tx": p["sell_tx"], "status": p["state"],
                 "position_id": p["id"]})
@@ -3300,7 +3308,11 @@ class CustodyRuntime(WalletRuntime):
                     try:
                         sale = await self.trade(session, uid, target["asset"], target["funding_asset"],
                             target["raw"], "SELL", {"output_asset": target["funding_asset"],
-                                "exit_reason": target_reason, "symbol": target["symbol"]},
+                                "exit_reason": target_reason, "symbol": target["symbol"],
+                                "exit_snapshot": trade_audit.exit_snapshot(
+                                    target, self.position_exit_price(target, prices),
+                                    self.position_entry_price(target),
+                                    int(time.time()), execution_policy.VERSION)},
                             target["id"], manual=False)
                         if sale and sale.get("state") == "FAILED":
                             raise WalletError(sale.get("failure_reason") or
@@ -3344,6 +3356,33 @@ class CustodyRuntime(WalletRuntime):
                         frozenset(position["id"] for position in positions)):
                     continue  # Refresh exit checks after a concurrent state change.
                 await self.apply_ai_decision(session, uid, current, positions, prices, snapshot)
+
+    async def process_trade_review(self, session):
+        config = ai_decisions.configuration()
+        # Entry analysis/review has priority. Retrospective work never takes
+        # the custody lock, signs a transaction, or gates exits/withdrawals.
+        if not config["configured"] or self.ai_lock.locked():
+            return
+        row = self.ledger.claim_trade_review(config["max_calls_per_day"])
+        if row is None:
+            return
+        report = None
+        try:
+            report = await trade_audit.review(session, row["facts"], config["model"])
+        except Exception:
+            # Provider bodies may contain secrets; only a fixed safe status is persisted.
+            self.log("Post-trade review unavailable; finalized evidence retained.")
+        self.ledger.finish_trade_review(row, report, config["model"])
+
+    async def trade_review_worker(self):
+        """Separate bounded background loop, including while new trading is OFF."""
+        while True:
+            try:
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
+                    await self.process_trade_review(session)
+            except Exception:
+                self.log("Post-trade review worker paused; execution continues independently.")
+            await asyncio.sleep(60)
 
     async def worker(self):
         # Settings are paused on restart. Explicit close queues run before market scans.

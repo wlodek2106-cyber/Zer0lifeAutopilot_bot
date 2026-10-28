@@ -2213,6 +2213,67 @@ RAW_HTML = r"""<!DOCTYPE html>
     </div>
 
     <script>
+        function tradeAuditText(value) {
+            return String(value ?? '').replace(/[&<>"']/g, ch =>
+                ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+        }
+        function renderTradeAudit(trade) {
+            const labels = {
+                AI_BUY:'AI entry with recorded analysis', MANUAL_BUY:'Manual purchase',
+                MANUAL_SELL:'Manual sale', STOP_LOSS:'Protective stop loss',
+                TRAILING_STOP:'Activated peak trailing stop',
+                LEGACY_AI_SELL:'Legacy AI sale', RESISTANCE_TARGET:'Legacy resistance exit',
+                TAKE_PROFIT:'Legacy take-profit exit', UNKNOWN:'Cause not established'
+            };
+            const reviews = trade.trade_review || {};
+            const phases = trade.status === 'CLOSED' ? ['BUY','SELL'] : ['BUY'];
+            return `<details style="margin-top:12px;line-height:1.6;overflow-wrap:anywhere">
+                <summary>Trade evidence &amp; second-agent review</summary>
+                ${phases.map(kind => {
+                    const row = reviews[kind];
+                    if (!row) return `<p>${kind}: No audit recorded for this historical trade.</p>`;
+                    const facts = row.facts || {};
+                    const trigger = facts.trigger || {};
+                    const snap = trigger.snapshot || {};
+                    const report = row.report;
+                    const state = row.state === 'REVIEWED' ? 'Review complete'
+                        : row.state === 'WAITING_BUDGET' ? 'Waiting for shared AI budget'
+                        : row.state === 'UNAVAILABLE' ? 'AI review unavailable; evidence retained'
+                        : row.state === 'RUNNING' ? 'AI review in progress' : 'AI review queued';
+                    const price = value => Number.isFinite(value) ? Number(value).toPrecision(8) : 'Not recorded';
+                    const triggerNumbers = Object.keys(snap).length
+                        ? `<div>Trigger price: ${price(snap.observed_price)} ${tradeAuditText(facts.funding_currency)}
+                            · Peak: ${price(snap.peak_price)}
+                            · Entry: ${price(snap.entry_price)}</div>
+                            <div>Observed return: ${Number.isFinite(snap.observed_return_pct) ? snap.observed_return_pct.toFixed(3)+'%' : 'Not recorded'}
+                            · Peak return: ${Number.isFinite(snap.peak_return_pct) ? snap.peak_return_pct.toFixed(3)+'%' : 'Not recorded'}
+                            · Pullback: ${Number.isFinite(snap.pullback_from_peak_pct) ? snap.pullback_from_peak_pct.toFixed(3)+'%' : 'Not recorded'}</div>
+                            <div>Trigger time: ${Number.isFinite(snap.observed_at) ? tradeAuditText(new Date(snap.observed_at*1000).toLocaleString()) : 'Not recorded'}
+                            · Policy: ${tradeAuditText(snap.policy_version || 'Not recorded')}</div>` : '';
+                    return `<div style="border-top:1px solid #25332a;padding:12px 0">
+                        <strong>${kind} · Recorded facts</strong>
+                        <div>${tradeAuditText(labels[trigger.source] || labels.UNKNOWN)}</div>
+                        ${trigger.reason ? '<div>Entry reason: '+tradeAuditText(trigger.reason)+'</div>' : ''}
+                        ${trigger.risk_reason ? '<div>Risk/trend check: '+tradeAuditText(trigger.risk_reason)+'</div>' : ''}
+                        ${trigger.source === 'AI_BUY' ? '<div>Bound risk approval: '
+                            +(trigger.risk_approved === true ? 'YES' : 'Not verified')
+                            +' · Trend: '+tradeAuditText(trigger.risk_trend)+'</div>' : ''}
+                        ${triggerNumbers}
+                        <div>Executed price: ${price(facts.fill_price)} ${tradeAuditText(facts.funding_currency)}</div>
+                        <div>Finalized: ${tradeAuditText(new Date(row.finalized_at*1000).toLocaleString())}</div>
+                        <div>Second agent: ${tradeAuditText(state)}</div>
+                        ${row.reviewed_at ? '<div>Reviewed: '+tradeAuditText(new Date(row.reviewed_at*1000).toLocaleString())+'</div>' : ''}
+                        ${row.last_error ? '<div>'+tradeAuditText(row.last_error)+'</div>' : ''}
+                        ${report ? '<div><strong>AI interpretation — not execution evidence</strong></div><div>'
+                            +tradeAuditText(report.assessment)+'</div><div>Lesson: '
+                            +tradeAuditText(report.lesson)+'</div><div>Evidence: '
+                            +tradeAuditText(report.evidence_quality)+' · '+tradeAuditText(row.model)+'</div>' : ''}
+                        <small>${tradeAuditText(facts.limitations)}</small>
+                    </div>`;
+                }).join('')}
+                <small>Retrospective analysis only. It cannot place trades, delay exits or change risk settings. This is not model training or a profit guarantee.</small>
+            </details>`;
+        }
         let tg;
         try {
             tg = window.Telegram?.WebApp;
@@ -4091,7 +4152,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                                         <div>Entry: <span style="color: #fff;">${t.buy_price.toPrecision(4)} ${t.funding_currency||'USDC'}</span></div>
                                         <div>Exit: <span style="color: #fff;">${isClosed ? t.sell_price.toPrecision(4)+' '+(t.funding_currency||'USDC') : 'Pending'}</span></div>
                                         <div>Quantity: <span style="color: #fff;">${t.amount_tokens.toFixed(3)}</span></div>
-                                        <div>Time: <span style="color: #fff;">${t.timestamp}</span></div>
+                                        <div>Opened: <span style="color: #fff;">${t.timestamp}</span></div>
+                                        ${t.closed_at ? '<div>Closed: <span style="color:#fff">'+tradeAuditText(t.closed_at)+'</span></div>' : ''}
                                     </div>
                                     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px; padding-top: 6px; border-top: 1px solid #141b2a;">
                                         <div style="font-size: 11px; color: #64748b;">Result:</div>
@@ -4103,6 +4165,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                                         ${t.buy_tx ? '<a class="tx-link" href="https://solscan.io/tx/' + t.buy_tx + '" target="_blank">↗ Buy transaction</a>' : ''}
                                         ${t.sell_tx ? '<a class="tx-link" style="color: #4ade80;" href="https://solscan.io/tx/' + t.sell_tx + '" target="_blank">↗ Sell transaction</a>' : ''}
                                     </div>
+                                    ${renderTradeAudit(t)}
                                     ${isOpen && t.position_id ? '<button type="button" class="position-close" data-position-id="' + t.position_id + '">Sell this position</button>' : ''}
                                 </div>
                             `;
@@ -4653,6 +4716,7 @@ async def main():
 
     runtime.poll_discovery()
     asyncio.create_task(runtime.worker())
+    asyncio.create_task(runtime.trade_review_worker())
     asyncio.create_task(runtime.recovery_notification_worker())
     await set_telegram_webhook()
     if TELEGRAM_TOKEN:

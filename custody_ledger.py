@@ -9,6 +9,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
+import trade_audit
 
 USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 SOL = "SOL"
@@ -47,7 +48,7 @@ def _balance(db, account, asset):
     return row["raw"] if row else 0
 
 
-class CustodyLedger:
+class CustodyLedger(trade_audit.TradeAuditLedger):
     def __init__(self, path):
         self.path = path
         if os.path.isfile(path) and os.path.getsize(path):
@@ -261,6 +262,7 @@ class CustodyLedger:
                 CREATE INDEX IF NOT EXISTS custody_activity_by_user
                     ON custody_activity_events(uid,created_at DESC);
             """)
+            trade_audit.initialize(db)
             for table, additions in {
                 "custody_users": {
                     "sniper_trading": "INTEGER NOT NULL DEFAULT 0",
@@ -1644,6 +1646,9 @@ class CustodyLedger:
                 db.execute("""INSERT OR IGNORE INTO custody_trade_notifications
                     (operation_id,uid,payload) VALUES(?,?,?)""",
                     (oid, row["uid"], json.dumps(notification, separators=(",", ":"))))
+                trade_audit.record_finalized(db, row, info,
+                    position if row["kind"] == "SELL" else None,
+                    spent, received, fee, commission_total)
 
     def positions(self, uid, state=None):
         with self.db() as db:
@@ -1737,7 +1742,8 @@ class CustodyLedger:
     def ai_allow_call(self, interval, daily_limit, trigger=None):
         now = int(time.time())
         with self.db() as db:
-            latest_attempt = db.execute("SELECT MAX(created_at) FROM custody_ai_calls").fetchone()[0]
+            latest_attempt = db.execute("""SELECT MAX(created_at) FROM custody_ai_calls
+                WHERE id NOT LIKE 'posttrade:%'""").fetchone()[0]
             latest_success = db.execute("SELECT MAX(created_at) FROM custody_ai_analyses").fetchone()[0]
             latest_scope = latest_success if trigger is None else db.execute(
                 "SELECT MAX(created_at) FROM custody_ai_analyses WHERE "

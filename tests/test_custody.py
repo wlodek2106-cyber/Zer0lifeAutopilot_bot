@@ -1163,6 +1163,18 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ledger.operation(operation["id"])["state"], "PREPARED")
         self.assertEqual(self.calls, [])
 
+    async def test_stats_exposes_only_own_trade_evidence_without_operation_wire(self):
+        position = self.open_position_for_close()
+        self.service.reconcile = AsyncMock()
+        own = json.loads((await self.service.stats(Request(101), None)).text)
+        trade = next(t for t in own["trades"] if t["position_id"] == position["id"])
+        self.assertEqual(trade["trade_review"]["BUY"]["facts"]["trigger"]["source"], "UNKNOWN")
+        self.assertEqual(trade["trade_review"]["BUY"]["state"], "QUEUED")
+        self.assertIsNone(trade["closed_at"])
+        other = json.loads((await self.service.stats(Request(202), None)).text)
+        self.assertEqual(other["trades"], [])
+        self.assertNotIn('"wire"', json.dumps(trade["trade_review"]))
+
     def open_position_for_close(self, uid=101):
         invoice = self.ledger.invoice(uid, USDC, 2_000_000)
         self.ledger.credit_deposit(invoice["id"], str(Signature.new_unique()),
