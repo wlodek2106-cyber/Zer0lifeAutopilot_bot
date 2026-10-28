@@ -1721,6 +1721,112 @@ RAW_HTML = r"""<!DOCTYPE html>
                 transition-duration: .01ms !important;
             }
         }
+        /* Desktop terminal: fixed command rail, generous workspace, same mobile DOM. */
+        @media (min-width: 1024px) {
+            html, body { min-height: 100%; }
+            body { overflow: hidden; }
+            #nav.bottom-nav {
+                position: fixed;
+                inset: 0 auto 0 0;
+                z-index: 900;
+                width: 226px;
+                padding: 30px 16px;
+                display: flex;
+                flex-direction: column;
+                justify-content: flex-start;
+                align-items: stretch;
+                gap: 9px;
+                border-top: 0;
+                border-right: 1px solid rgba(210, 235, 194, .14);
+                box-shadow: 12px 0 34px rgba(0, 0, 0, .24), inset -1px 0 0 rgba(255,255,255,.02);
+            }
+            #nav::before {
+                content: "ZER0LIFE";
+                display: block;
+                margin: 4px 10px 28px;
+                padding: 0 0 20px;
+                border-bottom: 1px solid rgba(210, 235, 194, .12);
+                color: #eff4e8;
+                font: 800 15px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+                letter-spacing: .14em;
+            }
+            #nav .nav-btn {
+                flex: 0 0 auto;
+                display: flex;
+                align-items: center;
+                gap: 13px;
+                min-height: 50px;
+                padding: 0 13px;
+                text-align: left;
+                font-size: 13px;
+                letter-spacing: .01em;
+            }
+            #nav .nav-btn span {
+                display: inline-grid;
+                place-items: center;
+                width: 23px;
+                margin: 0;
+                color: #a9bd91;
+                font-size: 18px;
+            }
+            #app .tab-panel {
+                width: auto;
+                max-width: none;
+                height: 100dvh;
+                margin: 0 0 0 226px;
+                padding: 42px clamp(28px, 4vw, 68px) 52px;
+                overflow-x: hidden;
+                overflow-y: auto;
+                scrollbar-color: rgba(200,255,55,.28) rgba(9,13,9,.5);
+                scrollbar-width: thin;
+            }
+            #app .tab-panel.active {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+                grid-auto-rows: max-content;
+                grid-auto-flow: row;
+                align-content: start;
+                align-items: start;
+                gap: 18px;
+            }
+            #app .tab-panel > * { min-width: 0; }
+            #app .page-heading { grid-column: 1 / -1; margin-bottom: 2px; }
+            #app .page-heading h1 { font-size: 32px; }
+            #app .card:not(#partner-program), #app .deposit-modal { margin-bottom: 0; }
+            #app #tab-terminal .account-summary,
+            #app #tab-terminal .overview-funds,
+            #app #tab-terminal .quick-actions,
+            #app #tab-terminal #btn-ai-crypto-investors { grid-column: 1 / -1; }
+            #app #tab-terminal .control-bar { max-width: 680px; margin: 0; }
+            #app #tab-terminal .btn-sell-all { margin: 0; min-height: 46px; }
+            #app #tab-trading #trading-controls,
+            #app #tab-trading #trading-ai-activity { grid-column: 1 / -1; }
+            #app #tab-trading #trading-ai-activity {
+                height: auto;
+                min-height: max-content;
+                align-self: stretch;
+            }
+            #app #tab-trading #trading-strategy,
+            #app #tab-trading #trading-sniper,
+            #app #tab-trading .trading-readiness-card,
+            #app #tab-trading #trading-activity-panel { grid-column: span 1; }
+            #app #tab-trading details { padding: 15px 20px; border: 1px solid rgba(210,235,194,.12); border-radius: 17px; background: rgba(10,15,10,.68); }
+            #app #tab-deposit .deposit-modal,
+            #app #tab-deposit #monthly-trading-fee-card { grid-column: span 1; }
+            #app #tab-deposit .deposit-modal { height: fit-content; }
+            #app #tab-settings #support-card,
+            #app #tab-settings #passkey-settings,
+            #app #tab-settings #settings-order-card { grid-column: span 1; }
+            #app #tab-settings #partner-program { grid-column: 1 / -1; }
+            #app #tab-tariffs > .card,
+            #app #tab-stats #stats-summary,
+            #app #tab-stats #stats-history { grid-column: 1 / -1; }
+            #app .grid-stats { gap: 11px; }
+            #app .log-console { height: 230px; }
+            #app .tariff-packages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            #app .partner-table, #app .partner-invite { max-width: 900px; }
+            #app .sig-input, #app textarea { max-width: 100%; }
+        }
     </style>
 </head>
 <body>
@@ -1788,7 +1894,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         <div id="tab-terminal" class="tab-panel active">
             <header class="page-heading"><div><p class="eyebrow">AI Trader · Personal account</p><h1>Overview</h1></div></header>
             <button id="btn-ai-crypto-investors" type="button" class="btn-green-main" onclick="gotoTab('ai-crypto-investors', null)">Ai Crypto Investors</button>
-            <div class="banner-limit" style="border-color:#ef4444; background:#2a1014; margin-bottom:12px;">
+            <div class="banner-limit account-summary" style="border-color:#ef4444; background:#2a1014; margin-bottom:12px;">
                 <div style="color:#4ade80; font-size:13px; font-weight:800;">Your account · USDC / SOL</div>
                 <div id="wallet-runtime-status" style="color:#cbd5e1; font-size:11px; margin-top:4px;">Personal funds. Trading carries risk.</div>
                 <div id="account-pending-operation-details" role="status" style="display:none;color:#cbd5e1;font-size:11px;margin-top:8px;overflow-wrap:anywhere;white-space:pre-wrap;"></div>
@@ -1808,7 +1914,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <span>Close all my positions</span>
             </button>
 
-            <div class="card" style="border: 1px solid rgba(34, 197, 94, 0.3); background: linear-gradient(135deg, #0e111a 0%, #0a150d 100%);">
+            <div class="card overview-funds" style="border: 1px solid rgba(34, 197, 94, 0.3); background: linear-gradient(135deg, #0e111a 0%, #0a150d 100%);">
                 <div style="font-size: 13px; font-weight: 800; color: #22c55e; margin-bottom: 8px; display: flex; justify-content: space-between;">
                     <span>Available funds</span>
                     <span id="display-username" style="color: #fff; font-size: 12px;"></span>
@@ -1846,7 +1952,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <p id="sniper-pnl" class="section-note">Realized SOL PnL: loading...</p>
             </div>
 
-            <div class="card">
+            <div class="card" id="core-strategy-card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div>
                         <div style="font-size: 17px; font-weight: 800; color: #fff;">Core strategy · USDC</div>
@@ -1865,7 +1971,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <p id="entry-cost-check" class="section-note" aria-live="polite">No entry cost check yet.</p>
             </div>
 
-            <div class="card">
+            <div class="card" id="activity-log-card">
                 <div style="font-size: 12px; font-weight: 700; color: #94a3b8; margin-bottom: 6px;">ACTIVITY LOG</div>
                 <div style="font-size:11px;color:#94a3b8;margin-bottom:8px;">AI decisions are not confirmed trades · times in your timezone</div>
                 <div id="log-box" class="log-console" data-activity-version="decision-history-v1">Loading activity...</div>
@@ -1873,7 +1979,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         </div>
 
         <div id="tab-stats" class="tab-panel">
-            <div class="card">
+            <div class="card" id="stats-summary">
                 <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start;">
                     <div>
                         <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase;">Realized PnL · USDC</div>
@@ -1889,7 +1995,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div class="section-note" style="margin-top:12px;">Totals are shown separately in their settlement currencies; SOL is not converted to USDC.</div>
             </div>
 
-            <div class="card">
+            <div class="card" id="stats-history">
                 <div style="font-size: 13px; font-weight: 800; color: #f8fafc; margin-bottom: 12px;">YOUR TRADES</div>
                 <div id="history-box" style="color: #64748b; font-size: 11px; text-align: center; padding: 20px;">Loading trades...</div>
             </div>
@@ -2048,7 +2154,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         <div id="tab-trading" class="tab-panel">
             <header class="page-heading"><div><p class="eyebrow">Your capital only</p><h1>Trading</h1></div></header>
             <div id="trading-controls"></div>
-            <div class="card"><h3 style="margin-top:0">AI activity</h3>
+            <div class="card" id="trading-ai-activity"><h3 style="margin-top:0">AI activity</h3>
                 <p id="ai-status" class="status-output">Checking AI status...</p>
                 <p id="ai-latency" class="section-note">Analysis timings: awaiting a fresh analysis.</p>
                 <button class="btn-copy" onclick="previewAI()">Check AI · no trade</button>
@@ -2066,11 +2172,11 @@ RAW_HTML = r"""<!DOCTYPE html>
             </div>
             <div id="trading-strategy"></div>
             <div id="trading-sniper"></div>
-            <div class="card">
+            <div class="card trading-readiness-card">
                 <button class="btn-copy" onclick="checkTradingReadiness()">Check readiness · no trade</button>
                 <div id="trading-readiness" class="status-output">Trading involves risk. No guaranteed returns.</div>
             </div>
-            <details><summary>Logs &amp; position controls</summary><div id="trading-activity"></div></details>
+            <details id="trading-activity-panel"><summary>Logs &amp; position controls</summary><div id="trading-activity"></div></details>
         </div>
         <div id="tab-tariffs" class="tab-panel">
             <header class="page-heading"><div><p class="eyebrow">ACCESS PACKAGES</p><h1>Tariffs</h1></div></header>
@@ -2112,7 +2218,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <p class="muted">Save recovery codes shown in the secure browser. Recovery requires your Telegram account, account security code and an unused recovery code; it replaces old passkeys.</p>
                 </details>
             </div>
-            <div class="card"><h3 style="margin-top:0">Order sizes</h3>
+            <div class="card" id="settings-order-card"><h3 style="margin-top:0">Order sizes</h3>
                 <p class="section-note">Saving settings does not start trading.</p>
                 <label class="settings-label" for="settings-order">USDC per core order</label>
                 <input id="settings-order" class="sig-input" type="number" min="0.000001" step="0.000001" value="1">
