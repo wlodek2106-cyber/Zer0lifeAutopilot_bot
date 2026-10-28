@@ -5,11 +5,10 @@ import json
 import math
 import re
 import time
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 from urllib.parse import quote
 
 import aiohttp
+import dexscreener_client as dexscreener
 from solders.pubkey import Pubkey
 from spl_token_support import (
     TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, validate_mint_account,
@@ -108,11 +107,7 @@ class MemeDiscovery:
         self.whale_seen = {}
         self.blocked = True
         self.lock = asyncio.Lock()
-        # Shared by discovery and price refreshes, not per participant.
-        self.request_lock = asyncio.Lock()
-        self.next_request_at = 0
-        self.provider_cooldown_until = 0
-        self.rate_limit_failures = 0
+        # Provider pacing/cooldown belongs to the application, not this scanner.
         self.hint_cache = {}
         self.report = {"source": "DexScreener profiles + meme/pump search", "complete": False,
                        "message": "Candidate scan has not run yet.", "eligible": 0}
@@ -148,61 +143,43 @@ class MemeDiscovery:
             self.whale_priorities.items(), key=lambda item: item[1])[:30]]
 
     def cooldown_remaining(self):
-        return max(0, math.ceil(self.provider_cooldown_until - time.monotonic()))
+        return dexscreener.cooldown_remaining()
 
     @staticmethod
     def retry_after_seconds(value):
-        try:
-            seconds = float(value)
-            if math.isfinite(seconds):
-                return max(0, seconds)
-        except (ValueError, TypeError):
-            pass
-        try:
-            date = parsedate_to_datetime(value)
-            if date.tzinfo is None:
-                date = date.replace(tzinfo=timezone.utc)
-            return max(0, (date - datetime.now(timezone.utc)).total_seconds())
-        except (ValueError, TypeError, OverflowError):
-            return 0
+        return dexscreener.retry_after_seconds(value)
 
-    async def fetch(self, session, path):
+    async def fetch(self, session, path, *, priority=dexscreener.DISCOVERY):
         # Cache discovery leads only. Prices and eligibility still require fresh
         # pool responses and the existing on-chain/chart/execution checks.
         hint = not path.startswith("/tokens/")
-        async with self.request_lock:
-            now = time.monotonic()
-            if self.cooldown_remaining():
-                raise ValueError("DexScreener unavailable: HTTP 429")
-            cached = self.hint_cache.get(path) if hint else None
-            if cached and now - cached[0] < 300:
-                return cached[1]
-            await asyncio.sleep(max(0, self.next_request_at - now))
-            self.next_request_at = time.monotonic() + 1.0
-            async with session.get("https://api.dexscreener.com" + path,
-                    headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
-                    timeout=aiohttp.ClientTimeout(total=10)) as response:
-                if response.status == 429:
-                    self.rate_limit_failures = min(6, self.rate_limit_failures + 1)
-                    delay = max(60 * 2 ** (self.rate_limit_failures - 1),
-                                self.retry_after_seconds(response.headers.get("Retry-After")))
-                    self.provider_cooldown_until = time.monotonic() + delay
-                if response.status != 200:
-                    raise ValueError("DexScreener unavailable: HTTP " + str(response.status))
-                data = await response.json()
-                self.rate_limit_failures = 0
-                if hint:
-                    self.hint_cache[path] = (time.monotonic(), data)
-                return data
+        state = dexscreener.scheduler()
+        now = state.clock()
+        if self.cooldown_remaining():
+            raise dexscreener.ProviderLimited(self.cooldown_remaining())
+        cached = self.hint_cache.get(path) if hint else None
+        if cached and 0 <= now - cached[0] < 300:
+            return cached[1]
+        async with dexscreener.request(session, path, priority=priority,
+                headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=10)) as response:
+            if response.status != 200:
+                raise ValueError("DexScreener unavailable: HTTP " + str(response.status))
+            data = await response.json()
+            if hint:
+                self.hint_cache[path] = (state.clock(), data)
+            return data
 
     def assets(self):
         with self.ledger.db() as db:
             return [dict(row) for row in db.execute("SELECT * FROM custody_meme_assets")]
 
-    async def pairs(self, session, mints):
+    async def pairs(self, session, mints, *, priority=None):
         found = []
         for offset in range(0, len(mints), 30):
-            data = await self.fetch(session, "/tokens/v1/solana/" + ",".join(mints[offset:offset+30]))
+            path = "/tokens/v1/solana/" + ",".join(mints[offset:offset+30])
+            data = (await self.fetch(session, path) if priority is None else
+                    await self.fetch(session, path, priority=priority))
             if not isinstance(data, list):
                 raise ValueError("DexScreener returned an invalid list.")
             found.extend(data)
@@ -385,7 +362,11 @@ class MemeDiscovery:
         report = {**self.report, "current_shortlist_count": len(current),
                   "retry_after_seconds": self.cooldown_remaining()}
         checked = report.get("checked_at")
-        if self.blocked:
+        if report["retry_after_seconds"]:
+            report.update(entry_paused=True, message=
+                "DexScreener rate limit (HTTP 429). Shared market-data requests are paused; "
+                f"automatic retry after at least {report['retry_after_seconds']} seconds.")
+        elif self.blocked:
             report.update(entry_paused=True, message=report.get("message")
                           or "Candidate checks unavailable. New sniper entries paused.")
         elif checked is not None and not 0 <= now - checked < 1800:
@@ -433,7 +414,7 @@ class MemeDiscovery:
         prices = {}
         by_mint = {row["mint"]: row for row in assets}
         best = {}
-        for pair in await self.pairs(session, list(by_mint)):
+        for pair in await self.pairs(session, list(by_mint), priority=dexscreener.PRICE):
             item = pool_metrics(pair)
             if item and item["price"] > 0 and item["mint"] in by_mint:
                 if item["liquidity_usd"] > best.get(item["mint"], {}).get("liquidity_usd", -1):
@@ -450,7 +431,7 @@ class MemeDiscovery:
         return prices
 
     def entry_allowed(self, code):
-        if self.blocked:
+        if self.blocked or self.cooldown_remaining():
             return False
         now = time.time()
         return any(row["code"] == code and 0 <= now - row["checked_at"] < 1800

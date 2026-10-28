@@ -7,6 +7,7 @@ import time
 import aiohttp
 
 import chart_analysis
+import dexscreener_client as dexscreener
 from meme_discovery import DEXES
 
 
@@ -178,8 +179,8 @@ async def fetch_main_market_context(session, watchlist, permitted_symbols):
     if not mints:
         return {}
     url = "https://api.dexscreener.com/tokens/v1/solana/" + ",".join(mints)
-    async with session.get(
-        url,
+    async with dexscreener.request(
+        session, url, priority=dexscreener.CONTEXT,
         headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
         timeout=aiohttp.ClientTimeout(total=8),
     ) as response:
@@ -203,8 +204,8 @@ async def fetch_sniper_market_context(session, watchlist, permitted_symbols):
     pairs = []
     for offset in range(0, len(mints), 30):
         url = "https://api.dexscreener.com/tokens/v1/solana/" + ",".join(mints[offset:offset + 30])
-        async with session.get(
-            url,
+        async with dexscreener.request(
+            session, url, priority=dexscreener.CONTEXT,
             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
             timeout=aiohttp.ClientTimeout(total=8),
         ) as response:

@@ -26,6 +26,7 @@ from solders.hash import Hash
 from solders.instruction import Instruction, AccountMeta
 from custody_runtime import CustodyRuntime
 from market_context import fetch_main_market_context, fetch_sniper_market_context
+import dexscreener_client as dexscreener
 from english_text import english_json_middleware
 from account_security import AccountSecurity
 from web_access import WebAccess
@@ -364,7 +365,8 @@ async def get_token_prices(session: aiohttp.ClientSession) -> dict:
     url = f"https://api.dexscreener.com/tokens/v1/solana/{mints_str}"
     try:
         headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+        async with dexscreener.request(session, url, priority=dexscreener.PRICE,
+                headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as resp:
             if resp.status == 200:
                 data = await resp.json()
                 pairs = data if isinstance(data, list) else []
@@ -660,7 +662,8 @@ async def meme_sniper_worker():
                     trade_id, t_tg_id, sym, mint, entry_sol_price, amount_tokens, half_taken = active_meme
                     url = f"https://api.dexscreener.com/latest/dex/tokens/{mint}"
                     headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-                    async with session.get(url, headers=headers, timeout=5) as resp:
+                    async with dexscreener.request(session, url, priority=dexscreener.PRICE,
+                            headers=headers, timeout=5) as resp:
                         if resp.status == 200:
                             data = await resp.json()
                             pairs = data.get("pairs", [])
@@ -694,7 +697,8 @@ async def meme_sniper_worker():
                         search_url = "https://api.dexscreener.com/latest/dex/search?q=SOL/USDC"
                         headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
                         
-                        async with session.get(search_url, headers=headers, timeout=6) as resp:
+                        async with dexscreener.request(session, search_url, priority=dexscreener.DISCOVERY,
+                                headers=headers, timeout=6) as resp:
                             if resp.status == 200:
                                 data = await resp.json()
                                 pairs = data.get("pairs", [])

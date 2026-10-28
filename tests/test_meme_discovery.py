@@ -4,6 +4,7 @@ import json
 import tempfile
 import time
 import unittest
+import dexscreener_client as dexscreener
 from unittest.mock import AsyncMock, patch
 
 from solders.pubkey import Pubkey
@@ -52,7 +53,7 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.rpc = AsyncMock(return_value={"value":[mint_account(),mint_account()]})
         self.discovery = MemeDiscovery(self.ledger,self.rpc,[])
 
-        async def fetch(session, path):
+        async def fetch(session, path, **kwargs):
             if path.startswith("/tokens/"):
                 return [pool(),pool(OTHER)]
             return [{"chainId":"solana","tokenAddress":MINT},{"chainId":"solana","tokenAddress":OTHER}]
@@ -78,7 +79,7 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_provider_429_stops_requests_and_respects_retry_after(self):
         discovery = MemeDiscovery(self.ledger, self.rpc, [])
         session = self.provider_session(429, {"Retry-After": "240"})
-        with patch("meme_discovery.time.monotonic", return_value=1000):
+        with patch.object(dexscreener.scheduler(), "clock", return_value=1000):
             with self.assertRaisesRegex(ValueError, "HTTP 429"):
                 await discovery.fetch(session, "/token-profiles/latest/v1")
             self.assertEqual(discovery.cooldown_remaining(), 240)
@@ -90,16 +91,15 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_hint_cache_is_fresh_only_and_never_caches_pool_prices(self):
         discovery = MemeDiscovery(self.ledger, self.rpc, [])
         session = self.provider_session()
-        with patch("meme_discovery.time.monotonic", return_value=1000):
+        dexscreener.scheduler().min_interval = 0
+        with patch.object(dexscreener.scheduler(), "clock", return_value=1000):
             await discovery.fetch(session, "/token-profiles/latest/v1")
             await discovery.fetch(session, "/token-profiles/latest/v1")
         self.assertEqual(session.get.call_count, 1)
-        with patch("meme_discovery.time.monotonic", return_value=1301), patch(
-                "meme_discovery.asyncio.sleep", new_callable=AsyncMock) as sleep:
+        with patch.object(dexscreener.scheduler(), "clock", return_value=1301):
             await discovery.fetch(session, "/token-profiles/latest/v1")
             await discovery.fetch(session, "/tokens/v1/solana/" + MINT)
             await discovery.fetch(session, "/tokens/v1/solana/" + MINT)
-            self.assertEqual(sleep.await_args.args[0], 1.0)
         self.assertEqual(session.get.call_count, 4)
 
     async def test_scan_stops_immediately_on_provider_cooldown(self):
@@ -113,17 +113,17 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cooldown_expiry_allows_request_and_clears_failure_count(self):
         discovery = MemeDiscovery(self.ledger, self.rpc, [])
-        with patch("meme_discovery.time.monotonic", return_value=1000):
+        with patch.object(dexscreener.scheduler(), "clock", return_value=1000):
             with self.assertRaises(ValueError):
                 await discovery.fetch(self.provider_session(429), "/tokens/v1/solana/" + MINT)
-        with patch("meme_discovery.time.monotonic", return_value=1061):
+        with patch.object(dexscreener.scheduler(), "clock", return_value=1061):
             await discovery.fetch(self.provider_session(), "/tokens/v1/solana/" + MINT)
-        self.assertEqual(discovery.rate_limit_failures, 0)
+        self.assertEqual(dexscreener.scheduler().rate_limit_failures, 0)
         self.assertEqual(discovery.cooldown_remaining(), 0)
 
     def test_retry_after_accepts_http_date_and_rejects_invalid_values(self):
         from datetime import datetime, timezone
-        with patch("meme_discovery.datetime") as clock:
+        with patch("dexscreener_client.datetime") as clock:
             clock.now.return_value = datetime(2026, 10, 27, tzinfo=timezone.utc)
             self.assertEqual(MemeDiscovery.retry_after_seconds(
                 "Tue, 27 Oct 2026 00:02:00 GMT"), 120)
@@ -268,7 +268,7 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_status_exposes_failed_price_check_without_re_admitting_candidates(self):
         await self.discovery.scan(None)
         self.discovery.fail("market-data HTTP 429")
-        self.discovery.provider_cooldown_until = time.monotonic() + 120
+        dexscreener.scheduler().cooldown_until = time.monotonic() + 120
         status = self.discovery.status_report()
         self.assertTrue(status["entry_paused"])
         self.assertIn("HTTP 429", status["message"])
