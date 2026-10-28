@@ -60,7 +60,7 @@ MAIN_CHART_DATA_CAPABILITIES = {
         "Closed 5-minute and 1-hour OHLCV candles from the selected Solana pool",
         "Repeated support/resistance areas from confirmed hourly swing points",
         "5-minute EMA20/50, RSI14, MACD histogram, ATR and same-timeframe relative volume",
-        "Confirmed 5-minute support-bounce or bounded rising-trend continuation entries; resistance-rejection exits",
+        "Confirmed 5-minute support-bounce or bounded rising-trend continuation entries; resistance context only",
     ],
     "unavailable": [
         "Full order-book depth, news/fundamentals and token-safety guarantees",
@@ -239,12 +239,14 @@ async def analyze(session, market, universes, screening=None, main_context=None,
                 "The previous candle need not be bullish. Continuation still requires "
                 "relative volume at least 0.8x, limited extension and room below known resistance. "
                 "A support bounce still requires relative volume at least 1.0x. Breakout chasing is disabled "
-                "and the server enforces this. A fresh chart_sell_setup at repeated resistance can trigger an "
-                "automatic sale of an owned position only when its current gross price is above entry. "
+                "and the server enforces this. Resistance is analysis context only and cannot trigger a sale. "
                 "Do not treat 24-hour total volume as relative volume, and do not invent candle signals when "
-                "chart data is missing or stale. Consider chart_sell_setup only as evidence for exiting an "
-                "already-owned spot position; SELL never opens a short. Server stop-loss and trailing-exit controls "
-                "remain authoritative. Missing or conflicting evidence means HOLD. These heuristics are not "
+                "chart data is missing or stale. Do not issue SELL: use HOLD for existing positions. "
+                "The server rejects AI SELL in both modes. Automatic sales are limited to a 5% stop below "
+                "entry or a 2% pullback from the tracked peak after reaching +3.5%, in the funding currency. "
+                "Reaching +3.5% alone does not sell; a continuing rise does not trigger the trail. "
+                "Explicit manual sales remain available. These triggers do not guarantee realized profit or fill prices. "
+                "Missing or conflicting evidence means HOLD. These heuristics are not "
                 "backtested and do not predict profit; never force a trade when no candidate qualifies.")},
             {"role": "system", "content": (
                 "For Sniper (SOL) BUY, require the supplied numeric chart context to have "

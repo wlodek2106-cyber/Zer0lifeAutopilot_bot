@@ -9,7 +9,7 @@ from custody_ledger import USDC, SOL
 from entry_costs import MAX_COST_BPS, MAX_PRICE_IMPACT_PCT, MAX_QUOTE_AGE_SECONDS, assess_entry
 from wallet_runtime import WalletError
 
-VERSION = "independent-execution-v9-bounded-continuation"
+VERSION = "independent-execution-v10-protective-exits-only"
 MAX_POSITIONS = MappingProxyType({"main": 5, "sniper": 5})
 DECISION_SECONDS = 120
 QUOTE_SECONDS = MAX_QUOTE_AGE_SECONDS
@@ -75,32 +75,23 @@ def sniper_exit_reason(price, entry, peak):
 
 
 def resistance_exit_reason(price, entry, current_price_usd, metrics, snapshot_created_at, now=None):
-    """Sell an owned position on a fresh, confirmed rejection at repeated resistance."""
-    now = time.time() if now is None else now
-    resistance_low = metrics.get("chart_resistance_low_usd") if isinstance(metrics, dict) else None
-    resistance_high = metrics.get("chart_resistance_high_usd") if isinstance(metrics, dict) else None
-    chart_price = metrics.get("chart_price_usd") if isinstance(metrics, dict) else None
-    near_price_zone = (
-        positive(current_price_usd) and positive(resistance_low) and positive(resistance_high)
-        and positive(chart_price) and resistance_high >= resistance_low
-        and resistance_low - (resistance_high - resistance_low) <= current_price_usd
-        <= resistance_high + (resistance_high - resistance_low)
-        and abs(current_price_usd / chart_price - 1) <= 0.01
-    )
-    if not (positive(price) and positive(entry) and price > entry
-            and isinstance(metrics, dict)
-            and metrics.get("chart_ready") == 1
-            and metrics.get("chart_sell_setup") == 1
-            and near_price_zone
-            and type(metrics.get("chart_resistance_touches_h1")) in (int, float)
-            and metrics["chart_resistance_touches_h1"] >= 2
-            and type(snapshot_created_at) in (int, float)
-            and math.isfinite(snapshot_created_at)
-            and type(metrics.get("chart_m5_age_seconds")) in (int, float)
-            and 0 <= metrics["chart_m5_age_seconds"] <= 7 * 60
-            and 0 <= now - snapshot_created_at + metrics["chart_m5_age_seconds"] <= 7 * 60):
-        return None
-    return "RESISTANCE_TARGET"
+    """Resistance remains analysis context, never an independent sale trigger."""
+    return None
+
+
+def sell_authorization(metadata):
+    """Only explicit manual exits or deterministic protection may request a sale."""
+    if not isinstance(metadata, dict) or "ai_analysis" in metadata:
+        return deny("ai_sell_disabled",
+            "BLOCKED: AI SELL cannot close a position. Automatic exits use only the "
+            "5% stop or the 2% peak trail activated after +3.5%. Manual sales remain available.")
+    if metadata.get("manual_close") is True:
+        return allow()
+    if metadata.get("exit_reason") in ("STOP_LOSS", "TRAILING_STOP"):
+        return allow()
+    return deny("exit_policy",
+        "BLOCKED: no permitted automatic exit trigger. Resistance and AI signals "
+        "cannot independently close a position.")
 
 
 def risk_exit(price, entry, peak=None):
@@ -209,6 +200,8 @@ def proposal(*, mode, decision, universe, created_at, original, prices, samples,
         return deny("stale", "SKIPPED: AI decision is stale or has an invalid timestamp.")
     if action == "HOLD":
         return deny("hold", "WAIT: AI chose HOLD. No transaction requested.")
+    if action == "SELL":
+        return sell_authorization({"ai_analysis": True})
     if symbol not in universe:
         return deny("universe", "BLOCKED: the proposed asset is not currently allowlisted.")
     old, price = original.get(symbol), prices.get(symbol)
@@ -220,9 +213,6 @@ def proposal(*, mode, decision, universe, created_at, original, prices, samples,
             return deny("sol_price", "SKIPPED: valid SOL reference prices are unavailable.")
         if abs((price / sol) / (old / old_sol) - 1) > .01:
             return deny("relative_price", "SKIPPED: token/SOL price drift exceeds the 1% safety limit.")
-    if action == "SELL":
-        return allow() if any(p["symbol"] == symbol for p in held) else deny(
-            "sell_skipped", "SKIPPED: no owned open position in this asset.")
     if (type(samples.get(symbol)) is not int or samples[symbol] < 5
             or (mode == "sniper" and (type(samples.get("SOL")) is not int or samples["SOL"] < 5))):
         return deny("warmup", "SKIPPED: fewer than five price samples; waiting for market-data warm-up.")
@@ -255,7 +245,7 @@ def order(*, uid, kind, asset, output_asset, raw, metadata, position_id,
                 or position["state"] != ("RESERVED" if reserved else "OPEN")):
             return deny("ownership", "BLOCKED: sell does not match this account's owned position.")
         # Entry-efficiency/position-count filters must never prevent an exit.
-        return allow()
+        return sell_authorization(metadata)
     if asset not in (USDC, SOL) or not settings:
         return deny("funding", "BLOCKED: invalid funding account.")
     mode = "main" if asset == USDC else "sniper"

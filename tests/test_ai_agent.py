@@ -574,7 +574,10 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.snapshot["universes"]=self.service.ai_universes()
         self.snapshot["prices"][code]=.01
         await self.apply(prices={**self.prices,code:.01},positions=positions)
-        self.assertEqual(self.service.trade.await_args.args[2:6],(mint,SOL,50_000_000,"SELL"))
+        self.service.trade.assert_not_awaited()
+        # Delisting does not block deterministic protection of an owned position.
+        self.assertEqual(self.service.exit_reason(
+            positions[0], {**self.prices, code: .009, "SOL": 100}), "STOP_LOSS")
         self.assertTrue(self.service.ledger.audit())
 
     async def test_no_buy_for_stale_drifting_nan_or_unwarmed_data(self):
@@ -776,6 +779,21 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         position = {"symbol": "WIF", "funding_asset": SOL, "cost_raw": 5_000_000,
                     "raw": 250_000, "decimals": 6, "peak_price": 0.0213}
         self.assertIsNone(self.service.exit_reason(position, {"WIF": 2.13, "SOL": 100}))
+
+    async def test_both_modes_ignore_resistance_and_keep_growing_positions_open(self):
+        metrics = {"chart_ready": 1, "chart_sell_setup": 1,
+            "chart_resistance_low_usd": 2.0, "chart_resistance_high_usd": 2.3,
+            "chart_resistance_touches_h1": 3, "chart_m5_age_seconds": 30,
+            "chart_price_usd": 2.1}
+        for asset, cost in ((SOL, 5_000_000), (USDC, 500_000)):
+            for price in (1.99, 2.01, 2.069, 2.07, 2.1, 2.2):
+                with self.subTest(funding=asset, price=price):
+                    position = {"symbol": "WIF", "funding_asset": asset,
+                        "cost_raw": cost, "raw": 250_000, "decimals": 6,
+                        "peak_price": (price / 100 if asset == SOL else price)}
+                    self.assertIsNone(self.service.exit_reason(
+                        position, {"WIF": price, "SOL": 100},
+                        metrics=metrics, snapshot_created_at=time.time()))
 
     async def test_native_realized_profit_is_sol_not_fabricated_usdc(self):
         ledger = self.service.ledger

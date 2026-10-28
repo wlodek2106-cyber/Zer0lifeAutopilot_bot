@@ -30,16 +30,20 @@ class PolicyTests(unittest.TestCase):
                 self.assertIsNone(exit_reason(1.015, 1.0, 1.035))
                 self.assertEqual(exit_reason(1.014, 1.0, 1.035), "TRAILING_STOP")
                 self.assertIsNone(exit_reason(1.035, 1.0, 1.035))
+                self.assertIsNone(exit_reason(0.9947, 1.0, 1.02))
+                self.assertIsNone(exit_reason(1.0349, 1.0, 1.0349))
+                self.assertIsNone(exit_reason(1.10, 1.0, 1.10))
+                self.assertEqual(exit_reason(1.078, 1.0, 1.10), "TRAILING_STOP")
 
-    def test_resistance_rejection_exit_requires_fresh_repeated_zone_and_gross_gain(self):
+    def test_resistance_rejection_never_independently_triggers_a_sale(self):
         metrics = {
             "chart_ready": 1, "chart_sell_setup": 1,
             "chart_resistance_low_usd": 103.0, "chart_resistance_high_usd": 104.0,
             "chart_resistance_touches_h1": 2, "chart_m5_age_seconds": 30,
             "chart_price_usd": 103.2,
         }
-        self.assertEqual(policy.resistance_exit_reason(
-            103.1, 100.0, 103.3, metrics, 1000, now=1100), "RESISTANCE_TARGET")
+        self.assertIsNone(policy.resistance_exit_reason(
+            103.1, 100.0, 103.3, metrics, 1000, now=1100))
         self.assertIsNone(policy.resistance_exit_reason(
             99.0, 100.0, 103.3, metrics, 1000, now=1100))
         self.assertIsNone(policy.resistance_exit_reason(
@@ -73,6 +77,29 @@ class PolicyTests(unittest.TestCase):
             universes={"main": ["SOL"], "sniper": []}, balance=1_000_000)
         values.update(changes)
         return policy.order(**values)
+
+    def test_ai_sell_is_blocked_in_both_modes_at_loss_or_profit(self):
+        for mode in ("main", "sniper"):
+            for value in (99.47, 103.5, 110.0):
+                with self.subTest(mode=mode, price=value):
+                    result = self.proposal(mode=mode,
+                        decision={"action": "SELL", "symbol": "TOKEN", "reason": "sell now"},
+                        universe=["TOKEN"], held=[{"symbol": "TOKEN"}],
+                        original={"TOKEN": value, "SOL": 100},
+                        prices={"TOKEN": value, "SOL": 100})
+                    self.assertEqual(result.code, "ai_sell_disabled")
+                    self.assertFalse(result.allowed)
+
+    def test_only_manual_or_protective_exit_metadata_is_allowed(self):
+        for info in ({}, {"exit_reason": "RESISTANCE_TARGET"},
+                     {"exit_reason": "TAKE_PROFIT"}, {"manual_close": "true"},
+                     {"ai_analysis": "id", "manual_close": True},
+                     {"ai_analysis": "id", "exit_reason": "STOP_LOSS"}):
+            with self.subTest(info=info):
+                self.assertFalse(policy.sell_authorization(info).allowed)
+        for info in ({"manual_close": True}, {"exit_reason": "STOP_LOSS"},
+                     {"exit_reason": "TRAILING_STOP"}):
+            self.assertTrue(policy.sell_authorization(info).allowed)
 
     def test_reason_is_data_not_an_instruction_and_limits_are_immutable(self):
         self.assertTrue(self.proposal().allowed)
@@ -140,11 +167,11 @@ class PolicyTests(unittest.TestCase):
                 self.assertTrue(policy.proposal(
                     held=four_open, **{**proposal_values,
                         "sniper_context": {"WIF": metrics}}).allowed)
-        self.assertTrue(policy.proposal(
+        self.assertEqual(policy.proposal(
             held=[{"symbol": "WIF"}],
             **{**proposal_values, "decision": {
                 "action": "SELL", "symbol": "WIF", "reason": "exit"},
-               "sniper_context": {}}).allowed)
+               "sniper_context": {}}).code, "ai_sell_disabled")
 
         order_values = dict(uid=101, kind="BUY", asset=SOL, output_asset="wif-mint",
             raw=5_000_000, metadata={"symbol": "WIF", "decimals": 6},
@@ -194,9 +221,9 @@ class PolicyTests(unittest.TestCase):
             with self.subTest(trend=trend):
                 context = {"SOL": {**metrics, "chart_trend_h1": trend}}
                 self.assertEqual(self.proposal(main_context=context).code, "core_trend")
-                self.assertTrue(self.proposal(main_context=context, decision={
+                self.assertEqual(self.proposal(main_context=context, decision={
                     "action": "SELL", "symbol": "SOL", "reason": "exit"},
-                    held=[{"symbol": "SOL"}]).allowed)
+                    held=[{"symbol": "SOL"}]).code, "ai_sell_disabled")
         self.assertTrue(self.proposal(main_context={"SOL": {**metrics, "chart_trend_h1": 1}}).allowed)
 
     def test_order_requires_saved_size_allowlisted_mint_and_enabled_mode(self):
@@ -215,7 +242,8 @@ class PolicyTests(unittest.TestCase):
                     "symbol": "SOL", "raw": 100, "state": "OPEN"}
         changes = dict(kind="SELL", asset=SOL, output_asset=USDC, raw=100,
                        position_id="owned", positions=[position], settings={"trading": False},
-                       universes={"main": [], "sniper": []}, balance=0)
+                       universes={"main": [], "sniper": []}, balance=0,
+                       metadata={"manual_close": True})
         self.assertTrue(self.order(**changes).allowed)
         self.assertFalse(self.order(**{**changes, "uid": 202}).allowed)
         self.assertFalse(self.order(**{**changes, "raw": 99}).allowed)
@@ -298,7 +326,7 @@ class RuntimePolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ledger.pending(), [])
 
         sell_info = {"symbol": position["symbol"], "decimals": position["decimals"],
-                     "output_asset": position["funding_asset"]}
+                     "output_asset": position["funding_asset"], "manual_close": True}
         self.service.authorize_execution_order(101, position["asset"],
             position["funding_asset"], position["raw"], "SELL", sell_info,
             position_id=position["id"])
@@ -320,6 +348,42 @@ class RuntimePolicyTests(unittest.IsolatedAsyncioTestCase):
             position["funding_asset"], position["raw"], "SELL", info,
             position_id=position["id"], reserved=True)
         self.assertEqual(self.ledger.operation(row["id"])["state"], "RESERVED")
+
+    async def test_ai_sell_is_rejected_before_network_or_reservation(self):
+        position = fixtures.RuntimeTests.open_position_for_close(self)
+        for metadata in (
+                {"ai_analysis": "old-analysis"},
+                {"ai_analysis": "old-analysis", "manual_close": True},
+                {"exit_reason": "RESISTANCE_TARGET"},
+                {"manual_close": True}):
+            with self.subTest(metadata=metadata):
+                with self.assertRaises(policy.ExecutionDenied):
+                    await self.service.trade(None, 101, position["asset"],
+                        position["funding_asset"], position["raw"], "SELL",
+                        metadata, position["id"], manual=False)
+                self.service.reconcile.assert_not_awaited()
+                self.service.rpc.assert_not_awaited()
+                self.service.send_via_jito.assert_not_awaited()
+                self.assertEqual(self.ledger.pending(), [])
+                self.assertEqual(self.ledger.positions(101, "OPEN")[0]["id"], position["id"])
+        self.assertTrue(self.ledger.audit())
+
+    async def test_legacy_reserved_ai_sell_cannot_be_prepared_or_broadcast(self):
+        position = fixtures.RuntimeTests.open_position_for_close(self)
+        info = {"output_asset": position["funding_asset"],
+                "ai_analysis": "old-analysis", "ai_created_at": time.time(),
+                "manual_close": False}
+        row = self.ledger.reserve(101, "legacy-ai-sell", "SELL", position["asset"],
+            position["raw"], info, position_id=position["id"])
+        with self.assertRaises(policy.ExecutionDenied):
+            await self.service.send_reserved(
+                None, SimpleNamespace(signatures=[Signature.new_unique()]), row, info)
+        self.assertEqual(self.ledger.operation(row["id"])["state"], "FAILED")
+        self.assertEqual(self.ledger.positions(101, "OPEN")[0]["id"], position["id"])
+        self.assertEqual(self.ledger.pending(), [])
+        self.service.rpc.assert_not_awaited()
+        self.service.send_via_jito.assert_not_awaited()
+        self.assertTrue(self.ledger.audit())
 
     async def blocked_send(self, change):
         row, info = self.reserved_buy()

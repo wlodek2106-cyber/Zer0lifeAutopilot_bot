@@ -2481,6 +2481,12 @@ class CustodyRuntime(WalletRuntime):
 
     async def trade(self, session, uid, asset, output_asset, raw, kind, metadata, position_id=None, manual=False):
         execution_started = time.monotonic()
+        # The caller's explicit manual action is authoritative, never metadata
+        # supplied by a model. Check before RPC, reservation and signing.
+        metadata = {**metadata, "manual_close": manual is True}
+        if kind == "SELL":
+            self.record_execution_check(uid, execution_policy.sell_authorization(metadata),
+                "exit_policy", kind, metadata.get("symbol", "")).require()
         if getattr(self, "web_access", None):
             self.web_access.require(uid, kind, position_id, manual)
         self.admit(uid)
@@ -3402,8 +3408,7 @@ class CustodyRuntime(WalletRuntime):
             reason = execution_policy.risk_exit_reason(price, entry, max(peak, entry, price))
         if reason:
             return reason
-        return execution_policy.resistance_exit_reason(
-            price, entry, prices.get(position["symbol"]), metrics, snapshot_created_at, now=now)
+        return None
 
     def exit_triggered(self, position, prices):
         return self.exit_reason(position, prices) is not None
@@ -3483,15 +3488,11 @@ class CustodyRuntime(WalletRuntime):
                     note("risk_review", str(exc))
                     continue
             if action == "SELL":
-                position = next((p for p in held if p["symbol"] == symbol), None)
-                if position and self.ledger.ai_claim(snapshot["id"], uid, mode):
-                    await self.observed_ai_trade(uid, snapshot, mode, session, uid, position["asset"],
-                        funding, position["raw"], "SELL",
-                        {"output_asset": funding, "ai_analysis": snapshot["id"],
-                         "ai_created_at": snapshot["created_at"]}, position["id"])
-                    return
-                note("sell_skipped", "SKIPPED: no owned open position in this asset." if not position else
-                     "SKIPPED: this analysis was already claimed; no automatic retry.")
+                # Defence in depth: even a replaced proposal gate must not
+                # turn an analyst SELL into an execution request.
+                note("ai_sell_disabled", "BLOCKED: AI SELL is advisory only; automatic "
+                     "sales use the 5% stop or the peak trail activated after +3.5%.")
+                continue
             elif action == "BUY":
                 if mode == "sniper":
                     try:

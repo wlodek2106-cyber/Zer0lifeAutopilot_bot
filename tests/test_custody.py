@@ -1174,7 +1174,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.ledger.finalize(buy["id"], 1_000_000, 5000, 10_000_000)
         return self.ledger.positions(uid, "OPEN")[0]
 
-    def test_fresh_repeated_resistance_rejection_exits_only_above_entry(self):
+    def test_fresh_repeated_resistance_rejection_does_not_close_position(self):
         position = self.open_position_for_close()
         now = int(time.time())
         metrics = {
@@ -1183,9 +1183,9 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             "chart_resistance_touches_h1": 2, "chart_m5_age_seconds": 30,
             "chart_price_usd": 103.2,
         }
-        self.assertEqual(self.service.exit_reason(
+        self.assertIsNone(self.service.exit_reason(
             position, {"BOME": 103.3}, metrics=metrics,
-            snapshot_created_at=now - 100, now=now), "RESISTANCE_TARGET")
+            snapshot_created_at=now - 100, now=now))
         self.assertIsNone(self.service.exit_reason(
             position, {"BOME": 99.0}, metrics=metrics,
             snapshot_created_at=now - 100, now=now))

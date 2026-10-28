@@ -184,8 +184,8 @@ class ActivityTests(unittest.IsolatedAsyncioTestCase):
         before = self.entries()
         await self.apply()
         self.assertEqual(before, self.entries())
-        self.assertTrue({"decision", "hold", "sell_skipped"} <= self.codes())
-        self.assertIn("no owned open position", json.dumps(before))
+        self.assertTrue({"decision", "hold", "ai_sell_disabled"} <= self.codes())
+        self.assertIn("AI SELL cannot close a position", json.dumps(before))
         self.runtime.trade.assert_not_awaited()
         self.runtime.rpc.assert_not_awaited()
         self.assertTrue(self.ledger.audit())
@@ -202,6 +202,7 @@ class ActivityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("price", self.codes())
         self.snapshot["id"] = "two"
         self.snapshot["decisions"]["main"]["action"] = "HOLD"
+        self.snapshot["decisions"]["sniper"]["action"] = "BUY"
         await self.apply(prices={"SOL": 102., "WIF": 2.})
         self.assertIn("relative_price", self.codes())
         self.runtime.trade.assert_not_awaited()
