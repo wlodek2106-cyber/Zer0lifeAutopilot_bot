@@ -2613,6 +2613,9 @@ class CustodyRuntime(WalletRuntime):
                 "profit_usdc": profit if not native else 0, "profit_units": profit,
                 "partner_commission": p["partner_commission_raw"] / scale,
                 "funding_currency": "SOL" if native else "USDC", "profit_pct": profit / cost * 100,
+                "strategy": p.get("strategy", "legacy"),
+                "entry_step": p.get("entry_step"), "exit_step": p.get("exit_step"),
+                "exit_reason": p.get("exit_reason", ""),
                 "trade_review": trade_reviews.get(p["id"], {}),
                 "closed_at": (datetime.fromtimestamp(p["closed_at"], timezone.utc).isoformat()
                               if p.get("closed_at") else None),
@@ -3544,6 +3547,7 @@ class CustodyRuntime(WalletRuntime):
                     await self.observed_ai_trade(uid, snapshot, mode, session, uid, funding,
                         asset_for_mint(watch["mint"]), settings[size_key], "BUY",
                         {"symbol": symbol, "output_asset": asset_for_mint(watch["mint"]),
+                         "strategy": mode,
                          "decimals": watch["decimals"], "ai_analysis": snapshot["id"],
                          "ai_created_at": snapshot["created_at"]})
                     return

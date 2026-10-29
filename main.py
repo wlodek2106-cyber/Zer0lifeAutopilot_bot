@@ -2291,8 +2291,51 @@ RAW_HTML = r"""<!DOCTYPE html>
             <details id="operator-settings" style="display:none;"><summary>Operator tools · fees &amp; migration</summary><div id="settings-admin"></div></details>
         </div>
         <div id="tab-ai-crypto-investors" class="tab-panel">
-            <section class="card" aria-label="Ai Crypto Investors">
-                <h1>Coming Soon</h1>
+            <header class="page-heading">
+                <div><p class="eyebrow">AI Trader · Independent strategy</p><h1>AI Crypto Investors</h1></div>
+            </header>
+            <section class="card" aria-label="AI Crypto Investors status">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+                    <div><h2 style="margin:0">Solana portfolio</h2>
+                        <p class="section-note" style="margin:5px 0 0">USDC and SOL · screened discovery universe</p></div>
+                    <span id="investor-mode-status" style="border:1px solid #536c20;border-radius:999px;padding:7px 11px;color:#c3f26b;font-size:11px;font-weight:800;letter-spacing:.06em">SETUP ONLY · NO ORDERS</span>
+                </div>
+                <p class="section-note" style="margin-top:16px">
+                    This is a read-only setup preview. Its staged-order engine is not connected yet, so this page cannot submit buys or sales.
+                    Core and Meme Sniper are separate and unchanged. Discovery is bounded to up to 200 new mints and 40 on-chain checks per scan; trades are limited to candidates
+                    that pass mint, liquidity, chart, quote and execution checks. This is not every Solana token.
+                </p>
+                <div class="grid-stats">
+                    <div class="stat-box"><div class="stat-label">Candidates screened</div><div class="stat-val" id="investor-candidate-count">Loading…</div></div>
+                    <div class="stat-box"><div class="stat-label">Open positions</div><div class="stat-val" id="investor-open-count">0</div></div>
+                    <div class="stat-box"><div class="stat-label">Realized result · USDC</div><div class="stat-val" id="investor-pnl-usdc">0.00</div></div>
+                    <div class="stat-box"><div class="stat-label">Realized result · SOL</div><div class="stat-val" id="investor-pnl-sol">0.000000000</div></div>
+                </div>
+            </section>
+            <section class="card" aria-label="AI Crypto Investors strategy">
+                <h2>Entry and exit rules</h2>
+                <p class="section-note">
+                    Three entry tranches only while fresh chart data confirms an upward trend; no averaging down.
+                    The next tranche requires continued upward confirmation.
+                </p>
+                <p class="section-note">
+                    Sell the first tranche at estimated net +3.5%, the second at +7%, and trail the final tranche
+                    after +10%. This strategy has no stop-loss: if targets are never reached, a position can remain
+                    open while falling and may lose most or all of its value. Targets use estimates; fills, returns
+                    and a profitable exit are not guaranteed. Manual sales remain available.
+                </p>
+                <p class="section-note">
+                    Results below are recorded per funding currency. They exclude separately paid operator/network
+                    fees and are not a promise of net profit.
+                </p>
+            </section>
+            <section class="card" aria-label="AI Crypto Investors open positions">
+                <h2>Open investor positions</h2>
+                <div id="investor-open-positions" class="section-note" style="white-space:pre-line">No AI Crypto Investors positions recorded.</div>
+            </section>
+            <section class="card" aria-label="AI Crypto Investors closed trades">
+                <h2>Closed trades and realized results</h2>
+                <div id="investor-closed-trades" class="section-note" style="white-space:pre-line">No AI Crypto Investors trades recorded.</div>
             </section>
         </div>
     </div>
@@ -2383,6 +2426,39 @@ RAW_HTML = r"""<!DOCTYPE html>
                 }).join('')}
                 <small>Retrospective analysis only. It cannot place trades, delay exits or change risk settings. This is not model training or a profit guarantee.</small>
             </details>`;
+        }
+        function renderInvestorDashboard(stats) {
+            const investorTrades=(stats.trades||[]).filter(trade=>trade.strategy==='investor');
+            const open=investorTrades.filter(trade=>trade.status==='OPEN'||trade.status==='RESERVED');
+            const closed=investorTrades.filter(trade=>trade.status==='CLOSED')
+                .sort((a,b)=>String(b.closed_at||'').localeCompare(String(a.closed_at||'')));
+            const solPnl=closed.filter(t=>t.funding_currency==='SOL')
+                .reduce((sum,t)=>sum+Number(t.profit_units||0),0);
+            const usdcPnl=closed.filter(t=>t.funding_currency==='USDC')
+                .reduce((sum,t)=>sum+Number(t.profit_units||0),0);
+            const fmt=(value,digits=6)=>Number.isFinite(Number(value))
+                ?Number(value).toFixed(digits):'—';
+            document.getElementById('investor-mode-status').textContent='SETUP ONLY · NO ORDERS';
+            document.getElementById('investor-open-count').textContent=String(open.length);
+            document.getElementById('investor-pnl-usdc').textContent=fmt(usdcPnl,2)+' USDC';
+            document.getElementById('investor-pnl-sol').textContent=fmt(solPnl,9)+' SOL';
+            const discovery=(stats.ai_status||{}).discovery||{};
+            document.getElementById('investor-candidate-count').textContent=
+                (Number(discovery.eligible||0))+' eligible / '+(Number(discovery.scanned||0))+' scanned';
+            document.getElementById('investor-open-positions').textContent=open.length
+                ?open.map(t=>(t.token_symbol||t.symbol)+' · '+fmt(t.amount_tokens,4)+' tokens · '
+                    +t.funding_currency+(t.entry_step?' · entry step '+t.entry_step:'')
+                    +' · entry '+fmt(t.buy_price,9)+' · '+(t.timestamp||'time unavailable')).join('\n')
+                :'No AI Crypto Investors positions recorded.';
+            document.getElementById('investor-closed-trades').textContent=closed.length
+                ?closed.slice(0,20).map(t=>(t.token_symbol||t.symbol)+' · '+t.funding_currency+' · '
+                    +fmt(t.profit_units,t.funding_currency==='SOL'?9:4)+' '+t.funding_currency
+                    +' ('+fmt(t.profit_pct,2)+'%)'
+                    +(t.entry_step?' · entry step '+t.entry_step:'')
+                    +(t.exit_step?' · exit step '+t.exit_step:'')
+                    +(t.exit_reason?' · '+t.exit_reason:'')
+                    +' · '+(t.closed_at||'time unavailable')).join('\n')
+                :'No AI Crypto Investors sales recorded.';
         }
         let tg;
         try {
@@ -4194,6 +4270,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     if (userEl) userEl.innerText = "@" + s.username;
                     
                     renderRealizedPnl(s);
+                    renderInvestorDashboard(s);
                     document.getElementById('closed-count').innerText = s.closed_count ? s.closed_count : 0;
                     
                     const dep = s.total_deposited ? s.total_deposited : 0;

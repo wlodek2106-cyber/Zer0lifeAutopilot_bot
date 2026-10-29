@@ -397,6 +397,23 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(self.ledger.positions(202), [])
         self.assertEqual(self.ledger.balance(202, USDC), 30_000_000)
 
+    def test_investor_strategy_tag_is_persisted_on_finalized_position(self):
+        op = self.reserve(kind="BUY", info={
+            "output_asset": "investor-mint", "symbol": "INV", "decimals": 6,
+            "strategy": "investor", "entry_step": 1})
+        self.complete(op, received=8_888_888)
+        position = self.ledger.positions(101, "OPEN")[0]
+        self.assertEqual(position["strategy"], "investor")
+        self.assertEqual(position["entry_step"], 1)
+        sale = self.reserve(kind="SELL", asset="investor-mint", raw=position["raw"],
+            position=position["id"], info={
+                "output_asset": USDC, "exit_reason": "INVESTOR_PROFIT_TARGET",
+                "exit_step": 1})
+        self.complete(sale, spent=position["raw"], received=1_050_000)
+        closed = self.ledger.positions(101, "CLOSED")[0]
+        self.assertEqual(closed["exit_step"], 1)
+        self.assertEqual(closed["exit_reason"], "INVESTOR_PROFIT_TARGET")
+
     def test_cannot_sell_another_users_position(self):
         op = self.reserve(kind="BUY", info={"output_asset": SOL, "symbol": "SOL", "decimals": 9})
         self.complete(op, received=8_888_888)

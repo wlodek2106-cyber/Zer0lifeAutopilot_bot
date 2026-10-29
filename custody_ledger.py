@@ -236,7 +236,8 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                     asset TEXT NOT NULL, symbol TEXT NOT NULL, decimals INTEGER NOT NULL,
                     raw INTEGER NOT NULL CHECK(raw>0), cost_usdc INTEGER NOT NULL CHECK(cost_usdc>0),
                     state TEXT NOT NULL, buy_tx TEXT NOT NULL, sell_tx TEXT,
-                    peak_price REAL NOT NULL DEFAULT 0,
+                    peak_price REAL NOT NULL DEFAULT 0, strategy TEXT NOT NULL DEFAULT 'legacy',
+                    entry_step INTEGER, exit_step INTEGER, exit_reason TEXT NOT NULL DEFAULT '',
                     proceeds_usdc INTEGER, created_at INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS custody_loss_reentry_cooldowns (
                     asset TEXT PRIMARY KEY, blocked_until INTEGER NOT NULL, last_loss_at INTEGER NOT NULL);
@@ -270,7 +271,10 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                 "custody_positions": {
                     "funding_asset": "TEXT NOT NULL DEFAULT '" + USDC + "'",
                     "cost_raw": "INTEGER", "proceeds_raw": "INTEGER", "closed_at": "INTEGER",
-                    "peak_price": "REAL NOT NULL DEFAULT 0"},
+                    "peak_price": "REAL NOT NULL DEFAULT 0",
+                    "strategy": "TEXT NOT NULL DEFAULT 'legacy'",
+                    "entry_step": "INTEGER", "exit_step": "INTEGER",
+                    "exit_reason": "TEXT NOT NULL DEFAULT ''"},
                 "custody_operations": {"failure_reason": "TEXT NOT NULL DEFAULT ''"},
             }.items():
                 columns = {row[1] for row in db.execute("PRAGMA table_info(" + table + ")")}
@@ -1593,20 +1597,32 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                     lines += [("external", output, -received), (target, output, received)]
             self.post(db, "complete:" + oid, "finalized blockchain effects", lines)
             if row["kind"] == "BUY":
+                strategy = info.get("strategy", "legacy")
+                if strategy not in ("core", "sniper", "investor"):
+                    strategy = "legacy"
+                entry_step = info.get("entry_step")
+                if type(entry_step) is not int or not 1 <= entry_step <= 3:
+                    entry_step = None
                 db.execute("""INSERT INTO custody_positions
-                    (id,uid,asset,symbol,decimals,raw,cost_usdc,state,buy_tx,created_at,funding_asset,cost_raw)
-                    VALUES(?,?,?,?,?,?,?,'OPEN',?,?,?,?)""",
+                    (id,uid,asset,symbol,decimals,raw,cost_usdc,state,buy_tx,created_at,
+                     funding_asset,cost_raw,strategy,entry_step)
+                    VALUES(?,?,?,?,?,?,?,'OPEN',?,?,?,?,?,?)""",
                     (oid, row["uid"], info["output_asset"], info["symbol"], info["decimals"],
                      received, spent if row["asset"] == USDC else 1,
-                     row["signature"], int(time.time()), row["asset"], spent))
+                     row["signature"], int(time.time()), row["asset"], spent, strategy, entry_step))
             elif row["kind"] == "SELL":
                 if spent != row["raw"]:
                     raise LedgerError("Частичная продажа требует отдельного разбора.")
                 closed_at = int(time.time())
                 db.execute("""UPDATE custody_positions SET state='CLOSED',sell_tx=?,proceeds_usdc=?,
-                    proceeds_raw=?,closed_at=? WHERE id=? AND uid=?""",
+                    proceeds_raw=?,closed_at=?,exit_step=?,exit_reason=?
+                    WHERE id=? AND uid=?""",
                     (row["signature"], received if info["output_asset"] == USDC else None,
-                     received, closed_at, row["position_id"], row["uid"]))
+                     received, closed_at,
+                     info.get("exit_step") if type(info.get("exit_step")) is int
+                         and 1 <= info["exit_step"] <= 3 else None,
+                     str(info.get("exit_reason") or "")[:60],
+                     row["position_id"], row["uid"]))
                 blocked_until = closed_at + REENTRY_COOLDOWN_SECONDS
                 db.execute("""INSERT INTO custody_loss_reentry_cooldowns
                     (asset,blocked_until,last_loss_at) VALUES(?,?,?)

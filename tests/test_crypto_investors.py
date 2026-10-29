@@ -16,7 +16,7 @@ class Elements(HTMLParser):
 
 
 class CryptoInvestorsTests(unittest.TestCase):
-    def test_button_opens_inactive_coming_soon_tab(self):
+    def test_button_opens_separate_read_only_investor_dashboard(self):
         source = (Path(__file__).resolve().parents[1] / "main.py").read_text()
         tree = ast.parse(source)
         html = next(
@@ -36,7 +36,12 @@ class CryptoInvestorsTests(unittest.TestCase):
         self.assertEqual(panel["class"], "tab-panel")
         self.assertIn(">Ai Crypto Investors</button>", html)
         panel_content = html.split('id="tab-ai-crypto-investors"', 1)[1].split(
-            '</section>', 1
+            '<div id="nav"', 1
         )[0]
-        self.assertIn("<h1>Coming Soon</h1>", panel_content)
-        self.assertNotIn("fetch(", panel_content)
+        self.assertIn("Open investor positions", panel_content)
+        self.assertIn("Closed trades and realized results", panel_content)
+        self.assertIn("Three entry tranches only while fresh chart data confirms an upward trend", panel_content)
+        self.assertIn("This strategy has no stop-loss", panel_content)
+        self.assertIn("may lose most or all of its value", panel_content)
+        self.assertIn("read-only setup preview", panel_content)
+        self.assertIn("cannot submit buys or sales", panel_content)
