@@ -56,7 +56,7 @@ async def review(session, decisions, main_context, sniper_context, learning):
     buys = {m: d for m, d in decisions.items() if d["action"] == "BUY"}
     if not buys:
         return {}
-    contexts = {"main": main_context, "sniper": sniper_context}
+    contexts = {"main": main_context, "sniper": sniper_context, "investor": sniper_context}
     # No analyst prose is passed to the second agent; use numeric evidence and
     # action/asset only to reduce agreement bias and prompt injection surface.
     candidates = {mode: {
@@ -93,7 +93,9 @@ async def review(session, decisions, main_context, sniper_context, learning):
                 "Its relative volume minimum is 0.8x; "
                 "the support-bounce volume minimum remains 1.0x. "
                 "positive 5m and 1h changes, no chasing above +3%/5m or +10%/1h, "
-                "and no 6h drop below -5%. Check volume, buyer pressure, resistance proximity "
+                "and no 6h drop below -5%. For Investor, approve BUY only for fresh rising "
+                "screened candidates; it has no stop-loss and the server controls its profit ladder. "
+                "Check volume, buyer pressure, resistance proximity "
                 "and contradictory RSI/MACD/EMA evidence. Unclear/missing evidence means reject. "
                 "Use outcome memory cautiously: small/correlated samples are not proven edge. "
                 "Negative past outcomes are counterevidence; positive history cannot override risk. "

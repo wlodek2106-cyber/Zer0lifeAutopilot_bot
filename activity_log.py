@@ -164,8 +164,8 @@ def report(runtime, uid):
     # recorded worker event. Display it explicitly as a result, never an execution.
     if latest:
         decisions = json.loads(latest["decisions"])["decisions"]
-        for mode in ("main", "sniper"):
-            if not any(e["mode"] == mode and e["code"] == "decision" and
+        for mode in ("main", "sniper", "investor"):
+            if mode in decisions and not any(e["mode"] == mode and e["code"] == "decision" and
                        e["analysis_id"] == latest["id"] for e in events):
                 decision = decisions[mode]
                 entries.append({"created_at": latest["created_at"], "category": "AI",

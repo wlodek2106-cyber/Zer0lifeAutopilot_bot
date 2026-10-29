@@ -9,8 +9,13 @@ from custody_ledger import USDC, SOL
 from entry_costs import MAX_COST_BPS, MAX_PRICE_IMPACT_PCT, MAX_QUOTE_AGE_SECONDS, assess_entry
 from wallet_runtime import WalletError
 
-VERSION = "independent-execution-v10-protective-exits-only"
+VERSION = "independent-execution-v11-investor-ladder"
 MAX_POSITIONS = MappingProxyType({"main": 5, "sniper": 5})
+INVESTOR_MAX_SLOTS = 5
+INVESTOR_TRANCHES = 3
+INVESTOR_TARGETS_PCT = MappingProxyType({1: 3.5, 2: 7.0})
+INVESTOR_FINAL_ACTIVATION_PCT = 10.0
+INVESTOR_FINAL_DRAWDOWN_PCT = 5.0
 DECISION_SECONDS = 120
 QUOTE_SECONDS = MAX_QUOTE_AGE_SECONDS
 MAX_SLOT_DISTANCE = 75
@@ -74,6 +79,30 @@ def sniper_exit_reason(price, entry, peak):
     return trailing_exit_reason(price, entry, peak, SNIPER_STOP_LOSS_PCT)
 
 
+def investor_exit_reason(price, entry, peak, entry_step):
+    """Investor exits take profit only; this strategy has no stop-loss."""
+    if not positive(price) or not positive(entry) or type(entry_step) is not int:
+        return None
+    if entry_step in INVESTOR_TARGETS_PCT:
+        target_ratio = 1 + INVESTOR_TARGETS_PCT[entry_step] / 100
+        if price / entry >= target_ratio:
+            return f"INVESTOR_TAKE_PROFIT_STEP_{entry_step}"
+        return None
+    if entry_step == INVESTOR_TRANCHES:
+        activation_ratio = 1 + INVESTOR_FINAL_ACTIVATION_PCT / 100
+        trail_ratio = 1 - INVESTOR_FINAL_DRAWDOWN_PCT / 100
+        if (positive(peak) and peak / entry >= activation_ratio
+                and price > entry and price / peak <= trail_ratio):
+            return "INVESTOR_TRAILING_TAKE_PROFIT"
+    return None
+
+
+def investor_minimum_return_allows(minimum_out, cost_raw):
+    """Do not auto-sell an Investor position at or below its funding cost."""
+    return (type(minimum_out) is int and minimum_out > 0
+            and type(cost_raw) is int and cost_raw > 0 and minimum_out > cost_raw)
+
+
 def resistance_exit_reason(price, entry, current_price_usd, metrics, snapshot_created_at, now=None):
     """Resistance remains analysis context, never an independent sale trigger."""
     return None
@@ -88,6 +117,11 @@ def sell_authorization(metadata):
     if metadata.get("manual_close") is True:
         return allow()
     if metadata.get("exit_reason") in ("STOP_LOSS", "TRAILING_STOP"):
+        return allow()
+    if (metadata.get("strategy") == "investor"
+            and metadata.get("exit_reason") in (
+                "INVESTOR_TAKE_PROFIT_STEP_1", "INVESTOR_TAKE_PROFIT_STEP_2",
+                "INVESTOR_TRAILING_TAKE_PROFIT")):
         return allow()
     return deny("exit_policy",
         "BLOCKED: no permitted automatic exit trigger. Resistance and AI signals "
@@ -170,6 +204,29 @@ def sniper_entry_signal(symbol, context):
     return allow()
 
 
+def investor_entry_signal(symbol, context, current_price, previous_entry=None):
+    """Require a fresh rising chart for every tranche; never average down."""
+    if not isinstance(context, dict) or not isinstance(context.get(symbol), dict):
+        return deny("investor_chart_data", "Investor entry blocked: fresh chart data is unavailable.")
+    metrics = context[symbol]
+    if metrics.get("chart_ready") != 1:
+        return deny("investor_chart_data", "Investor entry blocked: fresh 5-minute/1-hour candles are required.")
+    if metrics.get("chart_trend_h1") != 1 or metrics.get("chart_buy_setup") != 1:
+        return deny("investor_trend", "Investor entry blocked: the chart has no confirmed rising setup.")
+    m5, h1 = metrics.get("change_m5_pct"), metrics.get("change_h1_pct")
+    if not (bounded_pct(m5) and bounded_pct(h1)) or m5 <= 0 or h1 <= 0:
+        return deny("investor_trend", "Investor entry blocked: 5-minute and 1-hour changes must be positive.")
+    if m5 > 3 or h1 > 10:
+        return deny("investor_extension", "Investor entry blocked: the token is overextended.")
+    h6 = metrics.get("change_h6_pct")
+    if bounded_pct(h6) and h6 < -5:
+        return deny("investor_drawdown", "Investor entry blocked: the 6-hour decline exceeds 5%.")
+    if previous_entry is not None:
+        if not positive(current_price) or not positive(previous_entry) or current_price <= previous_entry:
+            return deny("investor_scale_in", "Investor add-on blocked: price has not risen above the prior tranche.")
+    return allow()
+
+
 def fresh(created_at, now, maximum):
     return (type(created_at) in (int, float) and math.isfinite(created_at)
             and 0 <= now - created_at <= maximum)
@@ -248,8 +305,12 @@ def order(*, uid, kind, asset, output_asset, raw, metadata, position_id,
         return sell_authorization(metadata)
     if asset not in (USDC, SOL) or not settings:
         return deny("funding", "BLOCKED: invalid funding account.")
-    mode = "main" if asset == USDC else "sniper"
-    flag, key = ("trading", "order_raw") if mode == "main" else ("sniper_trading", "sniper_order_raw")
+    strategy = metadata.get("strategy")
+    mode = strategy if strategy == "investor" else ("main" if asset == USDC else "sniper")
+    flag, key = (("investor_trading", "investor_budget_raw")
+                 if mode == "investor" else
+                 (("trading", "order_raw") if mode == "main"
+                  else ("sniper_trading", "sniper_order_raw")))
     if not settings.get(flag):
         return deny("paused", "BLOCKED: real trading is OFF for this mode.")
     symbol = metadata.get("symbol")
@@ -259,9 +320,34 @@ def order(*, uid, kind, asset, output_asset, raw, metadata, position_id,
     expected = SOL if watch["mint"] == WRAPPED_SOL else watch["mint"]
     if output_asset != expected or metadata.get("decimals") != watch["decimals"]:
         return deny("asset", "BLOCKED: order does not match the server's asset catalog.")
-    if raw != settings[key] or balance < raw:
+    if mode == "investor":
+        step = metadata.get("entry_step")
+        cap_key = "investor_budget_usdc_raw" if asset == USDC else "investor_budget_sol_raw"
+        cap = settings.get(cap_key)
+        expected_slot = cap // INVESTOR_MAX_SLOTS if type(cap) is int and cap > 0 else 0
+        expected_entry = expected_slot // INVESTOR_TRANCHES
+        if (type(step) is not int or not 1 <= step <= INVESTOR_TRANCHES
+                or expected_entry <= 0 or raw != expected_entry
+                or raw != metadata.get("entry_raw")
+                or metadata.get("investor_slot_raw") != expected_slot):
+            return deny("investor_tranche", "BLOCKED: Investor tranche size or stage is invalid.")
+        investor_positions = [p for p in positions
+                              if p.get("strategy") == "investor" and p.get("funding_asset") == asset]
+        symbols = {p.get("symbol") for p in investor_positions}
+        if symbol not in symbols and len(symbols) >= INVESTOR_MAX_SLOTS:
+            return deny("position_limit", "BLOCKED: all five Investor token slots are occupied.")
+    if (mode != "investor" and raw != settings[key]) or balance < raw:
         return deny("size", "BLOCKED: order exceeds the saved amount or available funds.")
     held = [p for p in positions if p["funding_asset"] == asset]
+    if mode == "investor":
+        investor_held = [p for p in held if p.get("strategy") == "investor"]
+        if (symbol not in {p.get("symbol") for p in investor_held}
+                and len({p.get("symbol") for p in investor_held}) >= INVESTOR_MAX_SLOTS):
+            return deny("position_limit", "BLOCKED: all five Investor token slots are occupied.")
+        if any(p.get("symbol") == symbol and p.get("entry_step") == metadata.get("entry_step")
+               for p in investor_held):
+            return deny("already_open", "BLOCKED: this Investor tranche is already open.")
+        return allow()
     if len(held) >= MAX_POSITIONS[mode]:
         return deny("position_limit", "BLOCKED: open-position limit reached.")
     if any(p["symbol"] == symbol for p in held):
@@ -306,11 +392,18 @@ def describe():
             "decision_max_age_seconds": DECISION_SECONDS, "quote_max_age_seconds": QUOTE_SECONDS,
             "quote_max_slot_distance": MAX_SLOT_DISTANCE, "slippage_bps": MAX_SLIPPAGE_BPS,
             "buy_max_price_impact_pct": float(MAX_IMPACT_PCT), "core_max_cost_pct": MAX_COST_BPS / 100,
-            "max_positions": dict(MAX_POSITIONS), "liquidity_basis": "executable_route_price_impact",
+            "max_positions": {**dict(MAX_POSITIONS), "investor_slots_per_currency": INVESTOR_MAX_SLOTS},
+            "liquidity_basis": "executable_route_price_impact",
             "entry_filters_never_block_exits": True,
             "sniper_buy_requires_fresh_chart_confirmation": True,
             "buy_requires_confirmed_support_bounce": False,
             "buy_requires_confirmed_setup": True,
+            "investor": {"max_slots_per_currency": INVESTOR_MAX_SLOTS,
+                         "entry_tranches": INVESTOR_TRANCHES,
+                         "profit_targets_pct": dict(INVESTOR_TARGETS_PCT),
+                         "final_trail_activation_pct": INVESTOR_FINAL_ACTIVATION_PCT,
+                         "final_trail_drawdown_pct": INVESTOR_FINAL_DRAWDOWN_PCT,
+                         "stop_loss": False},
             "buy_setups": ["support_bounce", "bounded_trend_continuation"],
             "breakout_chasing_disabled": True,
             "sell_on_fresh_resistance_rejection": True,

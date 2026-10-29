@@ -8,7 +8,7 @@ import random
 import time
 import uuid
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_HALF_UP
 from urllib.parse import urlencode
 
 import aiohttp
@@ -238,6 +238,11 @@ class CustodyRuntime(WalletRuntime):
             return [row[0] for row in db.execute(
                 "SELECT DISTINCT symbol FROM custody_positions WHERE state='OPEN' AND funding_asset=?", (SOL,))]
 
+    def held_investor_symbols(self):
+        with self.ledger.db() as db:
+            return [row[0] for row in db.execute(
+                "SELECT DISTINCT symbol FROM custody_positions WHERE state='OPEN' AND strategy='investor'")]
+
     async def background_discovery(self):
         whale_mints = set()
         scan_succeeded = False
@@ -343,7 +348,8 @@ class CustodyRuntime(WalletRuntime):
         if getattr(self, "discovery", None):
             try:
                 prices.update(await self.discovery.prices(
-                    session, [*self.held_sniper_symbols(), *extra_symbols]))
+                    session, [*self.held_sniper_symbols(),
+                              *self.held_investor_symbols(), *extra_symbols]))
             except Exception as exc:
                 reason = self.discovery.failure_category(exc)
                 was_blocked = self.discovery.blocked
@@ -566,9 +572,22 @@ class CustodyRuntime(WalletRuntime):
                      if symbol in current_codes or discovery and discovery.entry_allowed(symbol)]
         sniper_assets = list(dict.fromkeys(preferred + [row["code"] for row in candidates]))[:8]
         sniper_assets += sorted(self.held_sniper_symbols())[:32]
-        return {"main": [] if whale_symbols else getattr(
-                    self, "main_symbols", [s for s in CORE_SYMBOLS if s in self.watchlist]),
-                "sniper": list(dict.fromkeys(sniper_assets)) if discovery else self.sniper_symbols}
+        universes = {
+            "main": [] if whale_symbols else getattr(
+                self, "main_symbols", [s for s in CORE_SYMBOLS if s in self.watchlist]),
+            "sniper": list(dict.fromkeys(sniper_assets)) if discovery else self.sniper_symbols,
+        }
+        if (not whale_symbols and any(user.get("investor_trading")
+                                      for user in self.ledger.active_users())):
+            held_investor = sorted({
+                position["symbol"]
+                for user in self.ledger.active_users()
+                for position in self.ledger.positions(user["uid"])
+                if position.get("strategy") == "investor"
+            })
+            universes["investor"] = list(dict.fromkeys(
+                [row["code"] for row in candidates] + held_investor))[:40]
+        return universes
 
     async def ai_snapshot(self, session, prices, whale_symbols=None):
         config = ai_decisions.configuration()
@@ -589,7 +608,8 @@ class CustodyRuntime(WalletRuntime):
                 ai_decisions.validate_decisions(record["decisions"], record.get("universes", self.ai_universes()))
                 return {**latest, **record}
             universes = self.ai_universes(whale_symbols=whale_symbols)
-            wanted = set(universes["main"] + universes["sniper"]) | {"SOL"}
+            wanted = set(universes["main"] + universes["sniper"]
+                         + universes.get("investor", [])) | {"SOL"}
             market = {symbol: ((self.history.get(symbol) if
                       time.time()-getattr(self, "history_seen", {}).get(symbol, 0) <= 90 else None)
                       or [prices[symbol]])[-30:]
@@ -598,7 +618,8 @@ class CustodyRuntime(WalletRuntime):
             if getattr(self, "discovery", None):
                 for row in [*self.discovery.candidates(),
                             *(self.discovery.report.get("candidates", []) or [])]:
-                    if isinstance(row, dict) and row.get("code") in universes["sniper"]:
+                    if isinstance(row, dict) and row.get("code") in (
+                            set(universes["sniper"]) | set(universes.get("investor", []))):
                         screening_rows[row["code"]] = row
             screening = {symbol: {key: row[key] for key in (
                 "liquidity_usd", "volume_24h_usd", "transactions_24h", "age_hours",
@@ -637,7 +658,8 @@ class CustodyRuntime(WalletRuntime):
                 for mode, symbols in universes.items()}
             outcomes = self.ledger.closed_trade_outcomes()
             for outcome in outcomes:
-                outcome["mode"] = "sniper" if outcome["funding_asset"] == SOL else "main"
+                outcome["mode"] = ("investor" if outcome.get("strategy") == "investor"
+                                   else "sniper" if outcome["funding_asset"] == SOL else "main")
             learning = trade_learning.summarize(outcomes, permitted_mints)
             market_data_ms = round((time.monotonic() - analysis_started) * 1000)
             try:
@@ -683,7 +705,7 @@ class CustodyRuntime(WalletRuntime):
     async def review_ai_buys(self, session, aid, decisions, main_context, sniper_context,
                              learning, config):
         checked_at = int(time.time())
-        contexts = {"main": main_context, "sniper": sniper_context}
+        contexts = {"main": main_context, "sniper": sniper_context, "investor": sniper_context}
         verdicts, eligible = {}, {}
         for mode, decision in decisions.items():
             if decision["action"] != "BUY":
@@ -882,7 +904,8 @@ class CustodyRuntime(WalletRuntime):
         try:
             self.owner(request)
             if (getattr(self, "web_access", None) and request.method == "POST"
-                    and action.__name__ in {"ai_preview", "scan_candidates", "trading_readiness", "save_trading_settings"}):
+                    and action.__name__ in {"ai_preview", "scan_candidates", "trading_readiness",
+                                            "save_trading_settings", "save_investor_budget"}):
                 self.web_access.trading_request(request)
             if (getattr(self, "accounts", None) and request.method == "POST" and action.__name__ in
                     {"create_invoice","deposit","wallet_link","toggle","toggle_sniper","withdraw"}):
@@ -2443,11 +2466,18 @@ class CustodyRuntime(WalletRuntime):
                 "BLOCKED: this token is globally locked after a recent completed trade; about "
                 f"{remaining_minutes} minute(s) remain. No BUY was sent.")
         else:
+            budget_free = None
+            if kind == "BUY" and info.get("strategy") == "investor":
+                budget_key = "usdc" if asset == USDC else "sol"
+                budget_free = self.ledger.investor_budget_summary(uid)[budget_key]["free_raw"]
+                if reserved:
+                    budget_free += raw
             verdict = execution_policy.order(uid=uid, kind=kind, asset=asset,
                 output_asset=output_asset, raw=raw, metadata=info, position_id=position_id,
                 settings=self.ledger.settings(uid), positions=positions,
                 watchlist=self.watchlist, universes=self.ai_universes(),
-                balance=self.ledger.balance(uid, asset) + (raw if reserved and kind == "BUY" else 0),
+                balance=(budget_free if budget_free is not None else
+                         self.ledger.balance(uid, asset) + (raw if reserved and kind == "BUY" else 0)),
                 reserved=reserved)
         if verdict.allowed and info.get("ai_analysis") and not execution_policy.fresh(
                 info.get("ai_created_at"), time.time(), execution_policy.DECISION_SECONDS):
@@ -2456,7 +2486,8 @@ class CustodyRuntime(WalletRuntime):
             try:
                 source = self.ledger.ai_analysis(info["ai_analysis"])
                 record = json.loads(source["decisions"]) if source else {}
-                mode = "sniper" if asset == SOL else "main"
+                mode = "investor" if info.get("strategy") == "investor" else (
+                    "sniper" if asset == SOL else "main")
                 decision = record.get("decisions", {}).get(mode, {})
                 if decision.get("action") != "BUY" or decision.get("symbol") != info.get("symbol"):
                     raise ai_risk_review.ReviewError("Risk review has no matching stored BUY proposal.")
@@ -2478,6 +2509,17 @@ class CustodyRuntime(WalletRuntime):
             input_mint=WRAPPED_SOL if asset == SOL else asset,
             output_mint=WRAPPED_SOL if output_asset == SOL else output_asset, raw=raw,
             received_at=info.get("quote_received_at"), head_slot=head_slot)
+        if (verdict.allowed and kind == "SELL" and info.get("strategy") == "investor"
+                and info.get("manual_close") is not True):
+            cost_raw = info.get("position_cost_raw")
+            try:
+                minimum_return = int(info["risk_quote"]["otherAmountThreshold"])
+            except (KeyError, TypeError, ValueError):
+                minimum_return = 0
+            if not execution_policy.investor_minimum_return_allows(minimum_return, cost_raw):
+                verdict = execution_policy.deny(
+                    "investor_loss_exit",
+                    "Investor automatic sale blocked: the quoted minimum return does not exceed position cost; position remains open.")
         self.record_execution_check(uid, verdict, "quote", kind, info.get("symbol", "")).require()
 
     async def trade(self, session, uid, asset, output_asset, raw, kind, metadata, position_id=None, manual=False):
@@ -2593,6 +2635,20 @@ class CustodyRuntime(WalletRuntime):
                 """SELECT o.*, n.delivered_at AS telegram_notice_delivered_at
                    FROM custody_operations o LEFT JOIN custody_withdrawal_notifications n
                    ON n.operation_id=o.id WHERE o.uid=? ORDER BY o.created_at DESC LIMIT 20""", (uid,))]
+            position_metadata = {}
+            position_ids = [p["id"] for p in positions]
+            for offset in range(0, len(position_ids), 400):
+                batch = position_ids[offset:offset + 400]
+                if not batch:
+                    continue
+                placeholders = ",".join("?" for _ in batch)
+                for row in db.execute(
+                        "SELECT id,metadata FROM custody_operations WHERE uid=? AND kind='BUY' "
+                        "AND id IN (" + placeholders + ")", [uid, *batch]):
+                    try:
+                        position_metadata[row["id"]] = json.loads(row["metadata"] or "{}")
+                    except (json.JSONDecodeError, TypeError):
+                        position_metadata[row["id"]] = {}
             invoices = [dict(r) for r in db.execute(
                 "SELECT * FROM custody_invoices WHERE uid=? AND state='CREDITED' ORDER BY created_at DESC LIMIT 20", (uid,))]
             tx_deposits = [dict(r) for r in db.execute(
@@ -2606,6 +2662,13 @@ class CustodyRuntime(WalletRuntime):
             gross_profit_raw = (p["proceeds_raw"] or 0) - p["cost_raw"]
             net_profit_raw = gross_profit_raw - p["partner_commission_raw"]
             profit = net_profit_raw / scale if p["state"] == "CLOSED" else 0
+            review_rows = trade_reviews.get(p["id"], {})
+            buy_review = review_rows.get("BUY", {}).get("report") or ""
+            sell_review = review_rows.get("SELL", {}).get("report") or ""
+            if not isinstance(buy_review, str):
+                buy_review = json.dumps(buy_review, ensure_ascii=False)
+            if not isinstance(sell_review, str):
+                sell_review = json.dumps(sell_review, ensure_ascii=False)
             trades.append({"token_symbol": self.watchlist.get(p["symbol"], {}).get("label", p["symbol"]), "symbol": p["symbol"],
                 "token_mint": WRAPPED_SOL if p["asset"] == SOL else p["asset"],
                 "amount_tokens": qty, "buy_price": cost / qty,
@@ -2616,7 +2679,9 @@ class CustodyRuntime(WalletRuntime):
                 "strategy": p.get("strategy", "legacy"),
                 "entry_step": p.get("entry_step"), "exit_step": p.get("exit_step"),
                 "exit_reason": p.get("exit_reason", ""),
-                "trade_review": trade_reviews.get(p["id"], {}),
+                "buy_reason": str(position_metadata.get(p["id"], {}).get("ai_reason") or "")[:350],
+                "buy_review": buy_review[:500], "sell_review": sell_review[:500],
+                "trade_review": review_rows,
                 "closed_at": (datetime.fromtimestamp(p["closed_at"], timezone.utc).isoformat()
                               if p.get("closed_at") else None),
                 "timestamp": datetime.fromtimestamp(p["created_at"], timezone.utc).isoformat(),
@@ -2666,6 +2731,21 @@ class CustodyRuntime(WalletRuntime):
         withdrawable_sol = self.ledger.withdrawal_capacity(uid, SOL) / 1e9
         profit = sum(t["profit_usdc"] for t in trades)
         settings = self.ledger.settings(uid)
+        investor_budget_raw = self.ledger.investor_budget_summary(uid)
+        investor_budget = {
+            "usdc": {
+                "allocated": investor_budget_raw["usdc"]["allocated_raw"] / 1e6,
+                "free": investor_budget_raw["usdc"]["free_raw"] / 1e6,
+                "invested_cost": investor_budget_raw["usdc"]["invested_cost_raw"] / 1e6,
+                "pool": investor_budget_raw["usdc"]["pool_raw"] / 1e6,
+            },
+            "sol": {
+                "allocated": investor_budget_raw["sol"]["allocated_raw"] / 1e9,
+                "free": investor_budget_raw["sol"]["free_raw"] / 1e9,
+                "invested_cost": investor_budget_raw["sol"]["invested_cost_raw"] / 1e9,
+                "pool": investor_budget_raw["sol"]["pool_raw"] / 1e9,
+            },
+        }
         own_pending = [r for r in operations if r["state"] in ("RESERVED", "PREPARED", "SUBMITTED", "UNKNOWN")]
         def pending_summary(row):
             if row["asset"] == USDC:
@@ -2697,6 +2777,8 @@ class CustodyRuntime(WalletRuntime):
                                  if getattr(self, "web_access", None)
                                  else self.public_enabled or uid in self.beta_users),
             "operator_fees": self.operator_fees(uid),
+            "investor_budget": investor_budget,
+            "investor_active": bool(settings.get("investor_trading")),
             "sniper_active": bool(settings["sniper_trading"]),
             "sniper_settings": {"order_sol": settings["sniper_order_raw"]/1e9,
                 "max_positions": execution_policy.MAX_POSITIONS["sniper"]},
@@ -2728,6 +2810,108 @@ class CustodyRuntime(WalletRuntime):
             self.ledger.settings(uid, raw=raw, sniper_raw=sniper_raw)
         return web.json_response({"success": True, "message": "Размер покупки сохранён. Автопилот не включён.",
                                  "order_usdc": raw/1e6})
+
+    async def save_investor_budget(self, request, session):
+        uid = self.uid(request)
+        self.admit(uid)
+        body = await request.json()
+
+        def parse_budget(value, decimals):
+            try:
+                amount = Decimal(str(value))
+            except (InvalidOperation, TypeError, ValueError) as exc:
+                raise WalletError("Enter a valid non-negative budget amount.", 400) from exc
+            if not amount.is_finite() or amount < 0:
+                raise WalletError("Enter a valid non-negative budget amount.", 400)
+            if amount == 0:
+                return 0
+            return amount_raw(value, decimals)
+
+        usdc_raw = parse_budget(body.get("usdc_total", "0"), 6)
+        sol_raw = parse_budget(body.get("sol_total", "0"), 9)
+        async with self.lock:
+            if self.ledger.settings(uid).get("investor_trading"):
+                raise WalletError("Turn AI Crypto Investors OFF before changing its reserved budget.", 409)
+            if self.pending():
+                raise WalletError("Wait for the pending wallet operation before changing the Investor budget.", 409)
+            summary = self.ledger.set_investor_budget(uid, usdc_raw, sol_raw)
+        changes = summary.get("_changes", {})
+        movements = []
+        for key, label, decimals in (("usdc", "USDC", 6), ("sol", "SOL", 9)):
+            delta = int(changes.get(key, 0))
+            if delta > 0:
+                movements.append("reserved " + display_raw(delta, decimals) + " " + label +
+                                 " from available balance")
+            elif delta < 0:
+                movements.append("released " + display_raw(-delta, decimals) + " " + label +
+                                 " to available balance")
+        message = "Budget saved. " + ("; ".join(movements) + ". " if movements else
+                                      "No funds needed to move. ")
+        message += "Internal ledger only—no on-chain transfer. Autopilot remains OFF."
+        return web.json_response({
+            "success": True,
+            "message": message,
+            "investor_budget": {
+                "usdc": {
+                    "allocated": summary["usdc"]["allocated_raw"] / 1e6,
+                    "free": summary["usdc"]["free_raw"] / 1e6,
+                    "invested_cost": summary["usdc"]["invested_cost_raw"] / 1e6,
+                    "pool": summary["usdc"]["pool_raw"] / 1e6,
+                },
+                "sol": {
+                    "allocated": summary["sol"]["allocated_raw"] / 1e9,
+                    "free": summary["sol"]["free_raw"] / 1e9,
+                    "invested_cost": summary["sol"]["invested_cost_raw"] / 1e9,
+                    "pool": summary["sol"]["pool_raw"] / 1e9,
+                },
+            },
+        })
+
+    async def toggle_investor(self, request, session):
+        uid = self.uid(request)
+        async with self.lock:
+            settings = self.ledger.settings(uid)
+            if settings.get("investor_trading"):
+                self.ledger.settings(uid, investor_enabled=False)
+                self._worker_wakeup.set()
+                return web.json_response({"success": True, "investor_active": False})
+            self.admit_trading(uid)
+            if getattr(self, "web_access", None):
+                self.web_access.trading_request(request)
+            if not ai_decisions.configuration()["configured"]:
+                raise WalletError("AI Crypto Investors cannot start: AI service is not configured.", 503)
+            if self.pending():
+                raise WalletError("Wait for the pending wallet operation before enabling Investors.", 409)
+            await self.reconcile(session)
+            await self.solvent(session)
+            if not getattr(self, "discovery", None):
+                raise WalletError("Verified Solana candidate discovery is unavailable; Investors stayed OFF.", 503)
+            status = self.discovery.status_report()
+            candidates = self.discovery.candidates()
+            if status.get("entry_paused") or not candidates:
+                retry = int(status.get("retry_after_seconds") or 0)
+                if not retry:
+                    self.discovery_due = 0
+                    self.poll_discovery()
+                message = status.get("message") or "No verified candidates are available."
+                raise WalletError(
+                    message + " Refresh was requested if available. Investors stayed OFF; no trade was sent.",
+                    409)
+            budget = self.ledger.investor_budget_summary(uid)
+            usable = any(
+                item["allocated_raw"] // execution_policy.INVESTOR_MAX_SLOTS
+                // execution_policy.INVESTOR_TRANCHES > 0
+                and item["free_raw"] >= item["allocated_raw"] // execution_policy.INVESTOR_MAX_SLOTS
+                    // execution_policy.INVESTOR_TRANCHES
+                for item in budget.values())
+            if not usable:
+                raise WalletError(
+                    "Allocate at least one funded Investor tranche first. "
+                    "The budget remains reserved and Investors stayed OFF.", 409)
+            await self.ensure_monthly_trading_fee(session, uid)
+            self.ledger.settings(uid, investor_enabled=True)
+            self._worker_wakeup.set()
+        return web.json_response({"success": True, "investor_active": True})
 
     async def trading_preflight(self, uid, session, raw, funding=USDC, output=WRAPPED_SOL):
         self.admit(uid)
@@ -2818,7 +3002,8 @@ class CustodyRuntime(WalletRuntime):
         uid = self.uid(request)
         return web.json_response({"success": True, **activity_log.report(self, uid),
             "trading_active": bool(self.ledger.settings(uid)["trading"]),
-            "sniper_active": bool(self.ledger.settings(uid)["sniper_trading"])})
+            "sniper_active": bool(self.ledger.settings(uid)["sniper_trading"]),
+            "investor_active": bool(self.ledger.settings(uid).get("investor_trading"))})
 
     async def partner_program(self, request, session):
         uid = self.uid(request)
@@ -2860,7 +3045,8 @@ class CustodyRuntime(WalletRuntime):
         pending_sell = any(op["uid"] == uid and op["kind"] == "SELL"
                            for op in self.ledger.pending())
         should_queue = bool(positions or pending_sell)
-        self.ledger.settings(uid, enabled=False, sniper_enabled=False, close=should_queue)
+        self.ledger.settings(uid, enabled=False, sniper_enabled=False,
+                             investor_enabled=False, close=should_queue)
         if not should_queue:
             self._close_retry_after.pop(uid, None)
             activity_log.record_event(self, uid, f"close-empty-{uuid.uuid4()}",
@@ -3259,7 +3445,8 @@ class CustodyRuntime(WalletRuntime):
                 self.history[symbol] = (self.history[symbol] + [price])[-90:]
                 self.history_seen[symbol] = time.time()
         snapshot = self.poll_ai(prices) if any(
-            user["trading"] or user["sniper_trading"] for user in users) else None
+            user["trading"] or user["sniper_trading"] or user.get("investor_trading")
+            for user in users) else None
         # Check every participant's protective exits before any participant
         # starts a potentially slow BUY. A separate pass avoids starving later
         # users' stops behind an earlier user's quote/simulation/Jito request.
@@ -3275,14 +3462,16 @@ class CustodyRuntime(WalletRuntime):
                 current = self.ledger.settings(uid)
                 positions = self.ledger.positions(uid, "OPEN")
                 checked[uid] = (
-                    current["trading"], current["sniper_trading"],
+                    current["trading"], current["sniper_trading"], current.get("investor_trading", 0),
                     frozenset(position["id"] for position in positions))
                 target = None
                 target_reason = None
                 protection_waiting = False
                 for position in positions:
-                    mode_enabled = (current["sniper_trading"] if position["funding_asset"] == SOL
-                                    else current["trading"])
+                    mode_enabled = (
+                        current.get("investor_trading", 0) if position.get("strategy") == "investor"
+                        else current["sniper_trading"] if position["funding_asset"] == SOL
+                        else current["trading"])
                     if mode_enabled:
                         price = self.position_exit_price(position, prices)
                         entry = self.position_entry_price(position)
@@ -3311,6 +3500,10 @@ class CustodyRuntime(WalletRuntime):
                     try:
                         sale = await self.trade(session, uid, target["asset"], target["funding_asset"],
                             target["raw"], "SELL", {"output_asset": target["funding_asset"],
+                                "strategy": target.get("strategy", "legacy"),
+                                "entry_step": target.get("entry_step"),
+                                "exit_step": target.get("entry_step"),
+                                "position_cost_raw": target.get("cost_raw"),
                                 "exit_reason": target_reason, "symbol": target["symbol"],
                                 "exit_snapshot": trade_audit.exit_snapshot(
                                     target, self.position_exit_price(target, prices),
@@ -3355,7 +3548,7 @@ class CustodyRuntime(WalletRuntime):
                 current = self.ledger.settings(uid)
                 positions = self.ledger.positions(uid, "OPEN")
                 if current["close_requested"] or checked.get(uid) != (
-                        current["trading"], current["sniper_trading"],
+                        current["trading"], current["sniper_trading"], current.get("investor_trading", 0),
                         frozenset(position["id"] for position in positions)):
                     continue  # Refresh exit checks after a concurrent state change.
                 await self.apply_ai_decision(session, uid, current, positions, prices, snapshot)
@@ -3442,7 +3635,11 @@ class CustodyRuntime(WalletRuntime):
         entry = self.position_entry_price(position)
         if price is None or entry is None:
             return None
-        if position["funding_asset"] == SOL:
+        if position.get("strategy") == "investor":
+            reason = execution_policy.investor_exit_reason(
+                price, entry, max(position.get("peak_price") or entry, entry, price),
+                position.get("entry_step"))
+        elif position["funding_asset"] == SOL:
             peak = position.get("peak_price") or entry
             reason = execution_policy.sniper_exit_reason(price, entry, max(peak, entry, price))
         else:
@@ -3552,6 +3749,138 @@ class CustodyRuntime(WalletRuntime):
                          "ai_created_at": snapshot["created_at"]})
                     return
                 note("already_claimed", "SKIPPED: this analysis was already claimed; no automatic retry.")
+
+        investor_snapshot = scheduled_snapshot
+        if (settings.get("investor_trading")
+                and "investor" in investor_snapshot.get("decisions", {})):
+            await self.apply_investor_decision(
+                session, uid, positions, prices, investor_snapshot)
+
+    async def apply_investor_decision(self, session, uid, open_positions, prices, snapshot):
+        mode = "investor"
+        decisions = snapshot.get("decisions", {})
+        universes = snapshot.get("universes", {})
+        if mode not in decisions or mode not in universes:
+            return
+        ai_decisions.validate_decisions(decisions, universes)
+        activity_log.observe(self, uid, snapshot, mode)
+        decision = decisions[mode]
+        symbol, action = decision["symbol"], decision["action"]
+
+        def note(code, message):
+            activity_log.record(self, uid, snapshot, mode, code, message)
+            self.record_execution_check(
+                uid, execution_policy.deny(code, message), "investor", action, symbol or "")
+
+        if not execution_policy.fresh(
+                snapshot.get("created_at"), time.time(), execution_policy.DECISION_SECONDS):
+            note("stale", "Investor BUY skipped: AI analysis is stale.")
+            return
+        if action != "BUY":
+            note("investor_hold", "Investor chose HOLD; no trade was requested.")
+            return
+        discovery = getattr(self, "discovery", None)
+        if (not isinstance(symbol, str) or symbol not in universes[mode]
+                or not discovery or not discovery.entry_allowed(symbol)):
+            note("investor_candidate", "Investor BUY blocked: token is not on the fresh verified shortlist.")
+            return
+        if symbol not in self.watchlist:
+            note("investor_asset", "Investor BUY blocked: token identity is not in the live asset catalog.")
+            return
+        old_price = snapshot.get("prices", {}).get(symbol)
+        old_sol = snapshot.get("prices", {}).get("SOL")
+        current_usd = prices.get(symbol)
+        current_sol = prices.get("SOL")
+        samples = snapshot.get("samples", {})
+        if (not execution_policy.positive(old_price)
+                or not execution_policy.positive(current_usd)
+                or type(samples.get(symbol)) is not int or samples[symbol] < 5):
+            note("investor_price", "Investor BUY blocked: fresh price history is not ready.")
+            return
+
+        all_positions = self.ledger.positions(uid)
+        token_positions = [p for p in all_positions
+                           if p.get("strategy") == "investor" and p["symbol"] == symbol]
+        completed_steps = {p["entry_step"] for p in token_positions
+                           if type(p.get("entry_step")) is int}
+        step = next((value for value in (1, 2, 3) if value not in completed_steps), None)
+        if step is None:
+            note("investor_stages_complete", "All three Investor entry tranches for this token are complete.")
+            return
+
+        budget = self.ledger.investor_budget_summary(uid)
+        fixed_funding = token_positions[0]["funding_asset"] if token_positions else None
+        choices = []
+        for asset, key, decimals in ((USDC, "usdc", 6), (SOL, "sol", 9)):
+            account = budget[key]
+            cap = int(account["allocated_raw"])
+            slot_raw = cap // execution_policy.INVESTOR_MAX_SLOTS
+            tranche_raw = slot_raw // execution_policy.INVESTOR_TRANCHES
+            if (cap > 0 and tranche_raw > 0 and account["free_raw"] >= tranche_raw
+                    and (fixed_funding is None or fixed_funding == asset)):
+                choices.append((account["free_raw"] / cap, asset, tranche_raw, slot_raw, decimals))
+        if not choices:
+            note("investor_budget", "Investor BUY blocked: no allocated currency has enough free funds for the next tranche.")
+            return
+        _, funding, tranche_raw, slot_raw, decimals = max(choices, key=lambda item: item[0])
+        if fixed_funding == SOL:
+            if not execution_policy.positive(old_sol) or not execution_policy.positive(current_sol):
+                note("investor_sol_price", "Investor BUY blocked: fresh SOL price is unavailable.")
+                return
+            old_funding_price = old_price / old_sol
+            current_funding_price = current_usd / current_sol
+        else:
+            old_funding_price = old_price
+            current_funding_price = current_usd
+        if (not execution_policy.positive(old_funding_price)
+                or not execution_policy.positive(current_funding_price)
+                or abs(current_funding_price / old_funding_price - 1) > 0.01
+                or current_funding_price <= old_funding_price):
+            note("investor_price_drift", "Investor BUY blocked: price is stale, moved over 1%, or is not rising in the funding currency.")
+            return
+        previous_entry = None
+        if step > 1:
+            previous = [p for p in token_positions if p.get("entry_step") == step - 1]
+            if not previous or previous[-1]["funding_asset"] != funding:
+                note("investor_stage_order", "Investor BUY blocked: the prior tranche is missing or uses a different funding currency.")
+                return
+            previous_entry = self.position_entry_price(previous[-1])
+        chart = snapshot.get("sniper_market_context", {})
+        signal = execution_policy.investor_entry_signal(
+            symbol, chart, current_funding_price, previous_entry)
+        self.record_execution_check(uid, signal, "investor_chart", "BUY", symbol)
+        if not signal.allowed:
+            note(signal.code, signal.reason)
+            return
+        cooldown_until = self.ledger.entry_cooldown_until(asset_for_mint(self.watchlist[symbol]["mint"]))
+        if cooldown_until:
+            remaining = max(1, (cooldown_until - int(time.time()) + 59) // 60)
+            note("global_reentry_cooldown",
+                 f"Investor BUY blocked: global token cooldown has about {remaining} minute(s) remaining.")
+            return
+        try:
+            ai_risk_review.require_approval(
+                snapshot.get("risk_review"), snapshot["id"], mode, decision)
+        except ai_risk_review.ReviewError as exc:
+            note("risk_review", str(exc))
+            return
+        if not self.ledger.ai_claim(snapshot["id"], uid, mode):
+            note("already_claimed", "Investor analysis was already claimed; no automatic retry.")
+            return
+        try:
+            await self.verify_asset_mint(session, symbol)
+        except Exception:
+            note("mint_check", "Investor BUY blocked: on-chain token identity verification failed.")
+            return
+        watch = self.watchlist[symbol]
+        await self.observed_ai_trade(
+            uid, snapshot, mode, session, uid, funding,
+            asset_for_mint(watch["mint"]), tranche_raw, "BUY",
+            {"symbol": symbol, "output_asset": asset_for_mint(watch["mint"]),
+             "strategy": "investor", "entry_step": step, "entry_raw": tranche_raw,
+             "investor_slot_raw": slot_raw, "decimals": watch["decimals"],
+             "ai_analysis": snapshot["id"], "ai_created_at": snapshot["created_at"],
+             "ai_reason": decision["reason"][:350]})
 
     async def observed_ai_trade(self, uid, snapshot, mode, *args):
         activity_log.record(self, uid, snapshot, mode, "execution_check",

@@ -2298,12 +2298,13 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
                     <div><h2 style="margin:0">Solana portfolio</h2>
                         <p class="section-note" style="margin:5px 0 0">USDC and SOL · screened discovery universe</p></div>
-                    <span id="investor-mode-status" style="border:1px solid #536c20;border-radius:999px;padding:7px 11px;color:#c3f26b;font-size:11px;font-weight:800;letter-spacing:.06em">SETUP ONLY · NO ORDERS</span>
+                    <span id="investor-mode-status" style="border:1px solid #536c20;border-radius:999px;padding:7px 11px;color:#c3f26b;font-size:11px;font-weight:800;letter-spacing:.06em" aria-live="polite">AUTOPILOT · OFF</span>
                 </div>
+                <button id="investor-toggle" class="btn-ctl btn-toggle-off" style="margin-top:14px;width:100%" onclick="toggleInvestorTrading()">Autopilot: OFF · Turn on</button>
                 <p class="section-note" style="margin-top:16px">
-                    This is a read-only setup preview. Its staged-order engine is not connected yet, so this page cannot submit buys or sales.
-                    Core and Meme Sniper are separate and unchanged. Discovery is bounded to up to 200 new mints and 40 on-chain checks per scan; trades are limited to candidates
-                    that pass mint, liquidity, chart, quote and execution checks. This is not every Solana token.
+                    This is a separate real-money strategy. It can only trade screened Solana candidates after mint, liquidity,
+                    chart, quote and execution checks. Discovery is bounded to up to 200 new mints and 40 on-chain checks per scan;
+                    this does not mean every Solana token will be traded. Core and Meme Sniper remain separate.
                 </p>
                 <div class="grid-stats">
                     <div class="stat-box"><div class="stat-label">Candidates screened</div><div class="stat-val" id="investor-candidate-count">Loading…</div></div>
@@ -2319,15 +2320,49 @@ RAW_HTML = r"""<!DOCTYPE html>
                     The next tranche requires continued upward confirmation.
                 </p>
                 <p class="section-note">
-                    Sell the first tranche at estimated net +3.5%, the second at +7%, and trail the final tranche
-                    after +10%. This strategy has no stop-loss: if targets are never reached, a position can remain
-                    open while falling and may lose most or all of its value. Targets use estimates; fills, returns
+                    Divide each currency's manually entered budget into five token slots per currency, with three equal tranches
+                    per slot. Sell tranche one at +3.5% and tranche two at +7%; activate the final tranche's profit trail after
+                    +10%, then exit after a 5% pullback from its peak. Automatic exits are blocked unless the quote's minimum
+                    return is above entry cost; a sudden price gap can leave the position open, and a manual sale can realize a loss.
+                    This strategy has no stop-loss; the allocation may lose most or all of its value. Targets use estimates; fills, returns
                     and a profitable exit are not guaranteed. Manual sales remain available.
                 </p>
                 <p class="section-note">
                     Results below are recorded per funding currency. They exclude separately paid operator/network
                     fees and are not a promise of net profit.
                 </p>
+            </section>
+            <section class="card" aria-label="AI Crypto Investors budget">
+                <h2>Allocated strategy budget</h2>
+                <p class="section-note">
+                    Set one shared total for all AI Crypto Investors positions in each currency. The amount is reserved
+                    internally from your available bot balance; no on-chain transfer is made. Core, Meme Sniper and
+                    withdrawals cannot spend the reserved amount. Lower the allocation to release unused funds; the
+                    cost basis of open Investor positions cannot be released.
+                </p>
+                <p class="section-note">
+                    This is a hard cap. Profits above it return to your available balance. Trading losses reduce the
+                    reserved pool. Saving the same amount tops the pool back up from your available balance if funds
+                    allow; lowering it releases unused cash.
+                </p>
+                <p class="section-note">
+                    The engine starts only after you press ON and pass readiness checks. It is OFF after every server restart.
+                    If it is OFF, open positions remain open and can still be sold manually.
+                </p>
+                <div class="grid-stats">
+                    <div class="stat-box"><div class="stat-label">Budget limit · USDC</div><div class="stat-val" id="investor-budget-usdc-summary">0.000000</div></div>
+                    <div class="stat-box"><div class="stat-label">Free in Investor pool · USDC</div><div class="stat-val" id="investor-budget-usdc-free">0.000000</div></div>
+                    <div class="stat-box"><div class="stat-label">Open-position cost · USDC</div><div class="stat-val" id="investor-budget-usdc-invested">0.000000</div></div>
+                    <div class="stat-box"><div class="stat-label">Budget limit · SOL</div><div class="stat-val" id="investor-budget-sol-summary">0.000000000</div></div>
+                    <div class="stat-box"><div class="stat-label">Free in Investor pool · SOL</div><div class="stat-val" id="investor-budget-sol-free">0.000000000</div></div>
+                    <div class="stat-box"><div class="stat-label">Open-position cost · SOL</div><div class="stat-val" id="investor-budget-sol-invested">0.000000000</div></div>
+                </div>
+                <label class="settings-label" for="investor-budget-usdc">Type total budget · USDC</label>
+                <input id="investor-budget-usdc" class="sig-input" type="number" min="0" step="0.000001" value="0">
+                <label class="settings-label" for="investor-budget-sol">Type total budget · SOL</label>
+                <input id="investor-budget-sol" class="sig-input" type="number" min="0" step="0.000000001" value="0">
+                <button class="btn-green-main" style="margin-top:12px" onclick="saveInvestorBudget()">Save Investor budget</button>
+                <div id="investor-budget-status" class="section-note" role="status" aria-live="polite"></div>
             </section>
             <section class="card" aria-label="AI Crypto Investors open positions">
                 <h2>Open investor positions</h2>
@@ -2438,17 +2473,48 @@ RAW_HTML = r"""<!DOCTYPE html>
                 .reduce((sum,t)=>sum+Number(t.profit_units||0),0);
             const fmt=(value,digits=6)=>Number.isFinite(Number(value))
                 ?Number(value).toFixed(digits):'—';
-            document.getElementById('investor-mode-status').textContent='SETUP ONLY · NO ORDERS';
+            investorActive=!!stats.investor_active;
+            document.getElementById('investor-mode-status').textContent=
+                investorActive?'AUTOPILOT · ON':'AUTOPILOT · OFF';
+            const investorToggle=document.getElementById('investor-toggle');
+            investorToggle.textContent=investorActive?'Autopilot: ON · Turn off':'Autopilot: OFF · Turn on';
+            investorToggle.className='btn-ctl '+(investorActive?'btn-toggle-on':'btn-toggle-off');
+            document.getElementById('investor-budget-usdc').disabled=investorActive;
+            document.getElementById('investor-budget-sol').disabled=investorActive;
             document.getElementById('investor-open-count').textContent=String(open.length);
             document.getElementById('investor-pnl-usdc').textContent=fmt(usdcPnl,2)+' USDC';
             document.getElementById('investor-pnl-sol').textContent=fmt(solPnl,9)+' SOL';
+            const budget=stats.investor_budget||{};
+            const usdcBudget=budget.usdc||{};
+            const solBudget=budget.sol||{};
+            document.getElementById('investor-budget-usdc-summary').textContent=
+                fmt(usdcBudget.allocated,6)+' USDC';
+            document.getElementById('investor-budget-usdc-free').textContent=
+                fmt(usdcBudget.free,6)+' USDC';
+            document.getElementById('investor-budget-sol-summary').textContent=
+                fmt(solBudget.allocated,9)+' SOL';
+            document.getElementById('investor-budget-sol-free').textContent=
+                fmt(solBudget.free,9)+' SOL';
+            document.getElementById('investor-budget-usdc-invested').textContent=
+                fmt(usdcBudget.invested_cost,6)+' USDC';
+            document.getElementById('investor-budget-sol-invested').textContent=
+                fmt(solBudget.invested_cost,9)+' SOL';
+            if(!investorBudgetDirty){
+                const usdcInput=document.getElementById('investor-budget-usdc');
+                const solInput=document.getElementById('investor-budget-sol');
+                if(document.activeElement!==usdcInput)usdcInput.value=fmt(usdcBudget.allocated,6);
+                if(document.activeElement!==solInput)solInput.value=fmt(solBudget.allocated,9);
+            }
             const discovery=(stats.ai_status||{}).discovery||{};
             document.getElementById('investor-candidate-count').textContent=
                 (Number(discovery.eligible||0))+' eligible / '+(Number(discovery.scanned||0))+' scanned';
             document.getElementById('investor-open-positions').textContent=open.length
                 ?open.map(t=>(t.token_symbol||t.symbol)+' · '+fmt(t.amount_tokens,4)+' tokens · '
                     +t.funding_currency+(t.entry_step?' · entry step '+t.entry_step:'')
-                    +' · entry '+fmt(t.buy_price,9)+' · '+(t.timestamp||'time unavailable')).join('\n')
+                    +' · entry '+fmt(t.buy_price,9)+' · buy reason: '
+                    +(t.buy_reason||'no saved AI reason')
+                    +(t.buy_review?' · independent review: '+t.buy_review:'')
+                    +' · '+(t.timestamp||'time unavailable')).join('\n')
                 :'No AI Crypto Investors positions recorded.';
             document.getElementById('investor-closed-trades').textContent=closed.length
                 ?closed.slice(0,20).map(t=>(t.token_symbol||t.symbol)+' · '+t.funding_currency+' · '
@@ -2456,7 +2522,9 @@ RAW_HTML = r"""<!DOCTYPE html>
                     +' ('+fmt(t.profit_pct,2)+'%)'
                     +(t.entry_step?' · entry step '+t.entry_step:'')
                     +(t.exit_step?' · exit step '+t.exit_step:'')
+                    +(t.buy_reason?' · buy reason: '+t.buy_reason:'')
                     +(t.exit_reason?' · '+t.exit_reason:'')
+                    +(t.sell_review?' · post-trade review: '+t.sell_review:'')
                     +' · '+(t.closed_at||'time unavailable')).join('\n')
                 :'No AI Crypto Investors sales recorded.';
         }
@@ -2476,10 +2544,14 @@ RAW_HTML = r"""<!DOCTYPE html>
         let tradingActive = false;
         let currentTradingSettings = {order_usdc:1};
         let settingsOrderDirty=false;
+        let investorBudgetDirty=false;
+        let investorActive=false;
         let aiConfigured=false;
         let sniperActive=false;
         document.getElementById('settings-order').addEventListener('input',()=>{settingsOrderDirty=true;});
         document.getElementById('settings-sniper-order').addEventListener('input',()=>{settingsOrderDirty=true;});
+        document.getElementById('investor-budget-usdc').addEventListener('input',()=>{investorBudgetDirty=true;});
+        document.getElementById('investor-budget-sol').addEventListener('input',()=>{investorBudgetDirty=true;});
         document.getElementById('trading-controls').appendChild(document.querySelector('.control-bar'));
         document.getElementById('trading-strategy').appendChild(document.getElementById('user-bal-small').closest('.card'));
         document.getElementById('trading-activity').appendChild(document.querySelector('.btn-sell-all'));
@@ -2504,6 +2576,43 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const result=await response.json();if(!response.ok||!result.success)throw new Error(result.message);
                 settingsOrderDirty=false;alert(result.message);await refresh();
             } catch(e) {alert(e.message);}
+        }
+        async function saveInvestorBudget() {
+            try {
+                const response=await apiFetch('/api/investor_budget',{
+                    method:'POST',
+                    headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({
+                        usdc_total:document.getElementById('investor-budget-usdc').value||'0',
+                        sol_total:document.getElementById('investor-budget-sol').value||'0'
+                    })
+                });
+                const result=await response.json();
+                if(!response.ok||!result.success)throw new Error(result.message);
+                investorBudgetDirty=false;
+                document.getElementById('investor-budget-status').textContent=result.message;
+                await refresh();
+            } catch(e) {
+                document.getElementById('investor-budget-status').textContent=e.message;
+            }
+        }
+        async function toggleInvestorTrading() {
+            const enabling=!investorActive;
+            if(enabling&&!confirm(
+                'Enable real-money AI Crypto Investors? It uses only the reserved USDC/SOL budget, has no stop-loss, and can lose most or all of that budget. Autopilot turns OFF after a server restart.'
+            ))return;
+            const button=document.getElementById('investor-toggle');
+            button.disabled=true;
+            try {
+                const response=await apiFetch('/api/toggle_investor',{method:'POST'});
+                const result=await response.json();
+                if(!response.ok||!result.success)throw new Error(result.message);
+                await refresh();
+            } catch(e) {
+                alert(e.message);
+            } finally {
+                button.disabled=false;
+            }
         }
         async function loadPartnerProgram() {
             const link = document.getElementById('partner-invite-link');
@@ -4837,6 +4946,8 @@ async def main():
     app.router.add_post('/api/support', support_inbox.handle)
     app.router.add_post('/api/toggle_trading', wallet_handler(runtime.toggle))
     app.router.add_post('/api/trading_settings', wallet_handler(runtime.save_trading_settings))
+    app.router.add_post('/api/investor_budget', wallet_handler(runtime.save_investor_budget))
+    app.router.add_post('/api/toggle_investor', wallet_handler(runtime.toggle_investor))
     app.router.add_post('/api/trading_readiness', wallet_handler(runtime.trading_readiness))
     app.router.add_post('/api/ai_preview', wallet_handler(runtime.ai_preview))
     app.router.add_post('/api/recover_expired_operation', wallet_handler(runtime.recover_expired_operation))

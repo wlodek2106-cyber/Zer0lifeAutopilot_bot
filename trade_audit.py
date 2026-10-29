@@ -42,11 +42,14 @@ def exit_snapshot(position, price, entry, observed_at, policy_version):
     if not finite(price) or not finite(entry) or price <= 0 or entry <= 0:
         return {}
     peak = max(position.get("peak_price") or entry, entry, price)
+    investor = position.get("strategy") == "investor"
     return {
         "observed_at": observed_at, "policy_version": policy_version,
         "funding_currency": "SOL" if position["funding_asset"] == "SOL" else "USDC",
         "entry_price": entry, "observed_price": price, "peak_price": peak,
-        "stop_loss_pct": 5, "trail_activation_pct": 3.5, "trail_pullback_pct": 2,
+        "stop_loss_pct": None if investor else 5,
+        "trail_activation_pct": 10 if investor else 3.5,
+        "trail_pullback_pct": 5 if investor else 2,
         "observed_return_pct": (price / entry - 1) * 100,
         "peak_return_pct": (peak / entry - 1) * 100,
         "pullback_from_peak_pct": (1 - price / peak) * 100,
@@ -59,12 +62,15 @@ def _entry_evidence(db, info, symbol, native):
                      (aid,)).fetchone() if isinstance(aid, str) else None
     if row:
         record = json.loads(row["decisions"])
-        mode = "sniper" if native else "main"
+        mode = ("investor" if info.get("strategy") == "investor"
+                else "sniper" if native else "main")
         decision = record.get("decisions", {}).get(mode, {})
         if decision.get("action") == "BUY" and decision.get("symbol") == symbol:
             review = record.get("risk_review", {})
             verdict = review.get("verdicts", {}).get(mode, {})
-            context = record.get("sniper_market_context" if native else "main_market_context", {})
+            context = record.get(
+                "sniper_market_context" if mode in ("sniper", "investor")
+                else "main_market_context", {})
             return {
                 "source": "AI_BUY",
                 "analysis_created_at": row["created_at"],
@@ -98,7 +104,9 @@ def record_finalized(db, row, info, position, spent, received, fee, commission):
             source = "MANUAL_SELL"
         elif info.get("ai_analysis"):
             source = "LEGACY_AI_SELL"
-        elif reason in ("STOP_LOSS", "TRAILING_STOP", "RESISTANCE_TARGET", "TAKE_PROFIT"):
+        elif reason in ("STOP_LOSS", "TRAILING_STOP", "RESISTANCE_TARGET", "TAKE_PROFIT",
+                        "INVESTOR_TAKE_PROFIT_STEP_1", "INVESTOR_TAKE_PROFIT_STEP_2",
+                        "INVESTOR_TRAILING_TAKE_PROFIT"):
             source = reason
         else:
             source = "UNKNOWN"

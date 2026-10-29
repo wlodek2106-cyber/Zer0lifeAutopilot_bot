@@ -11,7 +11,7 @@ def summarize(rows, permitted_mints):
     for row in rows[:MAX_OUTCOMES]:
         mode = row.get("mode")
         mint = row.get("mint")
-        if mode not in ("main", "sniper") or mint not in permitted_mints.get(mode, {}):
+        if mode not in ("main", "sniper", "investor") or mint not in permitted_mints.get(mode, {}):
             continue
         cost, proceeds = row.get("cost_raw"), row.get("proceeds_raw")
         if type(cost) is not int or cost <= 0 or type(proceeds) is not int or proceeds < 0:

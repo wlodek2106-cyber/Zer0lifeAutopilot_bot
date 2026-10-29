@@ -16,7 +16,7 @@ class Elements(HTMLParser):
 
 
 class CryptoInvestorsTests(unittest.TestCase):
-    def test_button_opens_separate_read_only_investor_dashboard(self):
+    def test_investor_dashboard_has_separate_real_autopilot_and_manual_budget(self):
         source = (Path(__file__).resolve().parents[1] / "main.py").read_text()
         tree = ast.parse(source)
         html = next(
@@ -43,5 +43,15 @@ class CryptoInvestorsTests(unittest.TestCase):
         self.assertIn("Three entry tranches only while fresh chart data confirms an upward trend", panel_content)
         self.assertIn("This strategy has no stop-loss", panel_content)
         self.assertIn("may lose most or all of its value", panel_content)
-        self.assertIn("read-only setup preview", panel_content)
-        self.assertIn("cannot submit buys or sales", panel_content)
+        self.assertIn("5% pullback from its peak", panel_content)
+        self.assertIn('id="investor-toggle"', panel_content)
+        self.assertIn("Autopilot: OFF · Turn on", panel_content)
+        self.assertIn("OFF after every server restart", panel_content)
+        self.assertIn("toggleInvestorTrading()", panel_content)
+        self.assertIn("/api/toggle_investor", source)
+        self.assertEqual(elements.by_id["investor-budget-usdc"][1]["type"], "number")
+        self.assertEqual(elements.by_id["investor-budget-sol"][1]["type"], "number")
+        self.assertIn("Type total budget · USDC", panel_content)
+        self.assertIn("Type total budget · SOL", panel_content)
+        self.assertIn("withdrawals cannot spend the reserved amount", panel_content)
+        self.assertIn("Save Investor budget", panel_content)

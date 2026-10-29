@@ -398,6 +398,7 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(self.ledger.balance(202, USDC), 30_000_000)
 
     def test_investor_strategy_tag_is_persisted_on_finalized_position(self):
+        self.ledger.set_investor_budget(101, 1_000_000, 0)
         op = self.reserve(kind="BUY", info={
             "output_asset": "investor-mint", "symbol": "INV", "decimals": 6,
             "strategy": "investor", "entry_step": 1})
@@ -413,6 +414,54 @@ class LedgerTests(unittest.TestCase):
         closed = self.ledger.positions(101, "CLOSED")[0]
         self.assertEqual(closed["exit_step"], 1)
         self.assertEqual(closed["exit_reason"], "INVESTOR_PROFIT_TARGET")
+        budget = self.ledger.investor_budget_summary(101)["usdc"]
+        self.assertEqual(budget["free_raw"], 1_000_000)
+        self.assertEqual(budget["allocated_raw"], 1_000_000)
+        self.assertEqual(self.ledger.balance(101, USDC), 9_050_000)
+
+    def test_investor_budget_is_manual_reserved_and_releasable_only_when_unused(self):
+        with self.assertRaises(LedgerError):
+            self.ledger.set_investor_budget(101, 11_000_000, 0)
+
+        budget = self.ledger.set_investor_budget(101, 6_000_000, 0)["usdc"]
+        self.assertEqual(budget["free_raw"], 6_000_000)
+        self.assertEqual(self.ledger.balance(101, USDC), 4_000_000)
+        self.assertEqual(self.ledger.withdrawal_capacity(101, USDC), 4_000_000)
+
+        with self.assertRaises(LedgerError):
+            self.reserve(kind="WITHDRAW", raw=5_000_000)
+        with self.assertRaises(LedgerError):
+            self.reserve(kind="BUY", raw=5_000_000, info={
+                "output_asset": "other-mint", "symbol": "OTHER", "decimals": 6,
+            })
+
+        failed_buy = self.reserve(kind="BUY", raw=500_000, info={
+            "output_asset": "investor-mint", "symbol": "INV", "decimals": 6,
+            "strategy": "investor", "entry_step": 1,
+        })
+        self.ledger.fail(failed_buy["id"])
+        self.assertEqual(self.ledger.investor_budget_summary(101)["usdc"]["free_raw"], 6_000_000)
+
+        buy = self.reserve(kind="BUY", raw=5_000_000, info={
+            "output_asset": "investor-mint", "symbol": "INV", "decimals": 6,
+            "strategy": "investor", "entry_step": 1,
+        })
+        self.complete(buy, spent=5_000_000, received=1_000_000)
+        committed = self.ledger.investor_budget_summary(101)["usdc"]
+        self.assertEqual(committed["free_raw"], 1_000_000)
+        self.assertEqual(committed["invested_cost_raw"], 5_000_000)
+        with self.assertRaises(LedgerError):
+            self.ledger.set_investor_budget(101, 4_000_000, 0)
+
+        sale = self.reserve(kind="SELL", asset="investor-mint", raw=1_000_000,
+            position=buy["id"], info={"output_asset": USDC, "exit_step": 1})
+        self.complete(sale, spent=1_000_000, received=5_500_000)
+        self.assertEqual(self.ledger.balance(101, USDC), 4_500_000)
+        self.assertEqual(self.ledger.investor_budget_summary(101)["usdc"]["free_raw"], 6_000_000)
+
+        released = self.ledger.set_investor_budget(101, 6_000_000, 0)["usdc"]
+        self.assertEqual(released["free_raw"], 6_000_000)
+        self.assertEqual(self.ledger.balance(101, USDC), 4_500_000)
 
     def test_cannot_sell_another_users_position(self):
         op = self.reserve(kind="BUY", info={"output_asset": SOL, "symbol": "SOL", "decimals": 9})
@@ -699,11 +748,12 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(self.ledger.balance(101, USDC), 3_000_000)
 
     def test_restart_pauses_and_refunds_unsent_not_prepared(self):
-        self.ledger.settings(101, enabled=True)
+        self.ledger.settings(101, enabled=True, investor_enabled=True)
         self.ledger.settings(101, close=True)
         op = self.reserve()
         self.ledger.restart_pause()
         self.assertFalse(self.ledger.settings(101)["trading"])
+        self.assertFalse(self.ledger.settings(101)["investor_trading"])
         self.assertTrue(self.ledger.settings(101)["close_requested"])
         self.assertEqual(self.ledger.operation(op["id"])["state"], "FAILED")
         op2 = self.reserve()
@@ -1101,6 +1151,31 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.ledger.settings(101)["trading"])
         self.assertEqual(self.ledger.balance(101, USDC), 3_000_000)
         self.assertFalse(any(method == "sendTransaction" for method, _ in self.calls))
+
+    async def test_manual_investor_budget_is_saved_and_reserved_per_currency(self):
+        usdc_invoice = self.ledger.invoice(101, USDC, 5_000_000)
+        self.ledger.credit_deposit(usdc_invoice["id"], str(Signature.new_unique()),
+            USDC, 5_000_000, usdc_invoice["created_at"])
+        sol_invoice = self.ledger.invoice(101, SOL, 200_000_000)
+        self.ledger.credit_deposit(sol_invoice["id"], str(Signature.new_unique()),
+            SOL, 200_000_000, sol_invoice["created_at"])
+
+        response = await self.service.save_investor_budget(Request(101, {
+            "usdc_total": "3.125", "sol_total": "0.05",
+        }), None)
+        self.assertEqual(response.status, 200)
+        data = json.loads(response.text)
+        self.assertEqual(data["investor_budget"]["usdc"]["allocated"], 3.125)
+        self.assertEqual(data["investor_budget"]["sol"]["allocated"], 0.05)
+        self.assertEqual(self.ledger.balance(101, USDC), 1_875_000)
+        self.assertEqual(self.ledger.balance(101, SOL), 150_000_000)
+
+        release = await self.service.save_investor_budget(Request(101, {
+            "usdc_total": "0", "sol_total": "0",
+        }), None)
+        self.assertEqual(release.status, 200)
+        self.assertEqual(self.ledger.balance(101, USDC), 5_000_000)
+        self.assertEqual(self.ledger.balance(101, SOL), 200_000_000)
 
     async def test_trade_size_cannot_exceed_own_cash(self):
         with self.assertRaises(legacy.WalletError):

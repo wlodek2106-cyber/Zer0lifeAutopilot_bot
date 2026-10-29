@@ -42,6 +42,10 @@ def partner_account(uid):
     return "partner:" + str(int(uid))
 
 
+def investor_budget_account(uid):
+    return "investor-budget:" + str(int(uid))
+
+
 def _balance(db, account, asset):
     row = db.execute("SELECT raw FROM custody_accounts WHERE account=? AND asset=?",
                      (account, asset)).fetchone()
@@ -118,7 +122,9 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                     uid INTEGER PRIMARY KEY CHECK(uid>0), username TEXT NOT NULL,
                     trading INTEGER NOT NULL DEFAULT 0, close_requested INTEGER NOT NULL DEFAULT 0,
                     order_raw INTEGER NOT NULL DEFAULT 1000000,
-                    created_at INTEGER NOT NULL);
+                    created_at INTEGER NOT NULL,
+                    investor_budget_usdc_raw INTEGER NOT NULL DEFAULT 0,
+                    investor_budget_sol_raw INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS custody_wallet_links (
                     uid INTEGER PRIMARY KEY, address TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS custody_wallet_proofs (
@@ -267,7 +273,10 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
             for table, additions in {
                 "custody_users": {
                     "sniper_trading": "INTEGER NOT NULL DEFAULT 0",
-                    "sniper_order_raw": "INTEGER NOT NULL DEFAULT 5000000"},
+                    "sniper_order_raw": "INTEGER NOT NULL DEFAULT 5000000",
+                    "investor_trading": "INTEGER NOT NULL DEFAULT 0",
+                    "investor_budget_usdc_raw": "INTEGER NOT NULL DEFAULT 0",
+                    "investor_budget_sol_raw": "INTEGER NOT NULL DEFAULT 0"},
                 "custody_positions": {
                     "funding_asset": "TEXT NOT NULL DEFAULT '" + USDC + "'",
                     "cost_raw": "INTEGER", "proceeds_raw": "INTEGER", "closed_at": "INTEGER",
@@ -542,6 +551,88 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
             row = db.execute("SELECT raw FROM custody_accounts WHERE account=? AND asset=?",
                              (available(uid), asset)).fetchone()
             return row["raw"] if row else 0
+
+    @staticmethod
+    def _investor_exposure(db, uid, asset):
+        row = db.execute("""SELECT COALESCE(SUM(cost_raw),0) AS raw
+            FROM custody_positions WHERE uid=? AND strategy='investor'
+              AND funding_asset=? AND state IN ('OPEN','RESERVED')""",
+            (uid, asset)).fetchone()
+        return int(row["raw"] or 0)
+
+    def investor_budget_summary(self, uid):
+        if type(uid) is not int or uid <= 0:
+            raise LedgerError("Invalid Investor budget request.")
+        result = {}
+        with self.db() as db:
+            for asset, symbol, decimals in ((USDC, "USDC", 6), (SOL, "SOL", 9)):
+                cash = _balance(db, investor_budget_account(uid), asset)
+                invested = self._investor_exposure(db, uid, asset)
+                cap_column = ("investor_budget_usdc_raw" if asset == USDC
+                              else "investor_budget_sol_raw")
+                user = db.execute("SELECT " + cap_column + " AS raw FROM custody_users WHERE uid=?",
+                                  (uid,)).fetchone()
+                cap = int(user["raw"] or 0) if user else 0
+                result[symbol.lower()] = {
+                    "free_raw": cash,
+                    "invested_cost_raw": invested,
+                    "allocated_raw": cap,
+                    "pool_raw": cash + invested,
+                    "decimals": decimals,
+                }
+        return result
+
+    def set_investor_budget(self, uid, usdc_raw, sol_raw):
+        if (type(uid) is not int or uid <= 0
+                or type(usdc_raw) is not int or usdc_raw < 0
+                or type(sol_raw) is not int or sol_raw < 0
+                or max(usdc_raw, sol_raw) > 2**63 - 1):
+            raise LedgerError("Investor budget is invalid.")
+        targets = ((USDC, usdc_raw), (SOL, sol_raw))
+        changes = {USDC: 0, SOL: 0}
+        with self.db() as db:
+            if not db.execute("SELECT 1 FROM custody_users WHERE uid=?", (uid,)).fetchone():
+                raise LedgerError("Create an account before allocating an Investor budget.")
+            if db.execute("SELECT 1 FROM custody_operations WHERE state IN "
+                          "('RESERVED','PREPARED','SUBMITTED','UNKNOWN') LIMIT 1").fetchone():
+                raise LedgerError("Wait for the pending wallet operation before changing the Investor budget.")
+            for asset, target in targets:
+                account = investor_budget_account(uid)
+                cash = _balance(db, account, asset)
+                invested = self._investor_exposure(db, uid, asset)
+                if target < invested:
+                    raise LedgerError("Investor budget cannot be reduced below funds committed to open positions.")
+                pool = cash + invested
+                if target < pool:
+                    release = pool - target
+                    if cash < release:
+                        raise LedgerError("Only unused Investor budget can be released; open positions remain committed.")
+                    lines = [(account, asset, -release), (available(uid), asset, release)]
+                    note = "release unused AI Crypto Investors budget"
+                    changes[asset] = -release
+                elif target > pool:
+                    delta = target - pool
+                    if _balance(db, available(uid), asset) < delta:
+                        raise LedgerError("Insufficient available " +
+                            ("USDC" if asset == USDC else "SOL") + " to allocate this budget.")
+                    lines = [(available(uid), asset, -delta), (account, asset, delta)]
+                    note = "allocate AI Crypto Investors budget"
+                    changes[asset] = delta
+                else:
+                    lines = None
+                if lines:
+                    self.post(db, "investor-budget:" + str(uid) + ":" + asset + ":" + str(uuid.uuid4()),
+                              note, lines)
+                cap_column = ("investor_budget_usdc_raw" if asset == USDC
+                              else "investor_budget_sol_raw")
+                db.execute("UPDATE custody_users SET " + cap_column + "=? WHERE uid=?",
+                           (target, uid))
+        summary = self.investor_budget_summary(uid)
+        summary["_changes"] = {
+            "usdc": changes[USDC],
+            "sol": changes[SOL],
+        }
+        return summary
 
     @staticmethod
     def _has_monthly_fee_funding(db, uid):
@@ -1307,6 +1398,10 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
             elif kind == "BUY":
                 if asset not in (USDC, SOL) or metadata.get("output_asset") in (None, asset):
                     raise LedgerError("Недопустимая валюта покупки.")
+                if metadata.get("strategy") == "investor":
+                    source = investor_budget_account(uid)
+                    if _balance(db, source, asset) < raw:
+                        raise LedgerError("Investor purchase exceeds the free amount in its allocated budget.")
                 cooldown = db.execute("""SELECT blocked_until FROM custody_loss_reentry_cooldowns
                     WHERE asset=?""", (metadata["output_asset"],)).fetchone()
                 if cooldown and cooldown["blocked_until"] > int(time.time()):
@@ -1354,8 +1449,12 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                 raise LedgerError("Recovery audit evidence is incomplete.")
             if not isinstance(fee, int) or fee < 0 or fee > row["fee_cap"]:
                 raise LedgerError("Комиссия не соответствует резерву.")
+            info = json.loads(row["metadata"])
             source = (position_account(row["position_id"]) if row["kind"] == "SELL" else
-                      partner_account(row["uid"]) if row["kind"] == "PARTNER_PAYOUT" else available(row["uid"]))
+                      partner_account(row["uid"]) if row["kind"] == "PARTNER_PAYOUT" else
+                      investor_budget_account(row["uid"])
+                      if row["kind"] == "BUY" and info.get("strategy") == "investor"
+                      else available(row["uid"]))
             self.post(db, "failed:" + oid, "release only proven unsent/failed", [
                 (reserve_account(oid), row["asset"], -row["raw"]), (source, row["asset"], row["raw"]),
                 (reserve_account(oid), SOL, -row["fee_cap"]), ("treasury", SOL, row["fee_cap"] - fee),
@@ -1375,7 +1474,6 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
             db.execute("UPDATE custody_operations SET state='FAILED',failure_reason=? WHERE id=?",
                        (str(failure_reason or "")[:300], oid))
             if row["kind"] == "SELL" and recovery_audit is None:
-                info = json.loads(row["metadata"])
                 exit_reason = info.get("exit_reason")
                 if exit_reason in ("STOP_LOSS", "TRAILING_STOP"):
                     # Each retry has a new operation ID. Deduplicate by position,
@@ -1563,7 +1661,10 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                     raise LedgerError("Could not verify the withdrawal commission recipient.")
             account = reserve_account(oid)
             source = (position_account(row["position_id"]) if row["kind"] == "SELL" else
-                      partner_account(row["uid"]) if row["kind"] == "PARTNER_PAYOUT" else available(row["uid"]))
+                      partner_account(row["uid"]) if row["kind"] == "PARTNER_PAYOUT" else
+                      investor_budget_account(row["uid"])
+                      if row["kind"] == "BUY" and info.get("strategy") == "investor"
+                      else available(row["uid"]))
             lines = [(account, row["asset"], -spent), ("external", row["asset"], spent),
                 (account, SOL, -fee), ("external", SOL, fee),
                 (account, SOL, -(row["fee_cap"] - fee)), ("treasury", SOL, row["fee_cap"] - fee)]
@@ -1579,6 +1680,7 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                 if received <= 0:
                     raise LedgerError("Нет подтверждённого результата swap.")
                 output = info["output_asset"]
+                position = None
                 target = position_account(oid) if row["kind"] == "BUY" else available(row["uid"])
                 if row["kind"] == "SELL":
                     position = db.execute("SELECT * FROM custody_positions WHERE id=? AND uid=?",
@@ -1589,8 +1691,25 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                         db, position, received - position["cost_raw"])
                     if commission_total > received:
                         raise LedgerError("Партнёрские комиссии превышают полученную прибыль.")
-                    lines += [("external", output, -received),
-                              (target, output, received - commission_total)]
+                    net_received = received - commission_total
+                    lines.append(("external", output, -received))
+                    if position["strategy"] == "investor":
+                        cap_column = ("investor_budget_usdc_raw" if output == USDC
+                                      else "investor_budget_sol_raw")
+                        cap_row = db.execute("SELECT " + cap_column + " AS raw FROM custody_users WHERE uid=?",
+                                             (row["uid"],)).fetchone()
+                        cap = int(cap_row["raw"] or 0) if cap_row else 0
+                        pool_cash = _balance(db, investor_budget_account(row["uid"]), output)
+                        exposure_after = max(0, self._investor_exposure(
+                            db, row["uid"], output) - int(position["cost_raw"] or 0))
+                        room = max(0, cap - pool_cash - exposure_after)
+                        to_investor = min(net_received, room)
+                        if to_investor:
+                            lines.append((investor_budget_account(row["uid"]), output, to_investor))
+                        if net_received > to_investor:
+                            lines.append((available(row["uid"]), output, net_received - to_investor))
+                    else:
+                        lines.append((available(row["uid"]), output, net_received))
                     lines.extend((account, output, amount)
                                  for account, amount in commission_accounts.items())
                 else:
@@ -1623,13 +1742,19 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                          and 1 <= info["exit_step"] <= 3 else None,
                      str(info.get("exit_reason") or "")[:60],
                      row["position_id"], row["uid"]))
-                blocked_until = closed_at + REENTRY_COOLDOWN_SECONDS
-                db.execute("""INSERT INTO custody_loss_reentry_cooldowns
-                    (asset,blocked_until,last_loss_at) VALUES(?,?,?)
-                    ON CONFLICT(asset) DO UPDATE SET
-                        blocked_until=MAX(custody_loss_reentry_cooldowns.blocked_until,excluded.blocked_until),
-                        last_loss_at=MAX(custody_loss_reentry_cooldowns.last_loss_at,excluded.last_loss_at)""",
-                    (position["asset"], blocked_until, closed_at))
+                investor_partial_exit = (
+                    position["strategy"] == "investor"
+                    and info.get("manual_close") is not True
+                    and info.get("exit_reason") in (
+                        "INVESTOR_TAKE_PROFIT_STEP_1", "INVESTOR_TAKE_PROFIT_STEP_2"))
+                if not investor_partial_exit:
+                    blocked_until = closed_at + REENTRY_COOLDOWN_SECONDS
+                    db.execute("""INSERT INTO custody_loss_reentry_cooldowns
+                        (asset,blocked_until,last_loss_at) VALUES(?,?,?)
+                        ON CONFLICT(asset) DO UPDATE SET
+                            blocked_until=MAX(custody_loss_reentry_cooldowns.blocked_until,excluded.blocked_until),
+                            last_loss_at=MAX(custody_loss_reentry_cooldowns.last_loss_at,excluded.last_loss_at)""",
+                        (position["asset"], blocked_until, closed_at))
             elif row["kind"] == "PARTNER_PAYOUT":
                 db.execute("""UPDATE custody_partner_earnings SET state='PAID',signature=?
                     WHERE operation_id=? AND state='SUBMITTED'""", (row["signature"], oid))
@@ -1651,7 +1776,9 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                 else:
                     exit_reason = info.get("exit_reason")
                     if exit_reason not in ("STOP_LOSS", "TAKE_PROFIT", "TRAILING_STOP",
-                                            "RESISTANCE_TARGET"):
+                                            "RESISTANCE_TARGET", "INVESTOR_TAKE_PROFIT_STEP_1",
+                                            "INVESTOR_TAKE_PROFIT_STEP_2",
+                                            "INVESTOR_TRAILING_TAKE_PROFIT"):
                         exit_reason = None
                     notification = {
                         "kind": "SELL", "symbol": position["symbol"],
@@ -1698,7 +1825,8 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
     def loss_entry_cooldown_until(self, asset, now=None):
         return self.entry_cooldown_until(asset, now)
 
-    def settings(self, uid, enabled=None, raw=None, close=None, sniper_enabled=None, sniper_raw=None):
+    def settings(self, uid, enabled=None, raw=None, close=None, sniper_enabled=None,
+                 sniper_raw=None, investor_enabled=None):
         with self.db() as db:
             if enabled is not None:
                 db.execute("UPDATE custody_users SET trading=?,close_requested=0 WHERE uid=?", (int(enabled), uid))
@@ -1710,18 +1838,23 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                 db.execute("UPDATE custody_users SET sniper_trading=? WHERE uid=?", (int(sniper_enabled), uid))
             if sniper_raw is not None:
                 db.execute("UPDATE custody_users SET sniper_order_raw=? WHERE uid=?", (sniper_raw, uid))
+            if investor_enabled is not None:
+                db.execute("UPDATE custody_users SET investor_trading=? WHERE uid=?",
+                           (int(investor_enabled), uid))
             row = db.execute("SELECT * FROM custody_users WHERE uid=?", (uid,)).fetchone()
             return dict(row) if row else None
 
     def active_users(self):
         with self.db() as db:
-            return [dict(r) for r in db.execute("SELECT * FROM custody_users WHERE trading=1 OR sniper_trading=1 OR close_requested=1")]
+            return [dict(r) for r in db.execute(
+                "SELECT * FROM custody_users WHERE trading=1 OR sniper_trading=1 "
+                "OR investor_trading=1 OR close_requested=1")]
 
     def restart_pause(self):
         with self.db() as db:
             # Automated modes pause on restart. An explicit close-all request is
             # a queued user action and remains until all positions are closed.
-            db.execute("UPDATE custody_users SET trading=0,sniper_trading=0")
+            db.execute("UPDATE custody_users SET trading=0,sniper_trading=0,investor_trading=0")
             # RESERVED has never been broadcast, by contract; PREPARED is ambiguous.
             unsent = [r[0] for r in db.execute("SELECT id FROM custody_operations WHERE state='RESERVED'")]
         for oid in unsent:
@@ -1731,7 +1864,7 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
         """Read-only training evidence: finalized round trips, never open PnL."""
         with self.db() as db:
             return [dict(row) for row in db.execute("""
-                SELECT p.asset AS mint, p.funding_asset, p.cost_raw, p.proceeds_raw
+                SELECT p.asset AS mint, p.funding_asset, p.strategy, p.cost_raw, p.proceeds_raw
                 FROM custody_positions p
                 JOIN custody_operations b ON b.id=p.id AND b.kind='BUY' AND b.state='COMPLETED'
                 WHERE p.state='CLOSED' AND p.sell_tx IS NOT NULL
@@ -1799,7 +1932,7 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
             db.execute("INSERT INTO custody_ai_analyses VALUES(?,?,?)", (aid, int(time.time()), json.dumps(decisions)))
 
     def ai_claim(self, aid, uid, mode):
-        if mode not in ("main", "sniper"):
+        if mode not in ("main", "sniper", "investor"):
             raise LedgerError("Неизвестный режим AI.")
         with self.db() as db:
             return bool(db.execute("INSERT OR IGNORE INTO custody_ai_attempts VALUES(?,?,?)", (aid, uid, mode)).rowcount)

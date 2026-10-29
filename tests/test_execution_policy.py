@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import execution_policy as policy
+import ai_decisions
 from custody_ledger import USDC, SOL
 from solders.hash import Hash
 from solders.message import MessageV0
@@ -441,3 +442,67 @@ class RuntimePolicyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_live_allowlist_change_invalidates_an_earlier_proposal(self):
         await self.blocked_send(lambda info: setattr(self.service, "main_symbols", []))
+
+
+class InvestorPolicyTests(unittest.TestCase):
+    def test_profit_ladder_never_uses_a_stop_loss(self):
+        self.assertEqual(policy.investor_exit_reason(103.5, 100, 103.5, 1),
+                         "INVESTOR_TAKE_PROFIT_STEP_1")
+        self.assertEqual(policy.investor_exit_reason(107, 100, 107, 2),
+                         "INVESTOR_TAKE_PROFIT_STEP_2")
+        self.assertIsNone(policy.investor_exit_reason(109.99, 100, 109.99, 3))
+        self.assertIsNone(policy.investor_exit_reason(105, 100, 110, 3))
+        self.assertEqual(policy.investor_exit_reason(104.5, 100, 110, 3),
+                         "INVESTOR_TRAILING_TAKE_PROFIT")
+        self.assertIsNone(policy.investor_exit_reason(1, 100, 110, 3))
+        self.assertTrue(policy.investor_minimum_return_allows(1_001, 1_000))
+        self.assertFalse(policy.investor_minimum_return_allows(1_000, 1_000))
+        self.assertFalse(policy.investor_minimum_return_allows(999, 1_000))
+
+    def test_investor_entry_requires_fresh_rising_non_extended_chart(self):
+        context = {"TOKEN": {
+            "chart_ready": 1, "chart_trend_h1": 1, "chart_buy_setup": 1,
+            "change_m5_pct": 0.5, "change_h1_pct": 2, "change_h6_pct": -2,
+        }}
+        self.assertTrue(policy.investor_entry_signal("TOKEN", context, 101).allowed)
+        self.assertFalse(policy.investor_entry_signal(
+            "TOKEN", context, 99, previous_entry=100).allowed)
+        context["TOKEN"]["change_m5_pct"] = 3.1
+        self.assertEqual(policy.investor_entry_signal("TOKEN", context, 101).code,
+                         "investor_extension")
+
+    def test_investor_buy_must_use_exact_server_tranche_and_reserved_pool(self):
+        settings = {
+            "investor_trading": 1,
+            "investor_budget_usdc_raw": 15_000_000,
+            "investor_budget_sol_raw": 0,
+        }
+        metadata = {
+            "strategy": "investor", "symbol": "TOKEN", "decimals": 6,
+            "entry_step": 1, "entry_raw": 1_000_000,
+            "investor_slot_raw": 3_000_000,
+        }
+        kwargs = {
+            "uid": 1, "kind": "BUY", "asset": USDC, "output_asset": "mint",
+            "raw": 1_000_000, "metadata": metadata, "position_id": None,
+            "settings": settings, "positions": [], "watchlist": {
+                "TOKEN": {"mint": "mint", "decimals": 6}},
+            "universes": {"main": [], "sniper": [], "investor": ["TOKEN"]},
+            "balance": 1_000_000,
+        }
+        self.assertTrue(policy.order(**kwargs).allowed)
+        kwargs["metadata"] = {**metadata, "entry_raw": 2_000_000}
+        self.assertEqual(policy.order(**kwargs).code, "investor_tranche")
+        kwargs["metadata"] = metadata
+        kwargs["balance"] = 0
+        self.assertEqual(policy.order(**kwargs).code, "size")
+
+    def test_investor_ai_cannot_issue_a_sell(self):
+        universes = {"main": [], "sniper": [], "investor": ["TOKEN"]}
+        decisions = {
+            "main": {"action": "HOLD", "symbol": None, "reason": "No signal."},
+            "sniper": {"action": "HOLD", "symbol": None, "reason": "No signal."},
+            "investor": {"action": "SELL", "symbol": "TOKEN", "reason": "Sell now."},
+        }
+        with self.assertRaises(ai_decisions.AIError):
+            ai_decisions.validate_decisions(decisions, universes)
