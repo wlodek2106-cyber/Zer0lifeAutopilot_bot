@@ -2419,6 +2419,9 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             return await self.service.handle(request, self.service.stats)
         app.router.add_get("/api/stats", handler)
         app.router.add_get("/api/admin/status", handler)
+        app.router.add_get("/api/admin/balance_check", handler)
+        app.router.add_post("/api/admin/legacy_balances/import", handler)
+        app.router.add_post("/api/admin/future_sensitive_action", handler)
         def header(uid):
             fields = {"auth_date": str(int(time.time())), "user": json.dumps({"id": uid})}
             canonical = "\n".join(f"{k}={v}" for k, v in sorted(fields.items()))
@@ -2434,6 +2437,15 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(response.status, 200)
                 self.assertEqual((await response.json())["user_balance"], 7)
                 self.assertEqual((await client.get("/api/admin/status", headers=header(202))).status, 403)
+                for path, method in (
+                    ("/api/admin/balance_check", "GET"),
+                    ("/api/admin/legacy_balances/import", "POST"),
+                    ("/api/admin/future_sensitive_action", "POST"),
+                ):
+                    response = await client.request(method, path, headers=header(202), json={})
+                    self.assertEqual(response.status, 403, path)
+                self.assertEqual(
+                    (await client.get("/api/admin/balance_check", headers=header(101))).status, 200)
                 forged = header(202)
                 forged["X-Telegram-Init-Data"] += "0"
                 self.assertEqual((await client.get("/api/stats", headers=forged)).status, 401)

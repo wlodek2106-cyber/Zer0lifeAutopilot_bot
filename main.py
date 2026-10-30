@@ -178,7 +178,10 @@ async def telegram_auth_middleware(request, handler):
     except (TelegramAuthError, WalletError) as exc:
         return web.json_response({"success": False, "message": str(exc)}, status=getattr(exc, "status", 401))
     request["telegram_user"] = telegram_user
-    if request.path in ADMIN_API_PATHS:
+    # Guard the whole admin namespace here so a newly added /api/admin/* route
+    # cannot accidentally ship without the central owner check. Individual
+    # runtime methods still enforce ownership as a second line of defense.
+    if request.path in ADMIN_API_PATHS or request.path.startswith("/api/admin/"):
         try:
             admin_id = int(ADMIN_TELEGRAM_ID)
         except (TypeError, ValueError):
