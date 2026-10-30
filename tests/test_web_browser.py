@@ -123,6 +123,16 @@ class WebBrowserTests(unittest.TestCase):
             assert(document.getElementById('telegram-package-modal-checkout').hidden,
               'checkout stays unavailable until free access ends');
             closeTelegramPackage();
+             window.tariffResponse={success:true,active:false,free_access:false,trial_available:true,
+               trial_active:false,payment_required:true,purchase_available:false,
+               trading_admitted:false,server_time:now,free_access_until:now-1};
+             await refreshTelegramTariffs();
+             assert(!document.getElementById('telegram-trial-start').hidden,
+               'new account sees the one-time free-trial button');
+             assert(!document.getElementById('telegram-tariff-modal').classList.contains('active'),
+               'eligible new user is not pushed into paid checkout');
+             assert(document.getElementById('telegram-tariff-status').textContent.includes('qualifies'),
+               'trial eligibility is explained in the tariff screen');
             window.tariffResponse={success:true,active:false,free_access:false,payment_required:true,
               purchase_available:false,trading_admitted:false,server_time:now,free_access_until:now-1};
             await refreshTelegramTariffs();

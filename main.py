@@ -2191,6 +2191,9 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <section id="telegram-tariff-view" hidden>
                     <p id="telegram-tariff-status" role="status" aria-live="polite">Checking access…</p>
                     <p id="telegram-tariff-countdown" class="section-note" aria-live="polite"></p>
+                    <button id="telegram-trial-start" class="btn-green-main" type="button" hidden>
+                        Start one-time 3-day free trial
+                    </button>
                     <div class="tariff-packages">
                         <button type="button" class="tariff-package" data-telegram-package="zrl_7d">
                             <strong>7 days · 100,000 ZRL</strong><span>Tap to view package details.</span>
@@ -3364,9 +3367,17 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const status=document.getElementById('telegram-tariff-status');
                 const note=document.getElementById('telegram-tariff-note');
                 const checkout=document.getElementById('telegram-tariff-checkout');
+                const trialButton=document.getElementById('telegram-trial-start');
+                trialButton.hidden=!data.trial_available;
                 if(data.admin_free){
                     status.textContent='Administrator access is permanent; package payment is not required.';
                     note.textContent='The public free-access countdown below is for other accounts. A subscription never changes trading admission or starts Core or Sniper.';
+                }else if(data.trial_active){
+                    status.textContent='Your one-time 3-day free trial is active until '+new Date(Number(data.trial_expires_at)*1000).toLocaleString()+'.';
+                    note.textContent='The separate $5 monthly trading fee is waived during the trial. Access does not turn on Core or Sniper.';
+                }else if(data.trial_available){
+                    status.textContent='This new account qualifies for one 3-day free trial.';
+                    note.textContent='Start it once to receive 72 hours of access. The $5 monthly trading fee is waived during the trial; Core and Sniper remain unchanged.';
                 }else if(data.free_access){
                     status.textContent='Free AI Trader subscription is active for everyone through 1 November 2026.';
                     note.textContent='No payment is needed before the countdown ends. Payment is not credited to trading balance and never turns on Core or Sniper.';
@@ -3381,10 +3392,11 @@ RAW_HTML = r"""<!DOCTYPE html>
                 }
                 checkout.hidden=!data.purchase_available||data.admin_free||data.active||data.free_access;
                 const modalCheckout=document.getElementById('telegram-tariff-modal-checkout');
-                modalCheckout.hidden=!data.purchase_available||data.admin_free||data.free_access;
+                modalCheckout.hidden=!data.purchase_available||data.admin_free||data.free_access
+                    ||data.trial_available||data.trial_active;
                 if(!data.payment_required)telegramTariffDismissed=false;
                 const modal=document.getElementById('telegram-tariff-modal');
-                if(data.payment_required&&!telegramTariffDismissed){
+                if(data.payment_required&&!data.trial_available&&!telegramTariffDismissed){
                     document.getElementById('telegram-tariff-modal-message').textContent=
                         data.purchase_available?
                         'Choose 7 days for 100,000 ZRL or 30 days for 0.5 SOL. Payment is verified in the secure browser checkout and does not enter your trading balance.':
@@ -3399,9 +3411,46 @@ RAW_HTML = r"""<!DOCTYPE html>
                 document.getElementById('telegram-tariff-status').textContent=error.message||'Could not check access.';
             }finally{telegramTariffBusy=false;}
         }
+        async function startTelegramTrial(){
+            const button=document.getElementById('telegram-trial-start');
+            if(!telegramTariffState?.trial_available||button.disabled)return;
+            button.disabled=true;
+            button.textContent='Starting your trial…';
+            try{
+                const response=await apiFetch('/api/subscription/trial',{
+                    method:'POST',headers:{'Content-Type':'application/json'},body:'{}'
+                });
+                const data=await response.json();
+                if(!response.ok||!data.success)throw Error(data.message||'Could not start the free trial.');
+                await refreshTelegramTariffs();
+                refreshMonthlyTradingFee(true);
+            }catch(error){
+                alert(error.message||'Could not start the free trial.');
+                button.disabled=false;
+                button.textContent='Start one-time 3-day free trial';
+            }
+        }
+        document.getElementById('telegram-trial-start')?.addEventListener('click',startTelegramTrial);
         function tickTelegramTariffCountdown(){
             if(window.ZRL_WEB||!telegramTariffState)return;
             const label=document.getElementById('telegram-tariff-countdown');
+            if(telegramTariffState.trial_active&&telegramTariffState.trial_expires_at){
+                const trialSeconds=Number(telegramTariffState.trial_expires_at)-
+                    Math.floor((Date.now()+telegramTariffClockOffset)/1000);
+                if(trialSeconds<=0){
+                    label.textContent='Your free trial has ended. Checking access…';
+                    if(Date.now()>=nextTelegramTariffCheck){
+                        nextTelegramTariffCheck=Date.now()+10000;refreshTelegramTariffs();
+                    }
+                    return;
+                }
+                const trialDays=Math.floor(trialSeconds/86400);
+                const trialHours=Math.floor(trialSeconds%86400/3600);
+                const trialMinutes=Math.floor(trialSeconds%3600/60);
+                const trialRemainder=trialSeconds%60;
+                label.textContent=`Free trial ends in ${trialDays}d ${trialHours}h ${trialMinutes}m ${trialRemainder}s.`;
+                return;
+            }
             const until=Number(telegramTariffState.free_access_until||0);
             if(!until){label.textContent='';return;}
             const seconds=until-
@@ -3423,7 +3472,8 @@ RAW_HTML = r"""<!DOCTYPE html>
             label.textContent=`Public free access ends in ${days}d ${hours}h ${minutes}m ${remaining}s · 1 Nov 2026, 00:00 Europe/Warsaw${accessNote}`;
         }
         function openTariffCheckout(packageId=null){
-            if(!telegramTariffState?.purchase_available||telegramTariffState.admin_free||telegramTariffState.free_access)return;
+            if(!telegramTariffState?.purchase_available||telegramTariffState.admin_free
+                    ||telegramTariffState.free_access||telegramTariffState.trial_active)return;
             const url=new URL('/terminal',window.location.origin);
             if(['zrl_7d','sol_30d'].includes(packageId))url.searchParams.set('package',packageId);
             if(window.Telegram?.WebApp?.openLink)window.Telegram.WebApp.openLink(url.href);
@@ -3449,6 +3499,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                 status.textContent='Checking account access…';
             }else if(data.admin_free){
                 status.textContent='Your administrator account has permanent free access. No package payment is needed.';
+            }else if(data.trial_active){
+                status.textContent='Your 3-day free trial is active until '+new Date(Number(data.trial_expires_at)*1000).toLocaleString()+'. No package payment is due yet.';
             }else if(data.free_access){
                 status.textContent='Your free access is still active. Checkout opens after the public free-access period ends.';
             }else if(!data.purchase_available){
@@ -3458,7 +3510,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             }else{
                 status.textContent='Continue to the secure browser checkout to create an exact payment invoice.';
             }
-            checkout.hidden=!data?.purchase_available||data.admin_free||data.free_access;
+            checkout.hidden=!data?.purchase_available||data.admin_free||data.free_access||data.trial_active;
             checkout.onclick=()=>openTariffCheckout(selectedTelegramPackage);
         }
         function closeTelegramPackage(){
@@ -3663,6 +3715,14 @@ RAW_HTML = r"""<!DOCTYPE html>
                 if(data.is_owner){
                     statusEl.textContent='Administrator account: this recurring trading fee does not apply.';
                     consentBox.hidden=true;cancelButton.hidden=true;
+                    return;
+                }
+                if(data.trial_fee_waived){
+                    statusEl.textContent='No $5 monthly trading fee is charged during your 3-day free trial. After the trial, recurring charges apply only if you have explicitly accepted the fee terms.';
+                    quoteEl.textContent='Monthly trading fee waived for the duration of the free trial.';
+                    consentBox.hidden=true;
+                    cancelButton.hidden=data.consent_status!=='ACTIVE';
+                    updateMonthlyFeeAcceptButton();
                     return;
                 }
                 quoteEl.textContent=monthlyFeeQuoteAvailable
@@ -4947,6 +5007,7 @@ async def main():
     app.router.add_post('/web-auth/finish', runtime.web_access.public)
     app.router.add_post('/web-auth/logout', runtime.web_access.public)
     app.router.add_get('/api/subscription', wallet_handler(runtime.web_access.status))
+    app.router.add_post('/api/subscription/trial', wallet_handler(runtime.web_access.start_trial))
     app.router.add_post('/api/subscription/order', wallet_handler(runtime.web_access.order))
     app.router.add_post('/api/subscription/verify', wallet_handler(runtime.web_access.verify))
     app.router.add_get('/health', health_handler)

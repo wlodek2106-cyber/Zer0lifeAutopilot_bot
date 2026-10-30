@@ -16,7 +16,7 @@ from account_security import AccountSecurity, digest
 from custody_ledger import CustodyLedger, SOL, USDC, FEE_CAP
 from wallet_runtime import WalletError, GENESIS, SYSTEM, TOKEN, associated
 from web_access import (WebAccess, RECEIVER, SOL_RECEIVER, PRICE, PERIOD, SESSION_COOKIE, LOGIN_COOKIE,
-                        FREE_ACCESS_UNTIL, ZRL_MINT, ZRL_DECIMALS, ZRL_PRICE_RAW, ZRL_PERIOD)
+                        FREE_ACCESS_UNTIL, TRIAL_PERIOD, ZRL_MINT, ZRL_DECIMALS, ZRL_PRICE_RAW, ZRL_PERIOD)
 from test_account_security import Device, Request, ORIGIN, decoded
 
 OWNER = 428821665
@@ -207,6 +207,87 @@ class WebAccessTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(state["trading_admitted"])
             with self.assertRaises(WalletError):
                 self.access.trading_request(request)
+
+    async def test_new_account_trial_is_one_time_72_hours_and_does_not_enable_modes(self):
+        uid = 101
+        self.runtime.beta_users = {OWNER}
+        self.ledger.settings(uid, enabled=True, sniper_enabled=True, close=True)
+        request = BrowserRequest(uid=uid)
+        started = int(time.time()) + 5
+
+        with patch("web_access.time.time", return_value=started):
+            first = decoded(await self.access.start_trial(request, None))
+        self.assertTrue(first["trial_started"])
+        self.assertTrue(first["trial_active"])
+        self.assertEqual(first["trial_expires_at"], started + TRIAL_PERIOD)
+        self.assertTrue(self.access.state(uid)["trading_admitted"])
+        self.assertTrue(self.ledger.settings(uid)["trading"])
+        self.assertTrue(self.ledger.settings(uid)["sniper_trading"])
+
+        with patch("web_access.time.time", return_value=started + 10):
+            repeated = decoded(await self.access.start_trial(request, None))
+        self.assertFalse(repeated["trial_started"])
+        self.assertEqual(repeated["trial_expires_at"], started + TRIAL_PERIOD)
+
+        with patch("web_access.time.time", return_value=started + TRIAL_PERIOD):
+            self.assertFalse(self.access.state(uid)["trial_active"])
+            self.assertFalse(self.access.state(uid)["trading_admitted"])
+            self.access.pause_expired(uid)
+            with self.assertRaises(WalletError):
+                await self.access.start_trial(request, None)
+        settings = self.ledger.settings(uid)
+        self.assertFalse(settings["trading"])
+        self.assertFalse(settings["sniper_trading"])
+        self.assertTrue(settings["close_requested"])
+
+    async def test_trial_is_restricted_to_accounts_created_after_rollout(self):
+        uid = 102
+        with self.ledger.db() as db:
+            db.execute("UPDATE access_settings SET value=? WHERE key='trial_eligible_after'",
+                       (int(time.time()) + 1,))
+        with self.assertRaises(WalletError) as caught:
+            await self.access.start_trial(BrowserRequest(uid=uid), None)
+        self.assertEqual(caught.exception.status, 403)
+
+    async def test_trial_waives_monthly_fee_status_and_all_charge_paths(self):
+        from custody_runtime import CustodyRuntime
+
+        uid = 101
+        await self.access.start_trial(BrowserRequest(uid=uid), None)
+        service = object.__new__(CustodyRuntime)
+        service.ledger = self.ledger
+        service.owner_id = OWNER
+        service.web_access = self.access
+        service._monthly_fee_worker_status = "idle"
+        service.solvent = AsyncMock(side_effect=AssertionError("must not check or charge during trial"))
+        service.monthly_trading_fee_quote = AsyncMock(
+            side_effect=AssertionError("must not request a fee quote during trial"))
+        before = self.ledger.balance(uid, SOL)
+
+        await service.ensure_monthly_trading_fee(None, uid)
+        direct_charge = await service._charge_monthly_trading_fee(None, uid)
+        status = await service.monthly_trading_fee_status(uid, None)
+        with patch.object(self.ledger, "monthly_fee_due_users", return_value=[uid]):
+            await service.process_due_monthly_trading_fees(None)
+
+        self.assertEqual(direct_charge["state"], "trial_fee_waived")
+        self.assertTrue(status["trial_fee_waived"])
+        self.assertTrue(status["fee_access"])
+        self.assertEqual(self.ledger.balance(uid, SOL), before)
+        service.solvent.assert_not_awaited()
+        service.monthly_trading_fee_quote.assert_not_awaited()
+
+    async def test_trial_blocks_new_paid_order_but_preserves_preexisting_invoice_days(self):
+        order = await self.new_order(101)
+        started = int(time.time())
+        with patch("web_access.time.time", return_value=started):
+            trial = decoded(await self.access.start_trial(BrowserRequest(uid=101), None))
+        with self.assertRaises(WalletError):
+            await self.new_order(101)
+
+        paid = await self.pay(order)
+        self.assertTrue(paid["trial_active"])
+        self.assertEqual(paid["expires_at"], trial["trial_expires_at"] + PERIOD)
 
     async def test_promo_skips_expiry_pause_until_fixed_deadline_then_pauses(self):
         self.access.free_access_until = FREE_ACCESS_UNTIL

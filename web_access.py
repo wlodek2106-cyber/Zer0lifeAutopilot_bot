@@ -21,6 +21,7 @@ RECEIVER = "57S7TryAMhxRq5sMSyZxTkyCmzT8tPFKfXjzZwvmv5db"  # ZRL package receive
 SOL_RECEIVER = "CXKWBCBBGcL4hmxoMSPKB3CzGqeZYFT2Ke4hgCJ3wi4Y"
 PRICE = 500_000_000
 PERIOD = 30 * 86400
+TRIAL_PERIOD = 3 * 86400
 ZRL_MINT = "AyfWjjJ9FPYfsgKCUaZ7PwMpoHi8ujf4m3pYxy7MmDiq"
 ZRL_DECIMALS = 6
 ZRL_PRICE = 100_000
@@ -92,6 +93,10 @@ class WebAccess:
                     recipient TEXT NOT NULL DEFAULT '57S7TryAMhxRq5sMSyZxTkyCmzT8tPFKfXjzZwvmv5db');
                 CREATE TABLE IF NOT EXISTS access_memberships (
                     uid INTEGER PRIMARY KEY, expires INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS access_trials (
+                    uid INTEGER PRIMARY KEY, started INTEGER NOT NULL, expires INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS access_settings (
+                    key TEXT PRIMARY KEY, value INTEGER NOT NULL);
             """)
             for table, columns in (
                 ("access_orders", (
@@ -114,10 +119,46 @@ class WebAccess:
                         db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
             db.execute("CREATE INDEX IF NOT EXISTS access_orders_open_asset_raw "
                        "ON access_orders(asset, raw, deadline)")
+            # Existing registrations predate this marker; only profiles registered
+            # after rollout may claim the one-time trial.
+            db.execute("""INSERT OR IGNORE INTO access_settings(key,value)
+                VALUES('trial_eligible_after',?)""", (int(time.time()),))
         self.free_access_until = FREE_ACCESS_UNTIL
 
     def free_access_active(self, now=None):
         return int(time.time() if now is None else now) < self.free_access_until
+
+    def trial_status(self, uid, now=None):
+        uid = int(uid)
+        current = int(time.time() if now is None else now)
+        with self.ledger.db() as db:
+            cutoff = db.execute(
+                "SELECT value FROM access_settings WHERE key='trial_eligible_after'").fetchone()
+            user = db.execute("SELECT created_at FROM custody_users WHERE uid=?", (uid,)).fetchone()
+            profile = db.execute("SELECT accepted_at FROM app_profiles WHERE uid=?", (uid,)).fetchone()
+            trial = db.execute("SELECT started,expires FROM access_trials WHERE uid=?", (uid,)).fetchone()
+            membership = db.execute("SELECT expires FROM access_memberships WHERE uid=?", (uid,)).fetchone()
+            has_paid_receipt = bool(db.execute(
+                "SELECT 1 FROM access_receipts WHERE uid=? LIMIT 1", (uid,)).fetchone())
+        claimed = bool(trial)
+        active = bool(trial and trial["expires"] > current)
+        eligible = bool(
+            not self.owner(uid)
+            and cutoff and user and profile
+            and user["created_at"] >= cutoff["value"]
+            and profile["accepted_at"] >= cutoff["value"]
+            and not claimed and not membership and not has_paid_receipt
+        )
+        return {
+            "trial_available": eligible,
+            "trial_active": active,
+            "trial_used": claimed,
+            "trial_started_at": trial["started"] if trial else None,
+            "trial_expires_at": trial["expires"] if trial else None,
+        }
+
+    def trial_active(self, uid, now=None):
+        return self.trial_status(uid, now)["trial_active"]
 
     def trading_admitted(self, uid, now=None):
         uid = int(uid)
@@ -131,6 +172,7 @@ class WebAccess:
             or getattr(self.runtime, "public_enabled", False)
             or uid in getattr(self.runtime, "beta_users", set())
             or self.free_access_active(current)
+            or self.trial_active(uid, current)
             or paid_active
         )
 
@@ -157,17 +199,23 @@ class WebAccess:
         now = int(time.time())
         with self.ledger.db() as db:
             row = db.execute("SELECT expires FROM access_memberships WHERE uid=?", (uid,)).fetchone()
+        trial = self.trial_status(uid, now)
         owner_free = self.owner(uid)
         promo_free = not owner_free and self.free_access_active(now)
         expiry = row["expires"] if row else 0
         paid_active = expiry > now
         admitted = self.trading_admitted(uid, now)
-        return {"success": True, "active": owner_free or promo_free or paid_active,
+        active = owner_free or promo_free or trial["trial_active"] or paid_active
+        return {"success": True, "active": active,
                 "admin_free": owner_free, "free_access": promo_free,
                 "free_access_until": self.free_access_until,
-                "payment_required": not owner_free and not promo_free and not paid_active,
+                **trial,
+                "trial_days": TRIAL_PERIOD // 86400,
+                "payment_required": not active,
                 "trading_admitted": admitted,
-                "expires_at": None if owner_free else expiry, "server_time": now,
+                "expires_at": None if owner_free else max(
+                    expiry, trial["trial_expires_at"] or 0),
+                "server_time": now,
                 "price_sol": "0.5", "price_lamports": str(PRICE), "days": 30,
                 "packages": [{"id": key, "asset": value["asset"], "price": str(value["price"]),
                               "recipient": value["recipient"],
@@ -184,8 +232,11 @@ class WebAccess:
             db.execute("""UPDATE custody_users SET trading=0,sniper_trading=0
                 WHERE uid<>? AND NOT EXISTS(
                     SELECT 1 FROM access_memberships m WHERE m.uid=custody_users.uid AND m.expires>?)
+                AND NOT EXISTS(
+                    SELECT 1 FROM access_trials t WHERE t.uid=custody_users.uid AND t.expires>?)
                 """ + (" AND uid=?" if uid is not None else ""),
-                (int(self.runtime.owner_id), now, uid) if uid is not None else (int(self.runtime.owner_id), now))
+                (int(self.runtime.owner_id), now, now, uid)
+                if uid is not None else (int(self.runtime.owner_id), now, now))
         # close_requested is deliberately preserved: explicit user-requested exits.
 
     def require(self, uid, kind="BUY", position_id=None, manual=False):
@@ -419,7 +470,7 @@ class WebAccess:
                 AND NOT EXISTS(SELECT 1 FROM access_receipts r WHERE r.order_id=o.id)
                 ORDER BY created DESC LIMIT 1""", (uid, int(time.time()))).fetchone()
         state = self.state(uid)
-        if state["free_access"] or state["admin_free"]:
+        if state["free_access"] or state["admin_free"] or state["trial_active"]:
             pending = None
         public_pending = self.public_order(pending) if pending else None
         return web.json_response({**state, "pending_order": public_pending,
@@ -439,7 +490,7 @@ class WebAccess:
         package = PACKAGES.get(package_id)
         if not package:
             raise WalletError("Choose one of the available access packages.", 400)
-        if self.free_access_active():
+        if self.free_access_active() or self.trial_active(uid):
             raise WalletError("Free AI Trader access is still active. No payment is due yet.", 409)
         sender = self.ledger.wallet_address(uid)
         if not sender or sender in (RECEIVER, SOL_RECEIVER, self.runtime.wallet):
@@ -469,6 +520,43 @@ class WebAccess:
                 row = db.execute("SELECT * FROM access_orders WHERE id=?", (oid,)).fetchone()
         return web.json_response({"success": True, "order": self.public_order(row),
                                   **self.state(uid), "recipient": row["recipient"]})
+
+    async def start_trial(self, request, session):
+        uid = self.runtime.uid(request)
+        if self.owner(uid):
+            raise WalletError("Administrator access is permanent; no trial is needed.", 409)
+        self.runtime.admit(uid)
+        now = int(time.time())
+        already_active = False
+        with self.ledger.db() as db:
+            cutoff = db.execute(
+                "SELECT value FROM access_settings WHERE key='trial_eligible_after'").fetchone()
+            user = db.execute("SELECT created_at FROM custody_users WHERE uid=?", (uid,)).fetchone()
+            profile = db.execute("SELECT accepted_at FROM app_profiles WHERE uid=?", (uid,)).fetchone()
+            trial = db.execute("SELECT started,expires FROM access_trials WHERE uid=?", (uid,)).fetchone()
+            membership = db.execute("SELECT expires FROM access_memberships WHERE uid=?", (uid,)).fetchone()
+            receipt = db.execute("SELECT 1 FROM access_receipts WHERE uid=? LIMIT 1", (uid,)).fetchone()
+            if trial:
+                if trial["expires"] > now:
+                    already_active = True
+                else:
+                    raise WalletError("This account has already used its free trial.", 409)
+            else:
+                if (not cutoff or not user or not profile
+                        or user["created_at"] < cutoff["value"]
+                        or profile["accepted_at"] < cutoff["value"]
+                        or membership or receipt):
+                    raise WalletError("The one-time free trial is available only to newly created accounts.", 403)
+                db.execute("INSERT INTO access_trials(uid,started,expires) VALUES(?,?,?)",
+                           (uid, now, now + TRIAL_PERIOD))
+        if already_active:
+            return web.json_response({**self.state(uid), "trial_started": False,
+                "message": "Your one-time free trial is already active."},
+                headers={"Cache-Control": "no-store"})
+        self.pause_expired(uid)
+        return web.json_response({**self.state(uid), "trial_started": True,
+            "message": "Your 3-day free trial has started. No monthly trading fee will be charged during the trial."},
+            headers={"Cache-Control": "no-store"})
 
     async def verify(self, request, session):
         uid = self.runtime.uid(request)
@@ -535,6 +623,9 @@ class WebAccess:
             else:
                 current = db.execute("SELECT expires FROM access_memberships WHERE uid=?", (uid,)).fetchone()
                 starts = max(now, current["expires"] if current else 0)
+                trial = db.execute("SELECT expires FROM access_trials WHERE uid=?", (uid,)).fetchone()
+                if trial and trial["expires"] > now:
+                    starts = max(starts, trial["expires"])
                 # A pre-existing invoice may finish during the free window; do not consume its paid days.
                 if self.free_access_active(now):
                     starts = max(starts, self.free_access_until)

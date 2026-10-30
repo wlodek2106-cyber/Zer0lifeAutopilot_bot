@@ -421,16 +421,24 @@ class CustodyRuntime(WalletRuntime):
     async def monthly_trading_fee_status(self, uid, session):
         status = self.ledger.monthly_fee_status(uid, self.owner_id)
         now = int(time.time())
+        trial_fee_waived = bool(
+            getattr(self, "web_access", None)
+            and self.web_access.trial_active(uid, now))
         status.update({
             "terms_version": MONTHLY_TRADING_FEE_TERMS_VERSION,
             "fee_usd": MONTHLY_TRADING_FEE_USD_CENTS / 100,
             "period_seconds": MONTHLY_TRADING_FEE_PERIOD_SECONDS,
             "billing_status": self._monthly_fee_worker_status,
+            "trial_fee_waived": trial_fee_waived,
             "fee_access": bool(status["is_owner"] or not status["funded"]
+                               or trial_fee_waived
                                or (status["paid_until"] and status["paid_until"] > now)),
         })
         status["history"] = self.ledger.monthly_fee_charges(uid, self.owner_id)
-        if not status["is_owner"]:
+        if trial_fee_waived:
+            status.update({"quote_available": False, "quote_raw": None,
+                           "quote_sol": None, "sol_usd": None})
+        elif not status["is_owner"]:
             try:
                 quote = await self.monthly_trading_fee_quote(session)
                 status.update({
@@ -445,6 +453,9 @@ class CustodyRuntime(WalletRuntime):
         return status
 
     async def _charge_monthly_trading_fee(self, session, uid):
+        if (getattr(self, "web_access", None)
+                and self.web_access.trial_active(uid)):
+            return {"state": "trial_fee_waived"}
         status = self.ledger.monthly_fee_status(uid, self.owner_id)
         if status["is_owner"] or not status["funded"]:
             return {"state": "waiting_for_funding" if not status["is_owner"] else "exempt"}
@@ -454,8 +465,16 @@ class CustodyRuntime(WalletRuntime):
             uid, self.owner_id, quote["amount_raw"], quote["price_usd"])
 
     async def process_due_monthly_trading_fees(self, session):
-        due_users = self.ledger.monthly_fee_due_users()
+        all_due_users = self.ledger.monthly_fee_due_users()
+        if not all_due_users:
+            return
+        due_users = [
+            uid for uid in all_due_users
+            if not (getattr(self, "web_access", None)
+                    and self.web_access.trial_active(uid))
+        ]
         if not due_users:
+            self._monthly_fee_worker_status = "trial_fee_waived"
             return
         try:
             await self.solvent(session)
@@ -528,6 +547,9 @@ class CustodyRuntime(WalletRuntime):
                     charge_id, outcome, int(time.time()), retry_after, error)
 
     async def ensure_monthly_trading_fee(self, session, uid):
+        if (getattr(self, "web_access", None)
+                and self.web_access.trial_active(uid)):
+            return
         status = self.ledger.monthly_fee_status(uid, self.owner_id)
         if status["is_owner"] or not status["funded"]:
             return
