@@ -33,7 +33,7 @@ from custody_ledger import (
     MONTHLY_TRADING_FEE_TERMS_VERSION,
 )
 from legacy_retirement import prove_retirement, RECOVERY_RPC
-from tx_deposits import incoming_amounts
+from tx_deposits import incoming_amounts_for_wallets
 from solders.signature import Signature
 import ai_decisions
 import ai_risk_review
@@ -166,8 +166,36 @@ def memo_invoice(tx):
 
 class CustodyRuntime(WalletRuntime):
     def __init__(self, *args, base_url, notification_token="", market_context_fn=None,
-                 sniper_market_context_fn=None, **kwargs):
+                 sniper_market_context_fn=None, reserve_wallet="", hot_wallet_cap_usdc=0,
+                 hot_wallet_cap_sol=0, **kwargs):
         super().__init__(*args, **kwargs)
+        self.reserve_config_error = ""
+        reserve_was_explicit = bool(str(reserve_wallet or "").strip())
+        try:
+            configured_reserve = str(reserve_wallet or self.wallet).strip()
+            reserve_key = Pubkey.from_string(configured_reserve)
+            if not reserve_key.is_on_curve():
+                raise ValueError("reserve wallet must be an on-curve Solana address")
+            self.deposit_wallet = str(reserve_key)
+            if reserve_was_explicit and self.deposit_wallet == self.wallet:
+                self.reserve_config_error = "The reserve wallet must be separate from the hot wallet."
+        except Exception:
+            self.deposit_wallet = self.wallet
+            self.reserve_config_error = "The configured reserve wallet address is invalid."
+        self.split_wallet_enabled = self.deposit_wallet != self.wallet
+        try:
+            self.hot_wallet_caps = {
+                USDC: (amount_raw(hot_wallet_cap_usdc, 6)
+                       if str(hot_wallet_cap_usdc).strip() not in ("", "0", "0.0") else 0),
+                SOL: (amount_raw(hot_wallet_cap_sol, 9)
+                      if str(hot_wallet_cap_sol).strip() not in ("", "0", "0.0") else 0),
+            }
+        except WalletError:
+            self.hot_wallet_caps = {USDC: 0, SOL: 0}
+            self.reserve_config_error = "Hot-wallet limits must be valid positive amounts."
+        if self.split_wallet_enabled and any(
+                self.hot_wallet_caps[asset] <= 0 for asset in (USDC, SOL)):
+            self.reserve_config_error = "Both hot-wallet limits must be configured before split-wallet mode."
         self.notification_token = notification_token
         self.market_context_fn = market_context_fn
         self.sniper_market_context_fn = sniper_market_context_fn
@@ -882,8 +910,15 @@ class CustodyRuntime(WalletRuntime):
         self.ready()
 
     def readiness(self):
-        return {**super().readiness(), "public_custody_enabled": self.public_enabled,
-                "legacy_operation_pending": bool(self.legacy_pending())}
+        return {**super().readiness(),
+                "public_custody_enabled": self.public_enabled,
+                "legacy_operation_pending": bool(self.legacy_pending()),
+                "split_wallet_enabled": self.split_wallet_enabled,
+                "reserve_wallet_configured": not bool(self.reserve_config_error),
+                "hot_wallet_caps_configured": (
+                    all(self.hot_wallet_caps.get(asset, 0) > 0 for asset in (USDC, SOL))
+                    if self.split_wallet_enabled else False),
+                "deposit_wallet": self.deposit_wallet}
 
     def legacy_pending(self):
         with self.ledger.db() as db:
@@ -893,6 +928,8 @@ class CustodyRuntime(WalletRuntime):
 
     def ready(self):
         signer = super().ready()
+        if self.reserve_config_error:
+            raise WalletError(self.reserve_config_error, 503)
         # Do not ignore an ambiguous legacy payment during a migration.
         with self.ledger.db() as db:
             exists = db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='wallet_operations'").fetchone()
@@ -928,20 +965,20 @@ class CustodyRuntime(WalletRuntime):
     def pending(self):
         return self.ledger.pending()
 
-    async def balances(self, session):
-        native = (await self.rpc(session, "getBalance", [self.wallet, {"commitment": "finalized"}]))["value"]
+    async def balances_for_wallet(self, session, wallet):
+        native = (await self.rpc(session, "getBalance", [wallet, {"commitment": "finalized"}]))["value"]
         # Backing is a finalized snapshot, never a quote or a user-provided number.
         balances = {SOL: {"raw": native, "decimals": 9}, USDC: {"raw": 0, "decimals": 6}}
         for program in (TOKEN, TOKEN_2022):
             tokens = (await self.rpc(session, "getTokenAccountsByOwner", [
-                self.wallet, {"programId": str(program)},
+                wallet, {"programId": str(program)},
                 {"encoding": "jsonParsed", "commitment": "finalized"}]))["value"]
             for account in tokens:
                 value = account.get("account", {})
                 if value.get("owner") != str(program):
                     raise WalletError("RPC returned a token account from an unexpected program.")
                 info = value.get("data", {}).get("parsed", {}).get("info", {})
-                if info.get("owner") == self.wallet and info.get("state") == "initialized":
+                if info.get("owner") == wallet and info.get("state") == "initialized":
                     mint = info["mint"]
                     asset = asset_for_mint(mint)
                     entry = balances.setdefault(asset, {"raw": 0, "decimals": info["tokenAmount"]["decimals"]})
@@ -950,17 +987,57 @@ class CustodyRuntime(WalletRuntime):
         balances[WRAPPED_SOL] = balances[SOL]
         return balances
 
+    async def balances(self, session):
+        # The signer can spend only the hot wallet. Reserve balances are backing,
+        # not spendable by this process.
+        return await self.balances_for_wallet(session, self.wallet)
+
+    async def total_backing_balances(self, session):
+        hot = await self.balances(session)
+        if not self.split_wallet_enabled:
+            return hot
+        reserve = await self.balances_for_wallet(session, self.deposit_wallet)
+        total = {}
+        for snapshot in (hot, reserve):
+            for asset, info in snapshot.items():
+                if asset == WRAPPED_SOL:
+                    continue
+                entry = total.setdefault(asset, {"raw": 0, "decimals": info["decimals"]})
+                if entry["decimals"] != info["decimals"]:
+                    raise WalletError("Wallet snapshots disagree on token decimals.")
+                entry["raw"] += int(info["raw"])
+        total[WRAPPED_SOL] = total[SOL]
+        return total
+
     async def solvent(self, session):
         if await self.rpc(session, "getGenesisHash") != GENESIS:
             raise WalletError("Операции разрешены только в Solana mainnet.")
         self.ledger.audit()
-        backing = await self.balances(session)
+        backing = await self.total_backing_balances(session)
         for asset, liability in self.ledger.liabilities().items():
             if liability > backing.get(asset, {}).get("raw", 0):
                 raise WalletError(
                     "Withdrawals and trading are paused because wallet funds do not cover recorded account balances. "
                     "No transfer was sent.")
         return backing
+
+    async def require_hot_wallet_capacity(self, session, asset, new_raw):
+        if not self.split_wallet_enabled:
+            return
+        cap = self.hot_wallet_caps.get(asset)
+        if not cap:
+            raise WalletError("Hot-wallet trading limits are not configured.", 503)
+        hot = await self.balances(session)
+        liquid_raw = int(hot.get(asset, {}).get("raw", 0))
+        committed_raw = self.ledger.hot_wallet_exposure(asset)
+        requested_raw = int(new_raw)
+        if liquid_raw + committed_raw + requested_raw > cap:
+            decimals = 6 if asset == USDC else 9
+            raise WalletError(
+                "BUY paused: the hot-wallet limit of "
+                + display_raw(cap, decimals) + " "
+                + ("USDC" if asset == USDC else "SOL")
+                + " would be exceeded. Sales remain available; move excess proceeds to the reserve manually.")
 
     @staticmethod
     def wrapped_delta(tx, wallet):
@@ -1014,16 +1091,17 @@ class CustodyRuntime(WalletRuntime):
         keys = tx["transaction"]["message"]["accountKeys"]
         if any(isinstance(key, dict) and key.get("pubkey") == self.wallet and key.get("signer") for key in keys):
             raise WalletError("An outgoing server transaction cannot be credited as a deposit.", 409)
+        deposit_wallet = invoice.get("deposit_wallet") or self.wallet
         asset = invoice["asset"]
         if asset == SOL:
             addresses = [k.get("pubkey") if isinstance(k, dict) else k for k in keys]
-            if self.wallet not in addresses:
+            if deposit_wallet not in addresses:
                 raise WalletError("No SOL transfer to the deposit address was found.", 409)
-            index = addresses.index(self.wallet)
+            index = addresses.index(deposit_wallet)
             # Token-account rent is not a native SOL deposit to the shared address.
             delta = tx["meta"]["postBalances"][index] - tx["meta"]["preBalances"][index]
         else:
-            delta = self.effects(tx, self.wallet, asset)
+            delta = self.effects(tx, deposit_wallet, asset)
         if delta != invoice["raw"]:
             raise WalletError("The asset or amount does not match this payment request.", 409)
         # Only the memo's persisted owner gets credit. The submitting user is irrelevant.
@@ -1041,10 +1119,11 @@ class CustodyRuntime(WalletRuntime):
                 "label": "AI Trader SOL",
                 "message": f"Deposit {amount} SOL",
             }
-            pay_uri = f"solana:{self.wallet}?{urlencode(params)}"
+            pay_uri = f"solana:{invoice.get('deposit_wallet') or self.wallet}?{urlencode(params)}"
         payment_url = self.base_url.rstrip("/") + "/deposit/" + invoice["id"]
         return {"invoice_id": invoice["id"], "token": token, "amount": amount,
-            "deposit_wallet": self.wallet, "expires_at": invoice["expires_at"],
+            "deposit_wallet": invoice.get("deposit_wallet") or self.wallet,
+            "expires_at": invoice["expires_at"],
             "state": invoice["state"], "solana_pay_uri": pay_uri,
             "payment_url": payment_url}
 
@@ -1065,7 +1144,7 @@ class CustodyRuntime(WalletRuntime):
             raw = amount_raw(body.get("amount", ""), decimals)
         except WalletError:
             raise WalletError(f"Enter a positive SOL amount with no more than {decimals} decimal places.", 400)
-        invoice = self.ledger.invoice(uid, SOL, raw)
+        invoice = self.ledger.invoice(uid, SOL, raw, self.deposit_wallet)
         return web.json_response({"success": True, **self.public_invoice(invoice)})
 
     async def deposit(self, request, session):
@@ -1104,7 +1183,8 @@ class CustodyRuntime(WalletRuntime):
                 sender = self.ledger.wallet_address(uid)
                 if not sender:
                     raise WalletError("Verify your wallet once using the button above. Future deposits can then be checked by transaction signature.", 403)
-                amounts = incoming_amounts(tx, self.wallet, sender)
+                deposit_wallets = list(dict.fromkeys((self.deposit_wallet, self.wallet)))
+                amounts = incoming_amounts_for_wallets(tx, deposit_wallets, sender)
                 balances = await self.solvent(session)
                 self.ledger.credit_tx(uid, signature, sender, amounts, int(tx.get("blockTime") or 0),
                                       {asset: data["raw"] for asset, data in balances.items()})
@@ -1137,7 +1217,8 @@ class CustodyRuntime(WalletRuntime):
         self.admit(proof["uid"])
         body = await request.json()
         address = Pubkey.from_string(str(body.get("address", "")))
-        if not address.is_on_curve() or str(address) == self.wallet:
+        if (not address.is_on_curve()
+                or str(address) in {self.wallet, self.deposit_wallet}):
             raise WalletError("Verify your own wallet, not the shared server address.", 400)
         signature = Signature.from_bytes(base64.b64decode(body.get("signature", ""), validate=True))
         if not signature.verify(address, proof["message"].encode("utf-8")):
@@ -1155,7 +1236,7 @@ class CustodyRuntime(WalletRuntime):
             raise WalletError("Use Solana mainnet.")
         body = await request.json()
         sender = Pubkey.from_string(str(body.get("sender", "")))
-        recipient = Pubkey.from_string(self.wallet)
+        recipient = Pubkey.from_string(invoice.get("deposit_wallet") or self.wallet)
         if not sender.is_on_curve() or sender == recipient:
             raise WalletError("A separate sender wallet is required.", 400)
         instructions = []
@@ -1179,7 +1260,9 @@ class CustodyRuntime(WalletRuntime):
                     AccountMeta(SYSTEM, False, False), AccountMeta(TOKEN, False, False)]))
             else:
                 dest_info = accounts[1].get("data", {}).get("parsed", {}).get("info", {})
-                if dest_info.get("owner") != self.wallet or dest_info.get("mint") != USDC or dest_info.get("state") != "initialized":
+                if (dest_info.get("owner") != str(recipient)
+                        or dest_info.get("mint") != USDC
+                        or dest_info.get("state") != "initialized"):
                     raise WalletError("The deposit wallet's USDC account is unavailable.")
             instructions.append(Instruction(TOKEN, bytes([12]) + invoice["raw"].to_bytes(8, "little") + bytes([6]), [
                 AccountMeta(source, False, True), AccountMeta(mint, False, False),
@@ -1361,7 +1444,10 @@ class CustodyRuntime(WalletRuntime):
         if self.uid(request) != self.owner_id:
             raise WalletError("Только администратор.", 403)
         self.ledger.audit()
-        backing = await self.balances(session)
+        backing = await self.total_backing_balances(session)
+        hot = await self.balances(session)
+        reserve = (await self.balances_for_wallet(session, self.deposit_wallet)
+                   if self.split_wallet_enabled else {})
         liabilities = self.ledger.liabilities()
         assets = {}
         for asset, decimals in ((USDC, 6), (SOL, 9)):
@@ -1375,10 +1461,19 @@ class CustodyRuntime(WalletRuntime):
                 "difference": display_raw(actual - owed, decimals),
                 "shortfall": display_raw(shortfall_raw, decimals),
                 "shortfall_raw": str(shortfall_raw),
+                "hot_wallet": display_raw(int(hot.get(asset, {}).get("raw", 0)), decimals),
+                "reserve_wallet": display_raw(int(reserve.get(asset, {}).get("raw", 0)), decimals),
                 "owner_available": display_raw(owner_available_raw, decimals),
                 "owner_available_raw": str(owner_available_raw),
             }
-        return web.json_response({"success": True, "assets": assets, "read_only": True})
+        return web.json_response({"success": True, "assets": assets, "read_only": True,
+            "split_wallet_enabled": self.split_wallet_enabled,
+            "deposit_wallet": self.deposit_wallet,
+            "hot_wallet": self.wallet,
+            "hot_wallet_caps": {
+                "USDC": display_raw(self.hot_wallet_caps.get(USDC, 0), 6),
+                "SOL": display_raw(self.hot_wallet_caps.get(SOL, 0), 9),
+            }})
 
     async def admin_absorb_owner_shortfall(self, request, session):
         uid = self.uid(request)
@@ -1416,7 +1511,7 @@ class CustodyRuntime(WalletRuntime):
                 raise WalletError("Coverage adjustments are allowed only on Solana mainnet.", 503)
 
             self.ledger.audit()
-            backing = await self.balances(session)
+            backing = await self.total_backing_balances(session)
             liabilities = self.ledger.liabilities()
             deficits = {
                 asset: max(0, int(liability) - int(backing.get(asset, {}).get("raw", 0)))
@@ -2541,6 +2636,7 @@ class CustodyRuntime(WalletRuntime):
             raise WalletError("Ожидается подтверждение предыдущей операции.", 409)
         await self.solvent(session)
         if kind == "BUY":
+            await self.require_hot_wallet_capacity(session, asset, raw)
             await self.ensure_monthly_trading_fee(session, uid)
         if kind == "BUY":
             token_2022_asset = next(
@@ -3091,7 +3187,12 @@ class CustodyRuntime(WalletRuntime):
             if not db.execute("SELECT id FROM custody_invoices WHERE state='OPEN' AND expires_at>? LIMIT 1",
                               (int(time.time()) - 86400,)).fetchone():
                 return
-        addresses = [self.wallet, str(associated(Pubkey.from_string(self.wallet), Pubkey.from_string(USDC)))]
+        addresses = []
+        for wallet in dict.fromkeys((self.deposit_wallet, self.wallet)):
+            addresses.extend((
+                wallet,
+                str(associated(Pubkey.from_string(wallet), Pubkey.from_string(USDC))),
+            ))
         for address in addresses:
             with self.ledger.db() as db:
                 saved = db.execute("SELECT signature FROM custody_scan_cursor WHERE address=?", (address,)).fetchone()

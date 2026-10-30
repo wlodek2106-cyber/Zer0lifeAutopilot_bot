@@ -2718,6 +2718,65 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.display_raw(9223372036854775807, 9), "9223372036.854775807")
         self.assertEqual(runtime.display_raw(100_000_000, 6), "100")
 
+    async def test_split_wallet_solvency_combines_backing_but_hot_balance_stays_separate(self):
+        reserve = str(Keypair().pubkey())
+        self.service.deposit_wallet = reserve
+        self.service.split_wallet_enabled = True
+        self.service.balances = AsyncMock(return_value={
+            SOL: {"raw": 50_000_000, "decimals": 9},
+            USDC: {"raw": 100_000_000, "decimals": 6},
+            runtime.WRAPPED_SOL: {"raw": 50_000_000, "decimals": 9},
+        })
+        self.service.balances_for_wallet = AsyncMock(return_value={
+            SOL: {"raw": 40_000_000, "decimals": 9},
+            USDC: {"raw": 60_000_000, "decimals": 6},
+            runtime.WRAPPED_SOL: {"raw": 40_000_000, "decimals": 9},
+        })
+        self.service.rpc = AsyncMock(return_value=runtime.GENESIS)
+        with patch.object(self.ledger, "liabilities",
+                          return_value={USDC: 150_000_000, SOL: 80_000_000}):
+            backing = await self.service.solvent(None)
+        self.assertEqual(backing[USDC]["raw"], 160_000_000)
+        self.assertEqual(backing[SOL]["raw"], 90_000_000)
+        self.assertEqual((await self.service.balances(None))[USDC]["raw"], 100_000_000)
+
+    async def test_hot_wallet_limit_includes_open_positions_and_blocks_over_cap_buy(self):
+        self.service.split_wallet_enabled = True
+        self.service.hot_wallet_caps = {USDC: 100_000_000, SOL: 1_000_000_000}
+        self.service.balances = AsyncMock(return_value={
+            USDC: {"raw": 50_000_000, "decimals": 6},
+            SOL: {"raw": 1_000_000_000, "decimals": 9},
+        })
+        with patch.object(self.ledger, "hot_wallet_exposure", return_value=40_000_000):
+            await self.service.require_hot_wallet_capacity(None, USDC, 10_000_000)
+            with self.assertRaisesRegex(runtime.WalletError, "hot-wallet limit"):
+                await self.service.require_hot_wallet_capacity(None, USDC, 10_000_001)
+
+    async def test_sell_path_never_checks_hot_wallet_buy_cap(self):
+        self.service.admit = Mock()
+        self.service.reconcile = AsyncMock()
+        self.service.pending = Mock(return_value=[])
+        self.service.solvent = AsyncMock(return_value={})
+        self.service.record_execution_check = Mock()
+        self.service.authorize_execution_order = Mock()
+        self.service.require_hot_wallet_capacity = AsyncMock()
+        self.service.get_jito_tip_quote = AsyncMock(
+            side_effect=runtime.WalletError("stop before signing"))
+        with self.assertRaisesRegex(runtime.WalletError, "stop before signing"):
+            await self.service.trade(None, 101, "token-mint", USDC, 1, "SELL",
+                {"symbol": "TEST", "output_asset": USDC}, position_id="position",
+                manual=True)
+        self.service.require_hot_wallet_capacity.assert_not_awaited()
+
+    def test_new_invoice_uses_reserve_and_legacy_invoice_keeps_hot_destination(self):
+        reserve = str(Keypair().pubkey())
+        self.service.deposit_wallet = reserve
+        self.service.split_wallet_enabled = True
+        new_invoice = self.ledger.invoice(101, SOL, 10_000_000, reserve)
+        old_invoice = self.ledger.invoice(101, SOL, 20_000_000)
+        self.assertEqual(self.service.public_invoice(new_invoice)["deposit_wallet"], reserve)
+        self.assertEqual(self.service.public_invoice(old_invoice)["deposit_wallet"], self.service.wallet)
+
 
 class SimulationTests(unittest.IsolatedAsyncioTestCase):
     setUp = RuntimeTests.setUp

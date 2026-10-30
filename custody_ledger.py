@@ -155,7 +155,8 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                     id TEXT PRIMARY KEY, uid INTEGER NOT NULL REFERENCES custody_users(uid),
                     asset TEXT NOT NULL, raw INTEGER NOT NULL CHECK(raw>0),
                     created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
-                    signature TEXT UNIQUE, state TEXT NOT NULL DEFAULT 'OPEN');
+                    signature TEXT UNIQUE, state TEXT NOT NULL DEFAULT 'OPEN',
+                    deposit_wallet TEXT NOT NULL DEFAULT '');
                 CREATE TABLE IF NOT EXISTS custody_operations (
                     id TEXT PRIMARY KEY, request_key TEXT NOT NULL UNIQUE,
                     uid INTEGER NOT NULL REFERENCES custody_users(uid), kind TEXT NOT NULL,
@@ -284,6 +285,7 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                     "strategy": "TEXT NOT NULL DEFAULT 'legacy'",
                     "entry_step": "INTEGER", "exit_step": "INTEGER",
                     "exit_reason": "TEXT NOT NULL DEFAULT ''"},
+                "custody_invoices": {"deposit_wallet": "TEXT NOT NULL DEFAULT ''"},
                 "custody_operations": {"failure_reason": "TEXT NOT NULL DEFAULT ''"},
             }.items():
                 columns = {row[1] for row in db.execute("PRAGMA table_info(" + table + ")")}
@@ -1137,7 +1139,7 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
             return {r["asset"]: r["raw"] for r in db.execute(
                 "SELECT asset,SUM(raw) raw FROM custody_accounts WHERE account!='external' GROUP BY asset")}
 
-    def invoice(self, uid, asset, raw):
+    def invoice(self, uid, asset, raw, deposit_wallet=""):
         now = int(time.time())
         iid = secrets.token_urlsafe(24)
         with self.db() as db:
@@ -1145,8 +1147,10 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                                (uid, now)).fetchone()[0]
             if count >= 10:
                 raise LedgerError("Too many open deposit requests. Wait for one to expire before creating another.")
-            db.execute("INSERT INTO custody_invoices(id,uid,asset,raw,created_at,expires_at) VALUES(?,?,?,?,?,?)",
-                       (iid, uid, asset, raw, now, now + 3600))
+            db.execute("""INSERT INTO custody_invoices
+                (id,uid,asset,raw,created_at,expires_at,deposit_wallet)
+                VALUES(?,?,?,?,?,?,?)""",
+                (iid, uid, asset, raw, now, now + 3600, str(deposit_wallet or "")))
         return self.get_invoice(iid)
 
     def get_invoice(self, iid):
@@ -1802,6 +1806,15 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                 (" AND state=?" if state else "") + " ORDER BY created_at DESC",
                 (uid, state) if state else (uid,))
             return [dict(r) for r in rows]
+
+    def hot_wallet_exposure(self, funding_asset):
+        """Return cost basis still held or reserved for sale, in its funding asset."""
+        with self.db() as db:
+            row = db.execute("""SELECT COALESCE(SUM(cost_raw),0) AS raw
+                FROM custody_positions
+                WHERE funding_asset=? AND state IN ('OPEN','RESERVED')""",
+                (funding_asset,)).fetchone()
+            return int(row["raw"] or 0)
 
     def record_position_peak(self, uid, position_id, price):
         if type(price) not in (int, float) or not math.isfinite(price) or price <= 0:

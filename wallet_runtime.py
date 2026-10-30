@@ -449,7 +449,10 @@ class WalletRuntime:
             "total_pnl": profit, "profit_usdc": profit, "total_roi": 0,
             "closed_count": sum(p["state"] == "CLOSED" for p in positions), "trades": trades,
             "wallet_history": history, "wallet_status": self.readiness(), "operation_pending": blocked,
-            "balance_reconciled": True, "deposit_wallet": self.wallet, "trading_active": self.trading})
+            "balance_reconciled": True,
+            "deposit_wallet": getattr(self, "deposit_wallet", self.wallet),
+            "hot_wallet": self.wallet,
+            "trading_active": self.trading})
 
     async def toggle(self, request, session):
         async with self.lock:

@@ -54,7 +54,9 @@ DB_DIR = "/var/data"
 DB_FILE = os.path.join(DB_DIR, "zer0life_users.db") if os.path.exists(DB_DIR) else "zer0life_users.db"
 
 SOLANA_RPC = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com").strip()
-SHARED_DEPOSIT_WALLET = os.getenv("DEPOSIT_WALLET", "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L").strip()
+SHARED_HOT_WALLET = os.getenv("DEPOSIT_WALLET", "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L").strip()
+CUSTODY_RESERVE_WALLET = os.getenv("CUSTODY_RESERVE_WALLET", "").strip()
+SHARED_DEPOSIT_WALLET = CUSTODY_RESERVE_WALLET or SHARED_HOT_WALLET
 SPLASH_IMAGE_URL = "/static/zerolife-ai-trader-core.webp"
 
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
@@ -3059,13 +3061,19 @@ RAW_HTML = r"""<!DOCTYPE html>
                     usdc_available:usdc.owner_available,
                     sol_available:sol.owner_available
                 };
-                box.textContent=['USDC: wallet '+usdc.wallet+
-                    ' · account balances '+usdc.ledger+
-                    ' · difference '+usdc.difference,
-                    'SOL: wallet '+sol.wallet+
-                    ' · account balances '+sol.ledger+
-                    ' · difference '+sol.difference,
-                    'Read-only: no ledger or on-chain balance was changed.'].join('\n');
+                const custodyLines=[];
+                if(result.split_wallet_enabled){
+                    custodyLines.push('Hot wallet: '+usdc.hot_wallet+' USDC · '+sol.hot_wallet+' SOL');
+                    custodyLines.push('Reserve wallet: '+usdc.reserve_wallet+' USDC · '+sol.reserve_wallet+' SOL');
+                    custodyLines.push('Hot-wallet caps: '+result.hot_wallet_caps.USDC+
+                        ' USDC · '+result.hot_wallet_caps.SOL+' SOL');
+                }
+                custodyLines.push('Combined wallets: USDC '+usdc.wallet+
+                    ' · account balances '+usdc.ledger+' · difference '+usdc.difference);
+                custodyLines.push('Combined wallets: SOL '+sol.wallet+
+                    ' · account balances '+sol.ledger+' · difference '+sol.difference);
+                custodyLines.push('Read-only: no ledger or on-chain balance was changed.');
+                box.textContent=custodyLines.join('\n');
                 const hasShortfall=ownerShortfallPreview.usdc_raw!=='0'||ownerShortfallPreview.sol_raw!=='0';
                 const sufficient=rawAmountAtLeast(ownerShortfallPreview.usdc_available_raw,ownerShortfallPreview.usdc_raw)&&
                     rawAmountAtLeast(ownerShortfallPreview.sol_available_raw,ownerShortfallPreview.sol_raw);
@@ -4896,9 +4904,12 @@ async def main():
     app = web.Application(middlewares=[
         security_headers_middleware, english_json_middleware, telegram_auth_middleware],
         client_max_size=MAX_SUPPORT_REQUEST_BYTES)
-    runtime = CustodyRuntime(DB_FILE, SOLANA_RPC, ADMIN_TELEGRAM_ID, SHARED_DEPOSIT_WALLET,
+    runtime = CustodyRuntime(DB_FILE, SOLANA_RPC, ADMIN_TELEGRAM_ID, SHARED_HOT_WALLET,
         get_signer_keypair, verify_user_pin, get_token_prices, WATCHLIST, add_log,
         base_url=RENDER_URL, notification_token=TELEGRAM_TOKEN,
+        reserve_wallet=CUSTODY_RESERVE_WALLET,
+        hot_wallet_cap_usdc=os.getenv("HOT_WALLET_CAP_USDC", ""),
+        hot_wallet_cap_sol=os.getenv("HOT_WALLET_CAP_SOL", ""),
         market_context_fn=lambda session: fetch_main_market_context(
             session, WATCHLIST, runtime.main_symbols),
         sniper_market_context_fn=lambda session, watchlist, symbols: fetch_sniper_market_context(

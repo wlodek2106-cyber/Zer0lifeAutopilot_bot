@@ -12,7 +12,7 @@ from wallet_runtime import WalletError, GENESIS, SYSTEM, TOKEN, associated
 from solders.pubkey import Pubkey
 from custody_ledger import CustodyLedger, LedgerError, SOL, USDC
 from custody_runtime import CustodyRuntime
-from tx_deposits import incoming_amounts
+from tx_deposits import incoming_amounts, incoming_amounts_for_wallets
 
 
 class Request(dict):
@@ -136,6 +136,16 @@ class TxDepositTests(unittest.IsolatedAsyncioTestCase):
     async def test_root_signed_outgoing_never_deposit(self):
         self.tx["transaction"]["message"]["accountKeys"][1]["signer"]=True
         with self.assertRaises(WalletError): await self.claim()
+
+    async def test_deposit_to_reserve_is_detected_without_losing_legacy_hot_wallet_support(self):
+        reserve = str(Keypair().pubkey())
+        tx = self.transaction(SOL)
+        tx["transaction"]["message"]["accountKeys"][1]["pubkey"] = reserve
+        tx["transaction"]["message"]["instructions"][0]["parsed"]["info"]["destination"] = reserve
+        amounts = incoming_amounts_for_wallets(tx, [self.wallet, reserve], self.address)
+        self.assertEqual(amounts, {SOL: 1_000_000})
+        legacy_amounts = incoming_amounts_for_wallets(self.transaction(SOL), [reserve, self.wallet], self.address)
+        self.assertEqual(legacy_amounts, {SOL: 1_000_000})
 
     async def test_spoofed_delegated_usdc_source_rejected(self):
         self.tx=self.transaction(USDC)

@@ -4,7 +4,7 @@ from solders.pubkey import Pubkey
 from custody_ledger import SOL, USDC
 
 
-def incoming_amounts(tx, wallet, sender):
+def incoming_amounts(tx, wallet, sender, no_match_ok=False):
     keys = tx["transaction"]["message"]["accountKeys"]
     addresses = [k["pubkey"] for k in keys]
     signers = {k["pubkey"] for k in keys if k.get("signer")}
@@ -56,6 +56,8 @@ def incoming_amounts(tx, wallet, sender):
                 raise WalletError("Недопустимая сумма перевода.", 409)
             amounts[asset] = amounts.get(asset, 0) + raw
     if not amounts:
+        if no_match_ok:
+            return {}
         raise WalletError("В Tx нет перевода USDC или SOL с вашего кошелька на общий адрес.", 409)
     for asset, raw in amounts.items():
         if asset == SOL:
@@ -65,4 +67,23 @@ def incoming_amounts(tx, wallet, sender):
             delta = WalletRuntime.delta(tx, wallet, USDC)
         if delta < raw:
             raise WalletError("Фактическое поступление меньше суммы перевода.", 409)
+    return amounts
+
+
+def incoming_amounts_for_wallets(tx, wallets, sender):
+    """Attribute an incoming deposit to any configured legacy/current custody address."""
+    targets = list(dict.fromkeys(str(wallet) for wallet in wallets if wallet))
+    if not targets:
+        raise WalletError("No custody deposit address is configured.", 503)
+    amounts = {}
+    matched = False
+    for target in targets:
+        received = incoming_amounts(tx, target, sender, no_match_ok=True)
+        if not received:
+            continue
+        matched = True
+        for asset, raw in received.items():
+            amounts[asset] = amounts.get(asset, 0) + raw
+    if not matched:
+        raise WalletError("No SOL or USDC transfer to the reserve or hot-wallet address was found.", 409)
     return amounts
