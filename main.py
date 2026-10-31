@@ -1727,11 +1727,191 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
         #app details summary { color: #d3dfc8; }
         #app a { color: #c9ed7d; }
+        #app .base-paper-card {
+            position: relative;
+            overflow: hidden;
+            padding: 16px !important;
+            background:
+                radial-gradient(150px 110px at 9% 0%, rgba(0, 82, 255, .28), transparent 92%),
+                linear-gradient(145deg, #101b30 0%, #0b1320 48%, #080d14 100%) !important;
+            border: 1px solid rgba(92, 148, 255, .42) !important;
+            border-radius: 21px;
+            box-shadow:
+                inset 0 1px 0 rgba(255,255,255,.11),
+                inset 0 -14px 24px rgba(0,0,0,.25),
+                0 7px 0 rgba(0, 36, 122, .55),
+                0 18px 38px rgba(0,0,0,.4);
+        }
+        #app .base-paper-card::before {
+            content: "";
+            position: absolute;
+            inset: 0 12% auto;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(181,211,255,.68), transparent);
+            pointer-events: none;
+        }
+        #app .base-paper-head, #app .base-network-identity {
+            display: flex;
+            align-items: center;
+        }
+        #app .base-paper-head { justify-content: space-between; gap: 10px; }
+        #app .base-network-identity { min-width: 0; gap: 12px; }
+        #app .base-network-mark {
+            position: relative;
+            display: grid;
+            place-items: center;
+            flex: 0 0 44px;
+            width: 44px;
+            height: 44px;
+            border-radius: 13px;
+            color: white;
+            background: linear-gradient(145deg, #7db2ff 0%, #1769ff 42%, #0043d1 76%, #002f9c 100%);
+            box-shadow:
+                inset 0 2px 0 rgba(255,255,255,.58),
+                inset 0 -4px 8px rgba(0,25,95,.5),
+                0 5px 0 #00389f,
+                0 10px 17px rgba(0,82,255,.36);
+            transform: perspective(420px) rotateX(8deg) rotateY(-10deg);
+        }
+        #app .base-network-mark::after {
+            content: "";
+            position: absolute;
+            inset: 5px;
+            border: 1px solid rgba(255,255,255,.34);
+            border-radius: 9px;
+            box-shadow: inset 0 0 12px rgba(255,255,255,.12);
+        }
+        #app .base-network-mark span {
+            position: relative;
+            z-index: 1;
+            font: 850 23px/1 system-ui, sans-serif;
+            text-shadow: 0 2px 3px rgba(0,24,91,.55);
+        }
+        #app .base-network-kicker {
+            margin: 0 0 3px;
+            color: #83b3ff;
+            font: 750 9px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+            letter-spacing: .12em;
+        }
+        #app .base-paper-head h2 { margin: 0; font-size: 18px; line-height: 1.2; }
+        #app .base-paper-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            flex: 0 0 auto;
+            padding: 7px 9px;
+            border: 1px solid rgba(111,166,255,.33);
+            border-radius: 999px;
+            color: #c4dcff;
+            background: linear-gradient(145deg, rgba(31,69,128,.48), rgba(12,27,50,.84));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.1), 0 3px 9px rgba(0,0,0,.2);
+            font: 750 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+            letter-spacing: .04em;
+            white-space: nowrap;
+        }
+        #app .base-paper-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #6bb3ff;
+            box-shadow: 0 0 9px rgba(64,148,255,.9);
+        }
+        #app .base-paper-caption { margin: 9px 0 11px; color: #9baecb; font-size: 11px; line-height: 1.35; }
+        #app .base-paper-metrics { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 7px; }
+        #app .base-paper-metric {
+            min-width: 0;
+            padding: 9px 9px 8px;
+            border: 1px solid rgba(144,176,224,.17);
+            border-radius: 13px;
+            background: linear-gradient(150deg, rgba(19,31,51,.95), rgba(8,15,27,.98));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.055), 0 4px 10px rgba(0,0,0,.17);
+        }
+        #app .base-paper-metric > span {
+            display: block;
+            overflow: hidden;
+            color: #93a8c7;
+            font: 700 8px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+            letter-spacing: .08em;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        #app .base-paper-metric strong {
+            display: block;
+            overflow: hidden;
+            margin-top: 4px;
+            color: #f1f6ff;
+            font: 760 16px/1.15 ui-monospace, SFMono-Regular, Menlo, monospace;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        #app .base-paper-metric small { display: block; overflow: hidden; margin-top: 3px; color: #95a4bb; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+        #app .base-paper-controls {
+            display: grid;
+            grid-template-columns: minmax(95px,1fr) minmax(75px,.7fr) minmax(116px,1.15fr);
+            align-items: end;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        #app .base-paper-budget-field { display: block; min-width: 0; color: #a9b9d0; font-size: 9px; font-weight: 700; }
+        #app .base-paper-budget-field > span { display: block; margin: 0 0 4px 2px; }
+        #app .base-paper-budget-field .sig-input {
+            box-sizing: border-box;
+            width: 100%;
+            min-height: 44px;
+            height: 44px;
+            margin: 0 !important;
+            padding: 8px 10px;
+            font-size: 13px;
+        }
+        #app .base-paper-save, #app .base-paper-scan {
+            width: 100%;
+            min-width: 0;
+            min-height: 44px;
+            height: 44px;
+            margin: 0 !important;
+            padding: 0 9px;
+            font-size: 11px;
+            white-space: nowrap;
+        }
+        #app .base-paper-save {
+            color: #cfe1ff !important;
+            border-color: rgba(105,153,230,.28) !important;
+            background: linear-gradient(145deg, #1c2d49, #111c2d) !important;
+        }
+        #app .base-paper-scan {
+            color: #f5f9ff !important;
+            border: 1px solid rgba(151,192,255,.72) !important;
+            background: linear-gradient(145deg, #5f9aff 0%, #1769ff 54%, #0044c9 100%) !important;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.48), 0 4px 0 #003aab, 0 8px 16px rgba(0,82,255,.28) !important;
+        }
+        #app .base-paper-scan:active:not(:disabled) { transform: translateY(2px); box-shadow: inset 0 1px 0 rgba(255,255,255,.3), 0 2px 0 #003aab !important; }
+        #app .base-paper-status { min-height: 15px; margin: 9px 2px 0; color: #a9bbd4; font-size: 10px; line-height: 1.4; }
+        #app .base-paper-details { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; margin-top: 9px; }
+        #app .base-paper-fold {
+            min-width: 0;
+            padding: 9px 10px;
+            border: 1px solid rgba(126,157,204,.17);
+            border-radius: 12px;
+            background: linear-gradient(145deg, rgba(15,25,41,.8), rgba(8,14,24,.9));
+        }
+        #app .base-paper-fold summary { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: #c6d7f1; font-size: 10px; }
+        #app .base-paper-fold[open] { border-color: rgba(89,146,255,.35); }
+        #app .base-paper-fold-count { min-width: 20px; padding: 3px 6px; border-radius: 999px; color: #b7d4ff; background: rgba(49,106,196,.24); text-align: center; font: 700 9px/1.1 ui-monospace, monospace; }
+        #app .base-paper-list { max-height: 190px; overflow: auto; margin-top: 9px; color: #b4c3d7; font: 10px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-line; overflow-wrap: anywhere; }
+        #app .base-paper-disclaimer, #app .base-paper-rules { display: block; margin: 9px 0 0; color: #8fa2bd; font-size: 10px; line-height: 1.5; }
+        #app .base-paper-fold-wide { grid-column: 1 / -1; }
         @media (max-width: 380px) {
             #app .tab-panel { padding-right: 14px; padding-left: 14px; }
             #app .card:not(#partner-program), #app .deposit-modal { padding: 15px; }
             #app .stat-box { padding: 11px; }
             #app .stat-val { font-size: 15px; }
+            #app .base-paper-card { padding: 13px !important; }
+            #app .base-paper-metric { padding: 8px 7px; }
+            #app .base-paper-metric strong { font-size: 14px; }
+            #app .base-paper-controls { grid-template-columns: 1fr 1fr; }
+            #app .base-paper-budget-field { grid-column: 1 / -1; }
+            #app .base-paper-details { grid-template-columns: 1fr; }
+            #app .base-paper-fold-wide { grid-column: auto; }
         }
         @media (prefers-reduced-motion: reduce) {
             #app .btn-ctl, #app .btn-copy, #app .wallet-tab, #app .token-btn,
@@ -2335,6 +2515,76 @@ RAW_HTML = r"""<!DOCTYPE html>
             <header class="page-heading">
                 <div><p class="eyebrow">AI Trader · Independent strategy</p><h1>AI Crypto Investors</h1></div>
             </header>
+            <section id="base-paper-panel" class="card base-paper-card" aria-label="Base network paper simulation" style="display:none">
+                <div class="base-paper-head">
+                    <div class="base-network-identity">
+                        <span class="base-network-mark" aria-hidden="true"><span>B</span></span>
+                        <div>
+                            <p class="base-network-kicker">BASE NETWORK · L2</p>
+                            <h2>Paper Investors</h2>
+                        </div>
+                    </div>
+                    <span class="base-paper-badge"><span class="base-paper-dot"></span>SIM ONLY · LIVE OFF</span>
+                </div>
+                <p class="base-paper-caption">Manual scan · No Base wallet or real transactions</p>
+                <div class="base-paper-metrics">
+                    <div class="base-paper-metric">
+                        <span>CAP / FREE</span>
+                        <strong id="base-paper-budget">$100.00</strong>
+                        <small><span id="base-paper-free">$100.00</span> available</small>
+                    </div>
+                    <div class="base-paper-metric">
+                        <span>OPEN POSITIONS</span>
+                        <strong id="base-paper-open-count">0</strong>
+                        <small><span id="base-paper-open-cost">$0.00</span> cost</small>
+                    </div>
+                    <div class="base-paper-metric">
+                        <span>REALIZED · GROSS</span>
+                        <strong id="base-paper-pnl">$0.00</strong>
+                        <small><span id="base-paper-closed-count">0</span> closed · fees excluded</small>
+                    </div>
+                </div>
+                <div class="base-paper-controls">
+                    <label class="base-paper-budget-field" for="base-paper-budget-input">
+                        <span>Virtual cap · USD</span>
+                        <input id="base-paper-budget-input" class="sig-input" type="number" min="0" max="100000" step="1" value="100">
+                    </label>
+                    <button id="base-paper-save-budget" class="btn-copy base-paper-save" type="button" onclick="saveBasePaperBudget()">Save cap</button>
+                    <button id="base-paper-scan" class="btn-green-main base-paper-scan" type="button" onclick="runBasePaperScan()">
+                        <span aria-hidden="true">↻</span> Scan Base
+                    </button>
+                </div>
+                <div id="base-paper-status" class="base-paper-status section-note" role="status" aria-live="polite">
+                    Ready · scan manually to update the simulation.
+                </div>
+                <div class="base-paper-details">
+                    <details class="base-paper-fold">
+                        <summary>Open paper positions</summary>
+                        <div id="base-paper-open-positions" class="base-paper-list" aria-live="polite">No open paper positions.</div>
+                    </details>
+                    <details class="base-paper-fold">
+                        <summary>Screened candidates <span class="base-paper-fold-count" id="base-paper-candidate-count">0</span></summary>
+                        <div id="base-paper-candidates" class="base-paper-list">No scan results.</div>
+                    </details>
+                    <details class="base-paper-fold">
+                        <summary>Closed tranches &amp; results</summary>
+                        <div id="base-paper-closed-trades" class="base-paper-list">No simulated exits.</div>
+                        <small id="base-paper-pnl-note" class="base-paper-disclaimer">
+                            Gross price-only simulation. Gas, DEX fees, routing, price impact and failed fills are excluded;
+                            results are not a profit forecast.
+                        </small>
+                    </details>
+                    <details class="base-paper-fold">
+                        <summary>Strategy &amp; filters</summary>
+                        <p class="base-paper-rules">
+                            Shared virtual USD cap across Base USDC and WETH · up to five positions · three equal entry tranches.
+                            Entries require fresh closed 5m/1h candles. Profit exits: +3.5%, +7%, then +10% activation with a
+                            5% pullback trail. No stop-loss. Pools need at least $10,000 liquidity, $100,000 24h volume,
+                            200 daily transactions, and 24h age. Only exact Base USDC/WETH quote contracts are accepted.
+                        </p>
+                    </details>
+                </div>
+            </section>
             <section class="card" aria-label="AI Crypto Investors status">
                 <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
                     <div><h2 style="margin:0">Solana portfolio</h2>
@@ -2412,46 +2662,6 @@ RAW_HTML = r"""<!DOCTYPE html>
             <section class="card" aria-label="AI Crypto Investors closed trades">
                 <h2>Closed trades and realized results</h2>
                 <div id="investor-closed-trades" class="section-note" style="white-space:pre-line">No AI Crypto Investors trades recorded.</div>
-            </section>
-            <section id="base-paper-panel" class="card" aria-label="Base paper simulation" style="display:none">
-                <h2>Base · Paper simulation</h2>
-                <p class="section-note">
-                    Simulation only. No Base wallet, real balance, transaction, or paid AI is used.
-                    Press Scan manually to update it; there is no background trading.
-                </p>
-                <p class="section-note">
-                    One shared virtual USD cap across USDC and WETH · up to five token slots · three equal entries per slot.
-                    WETH is wrapped ETH used as a pool quote; native ETH is not used in this simulation.
-                    Paper exits use the configured +3.5%, +7%, and final +10% activation / 5% pullback rules.
-                    No stop-loss. Pools must meet $10,000 liquidity, $100,000 24h volume, 200 daily transactions,
-                    and 24h age; only exact Base USDC or WETH quote contracts are considered.
-                    A $0 cap blocks new paper entries only after open positions are closed; manual scans can still process exits.
-                </p>
-                <div class="grid-stats">
-                    <div class="stat-box"><div class="stat-label">Virtual cap · shared</div><div class="stat-val" id="base-paper-budget">$100.00</div></div>
-                    <div class="stat-box"><div class="stat-label">Open paper cost</div><div class="stat-val" id="base-paper-open-cost">$0.00</div></div>
-                    <div class="stat-box"><div class="stat-label">Free virtual budget</div><div class="stat-val" id="base-paper-free">$100.00</div></div>
-                    <div class="stat-box"><div class="stat-label">Realized gross paper PnL</div><div class="stat-val" id="base-paper-pnl">$0.00</div></div>
-                </div>
-                <label class="settings-label" for="base-paper-budget-input">Total virtual budget · USD</label>
-                <input id="base-paper-budget-input" class="sig-input" type="number" min="0" max="100000" step="1" value="100">
-                <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">
-                    <button id="base-paper-save-budget" class="btn-copy" type="button" onclick="saveBasePaperBudget()">Save virtual cap</button>
-                    <button id="base-paper-scan" class="btn-green-main" type="button" onclick="runBasePaperScan()">Scan Base · update simulation</button>
-                </div>
-                <div id="base-paper-status" class="section-note" role="status" aria-live="polite" style="white-space:pre-line;margin-top:12px">
-                    No Base paper scan has been run yet.
-                </div>
-                <h3>Screened Base candidates</h3>
-                <div id="base-paper-candidates" class="section-note" style="white-space:pre-line">No scan results.</div>
-                <h3>Open paper positions</h3>
-                <div id="base-paper-open-positions" class="section-note" style="white-space:pre-line">No open paper positions.</div>
-                <h3>Closed paper tranches</h3>
-                <div id="base-paper-closed-trades" class="section-note" style="white-space:pre-line">No simulated exits.</div>
-                <small id="base-paper-pnl-note" class="section-note">
-                    Gross price-only simulation. Gas, DEX fees, routing, price impact and failed fills are excluded;
-                    results are not a profit forecast.
-                </small>
             </section>
         </div>
     </div>
@@ -2619,17 +2829,24 @@ RAW_HTML = r"""<!DOCTYPE html>
         function renderBasePaper(data){
             if(!data||!data.success)return;
             const budgetInput=document.getElementById('base-paper-budget-input');
+            const openPositions=data.open_positions||[];
+            const candidates=data.candidates||[];
+            const closedTrades=data.closed_trades||[];
             document.getElementById('base-paper-budget').textContent=basePaperMoney(data.budget_usd);
             document.getElementById('base-paper-open-cost').textContent=basePaperMoney(data.open_cost_usd);
             document.getElementById('base-paper-free').textContent=basePaperMoney(data.free_budget_usd);
             document.getElementById('base-paper-pnl').textContent=basePaperMoney(data.realized_gross_pnl_usd);
+            document.getElementById('base-paper-open-count').textContent=String(openPositions.length);
+            document.getElementById('base-paper-closed-count').textContent=String(closedTrades.length);
+            document.getElementById('base-paper-candidate-count').textContent=String(candidates.length);
             if(document.activeElement!==budgetInput)budgetInput.value=String(Number(data.budget_usd||0));
             const scanned=data.scanned_at?new Date(Number(data.scanned_at)*1000).toLocaleString():'Not scanned';
             document.getElementById('base-paper-status').textContent=
                 data.message+'\nLast scan: '+scanned+'\nPaper only · live transactions: '+(data.live_trading?'unexpectedly enabled':'OFF')+
-                '\n'+(data.pnl_note||'');
-            document.getElementById('base-paper-candidates').textContent=(data.candidates||[]).length
-                ?data.candidates.map(c=>{
+                '';
+            if(data.pnl_note)document.getElementById('base-paper-pnl-note').textContent=data.pnl_note;
+            document.getElementById('base-paper-candidates').textContent=candidates.length
+                ?candidates.map(c=>{
                     const change='5m '+Number(c.change_m5_pct||0).toFixed(2)+'% / 1h '+Number(c.change_h1_pct||0).toFixed(2)+'%';
                     const reason=c.simulated_action||c.signal_reason||((c.rejection_reasons||[]).join(' ')||'No entry signal');
                     return (c.symbol||'TOKEN')+' / '+(c.quote_asset||'—')+' · $'+Number(c.price_usd||0).toPrecision(6)
@@ -2637,16 +2854,16 @@ RAW_HTML = r"""<!DOCTYPE html>
                         +' · '+change+'\n'+reason;
                 }).join('\n\n')
                 :'No eligible Base quote pools returned by the last scan.';
-            document.getElementById('base-paper-open-positions').textContent=(data.open_positions||[]).length
-                ?data.open_positions.map(p=>{
+            document.getElementById('base-paper-open-positions').textContent=openPositions.length
+                ?openPositions.map(p=>{
                     const pnl=p.unrealized_gross_pnl_usd==null?'price unavailable':basePaperMoney(p.unrealized_gross_pnl_usd)+' gross';
                     const stale=p.price_stale_seconds==null?'':p.price_stale_seconds>120?' · mark may be stale':'';
                     return p.symbol+' · tranche '+p.entry_step+'/3 · '+basePaperMoney(p.amount_usd)+' · '+p.quote_asset
                         +' · entry $'+Number(p.entry_price_usd||0).toPrecision(6)+' · current '+pnl+stale;
                 }).join('\n')
                 :'No open paper positions.';
-            document.getElementById('base-paper-closed-trades').textContent=(data.closed_trades||[]).length
-                ?data.closed_trades.map(p=>p.symbol+' · tranche '+p.entry_step+'/3 · '+basePaperMoney(p.profit_usd)
+            document.getElementById('base-paper-closed-trades').textContent=closedTrades.length
+                ?closedTrades.map(p=>p.symbol+' · tranche '+p.entry_step+'/3 · '+basePaperMoney(p.profit_usd)
                     +' gross · '+(p.exit_reason||'exit')+' · '+new Date(Number(p.closed_at||0)*1000).toLocaleString())
                     .join('\n')
                 :'No simulated exits.';

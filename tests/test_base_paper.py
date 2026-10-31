@@ -1,5 +1,8 @@
+import ast
 import asyncio
 import os
+from pathlib import Path
+import re
 import tempfile
 import unittest
 
@@ -170,6 +173,29 @@ class BasePaperLedgerTests(unittest.TestCase):
         self.assertIn("slots are occupied", blocked["signal_reason"])
         with self.assertRaisesRegex(ValueError, "below open paper-position cost"):
             self.engine.set_budget(OWNER_ID, 1, now=1_000_001)
+
+
+class BasePaperUiTests(unittest.TestCase):
+    def test_quick_controls_are_at_the_top_and_ids_are_unique(self):
+        source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        raw_html = next(
+            node.value.value
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "RAW_HTML" for target in node.targets)
+            and isinstance(node.value, ast.Constant)
+        )
+        match = re.search(r'<section id="base-paper-panel"[^>]*>(.*?)</section>', raw_html, re.S)
+        self.assertIsNotNone(match)
+        panel = match.group(0)
+        solana_section = raw_html.index('<section class="card" aria-label="AI Crypto Investors status">')
+        self.assertLess(raw_html.index('<section id="base-paper-panel"'), solana_section)
+        ids = re.findall(r'\bid="([^"]+)"', panel)
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertIn("BASE NETWORK · L2", panel)
+        self.assertIn("Scan Base", panel)
+        self.assertIn("SIM ONLY · LIVE OFF", panel)
 
 
 if __name__ == "__main__":
