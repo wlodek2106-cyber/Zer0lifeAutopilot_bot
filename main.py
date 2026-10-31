@@ -2413,6 +2413,46 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <h2>Closed trades and realized results</h2>
                 <div id="investor-closed-trades" class="section-note" style="white-space:pre-line">No AI Crypto Investors trades recorded.</div>
             </section>
+            <section id="base-paper-panel" class="card" aria-label="Base paper simulation" style="display:none">
+                <h2>Base · Paper simulation</h2>
+                <p class="section-note">
+                    Simulation only. No Base wallet, real balance, transaction, or paid AI is used.
+                    Press Scan manually to update it; there is no background trading.
+                </p>
+                <p class="section-note">
+                    One shared virtual USD cap across USDC and WETH · up to five token slots · three equal entries per slot.
+                    WETH is wrapped ETH used as a pool quote; native ETH is not used in this simulation.
+                    Paper exits use the configured +3.5%, +7%, and final +10% activation / 5% pullback rules.
+                    No stop-loss. Pools must meet $10,000 liquidity, $100,000 24h volume, 200 daily transactions,
+                    and 24h age; only exact Base USDC or WETH quote contracts are considered.
+                    A $0 cap blocks new paper entries only after open positions are closed; manual scans can still process exits.
+                </p>
+                <div class="grid-stats">
+                    <div class="stat-box"><div class="stat-label">Virtual cap · shared</div><div class="stat-val" id="base-paper-budget">$100.00</div></div>
+                    <div class="stat-box"><div class="stat-label">Open paper cost</div><div class="stat-val" id="base-paper-open-cost">$0.00</div></div>
+                    <div class="stat-box"><div class="stat-label">Free virtual budget</div><div class="stat-val" id="base-paper-free">$100.00</div></div>
+                    <div class="stat-box"><div class="stat-label">Realized gross paper PnL</div><div class="stat-val" id="base-paper-pnl">$0.00</div></div>
+                </div>
+                <label class="settings-label" for="base-paper-budget-input">Total virtual budget · USD</label>
+                <input id="base-paper-budget-input" class="sig-input" type="number" min="0" max="100000" step="1" value="100">
+                <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">
+                    <button id="base-paper-save-budget" class="btn-copy" type="button" onclick="saveBasePaperBudget()">Save virtual cap</button>
+                    <button id="base-paper-scan" class="btn-green-main" type="button" onclick="runBasePaperScan()">Scan Base · update simulation</button>
+                </div>
+                <div id="base-paper-status" class="section-note" role="status" aria-live="polite" style="white-space:pre-line;margin-top:12px">
+                    No Base paper scan has been run yet.
+                </div>
+                <h3>Screened Base candidates</h3>
+                <div id="base-paper-candidates" class="section-note" style="white-space:pre-line">No scan results.</div>
+                <h3>Open paper positions</h3>
+                <div id="base-paper-open-positions" class="section-note" style="white-space:pre-line">No open paper positions.</div>
+                <h3>Closed paper tranches</h3>
+                <div id="base-paper-closed-trades" class="section-note" style="white-space:pre-line">No simulated exits.</div>
+                <small id="base-paper-pnl-note" class="section-note">
+                    Gross price-only simulation. Gas, DEX fees, routing, price impact and failed fills are excluded;
+                    results are not a profit forecast.
+                </small>
+            </section>
         </div>
     </div>
 
@@ -2504,6 +2544,8 @@ RAW_HTML = r"""<!DOCTYPE html>
             </details>`;
         }
         function renderInvestorDashboard(stats) {
+            const basePanel=document.getElementById('base-paper-panel');
+            if(basePanel)basePanel.style.display=stats.is_admin?'':'none';
             const investorTrades=(stats.trades||[]).filter(trade=>trade.strategy==='investor');
             const open=investorTrades.filter(trade=>trade.status==='OPEN'||trade.status==='RESERVED');
             const closed=investorTrades.filter(trade=>trade.status==='CLOSED')
@@ -2568,6 +2610,95 @@ RAW_HTML = r"""<!DOCTYPE html>
                     +(t.sell_review?' · post-trade review: '+t.sell_review:'')
                     +' · '+(t.closed_at||'time unavailable')).join('\n')
                 :'No AI Crypto Investors sales recorded.';
+        }
+        let basePaperLoading=false,basePaperBusy=false;
+        function basePaperMoney(value){
+            const parsed=Number(value);
+            return Number.isFinite(parsed)?'$'+parsed.toFixed(2):'—';
+        }
+        function renderBasePaper(data){
+            if(!data||!data.success)return;
+            const budgetInput=document.getElementById('base-paper-budget-input');
+            document.getElementById('base-paper-budget').textContent=basePaperMoney(data.budget_usd);
+            document.getElementById('base-paper-open-cost').textContent=basePaperMoney(data.open_cost_usd);
+            document.getElementById('base-paper-free').textContent=basePaperMoney(data.free_budget_usd);
+            document.getElementById('base-paper-pnl').textContent=basePaperMoney(data.realized_gross_pnl_usd);
+            if(document.activeElement!==budgetInput)budgetInput.value=String(Number(data.budget_usd||0));
+            const scanned=data.scanned_at?new Date(Number(data.scanned_at)*1000).toLocaleString():'Not scanned';
+            document.getElementById('base-paper-status').textContent=
+                data.message+'\nLast scan: '+scanned+'\nPaper only · live transactions: '+(data.live_trading?'unexpectedly enabled':'OFF')+
+                '\n'+(data.pnl_note||'');
+            document.getElementById('base-paper-candidates').textContent=(data.candidates||[]).length
+                ?data.candidates.map(c=>{
+                    const change='5m '+Number(c.change_m5_pct||0).toFixed(2)+'% / 1h '+Number(c.change_h1_pct||0).toFixed(2)+'%';
+                    const reason=c.simulated_action||c.signal_reason||((c.rejection_reasons||[]).join(' ')||'No entry signal');
+                    return (c.symbol||'TOKEN')+' / '+(c.quote_asset||'—')+' · $'+Number(c.price_usd||0).toPrecision(6)
+                        +' · liquidity '+basePaperMoney(c.liquidity_usd)+' · volume '+basePaperMoney(c.volume_24h_usd)
+                        +' · '+change+'\n'+reason;
+                }).join('\n\n')
+                :'No eligible Base quote pools returned by the last scan.';
+            document.getElementById('base-paper-open-positions').textContent=(data.open_positions||[]).length
+                ?data.open_positions.map(p=>{
+                    const pnl=p.unrealized_gross_pnl_usd==null?'price unavailable':basePaperMoney(p.unrealized_gross_pnl_usd)+' gross';
+                    const stale=p.price_stale_seconds==null?'':p.price_stale_seconds>120?' · mark may be stale':'';
+                    return p.symbol+' · tranche '+p.entry_step+'/3 · '+basePaperMoney(p.amount_usd)+' · '+p.quote_asset
+                        +' · entry $'+Number(p.entry_price_usd||0).toPrecision(6)+' · current '+pnl+stale;
+                }).join('\n')
+                :'No open paper positions.';
+            document.getElementById('base-paper-closed-trades').textContent=(data.closed_trades||[]).length
+                ?data.closed_trades.map(p=>p.symbol+' · tranche '+p.entry_step+'/3 · '+basePaperMoney(p.profit_usd)
+                    +' gross · '+(p.exit_reason||'exit')+' · '+new Date(Number(p.closed_at||0)*1000).toLocaleString())
+                    .join('\n')
+                :'No simulated exits.';
+        }
+        async function loadBasePaper(){
+            if(basePaperLoading||!window.latestAccountStats?.is_admin)return;
+            basePaperLoading=true;
+            try{
+                const response=await apiFetch('/api/base-paper',{cache:'no-store'});
+                const data=await response.json();
+                if(!response.ok||!data.success)throw Error(data.message||'Could not load Base paper simulation.');
+                renderBasePaper(data);
+            }catch(error){
+                document.getElementById('base-paper-status').textContent=error.message||'Base paper simulation is unavailable.';
+            }finally{basePaperLoading=false;}
+        }
+        async function saveBasePaperBudget(){
+            const button=document.getElementById('base-paper-save-budget');
+            const amount=Number(document.getElementById('base-paper-budget-input').value);
+            if(!Number.isFinite(amount)||amount<0||amount>100000){
+                document.getElementById('base-paper-status').textContent='Enter a virtual budget from $0 to $100,000.';
+                return;
+            }
+            if(amount>0&&amount<15){
+                document.getElementById('base-paper-status').textContent='Use $0 only after positions close, or at least $15 for 15 virtual tranches.';
+                return;
+            }
+            button.disabled=true;
+            try{
+                const response=await apiFetch('/api/base-paper/budget',{method:'POST',
+                    headers:{'Content-Type':'application/json'},body:JSON.stringify({budget_usd:amount})});
+                const data=await response.json();
+                if(!response.ok||!data.success)throw Error(data.message||'Could not save virtual cap.');
+                renderBasePaper(data);
+            }catch(error){
+                document.getElementById('base-paper-status').textContent=error.message||'Could not save virtual cap.';
+            }finally{button.disabled=false;}
+        }
+        async function runBasePaperScan(){
+            if(basePaperBusy)return;
+            const button=document.getElementById('base-paper-scan');
+            basePaperBusy=true;button.disabled=true;
+            document.getElementById('base-paper-status').textContent=
+                'Scanning up to four Base pools and closed candles. This may take up to a minute; no live order is sent.';
+            try{
+                const response=await apiFetch('/api/base-paper/scan',{method:'POST'});
+                const data=await response.json();
+                if(!response.ok||!data.success)throw Error(data.message||'Base paper scan failed.');
+                renderBasePaper(data);
+            }catch(error){
+                document.getElementById('base-paper-status').textContent=error.message||'Base paper scan failed; no simulated action was recorded.';
+            }finally{basePaperBusy=false;button.disabled=false;}
         }
         let tg;
         try {
@@ -3705,6 +3836,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             const target = document.getElementById('tab-' + id);
             if (target) target.classList.add('active');
             if (btn) btn.classList.add('active');
+            if(id==='ai-crypto-investors')loadBasePaper();
             if(id==='tariffs'&&!window.ZRL_WEB){
                 document.getElementById('telegram-tariff-view').hidden=false;
                 refreshTelegramTariffs();
@@ -5135,6 +5267,9 @@ async def main():
     app.router.add_post('/api/trading_settings', wallet_handler(runtime.save_trading_settings))
     app.router.add_post('/api/investor_budget', wallet_handler(runtime.save_investor_budget))
     app.router.add_post('/api/toggle_investor', wallet_handler(runtime.toggle_investor))
+    app.router.add_get('/api/base-paper', wallet_handler(runtime.base_paper_report))
+    app.router.add_post('/api/base-paper/budget', wallet_handler(runtime.save_base_paper_budget))
+    app.router.add_post('/api/base-paper/scan', wallet_handler(runtime.scan_base_paper))
     app.router.add_post('/api/trading_readiness', wallet_handler(runtime.trading_readiness))
     app.router.add_post('/api/ai_preview', wallet_handler(runtime.ai_preview))
     app.router.add_post('/api/recover_expired_operation', wallet_handler(runtime.recover_expired_operation))

@@ -46,6 +46,7 @@ from entry_costs import EntryCostError, quote_amounts
 from meme_discovery import MemeDiscovery
 from whale_stream import HeliusWhaleStream
 from spl_token_support import validate_mint_account, token_account_data
+from base_paper import BasePaperEngine, BasePaperError
 
 WRAPPED_SOL = "So11111111111111111111111111111111111111112"
 JITO_BUNDLE_SEND_URL = "https://mainnet.block-engine.jito.wtf/api/v1/transactions?bundleOnly=true"
@@ -206,6 +207,7 @@ class CustodyRuntime(WalletRuntime):
         self._monthly_fee_worker_status = "idle"
         self.legacy_runtime = WalletRuntime(*args, **kwargs)
         self.ledger = CustodyLedger(self.db_file)
+        self.base_paper = BasePaperEngine(self.ledger.path, self.owner_id)
         self.ledger.user(self.owner_id)
         self.ledger.tx_epoch()
         self.base_url = base_url.rstrip("/")
@@ -1006,12 +1008,14 @@ class CustodyRuntime(WalletRuntime):
             self.owner(request)
             if (getattr(self, "web_access", None) and request.method == "POST"
                     and action.__name__ in {"ai_preview", "scan_candidates", "trading_readiness",
-                                            "save_trading_settings", "save_investor_budget"}):
+                                            "save_trading_settings", "save_investor_budget",
+                                            "save_base_paper_budget", "scan_base_paper"}):
                 self.web_access.trading_request(request)
             if (getattr(self, "accounts", None) and request.method == "POST" and action.__name__ in
                     {"create_invoice","deposit","wallet_link","toggle","toggle_sniper","withdraw"}):
                 self.accounts.require(self.uid(request))
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=35)) as session:
+            request_timeout = 70 if action.__name__ == "scan_base_paper" else 35
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=request_timeout)) as session:
                 if action.__name__ in {"create_invoice", "deposit", "toggle", "withdraw", "reserve_fees", "opening_balance"} and self.legacy_pending():
                     # Re-check finalized results BEFORE ready()/admit() rejects the request.
                     # Unknown results remain blocked; never resend or guess failure.
@@ -1020,6 +1024,8 @@ class CustodyRuntime(WalletRuntime):
         except (WalletError, LedgerError) as exc:
             return web.json_response({"success": False, "message": str(exc)},
                                      status=exc.status if isinstance(exc, WalletError) else 409)
+        except BasePaperError as exc:
+            return web.json_response({"success": False, "message": str(exc)}, status=exc.status)
         except (ValueError, KeyError, TypeError, json.JSONDecodeError):
             return web.json_response({"success": False, "message": "Неверный запрос или неполный ответ провайдера."}, status=400)
         except Exception as exc:
@@ -1028,6 +1034,31 @@ class CustodyRuntime(WalletRuntime):
 
     def pending(self):
         return self.ledger.pending()
+
+    def _require_base_paper_owner(self, request):
+        uid = self.uid(request)
+        if uid != self.owner_id:
+            raise BasePaperError("Base paper simulation is currently available to the owner only.", 403)
+        return uid
+
+    async def base_paper_report(self, request, session):
+        uid = self._require_base_paper_owner(request)
+        return web.json_response(self.base_paper.report(uid))
+
+    async def save_base_paper_budget(self, request, session):
+        uid = self._require_base_paper_owner(request)
+        body = await request.json()
+        if not isinstance(body, dict) or set(body) != {"budget_usd"}:
+            raise WalletError("Only the virtual Base budget can be changed here.", 400)
+        try:
+            report = self.base_paper.set_budget(uid, body["budget_usd"])
+        except ValueError as exc:
+            raise WalletError(str(exc), 400) from exc
+        return web.json_response(report)
+
+    async def scan_base_paper(self, request, session):
+        uid = self._require_base_paper_owner(request)
+        return web.json_response(await self.base_paper.scan(session, uid))
 
     async def balances_for_wallet(self, session, wallet):
         native = (await self.rpc(session, "getBalance", [wallet, {"commitment": "finalized"}]))["value"]
