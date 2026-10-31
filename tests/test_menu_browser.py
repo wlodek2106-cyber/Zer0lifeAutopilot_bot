@@ -74,8 +74,8 @@ class MenuBrowserTests(unittest.TestCase):
                 assert(!!exchangePanel,'Exchange panel exists');
                 assert(exchangePanel.textContent.includes('Quotes only · sending is disabled'),'quote-only state is explicit');
                 assert(exchangePanel.textContent.includes('no transaction is submitted'),'route availability is unambiguous');
-                assert(exchangePanel.textContent.includes('Shared wallet. Separate user balances.'),'UID-isolated ledger is explained');
-                assert(exchangePanel.textContent.includes('does not move funds or perform a withdrawal'),'quote screen is distinguished from withdrawal');
+                assert(!exchangePanel.textContent.includes('Separate user balances.'),'irrelevant balance note is omitted');
+                assert(!exchangePanel.textContent.includes("Each user's in-app balances"),'untranslated balance note is omitted');
                 assert(exchangePanel.textContent.includes('Transfers, approvals, and balance changes remain disabled'),'sending remains disabled');
                 assert(exchangePanel.querySelector('#exchange-amount'),'quote amount input is present');
                 assert(exchangePanel.querySelector('#exchange-quote-button'),'read-only quote control is present');

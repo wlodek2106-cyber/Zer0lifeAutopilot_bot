@@ -2072,10 +2072,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         .exchange-step-index { color:#9fbc82; font:700 9px/1 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.15em; }
         .exchange-step h2 { margin:9px 0 5px; color:#e6eddf; font-size:13px; letter-spacing:-.02em; }
         .exchange-step p { margin:0; color:#9fae9e; font-size:11px; line-height:1.55; }
-        .exchange-accounting { padding:18px; border:1px solid rgba(158,190,211,.18); border-radius:20px; background:linear-gradient(145deg,rgba(20,31,38,.92),rgba(16,24,29,.82)); }
-        .exchange-accounting h2 { margin:0 0 8px; color:#e4edf0; font-size:16px; }
-        .exchange-accounting p { margin:0; color:#a8b7b9; font-size:12px; line-height:1.65; }
-        .exchange-accounting strong { color:#d9e9de; }
+        .exchange-quote-panel { padding:18px; border:1px solid rgba(158,190,211,.18); border-radius:20px; background:linear-gradient(145deg,rgba(20,31,38,.92),rgba(16,24,29,.82)); }
         .exchange-destination { display:flex; flex-wrap:wrap; align-items:center; gap:7px; margin:14px 0; color:#91a59e; font:700 9px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.08em; }
         .exchange-destination span { padding:8px 10px; border:1px solid rgba(183,216,189,.17); border-radius:9px; background:rgba(9,16,15,.45); }
         .exchange-disabled { width:100%; min-height:48px; margin-top:15px; border:1px solid #39443b; border-radius:13px; color:#a8b0a5; background:linear-gradient(180deg,#30382f,#252d26); font-size:12px; font-weight:750; cursor:not-allowed; opacity:.78; }
@@ -2113,7 +2110,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         @media (min-width: 1024px) {
             #app #tab-exchange.active { display:block; }
             #app #tab-exchange > .exchange-hero, #app #tab-exchange > .exchange-callout,
-            #app #tab-exchange > .exchange-flow, #app #tab-exchange > .exchange-accounting,
+            #app #tab-exchange > .exchange-flow, #app #tab-exchange > .exchange-quote-panel,
             #app #tab-exchange > .exchange-safety { max-width:900px; }
         }
     </style>
@@ -2339,11 +2336,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <article class="exchange-step"><span class="exchange-step-index">02 / REVIEW</span><h2>Review quote and costs</h2><p>See the estimated output, minimum receive amount, provider fees and network costs. No transfer is submitted.</p></article>
                 <article class="exchange-step"><span class="exchange-step-index">03 / REVIEW</span><h2 id="exchange-destination-title">Review Base estimate</h2><p id="exchange-destination-copy">Compare the provider's estimate and minimum receive amount. No transfer is available yet.</p></article>
             </section>
-            <section class="exchange-accounting" aria-labelledby="exchange-accounting-title">
-                <p class="exchange-kicker">ACCOUNTING · ISOLATED BY UID</p>
-                <h2 id="exchange-accounting-title">Shared wallet. Separate user balances.</h2>
-                <p>Each user's in-app balances are tracked separately by account. This screen currently shows read-only route estimates only; it does <strong>not</strong> move funds or perform a withdrawal.</p>
-                <div class="exchange-destination" aria-label="Quote path"><span id="exchange-path-source">YOUR SOLANA USDC</span><span aria-hidden="true">→</span><span>PROVIDER ESTIMATE</span><span aria-hidden="true">→</span><span id="exchange-path-destination">BASE USDC ESTIMATE</span></div>
+            <section class="exchange-quote-panel" aria-label="Quote request">
+                <div class="exchange-destination" aria-label="Quote route"><span id="exchange-path-source">YOUR SOLANA USDC</span><span aria-hidden="true">→</span><span>PROVIDER ESTIMATE</span><span aria-hidden="true">→</span><span id="exchange-path-destination">BASE USDC ESTIMATE</span></div>
                 <div class="exchange-quote-form">
                     <div class="exchange-quote-field">
                         <label for="exchange-amount">Amount (USDC)</label>
@@ -3122,7 +3116,6 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["Review quote and costs","Проверить котировку и расходы","Перевірити котировку та витрати"],
             ["Credit your Base balance","Зачислить на баланс Base","Зарахувати на баланс Base"],
             ["Credit your Solana balance","Зачислить на баланс Solana","Зарахувати на баланс Solana"],
-            ["Shared wallet. Separate user balances.","Общий кошелёк. Балансы пользователей раздельные.","Спільний гаманець. Баланси користувачів окремі."],
             ["Pending or unknown?","Операция ожидает подтверждения?","Операція очікує підтвердження?"],
             ["Do not retry a transfer whose status is pending or unknown. Wait for its status to be resolved before taking any action.","Не повторяйте перевод со статусом «ожидает» или «неизвестен». Дождитесь проверки результата.","Не повторюйте переказ зі статусом «очікує» або «невідомо». Дочекайтеся перевірки результату."],
             ["Confirm and send this quote","Подтвердить и отправить обмен","Підтвердити й надіслати обмін"],
@@ -3183,7 +3176,6 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["Review Base estimate","Проверьте оценку для Base","Перевірте оцінку для Base"],
             ["Review Solana estimate","Проверьте оценку для Solana","Перевірте оцінку для Solana"],
             ["Compare the provider's estimate and minimum receive amount. No transfer is available yet.","Сравните оценку провайдера и минимальную сумму получения. Перевод пока недоступен.","Порівняйте оцінку провайдера та мінімальну суму отримання. Переказ поки недоступний."],
-            ["Shared wallet. Separate user balances.","Общий кошелёк. У каждого пользователя отдельный баланс.","Спільний гаманець. У кожного користувача окремий баланс."],
             ["Amount (USDC)","Сумма (USDC)","Сума (USDC)"],["Get quote","Запросить котировку","Запросити котирування"],
             ["Send amount","Отправить","Надіслати"],["Estimated receive","Ожидается получить","Очікується отримати"],
             ["Minimum receive","Минимум к получению","Мінімум до отримання"],
@@ -3213,7 +3205,6 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["Estimate only. This screen cannot approve or send a transaction.","Только оценка. На этом экране нельзя подтвердить или отправить транзакцию.","Лише оцінка. На цьому екрані не можна підтвердити чи надіслати транзакцію."],
             ["Quote requests are read-only. Transfers, approvals, and balance changes remain disabled.","Запросы котировок работают только на чтение. Переводы, разрешения и изменения баланса отключены.","Запити котирувань працюють лише для читання. Перекази, дозволи та зміни балансу вимкнені."],
             ["See the estimated output, minimum receive amount, provider fees and network costs. No transfer is submitted.","Смотрите оценку суммы получения, минимальную сумму, комиссию провайдера и сетевые расходы. Перевод не отправляется.","Перегляньте оцінку суми отримання, мінімальну суму, комісію провайдера та мережеві витрати. Переказ не надсилається."],
-            ["Each user's in-app balances are tracked separately by account. This screen currently shows read-only route estimates only; it does not move funds or perform a withdrawal.","Баланс каждого пользователя в приложении учитывается отдельно. Сейчас на этом экране отображаются только оценки маршрута: средства не перемещаются, вывод не выполняется.","Баланс кожного користувача в застосунку обліковується окремо. Зараз на цьому екрані показуються лише оцінки маршруту: кошти не переміщуються, виведення не виконується."],
             ["YOUR SOLANA USDC","ВАШИ USDC В SOLANA","ВАШІ USDC У SOLANA"],
             ["YOUR BASE USDC","ВАШИ USDC В BASE","ВАШІ USDC У BASE"],
             ["YOUR SOLANA BALANCE","ВАШ БАЛАНС SOLANA","ВАШ БАЛАНС SOLANA"],
@@ -3231,7 +3222,9 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["USDC route estimates for Solana and Base","Оценка маршрутов USDC между Solana и Base","Оцінка маршрутів USDC між Solana та Base"],
             ["USDC · READ-ONLY ROUTE QUOTE","USDC · КОТИРОВКА МАРШРУТА","USDC · КОТИРУВАННЯ МАРШРУТУ"],
             ["Choose quote direction","Выберите направление котировки","Виберіть напрямок котирування"],
-            ["Read-only quote details","Детали котировки","Деталі котирування"]
+            ["Read-only quote details","Детали котировки","Деталі котирування"],
+            ["Quote request","Запрос котировки","Запит котирування"],
+            ["Quote route","Маршрут котировки","Маршрут котирування"]
         ];
         const UI_COPY = {
             ru:Object.fromEntries(UI_COPY_ROWS.map(([english,russian])=>[english,russian])),

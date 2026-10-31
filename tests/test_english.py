@@ -46,11 +46,11 @@ class EnglishTests(unittest.TestCase):
                 "Choose a direction and request a live LI.FI estimate",
                 "Get a read-only quote for your Solana USDC",
                 "See the estimated output, minimum receive amount, provider fees and network costs",
-                "Shared wallet. Separate user balances.", "tracked separately by account",
-                "perform a withdrawal",
                 "No transfer is submitted", "Estimate only. This screen cannot approve or send a transaction",
                 'id="exchange-quote-button"', 'id="exchange-amount"'):
             self.assertIn(required, exchange)
+        self.assertNotIn("Shared wallet. Separate user balances.", exchange)
+        self.assertNotIn("Each user's in-app balances are tracked separately by account.", exchange)
         self.assertIn("const source = reverse ? 'Base' : 'Solana'", page)
         self.assertIn("const destination = reverse ? 'Solana' : 'Base'", page)
         self.assertNotRegex(exchange, r"<form\b")
