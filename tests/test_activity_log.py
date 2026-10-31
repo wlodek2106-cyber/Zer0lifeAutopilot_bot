@@ -56,6 +56,7 @@ class ActivityTests(unittest.IsolatedAsyncioTestCase):
                 "change_h6_pct": 1.0, "buys_m5": 8, "sells_m5": 4,
                 "chart_ready": 1, "chart_buy_setup": 1, "chart_trend_h1": 1}},
             "sniper_market_context": {"WIF": {"chart_ready": 1, "chart_buy_setup": 1,
+                "chart_trend_h1": 1,
                 "change_m5_pct": 0.8, "change_h1_pct": 1.2, "change_h6_pct": -4.9}},
             "decisions": {
                 "main": {"action": "HOLD", "symbol": None, "reason": "No trend"},
@@ -304,21 +305,19 @@ class ActivityTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.ledger.settings(101)["trading"])
         self.runtime.trade.assert_not_awaited()
 
-    async def test_provider_failure_status_is_safe_and_clears_on_success(self):
+    async def test_legacy_paid_ai_failure_is_hidden_while_rules_refresh_queues(self):
         self.ledger.ai_record("one", self.snapshot)
         future = asyncio.get_running_loop().create_future()
         future.set_exception(WalletError("SECRET_PROVIDER_ERROR"))
         self.runtime.ai_task = future
+        self.runtime.background_ai = AsyncMock(return_value={})
         with patch.dict("os.environ", {"OPENAI_API_KEY": "synthetic-not-a-real-key"}):
             self.runtime.poll_ai(self.prices)
+            self.assertIsNotNone(self.runtime.ai_task)
+            await self.runtime.ai_task
             result = activity_log.report(self.runtime, 101)
-            self.assertIn("Last AI refresh failed", result["activity_status"])
+            self.assertNotIn("Last AI refresh failed", result["activity_status"])
             self.assertNotIn("SECRET_PROVIDER_ERROR", json.dumps(result))
-            future = asyncio.get_running_loop().create_future()
-            future.set_result({})
-            self.runtime.ai_task = future
-            self.runtime.poll_ai(self.prices)
-            self.assertNotIn("refresh failed", activity_log.report(self.runtime, 101)["activity_status"])
         self.runtime.trade.assert_not_awaited()
 
     async def test_transaction_signature_and_pending_state_not_called_completed(self):

@@ -37,7 +37,7 @@ class ChartAnalysisTests(unittest.TestCase):
             with self.subTest(mode=signal.__name__):
                 self.assertTrue(signal("SOL", {"SOL": metrics}).allowed)
 
-    def test_continuation_still_rejects_weak_volume_red_candles_and_overextension(self):
+    def test_simple_setup_uses_green_close_not_complex_indicators(self):
         now = 1_000_000
         for scenario in ("weak_volume", "red_last", "doji_last",
                          "falling_close", "overextended"):
@@ -56,7 +56,8 @@ class ChartAnalysisTests(unittest.TestCase):
                     m5[-1].update(open=102, close=102.1, high=102.2, low=101.99)
                 result = chart_analysis.analyze_charts(m5, h1, now=now)
                 self.assertEqual(result["chart_trend_continuation"], 0)
-                self.assertEqual(result["chart_buy_setup"], 0)
+                expected_setup = int(m5[-1]["close"] > m5[-1]["open"])
+                self.assertEqual(result["chart_buy_setup"], expected_setup)
 
     def test_one_closed_green_candle_after_red_can_enter_both_modes(self):
         now = 1_000_000
@@ -74,7 +75,7 @@ class ChartAnalysisTests(unittest.TestCase):
             with self.subTest(mode=signal.__name__):
                 self.assertTrue(signal("SOL", {"SOL": metrics}).allowed)
 
-    def test_continuation_still_requires_fresh_and_rising_hourly_chart(self):
+    def test_simple_setup_requires_fresh_data_but_not_rising_hour(self):
         now = 1_000_000
         for scenario in ("provider_stale", "expired", "flat_hourly", "falling_hourly"):
             with self.subTest(scenario=scenario):
@@ -95,7 +96,8 @@ class ChartAnalysisTests(unittest.TestCase):
                                    low=close - 0.04, close=close)
                 result = chart_analysis.analyze_charts(m5, h1, now=now, **options)
                 self.assertEqual(result["chart_trend_continuation"], 0)
-                self.assertEqual(result["chart_buy_setup"], 0)
+                self.assertEqual(result["chart_buy_setup"],
+                                 0 if scenario in ("provider_stale", "expired") else 1)
 
     def make_candles(self, interval, count, now, base=100.0, step=0.1):
         candles = []
@@ -125,7 +127,7 @@ class ChartAnalysisTests(unittest.TestCase):
         self.assertEqual([bar["timestamp"] for bar in candles], [now - 600])
         self.assertEqual(candles[0]["close"], 100)
 
-    def test_fresh_chart_calculates_numeric_indicators_but_does_not_invent_setup(self):
+    def test_fresh_green_candle_is_enough_without_complex_pattern(self):
         now = 1_000_000
         m5 = self.make_candles(300, 60, now, base=100, step=0.1)
         h1 = self.make_candles(3600, 60, now, base=100, step=0.1)
@@ -136,8 +138,7 @@ class ChartAnalysisTests(unittest.TestCase):
         self.assertEqual(result["chart_trend_h1"], 1)
         self.assertGreater(result["chart_ema20_5m_usd"], 0)
         self.assertGreaterEqual(result["chart_rsi14_5m"], 0)
-        self.assertIn(result["chart_buy_setup"], (0, 1))
-        self.assertEqual(result["chart_buy_setup"], 0)
+        self.assertEqual(result["chart_buy_setup"], 1)
 
     def test_stale_or_short_history_fails_closed(self):
         now = 1_000_000
@@ -197,7 +198,7 @@ class ChartAnalysisTests(unittest.TestCase):
         extended_result = chart_analysis.analyze_charts(
             extended_bounce, h1, now=now)
         self.assertEqual(extended_result["chart_ready"], 1)
-        self.assertEqual(extended_result["chart_buy_setup"], 0)
+        self.assertEqual(extended_result["chart_buy_setup"], 1)
 
     def test_one_touch_is_not_a_confirmed_support_or_resistance_zone(self):
         self.assertIsNone(chart_analysis._nearest_zone(

@@ -368,6 +368,7 @@ async def get_token_prices(session: aiohttp.ClientSession) -> dict:
     liquidity_seen = {}
     mints_str = ",".join([v["mint"] for v in WATCHLIST.values()])
     url = f"https://api.dexscreener.com/tokens/v1/solana/{mints_str}"
+    get_token_prices.last_error = ""
     try:
         headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
         async with dexscreener.request(session, url, priority=dexscreener.PRICE,
@@ -389,8 +390,20 @@ async def get_token_prices(session: aiohttp.ClientSession) -> dict:
                                     and liquidity > liquidity_seen.get(sym, 0)):
                                 prices[sym] = price
                                 liquidity_seen[sym] = liquidity
+            else:
+                get_token_prices.last_error = (
+                    f"Market-data provider returned HTTP {resp.status}; "
+                    "fresh prices unavailable. No trade was sent.")
+    except dexscreener.ProviderLimited:
+        get_token_prices.last_error = (
+            f"DexScreener rate limit (HTTP 429); shared market-data requests paused for "
+            f"{max(1, dexscreener.cooldown_remaining())} seconds. No trade was sent.")
     except Exception:
-        pass
+        get_token_prices.last_error = (
+            "Market-data provider unavailable; fresh prices could not be verified. No trade was sent.")
+    if not prices and not get_token_prices.last_error:
+        get_token_prices.last_error = (
+            "No fresh verified market prices are available. Autopilot was not started; no trade was sent.")
     return prices
 
 async def execute_jupiter_swap(session: aiohttp.ClientSession, input_mint: str, output_mint: str, amount_raw: int, signer: Keypair, slippage_bps: int = MAX_SLIPPAGE_BPS, priority_fee: int = 25000) -> str:
@@ -2159,17 +2172,17 @@ RAW_HTML = r"""<!DOCTYPE html>
         <div id="tab-trading" class="tab-panel">
             <header class="page-heading"><div><p class="eyebrow">Your capital only</p><h1>Trading</h1></div></header>
             <div id="trading-controls"></div>
-            <div class="card" id="trading-ai-activity"><h3 style="margin-top:0">AI activity</h3>
-                <p id="ai-status" class="status-output">Checking AI status...</p>
-                <p id="ai-latency" class="section-note">Analysis timings: awaiting a fresh analysis.</p>
-                <button class="btn-copy" onclick="previewAI()">Check AI · no trade</button>
+            <div class="card" id="trading-ai-activity"><h3 style="margin-top:0">Trading signals</h3>
+                <p id="ai-status" class="status-output">Checking signal status...</p>
+                <p id="ai-latency" class="section-note">Signal timings: awaiting a fresh market scan.</p>
+                <button class="btn-copy" onclick="previewAI()">Check rule signals · no trade</button>
                 <p id="ai-decisions" class="status-output"></p>
                 <p id="ai-risk-review" class="status-output">Risk controller: awaiting analysis.</p>
                 <p id="ai-learning" class="section-note">Outcome memory: awaiting finalized trade history.</p>
                 <p id="ai-chart-zones" class="status-output"></p>
                 <details>
                     <summary>Independent execution guard</summary>
-                    <p class="section-note">AI proposes BUY / SELL / HOLD only. Server-owned checks decide whether an order is allowed. AI cannot change limits or disable checks.</p>
+                    <p class="section-note">The rules engine proposes BUY / HOLD only. Server-owned checks decide whether an order is allowed. No model can change limits or disable checks.</p>
                     <p id="execution-policy-summary" class="section-note">Policy loading...</p>
                     <p id="execution-policy-result" class="status-output">No execution check recorded yet.</p>
                     <p class="section-note">Liquidity is checked through the executable route and price impact at the requested size, not a promise of market depth. Entry cost estimates are not profit forecasts. Entry-efficiency checks never block owned-position exits or withdrawals. A passed check is not proof of a filled trade.</p>
@@ -4372,6 +4385,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                           +gate.stage+' / '+gate.action+(gate.symbol?' '+gate.symbol:'')+'\n'+normalizeAnalysisText(gate.reason)
                         : 'No execution check recorded yet. AI suggestions are not executed trades.';
                     const ai=s.ai_status||{};
+                    const rulesOnly=ai.paid_ai_enabled===false&&ai.signal_engine==='rules-v1';
                     aiConfigured=!!ai.configured;
                     updateMemeToggleUI(s.sniper_active);
                     const whaleAI=ai.whale_analysis||{};
@@ -4382,24 +4396,33 @@ RAW_HTML = r"""<!DOCTYPE html>
                           +((whaleAI.symbols||[]).length?' · '+whaleAI.symbols.map(code=>(ai.asset_labels||{})[code]||code).join(', '):'')
                           +(whaleAI.message?' · '+whaleAI.message:'')
                         : '';
-                    document.getElementById('ai-status').textContent=(aiConfigured?
+                    document.getElementById('ai-status').textContent=(rulesOnly?
+                        'Rules v1 · OpenAI OFF · no paid AI requests · '+ai.interval_seconds+' sec market scan':
+                        aiConfigured?
                         ai.model+' · '+ai.interval_seconds+' sec interval'+(ai.last_analyzed_at?' · analyzed':' · connection unverified')
                           +(ai.last_trigger==='whale_signal'?' · whale-triggered':''):
-                        'AI not connected. Operator setup required.')+whaleAIState;
+                        'Paid AI is unavailable; new AI signals are paused.')+whaleAIState;
                     const timings=ai.timings_ms||{};
                     document.getElementById('ai-latency').textContent=
-                        Number.isFinite(timings.total)
+                        rulesOnly
+                        ?'No OpenAI requests. Market data, RPC provider use and on-chain transaction fees may still have costs.'
+                        :Number.isFinite(timings.total)
                         ?'Last analysis timings · market data '+timings.market_data+' ms'
                           +' · analyst '+timings.analyst+' ms'
                           +' · risk controller '+timings.risk_controller+' ms'
                           +' · total '+timings.total+' ms. Network confirmation is separate.'
-                        :'Analysis timings: awaiting a fresh analysis.';
+                        :'Signal timings: awaiting a fresh market scan.';
                     if(ai.last_decisions)document.getElementById('ai-decisions').textContent=Object.entries(ai.last_decisions).map(([mode,d])=>{
                         const analyzedAt=ai.decision_created_at?ai.decision_created_at[mode]:ai.last_analyzed_at;
-                        return (mode==='main'?'Core · USDC':'Meme Sniper · SOL')+' · '+(analyzedAt?new Date(analyzedAt*1000).toLocaleString('en-GB'):'Awaiting analysis')+'\n'+d.action+' '+((ai.asset_labels||{})[d.symbol]||d.symbol||'')+' — '+normalizeAnalysisText(d.reason);
+                        const modeName=mode==='main'?'Core · USDC':mode==='sniper'?'Meme Sniper · SOL':'AI Crypto Investors';
+                        return modeName+' · '+(analyzedAt?new Date(analyzedAt*1000).toLocaleString('en-GB'):'Awaiting analysis')+'\n'+d.action+' '+((ai.asset_labels||{})[d.symbol]||d.symbol||'')+' — '+normalizeAnalysisText(d.reason);
                     }).join('\n');
+                    else document.getElementById('ai-decisions').textContent=
+                        rulesOnly?'No current rule signals yet. A fresh chart scan is required; no AI retry is running.':'No current analysis.';
                     const risk=ai.risk_controller||{};
-                    document.getElementById('ai-risk-review').textContent='Independent risk & trend review · BUY only\n'
+                    document.getElementById('ai-risk-review').textContent=(rulesOnly
+                        ?'Server-side chart gate · BUY signals only · paid AI reviewer OFF\n'
+                        :'Independent risk & trend review · BUY only\n')
                         +['main','sniper'].map(mode=>{
                             const v=(risk.verdicts||{})[mode];
                             const name=mode==='main'?'Core · USDC':'Meme Sniper · SOL';
@@ -4409,11 +4432,13 @@ RAW_HTML = r"""<!DOCTYPE html>
                         }).join('\n');
                     const learning=ai.learning||{};
                     const outcomeCount=Number(learning.sample_count||0);
-                    document.getElementById('ai-learning').textContent='Outcome memory · '+outcomeCount
+                    document.getElementById('ai-learning').textContent=(rulesOnly?'Trade outcome history · ':'Outcome memory · ')+outcomeCount
                         +' finalized closed trades included in the latest analysis (up to '+(learning.max_outcomes||500)+'). '
                         +'Fewer than '+(learning.minimum_sample||20)+' outcomes per token/mode is limited evidence. '
-                        +'Historical feedback, not model training or proof of profit; separate operator fees excluded. '
-                        +'The second AI request shares the existing daily budget. Exits do not require its approval.';
+                        +(rulesOnly?'Stored history only; no paid model training or profit guarantee. '
+                          :'Historical feedback, not model training or proof of profit; separate operator fees excluded. ')
+                        +(rulesOnly?'Automatic exits do not need AI approval.':
+                          'The second AI request shares the existing daily budget. Exits do not require its approval.');
                     renderCoreChartZones(ai.chart_context,ai.asset_labels);
                     const discovery=ai.discovery||{};
                     document.getElementById('discovery-status').textContent=discovery.entry_paused?discovery.message:
@@ -4430,10 +4455,10 @@ RAW_HTML = r"""<!DOCTYPE html>
                         (marketSource.provider||'DexScreener + GeckoTerminal')
                         +' · Helius WebSocket OFF'
                         +'\nCandidate refresh: every '+(marketSource.scan_interval_seconds||300)+' seconds; bounded to 200 discovered / 40 checked.'
-                        +'\nLiquidity and activity screening → fresh 5m/1h charts → AI analyst → risk controller → execution checks.'
+                        +'\nLiquidity and activity screening → fresh 5m/1h charts → rules engine → execution checks.'
                         +'\nMeme Sniper uses SOL. Core uses USDC and independent rising-trend analysis. Neither waits for whale events.'
                         +'\nCandidates are not orders. Unavailable or stale data blocks new entries, never position exits.'
-                        +'\nNo Helius streaming traffic from this source. Normal Solana RPC and AI requests can still incur costs.';
+                        +'\nNo Helius streaming or OpenAI traffic from this source. Solana RPC providers and on-chain transactions may still cost money.';
                     const sniper=s.sniper_settings||{order_sol:.005};
                     document.getElementById('sniper-order-size').textContent=sniper.order_sol+' SOL';
                     const sniperInput=document.getElementById('settings-sniper-order');

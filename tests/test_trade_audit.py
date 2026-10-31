@@ -15,6 +15,7 @@ from custody_ledger import CustodyLedger, LedgerError, SOL, USDC
 from custody_runtime import CustodyRuntime
 import execution_policy
 import trade_audit
+import openai_client
 
 
 REPORT = {"assessment": "The recorded stop caused the sale.",
@@ -200,6 +201,7 @@ class TradeReviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
         before = helper.ledger.balance(101, SOL)
         service.trade = AsyncMock(side_effect=AssertionError("Audit cannot trade"))
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test"}), \
+                patch.object(openai_client, "PAID_AI_ENABLED", True), \
                 patch("trade_audit.review", AsyncMock(side_effect=TimeoutError())):
             await service.process_trade_review(None)
         service.trade.assert_not_called()
@@ -237,7 +239,8 @@ class TradeReviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
         facts = {"kind": "SELL", "funding_currency": "SOL", "trigger": {"source": "UNKNOWN"},
                  "uid": 101, "wire": "SECRET", "signature": "PRIVATE_SIGNATURE",
                  "token_quantity": 500, "funding_raw": 99000000}
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "test"}):
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test"}), \
+                patch.object(openai_client, "PAID_AI_ENABLED", True):
             self.assertEqual(await trade_audit.review(session, facts, "test-model"), REPORT)
             content = session.payload["messages"][1]["content"]
             for private in ("uid", "SECRET", "PRIVATE_SIGNATURE", "funding_raw", "token_quantity"):

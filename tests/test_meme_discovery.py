@@ -113,13 +113,14 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cooldown_expiry_allows_request_and_clears_failure_count(self):
         discovery = MemeDiscovery(self.ledger, self.rpc, [])
+        state = dexscreener.scheduler()
         with patch.object(dexscreener.scheduler(), "clock", return_value=1000):
             with self.assertRaises(ValueError):
                 await discovery.fetch(self.provider_session(429), "/tokens/v1/solana/" + MINT)
-        with patch.object(dexscreener.scheduler(), "clock", return_value=1061):
+        with patch.object(state, "clock", return_value=1061):
             await discovery.fetch(self.provider_session(), "/tokens/v1/solana/" + MINT)
-        self.assertEqual(dexscreener.scheduler().rate_limit_failures, 0)
-        self.assertEqual(discovery.cooldown_remaining(), 0)
+            self.assertEqual(state.rate_limit_failures, 0)
+            self.assertEqual(discovery.cooldown_remaining(), 0)
 
     def test_retry_after_accepts_http_date_and_rejects_invalid_values(self):
         from datetime import datetime, timezone

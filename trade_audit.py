@@ -1,12 +1,12 @@
 """Finalized trade evidence and asynchronous, advisory-only second-agent reviews."""
 import json
 import math
-import os
 import time
 
 import aiohttp
 
 import ai_decisions
+import openai_client
 
 
 class AuditReviewError(ValueError):
@@ -256,15 +256,12 @@ async def review(session, facts, model):
         ],
     }
     try:
-        async with session.post("https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": "Bearer " + os.environ["OPENAI_API_KEY"]},
-                json=payload, timeout=aiohttp.ClientTimeout(total=20)) as response:
-            if response.status != 200:
-                raise AuditReviewError("Post-trade AI unavailable.")
-            body = await response.json()
+        body = await openai_client.chat_completion(session, payload, timeout_seconds=20)
         choice = body["choices"][0]
         if choice["finish_reason"] != "stop" or choice["message"].get("refusal"):
             raise AuditReviewError("Post-trade AI did not complete.")
         return validate_report(json.loads(choice["message"]["content"]))
+    except openai_client.OpenAIUnavailable as exc:
+        raise AuditReviewError(str(exc)) from None
     except (KeyError, IndexError, TypeError, json.JSONDecodeError):
         raise AuditReviewError("Post-trade AI returned incomplete evidence.") from None

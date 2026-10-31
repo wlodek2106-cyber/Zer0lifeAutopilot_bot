@@ -161,7 +161,7 @@ def _engulfing(previous, current, bullish):
 
 
 def analyze_charts(m5_candles, h1_candles, *, now, m5_stale=False, h1_stale=False):
-    """Calculate numeric chart zones and closed-candle support/rejection setups."""
+    """Calculate chart metrics; entry setup is one fresh closed bullish 5m candle."""
     m5 = m5_candles if isinstance(m5_candles, list) else []
     h1 = h1_candles if isinstance(h1_candles, list) else []
     result = {
@@ -281,7 +281,10 @@ def analyze_charts(m5_candles, h1_candles, *, now, m5_stale=False, h1_stale=Fals
     )
     result["chart_support_bounce"] = int(support_bounce)
     result["chart_trend_continuation"] = int(trend_continuation)
-    result["chart_buy_setup"] = int(support_bounce or trend_continuation)
+    # Entry confirmation is intentionally simple: the last parsed candle is closed
+    # and fresh because chart_ready is true above. Repeated support, RSI, MACD,
+    # volume and resistance remain context, not mandatory buy-pattern gates.
+    result["chart_buy_setup"] = int(last["close"] > last["open"])
 
     near_resistance = bool(
         resistance and last["high"] >= resistance["low"] - tolerance

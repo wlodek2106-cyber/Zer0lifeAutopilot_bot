@@ -41,6 +41,7 @@ import trade_learning
 import trade_audit
 import execution_policy
 import activity_log
+import rule_signals
 from entry_costs import EntryCostError, quote_amounts
 from meme_discovery import MemeDiscovery
 from whale_stream import HeliusWhaleStream
@@ -359,8 +360,6 @@ class CustodyRuntime(WalletRuntime):
     async def scan_candidates(self, request, session):
         self.admit(self.uid(request))
         cooldown = self.discovery.cooldown_remaining()
-        if time.time()-self.discovery_started >= 60 and not cooldown:
-            self.discovery_due = 0
         self.poll_discovery()
         if cooldown:
             return web.json_response({"success": True, "message":
@@ -368,7 +367,9 @@ class CustodyRuntime(WalletRuntime):
                 "discovery": self.discovery.status_report()})
         return web.json_response({"success": True, "message":
             "Candidate scan running. Refresh shortly. No trade is submitted." if self.discovery_task else
-            "Recent scan available; manual refresh has a 60-second cooldown. No trade is submitted.",
+            f"Candidate scan follows the shared schedule; next refresh in "
+            f"{max(0, int(self.discovery_due-time.time()))} seconds. "
+            "No extra provider request or trade was submitted.",
                                   "discovery": self.discovery.status_report()})
 
     async def current_prices(self, session, extra_symbols=()):
@@ -641,22 +642,23 @@ class CustodyRuntime(WalletRuntime):
 
     async def ai_snapshot(self, session, prices, whale_symbols=None):
         config = ai_decisions.configuration()
-        if not config["configured"]:
-            raise WalletError("Добавьте OPENAI_API_KEY в Environment на Render. AI-торговля пока не запущена.", 503)
         analysis_started = time.monotonic()
-        whale_symbols = list(dict.fromkeys(symbol for symbol in (whale_symbols or ())
-                                           if isinstance(symbol, str)))[:8]
-        whale_triggered = bool(whale_symbols)
-        trigger = "whale_signal" if whale_triggered else "scheduled"
-        min_interval = WHALE_AI_COOLDOWN_SECONDS if whale_triggered else config["interval_seconds"]
+        # Paid AI and whale-triggered requests are disabled. Use only the
+        # bounded scheduled scan and deterministic server-owned chart rules.
+        whale_symbols = []
+        whale_triggered = False
+        trigger = "scheduled"
+        min_interval = config["interval_seconds"]
         async with self.ai_lock:
             latest = self.ledger.ai_latest(trigger=trigger)
-            if latest and time.time() - latest["created_at"] < min_interval:
-                if whale_triggered:
-                    raise WalletError("Whale-triggered AI analysis is waiting for its 60-second request limit.", 429)
+            if latest:
                 record = json.loads(latest["decisions"])
-                ai_decisions.validate_decisions(record["decisions"], record.get("universes", self.ai_universes()))
-                return {**latest, **record}
+                if record.get("signal_engine") == rule_signals.ENGINE_ID:
+                    if time.time() - latest["created_at"] < min_interval:
+                        ai_decisions.validate_decisions(
+                            record["decisions"],
+                            record.get("universes", self.ai_universes()))
+                        return {**latest, **record}
             universes = self.ai_universes(whale_symbols=whale_symbols)
             wanted = set(universes["main"] + universes["sniper"]
                          + universes.get("investor", [])) | {"SOL"}
@@ -712,27 +714,26 @@ class CustodyRuntime(WalletRuntime):
                                    else "sniper" if outcome["funding_asset"] == SOL else "main")
             learning = trade_learning.summarize(outcomes, permitted_mints)
             market_data_ms = round((time.monotonic() - analysis_started) * 1000)
-            try:
-                aid = self.ledger.ai_allow_call(min_interval, config["max_calls_per_day"], trigger=trigger)
-                analyst_started = time.monotonic()
-                decisions = await ai_decisions.analyze(
-                    session, market, universes, screening, main_context, sniper_context,
-                    learning=learning)
-                if whale_triggered:
-                    decisions["main"] = {
-                        "action": "HOLD", "symbol": None,
-                        "reason": "Helius signals apply only to Meme Sniper. Core uses its scheduled chart analysis.",
-                    }
-            except LedgerError as exc:
-                raise WalletError(str(exc), 429) from None
-            except ai_decisions.AIError as exc:
-                raise WalletError(str(exc), 503) from None
-            except (aiohttp.ClientError, asyncio.TimeoutError):
-                raise WalletError("Нет безопасного ответа AI API. Новые входы остановлены.", 503) from None
+            aid = str(uuid.uuid4())
+            analyst_started = time.monotonic()
+            screened_symbols = {
+                symbol for symbol in (
+                    universes["sniper"] + universes.get("investor", []))
+                if getattr(self, "discovery", None)
+                and self.discovery.entry_allowed(symbol)
+            }
+            fresh_prices = {symbol: values[-1] for symbol, values in market.items()
+                            if values}
+            decisions = rule_signals.build_decisions(
+                universes, main_context, sniper_context, fresh_prices,
+                screening, screened_symbols)
+            ai_decisions.validate_decisions(decisions, universes)
             analyst_ms = round((time.monotonic() - analyst_started) * 1000)
             review_started = time.monotonic()
-            review = await self.review_ai_buys(
-                session, aid, decisions, main_context, sniper_context, learning, config)
+            checked_at = int(time.time())
+            review = rule_signals.review_decisions(
+                aid, decisions, main_context, sniper_context,
+                screened_symbols, fresh_prices, checked_at)
             timings_ms = {
                 "market_data": market_data_ms,
                 "analyst": analyst_ms,
@@ -742,6 +743,7 @@ class CustodyRuntime(WalletRuntime):
             completed_at = int(time.time())
             record = {"decisions": decisions, "universes": universes, "prices": {s: h[-1] for s, h in market.items()},
                       "samples": {s: len(h) for s, h in market.items()},
+                      "signal_engine": rule_signals.ENGINE_ID,
                       "main_market_context": ai_decisions.sanitize_main_context(main_context, universes["main"]),
                       "sniper_market_context": ai_decisions.sanitize_main_context(
                           sniper_context, universes["sniper"]),
@@ -761,10 +763,22 @@ class CustodyRuntime(WalletRuntime):
             if decision["action"] != "BUY":
                 continue
             metrics = contexts[mode].get(decision["symbol"], {})
-            if (metrics.get("chart_ready") != 1 or metrics.get("chart_trend_h1") != 1
+            if mode == "investor":
+                trend_ok = (
+                    metrics.get("chart_trend_h1") == 1
+                    and execution_policy.bounded_pct(metrics.get("change_h1_pct"))
+                    and metrics["change_h1_pct"] > 0
+                )
+            else:
+                trend_ok = (
+                    metrics.get("chart_trend_h1") in (0, 1)
+                    and execution_policy.bounded_pct(metrics.get("change_h1_pct"))
+                    and metrics["change_h1_pct"] >= 0
+                )
+            if (metrics.get("chart_ready") != 1 or not trend_ok
                     or metrics.get("chart_buy_setup") != 1):
                 verdicts[mode] = ai_risk_review.blocked(
-                    decision, "Fresh upward chart trend and a confirmed support bounce or trend-continuation setup are required.")
+                    decision, "Fresh chart data, a green 5-minute close and this mode's hourly trend rule are required.")
             else:
                 eligible[mode] = decision
         if eligible:
@@ -787,7 +801,7 @@ class CustodyRuntime(WalletRuntime):
         symbols = list(dict.fromkeys(symbol for symbol in symbols if isinstance(symbol, str)))[:8]
         self.whale_analysis_status = {
             "state": "running", "checked_at": int(time.time()), "symbols": symbols,
-            "message": "A confirmed whale buy passed the candidate screen; AI analysis is running. No order is sent by the signal.",
+            "message": "A screened market candidate is being checked by server rules. No order is sent by the signal.",
         }
         try:
             prices = await self.current_prices(session, extra_symbols=symbols)
@@ -814,25 +828,31 @@ class CustodyRuntime(WalletRuntime):
             return None
         self.whale_analysis_status = {
             "state": "complete", "checked_at": snapshot["created_at"], "symbols": eligible,
-            "message": "Fresh AI analysis completed after screening; no order was sent by the signal.",
+            "message": "Fresh rule-based chart check completed; no order was sent by the signal.",
         }
         return snapshot
 
     def ai_status(self):
-        latest = self.ledger.ai_latest()
-        latest_record = json.loads(latest["decisions"]) if latest else {}
         scheduled = self.ledger.ai_latest(trigger="scheduled")
         scheduled_record = json.loads(scheduled["decisions"]) if scheduled else {}
+        config = ai_decisions.configuration()
+        if (not config["paid_ai_enabled"]
+                and scheduled_record.get("signal_engine") != rule_signals.ENGINE_ID):
+            scheduled, scheduled_record = None, {}
+        latest = scheduled if not config["paid_ai_enabled"] else self.ledger.ai_latest()
+        latest_record = json.loads(latest["decisions"]) if latest else {}
         decisions = dict(latest_record.get("decisions") or {})
         if scheduled_record.get("decisions"):
             decisions["main"] = scheduled_record["decisions"]["main"]
-        return {**ai_decisions.configuration(), "last_analyzed_at": latest["created_at"] if latest else None,
+        return {**config, "last_analyzed_at": latest["created_at"] if latest else None,
                 "last_decisions": decisions or None,
                 "decision_created_at": {
                     "main": scheduled["created_at"] if scheduled else None,
                     "sniper": latest["created_at"] if latest else None},
                 "risk_controller": {
-                    "enabled": True, "scope": "New BUY proposals only; never exits or withdrawals",
+                    "enabled": bool(config["paid_ai_enabled"]),
+                    "scope": ("Paid AI BUY review" if config["paid_ai_enabled"] else
+                              "Server chart rules only; live execution checks remain mandatory"),
                     "verdicts": {
                         "main": scheduled_record.get("risk_review", {}).get("verdicts", {}).get("main"),
                         "sniper": latest_record.get("risk_review", {}).get("verdicts", {}).get("sniper")},
@@ -858,8 +878,8 @@ class CustodyRuntime(WalletRuntime):
                     "scan_interval_seconds": MARKET_SCAN_INTERVAL_SECONDS,
                     "helius_websocket_enabled": False,
                     "message": "Bounded market scanning, liquidity/activity screening and fresh 5m/1h charts. "
-                               "No Helius WebSocket or whale-event requirement. "
-                               "Normal Solana RPC and AI requests still have their own costs.",
+                               "No Helius WebSocket or paid AI requests. "
+                               "Solana RPC provider and on-chain transaction fees may still cost money.",
                 },
                 "whale_analysis": getattr(self, "whale_analysis_status", {"state": "idle"}),
                 "whale_stream": self.whale_stream.snapshot() if getattr(self, "whale_stream", None) else None}
@@ -869,7 +889,9 @@ class CustodyRuntime(WalletRuntime):
         self.admit(uid)
         prices = await self.current_prices(session)
         snapshot = await self.ai_snapshot(session, prices)
-        return web.json_response({"success": True, "message": "AI ответил. Анализ не подписывает и не отправляет сделки.",
+        return web.json_response({"success": True,
+            "message": "Rule signal check complete; no trade was sent and no paid AI request was made.",
+            "signal_engine": rule_signals.ENGINE_ID,
             "decisions": snapshot["decisions"], "created_at": snapshot["created_at"]})
 
     async def background_ai(self, prices):
@@ -881,15 +903,24 @@ class CustodyRuntime(WalletRuntime):
             return snapshot
 
     def poll_ai(self, prices):
-        """Never block position risk management on a model HTTP request."""
+        """Schedule bounded rule analysis without blocking position management."""
         config = ai_decisions.configuration()
-        if not config["configured"]:
+        if config["paid_ai_enabled"] and not config["configured"]:
             if self.ai_task:
                 self.ai_task.cancel()
                 self.ai_task = None
             self.last_error = "AI не подключён: нужен OPENAI_API_KEY на Render."
             self.ai_activity_error = "AI is not configured."
             return None
+        if not config["paid_ai_enabled"] and self.ai_task:
+            self.ai_task.cancel()
+            self.ai_task = None
+        if not config["paid_ai_enabled"]:
+            self.ai_activity_error = ""
+            if self.last_error and (
+                    "The previous AI request failed" in self.last_error
+                    or "OpenAI API" in self.last_error):
+                self.last_error = ""
         if self.ai_task and self.ai_task.done():
             try:
                 self.ai_task.result()
@@ -900,10 +931,15 @@ class CustodyRuntime(WalletRuntime):
                                           "analysis; inspect their timestamps.")
             self.ai_task = None
         latest = self.ledger.ai_latest(trigger="scheduled")
+        if latest:
+            stored = json.loads(latest["decisions"])
+            if stored.get("signal_engine") != rule_signals.ENGINE_ID:
+                latest = None
         if (not latest or time.time() - latest["created_at"] >= config["interval_seconds"]) and self.ai_task is None:
             self.ai_task = asyncio.create_task(self.background_ai(dict(prices)))
             self.ai_task.add_done_callback(lambda task: task.exception() if not task.cancelled() else None)
-        whale = self.ledger.ai_latest(trigger="whale_signal")
+        whale = (self.ledger.ai_latest(trigger="whale_signal")
+                 if config["paid_ai_enabled"] else None)
         if not latest:
             return {**whale, **json.loads(whale["decisions"])} if whale else None
         snapshot = {**latest, **json.loads(latest["decisions"])}
@@ -3047,7 +3083,10 @@ class CustodyRuntime(WalletRuntime):
                 + display_raw(FEE_CAP, 9) + " SOL. В Настройках → Резерв комиссий выделите только свои SOL. Пользовательские средства автоматически не расходуются.", 409)
         prices = await self.prices_fn(session)
         if not any(prices.get(symbol, 0) > 0 for symbol in self.watchlist):
-            raise WalletError("Источник котировок недоступен. Автопилот не запущен.", 503)
+            detail = getattr(self.prices_fn, "last_error", "")
+            message = (detail if isinstance(detail, str) and detail.strip() else
+                       "Источник котировок недоступен. Автопилот не запущен; сделка не отправлена.")
+            raise WalletError(message, 503)
         await self.ai_snapshot(session, prices)
         headers = {"Accept": "application/json"}
         if os.getenv("JUPITER_API_KEY"):
@@ -3680,7 +3719,8 @@ class CustodyRuntime(WalletRuntime):
         config = ai_decisions.configuration()
         # Entry analysis/review has priority. Retrospective work never takes
         # the custody lock, signs a transaction, or gates exits/withdrawals.
-        if not config["configured"] or self.ai_lock.locked():
+        if (not config["paid_ai_enabled"] or not config["configured"]
+                or self.ai_lock.locked()):
             return
         row = self.ledger.claim_trade_review(config["max_calls_per_day"])
         if row is None:

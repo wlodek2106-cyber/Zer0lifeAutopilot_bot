@@ -43,7 +43,7 @@ class Scheduler:
     def __init__(self):
         self.condition = asyncio.Condition()
         self.clock = time.monotonic
-        self.min_interval = 1.0
+        self.min_interval = 2.0
         self.next_request_at = 0
         self.cooldown_until = 0
         self.rate_limit_failures = 0

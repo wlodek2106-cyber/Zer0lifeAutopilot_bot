@@ -11,6 +11,7 @@ from solders.keypair import Keypair
 from solders.signature import Signature
 
 import ai_decisions
+import openai_client
 import dexscreener_client
 from custody_ledger import CustodyLedger, LedgerError, SOL, USDC
 from custody_runtime import CustodyRuntime, WRAPPED_SOL
@@ -220,6 +221,7 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
                 "buys_m5": 8, "sells_m5": 4, "chart_ready": 1, "chart_buy_setup": 1,
                 "chart_trend_h1": 1}},
             "sniper_market_context": {"WIF": {"chart_ready": 1, "chart_buy_setup": 1,
+                "chart_trend_h1": 1,
                 "change_m5_pct": 0.8, "change_h1_pct": 1.2, "change_h6_pct": -4.9}},
             "decisions": {"main": {"action": "BUY", "symbol": "SOL", "reason": "signal"},
                           "sniper": {"action": "HOLD", "symbol": None, "reason": "wait"}}}
@@ -239,7 +241,9 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
     async def test_analysis_refresh_defaults_before_decision_expiry(self):
         config = ai_decisions.configuration()
         self.assertEqual(config["interval_seconds"], 90)
-        self.assertEqual(config["max_calls_per_day"], 960)
+        self.assertEqual(config["max_calls_per_day"], 0)
+        self.assertFalse(config["paid_ai_enabled"])
+        self.assertEqual(config["signal_engine"], "rules-v1")
 
     async def test_legacy_environment_overrides_cannot_restore_stale_schedule(self):
         with patch.dict(os.environ, {
@@ -248,7 +252,7 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         }):
             config = ai_decisions.configuration()
         self.assertEqual(config["interval_seconds"], 90)
-        self.assertEqual(config["max_calls_per_day"], 960)
+        self.assertEqual(config["max_calls_per_day"], 0)
 
     async def apply(self, snapshot=None, prices=None, positions=None):
         await self.service.apply_ai_decision(None, 101, self.service.ledger.settings(101),
@@ -364,7 +368,7 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.service.trade.await_args.args[2:6], (USDC, SOL, 1_000_000, "BUY"))
         self.assertEqual(self.service.trade.await_args.args[6]["ai_analysis"], "test-analysis")
 
-    async def test_repeated_whale_results_do_not_postpone_scheduled_core_refresh(self):
+    async def test_legacy_paid_ai_snapshots_are_ignored_and_rules_refresh_is_requested(self):
         now = int(time.time())
         record = {key: copy.deepcopy(value) for key, value in self.snapshot.items()
                   if key not in ("id", "created_at")}
@@ -378,14 +382,13 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.service.background_ai = AsyncMock(return_value=None)
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-not-real"}):
             snapshot = self.service.poll_ai(self.prices)
+            self.assertIsNone(snapshot)
             self.assertIsNotNone(self.service.ai_task)
             await self.service.ai_task
-        self.assertEqual(snapshot["id"], "scheduled")
-        self.assertEqual(snapshot["sniper_snapshot"]["id"], "whale")
+        self.service.background_ai.assert_awaited_once()
         status = self.service.ai_status()
-        self.assertEqual(status["last_decisions"]["main"]["action"], "BUY")
-        self.assertEqual(status["decision_created_at"]["main"], now - 91)
-        self.assertEqual(status["chart_context"], self.snapshot["main_market_context"])
+        self.assertFalse(status["paid_ai_enabled"])
+        self.assertIsNone(status.get("last_decisions"))
 
     async def test_sniper_chart_gate_blocks_missing_chart_for_buys(self):
         self.snapshot["decisions"]["main"] = {"action": "HOLD", "symbol": None, "reason": "wait"}
@@ -405,7 +408,7 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
                 code, mint, 6, json.dumps(metrics), int(time.time())))
         self.service.restore_catalog()
         self.snapshot.setdefault("sniper_market_context", {})[code] = {
-            "chart_ready": 1, "chart_buy_setup": 1,
+            "chart_ready": 1, "chart_buy_setup": 1, "chart_trend_h1": 1,
             "change_m5_pct": 0.8, "change_h1_pct": 1.2, "change_h6_pct": -4.9}
         return code, mint
 
@@ -435,7 +438,7 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.service.trade.assert_not_awaited()
         self.service.verify_sniper_mint.assert_not_awaited()
 
-    async def test_confirmed_whale_candidate_triggers_ai_after_screen_without_trade(self):
+    async def test_confirmed_candidate_triggers_free_rules_check_after_screen(self):
         code, mint = self.new_candidate()
         with self.service.ledger.db() as db:
             row = json.loads(db.execute(
@@ -449,20 +452,18 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
 
         self.service.discovery.scan = AsyncMock(side_effect=screened_scan)
         self.service.current_prices = AsyncMock(return_value={**self.prices, code: .01})
-        decisions = {
-            "main": {"action": "HOLD", "symbol": None, "reason": "No clear USDC signal."},
-            "sniper": {"action": "HOLD", "symbol": code, "reason": "Wait for more market data."},
-        }
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-not-real"}), patch(
-                "ai_decisions.analyze", AsyncMock(return_value=decisions)) as analyze:
+                "ai_decisions.analyze", AsyncMock()) as analyze:
             await self.service.background_discovery()
 
-        analyze.assert_awaited_once()
-        self.assertEqual(analyze.await_args.args[2]["main"], [])
-        self.assertIn(code, analyze.await_args.args[2]["sniper"])
-        self.assertIn(code, analyze.await_args.args[3])
+        analyze.assert_not_awaited()
         self.assertEqual(self.service.whale_analysis_status["state"], "complete")
-        self.assertEqual(self.service.ai_status()["last_trigger"], "whale_signal")
+        self.assertEqual(self.service.ai_status()["last_trigger"], "scheduled")
+        latest = self.service.ledger.ai_latest(trigger="scheduled")
+        self.assertIsNotNone(latest)
+        stored = json.loads(latest["decisions"])
+        self.assertEqual(stored["signal_engine"], "rules-v1")
+        self.assertIn(code, stored["universes"]["sniper"])
         self.service.trade.assert_not_awaited()
 
     async def test_whale_signal_that_fails_screen_never_calls_ai(self):
@@ -540,7 +541,7 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.service.discovery_task)
         self.service.background_discovery.assert_not_called()
 
-    async def test_whale_ai_bypasses_scheduled_cache_but_respects_one_minute_quota(self):
+    async def test_whale_trigger_cannot_call_paid_ai_or_bypass_rules_cache(self):
         self.service.market_context_fn = AsyncMock(return_value={
             "SOL": {"change_m5_pct": 1.2}
         })
@@ -551,14 +552,15 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-not-real"}), patch(
                 "ai_decisions.analyze", AsyncMock(return_value=decisions)) as analyze:
             snapshot = await self.service.ai_snapshot(None, self.prices, whale_symbols=["WIF"])
-            self.assertEqual(snapshot["trigger"], "whale_signal")
-            with self.assertRaises(WalletError):
-                await self.service.ai_snapshot(None, self.prices, whale_symbols=["WIF"])
+            self.assertEqual(snapshot["trigger"], "scheduled")
+            self.assertEqual(snapshot["signal_engine"], "rules-v1")
+            cached = await self.service.ai_snapshot(
+                None, self.prices, whale_symbols=["WIF"])
 
-        analyze.assert_awaited_once()
-        self.assertEqual(snapshot["universes"]["main"], [])
+        analyze.assert_not_awaited()
+        self.assertEqual(cached["id"], snapshot["id"])
         self.assertEqual(snapshot["decisions"]["main"]["action"], "HOLD")
-        self.service.market_context_fn.assert_not_awaited()
+        self.service.market_context_fn.assert_awaited_once()
         self.service.trade.assert_not_awaited()
 
     async def test_removed_candidate_position_can_still_exit_and_other_users_are_untouched(self):
@@ -605,23 +607,22 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.apply(positions=[{"funding_asset": SOL, "symbol": "WIF"}])
         self.service.trade.assert_not_awaited()
 
-    async def test_missing_model_key_never_falls_back_to_rules(self):
+    async def test_missing_model_key_uses_rules_without_paid_ai(self):
         with patch.dict(os.environ, {}, clear=True):
-            with self.assertRaises(WalletError):
-                await self.service.ai_snapshot(None, self.prices)
-            self.assertIsNone(self.service.poll_ai(self.prices))
+            snapshot = await self.service.ai_snapshot(None, self.prices)
+            self.assertEqual(snapshot["signal_engine"], "rules-v1")
+            self.assertFalse(ai_decisions.configuration()["paid_ai_enabled"])
         self.service.trade.assert_not_awaited()
 
-    async def test_ai_retry_cooldown_returns_clear_http_429(self):
+    async def test_ai_retry_popup_is_not_generated_in_free_rules_mode(self):
         message = ("AI предыдущий запрос завершился ошибкой. Повторите через 60 секунд; "
                    "попытка учитывается в дневном лимите.")
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-not-real"}):
-            with patch.object(self.service.ledger, "ai_allow_call",
-                              side_effect=LedgerError(message)):
-                with self.assertRaises(WalletError) as raised:
-                    await self.service.ai_snapshot(None, self.prices)
-        self.assertEqual(raised.exception.status, 429)
-        self.assertEqual(str(raised.exception), message)
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-not-real"}), \
+                patch.object(self.service.ledger, "ai_allow_call",
+                             side_effect=LedgerError(message)) as paid_call:
+            snapshot = await self.service.ai_snapshot(None, self.prices)
+        self.assertEqual(snapshot["signal_engine"], "rules-v1")
+        paid_call.assert_not_called()
 
     async def test_invalid_model_commands_fail_closed(self):
         for edit in [
@@ -646,7 +647,8 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
             def post(self, url, **kwargs):
                 outer.payload = kwargs["json"]
                 return Response()
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-not-real"}):
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-not-real"}), \
+                patch.object(openai_client, "PAID_AI_ENABLED", True):
             await ai_decisions.analyze(Session(), {"SOL": [100]*5, "WIF": [2]*5},
                 self.service.ai_universes(), main_context={
                     "SOL": {"change_m5_pct": 0.8, "change_h1_pct": 2.1, "buys_h1": 12,
@@ -681,16 +683,14 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("chart data is missing or stale", self.payload["messages"][1]["content"])
         self.assertIn("only say the floor was breached when the value is less than -5%",
                       self.payload["messages"][1]["content"])
-        self.assertIn("confirmed bounce from repeated support",
+        self.assertIn("one fresh closed green 5-minute candle",
                       self.payload["messages"][2]["content"])
-        self.assertIn("bounded rising-trend continuation",
+        self.assertIn("A support zone, RSI, MACD",
                       self.payload["messages"][2]["content"])
-        self.assertIn("chart_trend_continuation=1",
-                      self.payload["messages"][1]["content"])
-        self.assertIn("one closed bullish 5m candle",
-                      self.payload["messages"][1]["content"])
-        self.assertIn("previous candle need not be bullish",
-                      self.payload["messages"][1]["content"])
+        self.assertNotIn("chart_trend_continuation=1",
+                         self.payload["messages"][1]["content"])
+        self.assertNotIn("previous candle need not be bullish",
+                         self.payload["messages"][1]["content"])
         self.assertNotIn("two closed bullish", json.dumps(self.payload["messages"]))
         self.assertIn("relative strength versus SOL is not applicable",
                       self.payload["messages"][1]["content"])
@@ -741,14 +741,12 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.service.market_context_fn.assert_awaited_once_with(None)
         self.service.sniper_market_context_fn.assert_awaited_once_with(
             None, self.service.watchlist, ["WIF"])
-        self.assertEqual(analyze.await_args.args[4], {
-            "SOL": {"change_m5_pct": 0.8, "liquidity_usd": 200_000},
-        })
+        analyze.assert_not_awaited()
         self.assertEqual(snapshot["main_market_context"], {
             "SOL": {"change_m5_pct": 0.8, "liquidity_usd": 200_000},
         })
-        self.assertEqual(analyze.await_args.args[5], sniper_context)
         self.assertEqual(snapshot["sniper_market_context"], sniper_context)
+        self.assertEqual(snapshot["signal_engine"], "rules-v1")
         timing = snapshot["timings_ms"]
         self.assertEqual(set(timing), {"market_data", "analyst", "risk_controller", "total"})
         self.assertTrue(all(type(value) is int and value >= 0 for value in timing.values()))
@@ -758,9 +756,10 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
     async def test_model_failure_does_not_consume_user_funds(self):
         before = self.service.ledger.balance(101, SOL)
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-not-real"}), patch(
-                "ai_decisions.analyze", AsyncMock(side_effect=ai_decisions.AIError("unavailable"))):
-            with self.assertRaises(WalletError):
-                await self.service.ai_snapshot(None, self.prices)
+                "ai_decisions.analyze", AsyncMock(side_effect=ai_decisions.AIError("unavailable"))) as analyze:
+            snapshot = await self.service.ai_snapshot(None, self.prices)
+        analyze.assert_not_awaited()
+        self.assertEqual(snapshot["signal_engine"], "rules-v1")
         self.assertEqual(self.service.ledger.balance(101, SOL), before)
         self.service.trade.assert_not_awaited()
 

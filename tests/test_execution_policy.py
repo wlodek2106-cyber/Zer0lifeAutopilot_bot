@@ -124,14 +124,15 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(self.proposal(held=[{"symbol": "X"}] * 5).code, "position_limit")
         self.assertEqual(self.proposal(held=[{"symbol": "SOL"}]).code, "already_open")
 
-    def test_sniper_allows_up_to_five_positions_and_blocks_the_sixth(self):
+    def test_sniper_allows_five_positions_and_accepts_a_flat_hour(self):
         decision = {"action": "BUY", "symbol": "WIF", "reason": "signal"}
         proposal_values = dict(mode="sniper", decision=decision, universe=["WIF"],
             created_at=1000, now=1001, original={"WIF": 1, "SOL": 100},
             prices={"WIF": 1, "SOL": 100}, samples={"WIF": 5, "SOL": 5},
             balance=25_000_000, order_raw=5_000_000,
             sniper_context={"WIF": {"chart_ready": 1, "chart_buy_setup": 1,
-                "change_m5_pct": 0.8, "change_h1_pct": 1.2, "change_h6_pct": -4.9}})
+                "chart_trend_h1": 0,
+                "change_m5_pct": 0.8, "change_h1_pct": 0.0, "change_h6_pct": -4.9}})
         four_open = [{"symbol": f"TOKEN{i}"} for i in range(4)]
         five_open = [{"symbol": f"TOKEN{i}"} for i in range(5)]
         self.assertTrue(policy.proposal(held=four_open, **proposal_values).allowed)
@@ -142,12 +143,12 @@ class PolicyTests(unittest.TestCase):
             **proposal_values, "sniper_context": {}}).code, "sniper_chart_data")
         self.assertEqual(policy.proposal(held=four_open, **{
             **proposal_values, "sniper_context": {
-                "WIF": {"chart_ready": 1, "chart_buy_setup": 0,
+                "WIF": {"chart_ready": 1, "chart_buy_setup": 0, "chart_trend_h1": 0,
                     "change_m5_pct": 0.8, "change_h1_pct": 1.2}}}).code,
             "sniper_chart_confirmation")
         falling_contexts = (
             ({"change_m5_pct": -0.1, "change_h1_pct": 1.2}, "sniper_trend"),
-            ({"change_m5_pct": 0.8, "change_h1_pct": 0}, "sniper_trend"),
+            ({"change_m5_pct": 0.8, "change_h1_pct": -0.1}, "sniper_trend"),
             ({"change_m5_pct": 0.8}, "sniper_trend_data"),
             ({"change_m5_pct": 0.8, "change_h1_pct": 1.2,
               "change_h6_pct": -5.1}, "sniper_drawdown"),
@@ -155,13 +156,15 @@ class PolicyTests(unittest.TestCase):
         for metrics, expected_code in falling_contexts:
             with self.subTest(metrics=metrics):
                 blocked_context = {"WIF": {
-                    "chart_ready": 1, "chart_buy_setup": 1, **metrics}}
+                    "chart_ready": 1, "chart_buy_setup": 1,
+                    "chart_trend_h1": 0, **metrics}}
                 self.assertEqual(policy.proposal(
                     held=four_open, **{**proposal_values,
                         "sniper_context": blocked_context}).code, expected_code)
         for six_hour_change in (-5, None):
             metrics = {"chart_ready": 1, "chart_buy_setup": 1,
-                "change_m5_pct": 0.8, "change_h1_pct": 1.2}
+                "change_m5_pct": 0.8, "change_h1_pct": 0.0,
+                "chart_trend_h1": 0}
             if six_hour_change is not None:
                 metrics["change_h6_pct"] = six_hour_change
             with self.subTest(six_hour_change=six_hour_change):
@@ -190,7 +193,7 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(self.proposal(decision={"action": "HOLD", "symbol": None,
                                                "reason": "wait"}).code, "hold")
 
-    def test_core_requires_aligned_trend_and_independent_confirmation(self):
+    def test_core_allows_single_green_candle_without_buyer_flow(self):
         self.assertEqual(self.proposal(main_context={}).code, "core_context")
         chart_ok = {"chart_ready": 1, "chart_buy_setup": 1, "chart_trend_h1": 1}
         falling = {"SOL": {**chart_ok, "change_m5_pct": 0.8, "change_h1_pct": -0.1}}
@@ -201,7 +204,7 @@ class PolicyTests(unittest.TestCase):
                             "change_h6_pct": -5.1}}
         self.assertEqual(self.proposal(main_context=drawdown).code, "core_drawdown")
         no_confirmation = {"SOL": {**chart_ok, "change_m5_pct": 0.8, "change_h1_pct": 2.0}}
-        self.assertEqual(self.proposal(main_context=no_confirmation).code, "core_confirmation")
+        self.assertTrue(self.proposal(main_context=no_confirmation).allowed)
         relative = {
             "SOL": {**chart_ok, "change_m5_pct": 0.2, "change_h1_pct": 1.0},
             "JUP": {**chart_ok, "change_m5_pct": 0.8, "change_h1_pct": 1.5},
@@ -215,17 +218,22 @@ class PolicyTests(unittest.TestCase):
                             "chart_ready": 1, "chart_buy_setup": 0, "chart_trend_h1": 1}}
         self.assertEqual(self.proposal(main_context=no_setup).code, "core_chart_confirmation")
 
-    def test_core_requires_rising_hourly_chart_even_when_aggregates_are_positive(self):
+    def test_core_allows_flat_hour_but_blocks_falling_hour(self):
         metrics = {"change_m5_pct": 0.8, "change_h1_pct": 1.5,
                    "chart_ready": 1, "chart_buy_setup": 1, "buys_m5": 8, "sells_m5": 4}
-        for trend in (None, -1, 0):
+        for trend in (None, -1):
             with self.subTest(trend=trend):
                 context = {"SOL": {**metrics, "chart_trend_h1": trend}}
                 self.assertEqual(self.proposal(main_context=context).code, "core_trend")
                 self.assertEqual(self.proposal(main_context=context, decision={
                     "action": "SELL", "symbol": "SOL", "reason": "exit"},
                     held=[{"symbol": "SOL"}]).code, "ai_sell_disabled")
-        self.assertTrue(self.proposal(main_context={"SOL": {**metrics, "chart_trend_h1": 1}}).allowed)
+        flat = {**metrics, "change_h1_pct": 0.0, "chart_trend_h1": 0}
+        self.assertTrue(self.proposal(main_context={"SOL": flat}).allowed)
+        falling = {**metrics, "change_h1_pct": -0.1, "chart_trend_h1": 0}
+        self.assertEqual(self.proposal(main_context={"SOL": falling}).code, "core_trend")
+        self.assertTrue(self.proposal(main_context={"SOL": {
+            **metrics, "chart_trend_h1": 1}}).allowed)
 
     def test_order_requires_saved_size_allowlisted_mint_and_enabled_mode(self):
         self.assertTrue(self.order().allowed)

@@ -243,6 +243,7 @@ TEXT = {
     " SOL; требуется не меньше ": " SOL; required minimum: ",
     " SOL. В Настройках → Резерв комиссий выделите только свои SOL. Пользовательские средства автоматически не расходуются.": " SOL. Settings → Fee reserve: allocate only your own SOL. Customer funds are never spent automatically.",
     "Источник котировок недоступен. Автопилот не запущен.": "Price feed unavailable. Autopilot not started.",
+    "Источник котировок недоступен. Автопилот не запущен; сделка не отправлена.": "Price feed unavailable. Autopilot not started; no trade was submitted.",
     "Jupiter не вернул котировку. Проверьте доступ к API; автопилот не запущен.": "Jupiter returned no quote. Check API access; autopilot not started.",
     "Jupiter вернул некорректную котировку. Автопилот не запущен.": "Jupiter returned an invalid quote. Autopilot not started.",
     "Недостаточно личных USDC для выбранного размера покупки.": "Insufficient personal USDC for the selected order size.",

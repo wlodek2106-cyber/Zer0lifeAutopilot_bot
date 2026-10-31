@@ -92,7 +92,8 @@ class MenuBrowserTests(unittest.TestCase):
                 assert(strategyText.includes('up to 200 Solana mints, verifies up to 40'),'expanded scan bounds are visible');
                 assert(Array.from(document.querySelectorAll('summary')).some(el=>el.textContent==='Market discovery · DexScreener + charts'),'replacement market source is visible');
                 assert(document.getElementById('meme-sniper-card').querySelectorAll('p.section-note').length===3,'compact sniper card');
-                fixture.ai_status={configured:true,model:'gpt-4.1',interval_seconds:900,
+                fixture.ai_status={configured:true,paid_ai_enabled:false,signal_engine:'rules-v1',
+                    model:'gpt-4.1',interval_seconds:90,
                     last_analyzed_at:1791925101,sniper_assets:[],
                     asset_labels:{SOL:'SOL',JUP:'JUP'},
                     chart_context:{
@@ -111,13 +112,14 @@ class MenuBrowserTests(unittest.TestCase):
                 await refresh();
                 assert(document.getElementById('toggle-text').textContent==='Autopilot: ON','enabled core status in English');
                 assert(document.getElementById('meme-toggle-text').textContent==='AI: ON','enabled sniper status in English');
-                assert(document.getElementById('ai-latency').textContent.includes('risk controller 75 ms'),
-                    'real analysis stages displayed in milliseconds');
+                 assert(document.getElementById('ai-status').textContent.includes('OpenAI OFF · no paid AI requests'),
+                     'paid AI is disabled in the rules-only interface');
+                 assert(document.getElementById('ai-latency').textContent.includes('No OpenAI requests. Market data, RPC provider use and on-chain transaction fees may still have costs.'),
+                     'remaining provider and transaction costs are disclosed');
                 const sourceText=document.getElementById('whale-signal-status').textContent;
                 assert(sourceText.includes('Helius WebSocket OFF'),'paid stream is visibly disabled');
                 assert(sourceText.includes('every 300 seconds'),'bounded replacement cadence is visible');
                 assert(sourceText.includes('Neither waits for whale events'),'scheduled entries do not wait for whales');
-                assert(sourceText.includes('RPC and AI requests can still incur costs'),'remaining costs are disclosed');
                 const coreAssets=document.getElementById('strategy-assets').textContent;
                 assert(!['WIF','BONK','BOME','POPCAT','MEW','PENGU'].some(symbol=>coreAssets.includes(symbol)),
                     'core asset list excludes every sniper-only seed when there are no live candidates');

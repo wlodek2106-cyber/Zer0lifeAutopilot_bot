@@ -5,6 +5,8 @@ import os
 
 import aiohttp
 
+import openai_client
+
 
 class AIError(ValueError):
     pass
@@ -73,12 +75,14 @@ MAIN_CHART_DATA_CAPABILITIES = {
 def configuration():
     return {
         "configured": bool(os.getenv("OPENAI_API_KEY")),
+        "paid_ai_enabled": openai_client.PAID_AI_ENABLED,
+        "signal_engine": "openai" if openai_client.PAID_AI_ENABLED else "rules-v1",
         "model": os.getenv("OPENAI_MODEL", "gpt-4.1"),
         # Execution proposals expire after 120 seconds. Keep this cadence and
         # service-wide quota fixed so a legacy Render override cannot silently
         # restore the 15-minute schedule or the old 96-call daily cap.
         "interval_seconds": 90,
-        "max_calls_per_day": 960,
+        "max_calls_per_day": 960 if openai_client.PAID_AI_ENABLED else 0,
     }
 
 
@@ -139,9 +143,9 @@ def main_usdc_signal_evidence(market, context, permitted_symbols):
         dex_hour = metrics.get("change_h1_pct")
         dex_six_hour = metrics.get("change_h6_pct")
         item["trend_aligned_positive"] = bool(
-            metrics.get("chart_trend_h1") == 1
+            metrics.get("chart_trend_h1") in (0, 1)
             and type(dex_short) in (int, float) and dex_short > 0
-            and type(dex_hour) in (int, float) and dex_hour > 0
+            and type(dex_hour) in (int, float) and dex_hour >= 0
             and (type(dex_six_hour) not in (int, float) or dex_six_hour >= -5)
             and dex_short <= 3 and dex_hour <= 10
         )
@@ -216,7 +220,8 @@ async def analyze(session, market, universes, screening=None, main_context=None,
                 "An empty permitted universe must return HOLD with a null symbol. "
                 "Helius-prioritized candidates apply only to Sniper, never to Main. "
                 "Never invent prices, guarantees, wallet commands, transfer destinations or order sizes. "
-                "Prefer HOLD when data is missing, insufficient, flat or ambiguous. "
+                "Prefer HOLD when data is missing, clearly falling or ambiguous. A flat hourly trend alone "
+                "is not a reason to HOLD when the latest closed 5-minute candle is green and the hourly change is nonnegative. "
                 "Every decision must include a concise, non-empty English reason of at most 350 characters; "
                 "give HOLD decisions a short factual reason instead of leaving it blank. "
                 "These are short snapshots, not a complete predictive model. Explain briefly in English. "
@@ -225,10 +230,10 @@ async def analyze(session, market, universes, screening=None, main_context=None,
                 "Only the independent risk controller may execute any decision.")},
             {"role": "system", "content": (
                 "Additional strategy guidance applies to both Core (USDC) and Sniper (SOL). "
-                "Follow the supplied chart-guide principles only where the feed supports them. Core BUY requires chart_trend_h1=1 "
-                "(a confirmed rising hourly chart trend; flat, falling or missing trends mean HOLD), positive 5-minute and 1-hour changes, "
-                "no overextension (5-minute above 3%, 1-hour above 10%) and no 6-hour decline below -5%, "
-                "plus buyer pressure or token strength versus SOL. When describing the 6-hour rule, state the "
+                "Follow supplied chart-guide principles only where the feed supports them. Core BUY requires chart_trend_h1=0 or 1 "
+                "(neutral or rising; falling/missing trends mean HOLD), positive 5-minute and nonnegative 1-hour changes, "
+                "no overextension (5-minute above 3%, 1-hour above 10%) and no 6-hour decline below -5%. "
+                "Buyer pressure and strength versus SOL are context, not mandatory entry gates. When describing the 6-hour rule, state the "
                 "actual change and call -5% the decline floor; only say the floor was breached when the value "
                 "is less than -5% (for example, -0.16% is above the floor). For SOL itself, relative strength "
                 "versus SOL is not applicable; do not call it negative or positive. "
@@ -236,15 +241,11 @@ async def analyze(session, market, universes, screening=None, main_context=None,
                 "checks. Fresh numeric 5-minute/1-hour OHLCV chart features are supplied when available: "
                 "repeated hourly support/resistance areas, confirmed support-bounce and resistance-rejection flags, "
                 "EMA, RSI, MACD, ATR, same-timeframe relative volume and simple engulfing flags. "
-                "Both modes require chart_buy_setup=1: a confirmed bounce from repeated support "
-                "(chart_support_bounce=1) OR bounded rising-trend continuation "
-                "(chart_trend_continuation=1). Continuation does not require a support zone; it requires "
-                "a rising hourly trend, aligned 5m EMAs, one closed bullish 5m candle whose close is above "
-                "the previous candle's close, RSI 45–68, nonnegative MACD. "
-                "The previous candle need not be bullish. Continuation still requires "
-                "relative volume at least 0.8x, limited extension and room below known resistance. "
-                "A support bounce still requires relative volume at least 1.0x. Breakout chasing is disabled "
-                "and the server enforces this. Resistance is analysis context only and cannot trigger a sale. "
+                "Both modes require chart_buy_setup=1, defined as one fresh, fully closed green 5-minute candle "
+                "(close greater than open). A repeated support zone, RSI range, MACD, relative volume, EMA alignment "
+                "and resistance room are useful context, not mandatory entry gates. The server separately blocks "
+                "a falling hourly trend, negative hourly change and overextended entries. Resistance is context only "
+                "and cannot trigger a sale. "
                 "Do not treat 24-hour total volume as relative volume, and do not invent candle signals when "
                 "chart data is missing or stale. Do not issue SELL: use HOLD for existing positions. "
                 "The server rejects AI SELL in both modes. Automatic sales are limited to a 5% stop below "
@@ -254,12 +255,12 @@ async def analyze(session, market, universes, screening=None, main_context=None,
                 "Missing or conflicting evidence means HOLD. These heuristics are not "
                 "backtested and do not predict profit; never force a trade when no candidate qualifies.")},
             {"role": "system", "content": (
-                "For Sniper (SOL) BUY, require the supplied numeric chart context to have "
-                "chart_ready=1 and chart_buy_setup=1, either a confirmed bounce from repeated support "
-                "or bounded rising-trend continuation; do not buy an overextended breakout, "
-                "and require positive change_m5_pct and change_h1_pct, and "
+                "For Sniper (SOL) BUY, require fresh numeric chart context with "
+                "chart_ready=1, chart_trend_h1=0 or 1, and chart_buy_setup=1 (one fresh closed green 5-minute candle). "
+                "A support zone, RSI, MACD, relative-volume threshold or EMA pattern is not mandatory. "
+                "Do not buy an overextended breakout. Require positive change_m5_pct and nonnegative change_h1_pct, and "
                 "change_h6_pct no lower than -5% when that value is available. If required 5-minute/hourly "
-                "changes or chart data are missing, stale, negative, or unconfirmed, choose HOLD. "
+                "changes or chart data are missing, stale, falling or unconfirmed, choose HOLD. "
                 "This is an entry-only gate; it never blocks SELL of an owned position. "
                 "The server independently enforces the same rule.")},
             *([{"role": "system", "content": (
@@ -292,18 +293,15 @@ async def analyze(session, market, universes, screening=None, main_context=None,
                 "main_funding": "USDC", "sniper_funding": "SOL"})},
         ],
     }
-    async with session.post("https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": "Bearer " + os.environ["OPENAI_API_KEY"]},
-            json=payload, timeout=aiohttp.ClientTimeout(total=30)) as response:
-        if response.status != 200:
-            # Never include the response body, key, or an authorization header in logs.
-            raise AIError("OpenAI API недоступен (HTTP " + str(response.status) + "). Проверьте ключ, модель и лимит API.")
-        try:
-            body = await response.json()
-            choice = body["choices"][0]
-            if choice["finish_reason"] != "stop" or choice["message"].get("refusal"):
-                raise AIError("Модель не завершила допустимое решение.")
-            result = json.loads(choice["message"]["content"])
-        except (KeyError, IndexError, TypeError, json.JSONDecodeError):
-            raise AIError("OpenAI вернул неполный ответ.") from None
+    try:
+        body = await openai_client.chat_completion(session, payload, timeout_seconds=30)
+    except openai_client.OpenAIUnavailable as exc:
+        raise AIError(str(exc)) from None
+    try:
+        choice = body["choices"][0]
+        if choice["finish_reason"] != "stop" or choice["message"].get("refusal"):
+            raise AIError("Модель не завершила допустимое решение.")
+        result = json.loads(choice["message"]["content"])
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError):
+        raise AIError("OpenAI вернул неполный ответ.") from None
     return validate_decisions(result, universes)

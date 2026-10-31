@@ -133,53 +133,35 @@ def risk_exit(price, entry, peak=None):
 
 
 def core_entry_signal(symbol, context):
-    """Require fresh chart confirmation for Core entries; never gate exits."""
+    """Require fresh charts, one green 5m close, and no falling hourly trend."""
     if not isinstance(context, dict) or not isinstance(context.get(symbol), dict):
         return deny("core_context", "SKIPPED: Core 5-minute/1-hour market context is missing.")
     metrics = context[symbol]
     if metrics.get("chart_ready") != 1:
         return deny("core_chart_data",
                     "SKIPPED: fresh 5-minute and 1-hour OHLCV candles are unavailable; Core BUY is blocked.")
-    if metrics.get("chart_trend_h1") != 1:
+    if metrics.get("chart_trend_h1") not in (0, 1):
         return deny("core_trend",
-                    "SKIPPED: Core requires a confirmed rising 1-hour chart trend; flat, falling or missing trends are not entries.")
+                    "SKIPPED: Core requires a non-falling 1-hour chart trend; falling or missing trends are not entries.")
     if metrics.get("chart_buy_setup") != 1:
         return deny("core_chart_confirmation",
-                    "SKIPPED: charts show neither a confirmed support bounce nor a bounded rising-trend continuation.")
+                    "SKIPPED: the latest fresh, closed 5-minute candle is not green.")
     m5, h1 = metrics.get("change_m5_pct"), metrics.get("change_h1_pct")
     if not (bounded_pct(m5) and bounded_pct(h1)):
         return deny("core_context", "SKIPPED: Core needs fresh 5-minute and 1-hour price changes.")
-    if m5 <= 0 or h1 <= 0:
-        return deny("core_trend", "SKIPPED: Core has no aligned positive 5-minute and 1-hour trend.")
+    if m5 <= 0 or h1 < 0:
+        return deny("core_trend", "SKIPPED: Core needs positive 5-minute momentum and a flat or rising 1-hour move.")
     if m5 > 3 or h1 > 10:
         return deny("core_extended", "SKIPPED: Core signal is overextended; the guide warns against chasing.")
     h6 = metrics.get("change_h6_pct")
     if bounded_pct(h6) and h6 < -5:
         return deny("core_drawdown", "SKIPPED: Core 6-hour decline is below the configured trend limit.")
 
-    buyer_pressure = any(
-        type(metrics.get("buys_" + window)) is int
-        and type(metrics.get("sells_" + window)) is int
-        and metrics["buys_" + window] > metrics["sells_" + window]
-        for window in ("m5", "h1")
-    )
-    sol_metrics = context.get("SOL")
-    relative_strength = (
-        symbol != "SOL" and isinstance(sol_metrics, dict) and (
-            (bounded_pct(sol_metrics.get("change_m5_pct"))
-             and m5 > sol_metrics["change_m5_pct"])
-            or (bounded_pct(sol_metrics.get("change_h1_pct"))
-                and h1 > sol_metrics["change_h1_pct"])
-        )
-    )
-    if not buyer_pressure and not relative_strength:
-        return deny("core_confirmation",
-                    "SKIPPED: Core lacks buyer-flow or relative-strength confirmation.")
     return allow()
 
 
 def sniper_entry_signal(symbol, context):
-    """Require rising momentum and a confirmed bounce or continuation for Sniper entries."""
+    """Require a fresh green 5m close and non-falling hourly momentum."""
     if not isinstance(context, dict) or not isinstance(context.get(symbol), dict):
         return deny("sniper_chart_data",
                     "SKIPPED: fresh 5-minute and 1-hour chart data is unavailable; Sniper BUY is blocked.")
@@ -189,14 +171,16 @@ def sniper_entry_signal(symbol, context):
                     "SKIPPED: fresh 5-minute and 1-hour candles are unavailable; Sniper BUY is blocked.")
     if metrics.get("chart_buy_setup") != 1:
         return deny("sniper_chart_confirmation",
-                    "SKIPPED: the chart has neither a confirmed support bounce nor a bounded rising-trend continuation.")
+                    "SKIPPED: the latest fresh, closed 5-minute candle is not green.")
     m5, h1 = metrics.get("change_m5_pct"), metrics.get("change_h1_pct")
     if not (bounded_pct(m5) and bounded_pct(h1)):
         return deny("sniper_trend_data",
                     "SKIPPED: Sniper needs valid 5-minute and 1-hour price changes.")
-    if m5 <= 0 or h1 <= 0:
+    if metrics.get("chart_trend_h1") not in (0, 1) or m5 <= 0 or h1 < 0:
         return deny("sniper_trend",
-                    "SKIPPED: Sniper needs positive 5-minute and 1-hour price changes.")
+                    "SKIPPED: Sniper needs positive 5-minute momentum and a flat or rising 1-hour trend.")
+    if m5 > 3 or h1 > 10:
+        return deny("sniper_extended", "SKIPPED: Sniper signal is overextended; the guide warns against chasing.")
     h6 = metrics.get("change_h6_pct")
     if bounded_pct(h6) and h6 < -5:
         return deny("sniper_drawdown",
