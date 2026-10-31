@@ -47,6 +47,7 @@ from meme_discovery import MemeDiscovery
 from whale_stream import HeliusWhaleStream
 from spl_token_support import validate_mint_account, token_account_data
 from base_paper import BasePaperEngine, BasePaperError
+from bridge_quotes import BridgeQuoteError, BridgeQuoteService
 
 WRAPPED_SOL = "So11111111111111111111111111111111111111112"
 JITO_BUNDLE_SEND_URL = "https://mainnet.block-engine.jito.wtf/api/v1/transactions?bundleOnly=true"
@@ -208,6 +209,7 @@ class CustodyRuntime(WalletRuntime):
         self.legacy_runtime = WalletRuntime(*args, **kwargs)
         self.ledger = CustodyLedger(self.db_file)
         self.base_paper = BasePaperEngine(self.ledger.path, self.owner_id)
+        self.bridge_quotes = BridgeQuoteService(self.ledger.path, self.ledger, self.wallet)
         self.ledger.user(self.owner_id)
         self.ledger.tx_epoch()
         self.base_url = base_url.rstrip("/")
@@ -1012,7 +1014,8 @@ class CustodyRuntime(WalletRuntime):
                                             "save_base_paper_budget", "scan_base_paper"}):
                 self.web_access.trading_request(request)
             if (getattr(self, "accounts", None) and request.method == "POST" and action.__name__ in
-                    {"create_invoice","deposit","wallet_link","toggle","toggle_sniper","withdraw","set_language"}):
+                    {"create_invoice","deposit","wallet_link","toggle","toggle_sniper","withdraw",
+                     "set_language","exchange_quote"}):
                 self.accounts.require(self.uid(request))
             request_timeout = 70 if action.__name__ == "scan_base_paper" else 35
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=request_timeout)) as session:
@@ -1025,6 +1028,8 @@ class CustodyRuntime(WalletRuntime):
             return web.json_response({"success": False, "message": str(exc)},
                                      status=exc.status if isinstance(exc, WalletError) else 409)
         except BasePaperError as exc:
+            return web.json_response({"success": False, "message": str(exc)}, status=exc.status)
+        except BridgeQuoteError as exc:
             return web.json_response({"success": False, "message": str(exc)}, status=exc.status)
         except (ValueError, KeyError, TypeError, json.JSONDecodeError):
             return web.json_response({"success": False, "message": "Неверный запрос или неполный ответ провайдера."}, status=400)
@@ -1059,6 +1064,15 @@ class CustodyRuntime(WalletRuntime):
     async def scan_base_paper(self, request, session):
         uid = self._require_base_paper_owner(request)
         return web.json_response(await self.base_paper.scan(session, uid))
+
+    async def exchange_quote(self, request, session):
+        uid = self.uid(request)
+        body = await request.json()
+        if not isinstance(body, dict) or set(body) != {"direction", "amount"}:
+            raise WalletError("Specify the direction and USDC amount.", 400)
+        quote = await self.bridge_quotes.quote(
+            session, uid, body["direction"], body["amount"])
+        return web.json_response({"success": True, "quote": quote})
 
     async def balances_for_wallet(self, session, wallet):
         native = (await self.rpc(session, "getBalance", [wallet, {"commitment": "finalized"}]))["value"]

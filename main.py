@@ -2080,6 +2080,21 @@ RAW_HTML = r"""<!DOCTYPE html>
         .exchange-destination span { padding:8px 10px; border:1px solid rgba(183,216,189,.17); border-radius:9px; background:rgba(9,16,15,.45); }
         .exchange-disabled { width:100%; min-height:48px; margin-top:15px; border:1px solid #39443b; border-radius:13px; color:#a8b0a5; background:linear-gradient(180deg,#30382f,#252d26); font-size:12px; font-weight:750; cursor:not-allowed; opacity:.78; }
         .exchange-disabled-note { margin:8px 0 0; color:#a0a99e; text-align:center; font-size:10px; line-height:1.5; }
+        .exchange-quote-form { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:end; margin-top:18px; }
+        .exchange-quote-field label { display:block; margin-bottom:7px; color:#a8b6a9; font-size:11px; font-weight:700; }
+        .exchange-quote-input { width:100%; min-height:48px; padding:0 13px; border:1px solid rgba(190,218,179,.22); border-radius:12px; color:#f0f3e8; background:#0c1412; font:700 15px ui-monospace,SFMono-Regular,Menlo,monospace; }
+        .exchange-quote-input:focus-visible { outline:2px solid #c5ee9a; outline-offset:2px; }
+        .exchange-quote-button { min-height:48px; padding:0 18px; border:1px solid rgba(198,238,154,.6); border-radius:12px; color:#10170d; background:linear-gradient(135deg,#d9ff8d,#8ed21b); font-size:12px; font-weight:850; cursor:pointer; }
+        .exchange-quote-button:disabled { cursor:wait; opacity:.6; }
+        .exchange-quote-status { min-height:20px; margin:9px 0 0; color:#b8c4b5; font-size:11px; line-height:1.5; }
+        .exchange-quote-result { margin-top:14px; padding:15px; border:1px solid rgba(158,190,211,.24); border-radius:16px; background:linear-gradient(145deg,rgba(14,24,28,.96),rgba(13,20,22,.94)); }
+        .exchange-quote-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }
+        .exchange-quote-value { min-width:0; padding:11px; border:1px solid rgba(190,218,179,.12); border-radius:12px; background:rgba(5,11,10,.34); }
+        .exchange-quote-value span { display:block; color:#9ba99a; font-size:10px; }
+        .exchange-quote-value strong { display:block; overflow-wrap:anywhere; margin-top:5px; color:#e7f5dc; font:750 13px ui-monospace,SFMono-Regular,Menlo,monospace; }
+        .exchange-quote-fees { margin:12px 0 0; padding:0; list-style:none; color:#aebaae; font-size:11px; line-height:1.55; }
+        .exchange-quote-fees li { padding:5px 0; border-bottom:1px solid rgba(190,218,179,.08); }
+        .exchange-quote-footnote { margin:10px 0 0; color:#a4b1a2; font-size:10px; line-height:1.55; }
         .exchange-safety { margin-top:12px; padding:14px 15px; border-left:2px solid #d9a863; border-radius:0 12px 12px 0; background:rgba(55,42,24,.28); color:#c5b28f; font-size:11px; line-height:1.6; }
         @media (max-width: 430px) {
             #nav .nav-btn { padding-right:1px; padding-left:1px; font-size:9px; }
@@ -2090,6 +2105,8 @@ RAW_HTML = r"""<!DOCTYPE html>
             .exchange-step-index { grid-row:span 2; padding-top:3px; }
             .exchange-step h2 { margin:0 0 4px; }
             .exchange-step p { grid-column:2; }
+            .exchange-quote-form { grid-template-columns:1fr; }
+            .exchange-quote-button { width:100%; }
             .bridge-stage { height:194px; }
             .bridge-node { width:102px; height:98px; }
         }
@@ -2295,13 +2312,13 @@ RAW_HTML = r"""<!DOCTYPE html>
 
         <div id="tab-exchange" class="tab-panel" aria-labelledby="exchange-title">
             <header class="page-heading"><div><p class="eyebrow">Cross-chain · Personal ledger</p><h1 id="exchange-title">Exchange</h1></div></header>
-            <section class="exchange-hero" aria-label="USDC transfer between Solana and Base">
+            <section class="exchange-hero" aria-label="USDC route estimates for Solana and Base">
                 <div class="exchange-heading">
-                    <div><p class="exchange-kicker">USDC · MANUAL CROSS-CHAIN TRANSFER</p><h1 id="exchange-direction-title">Solana → Base</h1></div>
-                    <span class="exchange-status">NOT CONFIGURED</span>
+                    <div><p class="exchange-kicker">USDC · READ-ONLY ROUTE QUOTE</p><h1 id="exchange-direction-title">Solana → Base</h1></div>
+                    <span class="exchange-status">QUOTE ONLY · SEND OFF</span>
                 </div>
-                <p class="exchange-lede">Choose a direction to move value between your own Solana and Base USDC balances. This is not available yet: the bridge backend and a separate Base hot wallet are not configured.</p>
-                <div class="exchange-direction" role="group" aria-label="Choose transfer direction">
+                <p class="exchange-lede">Choose a direction and request a live LI.FI estimate. This screen is quote-only: no transaction is submitted and no funds are moved.</p>
+                <div class="exchange-direction" role="group" aria-label="Choose quote direction">
                     <button id="exchange-dir-solana-base" type="button" aria-pressed="true" onclick="setExchangeDirection('solana-to-base')">Solana → Base</button>
                     <button id="exchange-dir-base-solana" type="button" aria-pressed="false" onclick="setExchangeDirection('base-to-solana')">Base → Solana</button>
                 </div>
@@ -2315,22 +2332,43 @@ RAW_HTML = r"""<!DOCTYPE html>
             </section>
             <div class="exchange-callout" role="status" aria-live="polite" style="margin-top:14px">
                 <span class="exchange-callout-mark" aria-hidden="true">!</span>
-                <div><strong>No transfer can be started in either direction</strong><p>The bridge backend, separate Base hot wallet and quote integration are not configured. There is no live quote or transaction submission yet.</p></div>
+                <div><strong>Quotes only · sending is disabled</strong><p>Review the estimated receive amount and costs. Quote requests do not reserve a balance, approve a wallet, or send a transaction.</p></div>
             </div>
-            <section class="exchange-flow" aria-label="How transfers will work when enabled">
-                <article class="exchange-step"><span class="exchange-step-index">01 / SOURCE</span><h2 id="exchange-source-title">Use your Solana USDC</h2><p id="exchange-source-copy">Only your available Solana USDC balance can fund this direction. No external Base deposit is needed.</p></article>
-                <article class="exchange-step"><span class="exchange-step-index">02 / REVIEW</span><h2>Review quote and costs</h2><p>A quote, estimated receive amount, provider charge and network costs will be shown before you manually confirm. Nothing is submitted automatically.</p></article>
-                <article class="exchange-step"><span class="exchange-step-index">03 / SETTLE</span><h2 id="exchange-destination-title">Credit your Base balance</h2><p id="exchange-destination-copy">Your Base balance is credited only after the destination-chain transfer reaches finality.</p></article>
+            <section class="exchange-flow" aria-label="Read-only quote details">
+                <article class="exchange-step"><span class="exchange-step-index">01 / SOURCE</span><h2 id="exchange-source-title">Use your Solana USDC</h2><p id="exchange-source-copy">Get a read-only quote for your Solana USDC. No funds are reserved or moved.</p></article>
+                <article class="exchange-step"><span class="exchange-step-index">02 / REVIEW</span><h2>Review quote and costs</h2><p>See the estimated output, minimum receive amount, provider fees and network costs. No transfer is submitted.</p></article>
+                <article class="exchange-step"><span class="exchange-step-index">03 / REVIEW</span><h2 id="exchange-destination-title">Review Base estimate</h2><p id="exchange-destination-copy">Compare the provider's estimate and minimum receive amount. No transfer is available yet.</p></article>
             </section>
             <section class="exchange-accounting" aria-labelledby="exchange-accounting-title">
                 <p class="exchange-kicker">ACCOUNTING · ISOLATED BY UID</p>
                 <h2 id="exchange-accounting-title">Shared wallet. Separate user balances.</h2>
-                <p>The bot's physical Base hot wallet is shared for settlement, but its ledger tracks each authenticated user's funds separately by Telegram account UID. A shared wallet does not make users' recorded balances shared. This internal bridge moves value between your in-app chain balances; it is <strong>not an external withdrawal</strong>.</p>
-                <div class="exchange-destination" aria-label="Transfer path"><span id="exchange-path-source">YOUR SOLANA USDC</span><span aria-hidden="true">→</span><span>DESTINATION FINALITY</span><span aria-hidden="true">→</span><span id="exchange-path-destination">YOUR BASE BALANCE</span></div>
-                <button class="exchange-disabled" type="button" disabled aria-disabled="true">Transfers unavailable · setup incomplete</button>
-                <p class="exchange-disabled-note">This control is disabled. No transfer can be started from this screen.</p>
+                <p>Each user's in-app balances are tracked separately by account. This screen currently shows read-only route estimates only; it does <strong>not</strong> move funds or perform a withdrawal.</p>
+                <div class="exchange-destination" aria-label="Quote path"><span id="exchange-path-source">YOUR SOLANA USDC</span><span aria-hidden="true">→</span><span>PROVIDER ESTIMATE</span><span aria-hidden="true">→</span><span id="exchange-path-destination">BASE USDC ESTIMATE</span></div>
+                <div class="exchange-quote-form">
+                    <div class="exchange-quote-field">
+                        <label for="exchange-amount">Amount (USDC)</label>
+                        <input id="exchange-amount" class="exchange-quote-input" type="number" inputmode="decimal"
+                            min="0.000001" max="10000" step="0.000001" value="10" autocomplete="off">
+                    </div>
+                    <button id="exchange-quote-button" class="exchange-quote-button" type="button" onclick="requestExchangeQuote()">Get quote</button>
+                </div>
+                <p id="exchange-quote-status" class="exchange-quote-status" role="status" aria-live="polite"></p>
+                <section id="exchange-quote-result" class="exchange-quote-result" aria-label="Read-only quote result" hidden>
+                    <div class="exchange-quote-grid">
+                        <div class="exchange-quote-value"><span>Send amount</span><strong id="exchange-quote-in">—</strong></div>
+                        <div class="exchange-quote-value"><span>Estimated receive</span><strong id="exchange-quote-out">—</strong></div>
+                        <div class="exchange-quote-value"><span>Minimum receive</span><strong id="exchange-quote-min">—</strong></div>
+                        <div class="exchange-quote-value"><span>Available source balance</span><strong id="exchange-quote-balance">—</strong></div>
+                    </div>
+                    <p class="exchange-quote-footnote"><span id="exchange-quote-provider"></span> · <span id="exchange-quote-expiry"></span></p>
+                    <h3 class="exchange-quote-cost-title">Estimated costs</h3>
+                    <ul id="exchange-quote-fees" class="exchange-quote-fees"></ul>
+                    <p id="exchange-quote-warning" class="exchange-quote-footnote"></p>
+                    <p class="exchange-quote-footnote">Estimate only. This screen cannot approve or send a transaction.</p>
+                </section>
+                <p class="exchange-disabled-note">Quote requests are read-only. Transfers, approvals, and balance changes remain disabled.</p>
             </section>
-            <aside class="exchange-safety"><strong>Pending or unknown?</strong> Do not retry a transfer whose status is pending or unknown. Wait for its status to be resolved before taking any action.</aside>
+            <aside class="exchange-safety"><strong>Quote only</strong> Estimates can expire or change. No purchase or transfer is sent from this screen.</aside>
         </div>
 
         <div id="tab-deposit" class="tab-panel">
@@ -3134,13 +3172,73 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["I agree to this recurring fee and authorize the in-app SOL balance transfer described above.","Я соглашаюсь с регулярной комиссией и разрешаю описанный выше внутренний перевод SOL.","Я погоджуюся з регулярною комісією та дозволяю описаний вище внутрішній переказ SOL."],
             ["Your device verifies you using Face ID, Touch ID or another system verification method. We verify the passkey signature, not a face photo. Face-only verification cannot be enforced on every device.","Устройство подтверждает вход через Face ID, Touch ID или другой системный способ. Проверяется подпись ключа доступа, а не фотография лица. Не на каждом устройстве можно принудительно включить распознавание только лица.","Пристрій підтверджує вхід через Face ID, Touch ID або інший системний спосіб. Перевіряється підпис ключа доступу, а не фото обличчя. Не на кожному пристрої можна примусово ввімкнути розпізнавання лише обличчя."],
             ["Both modes use a 5% stop below entry. After a position reaches +3.5%, a trailing exit triggers after a 2% pullback from its highest tracked price. Exits are checked approximately every 20 seconds independently of AI availability. Model failures stop new AI orders. After a server restart both modes pause and need manual reactivation.","В обоих режимах стоп-лосс установлен на 5% ниже входа. После роста позиции на 3,5% трейлинг-выход срабатывает при откате на 2% от максимальной отслеживаемой цены. Выходы проверяются примерно каждые 20 секунд независимо от доступности ИИ. Сбои модели приостанавливают новые ордера ИИ. После перезапуска сервера оба режима остановятся и потребуют ручного включения.","В обох режимах стоп-лос установлено на 5% нижче входу. Після зростання позиції на 3,5% трейлінг-вихід спрацьовує при відкаті на 2% від найвищої відстеженої ціни. Виходи перевіряються приблизно кожні 20 секунд незалежно від доступності ШІ. Збої моделі зупиняють нові ордери ШІ. Після перезапуску сервера обидва режими зупиняються й потребують ручного ввімкнення."],
-            ["Stops and trailing exits are execution conditions, not guaranteed fill prices. A 5% stop can close a position, but fast price moves, fees, slippage and liquidity can make the realized loss larger. Returns are not guaranteed.","Стоп-лосс и трейлинг задают условия исполнения, но не гарантируют цену сделки. Стоп на 5% может закрыть позицию, однако резкое движение цены, комиссии, проскальзывание и ликвидность могут увеличить фактический убыток. Доходность не гарантируется.","Стоп-лос і трейлінг визначають умови виконання, але не гарантують ціну угоди. Стоп на 5% може закрити позицію, однак різкий рух ціни, комісії, прослизання та ліквідність можуть збільшити фактичний збиток. Дохідність не гарантована."]
+            ["Stops and trailing exits are execution conditions, not guaranteed fill prices. A 5% stop can close a position, but fast price moves, fees, slippage and liquidity can make the realized loss larger. Returns are not guaranteed.","Стоп-лосс и трейлинг задают условия исполнения, но не гарантируют цену сделки. Стоп на 5% может закрыть позицию, однако резкое движение цены, комиссии, проскальзывание и ликвидность могут увеличить фактический убыток. Доходность не гарантируется.","Стоп-лос і трейлінг визначають умови виконання, але не гарантують ціну угоди. Стоп на 5% може закрити позицію, однак різкий рух ціни, комісії, прослизання та ліквідність можуть збільшити фактичний збиток. Дохідність не гарантована."],
+            ["QUOTE ONLY · SEND OFF","ТОЛЬКО КОТИРОВКА · ОТПРАВКА ВЫКЛ","ЛИШЕ КОТИРУВАННЯ · НАДСИЛАННЯ ВИМК"],
+            ["Choose a direction and request a live LI.FI estimate. This screen is quote-only: no transaction is submitted and no funds are moved.","Выберите направление и запросите актуальную оценку LI.FI. Здесь доступны только котировки: транзакции не отправляются, средства не перемещаются.","Виберіть напрямок і запросіть актуальну оцінку LI.FI. Тут доступні лише котирування: транзакції не надсилаються, кошти не переміщуються."],
+            ["Quotes only · sending is disabled","Только котировки · отправка отключена","Лише котирування · надсилання вимкнено"],
+            ["Review the estimated receive amount and costs. Quote requests do not reserve a balance, approve a wallet, or send a transaction.","Проверьте ожидаемую сумму получения и расходы. Запрос котировки не резервирует баланс, не подтверждает кошелёк и не отправляет транзакцию.","Перевірте очікувану суму отримання та витрати. Запит котирування не резервує баланс, не підтверджує гаманець і не надсилає транзакцію."],
+            ["Get a read-only quote for your Solana USDC. No funds are reserved or moved.","Получите котировку для своих USDC в Solana. Средства не резервируются и не перемещаются.","Отримайте котирування для своїх USDC у Solana. Кошти не резервуються й не переміщуються."],
+            ["Get a read-only quote for your Base USDC. No funds are reserved or moved.","Получите котировку для своих USDC в Base. Средства не резервируются и не перемещаются.","Отримайте котирування для своїх USDC у Base. Кошти не резервуються й не переміщуються."],
+            ["Request a quote and compare the estimated receive amount. Nothing is submitted automatically.","Запросите котировку и сравните ожидаемую сумму получения. Ничего не отправляется автоматически.","Запитайте котирування та порівняйте очікувану суму отримання. Нічого не надсилається автоматично."],
+            ["Review Base estimate","Проверьте оценку для Base","Перевірте оцінку для Base"],
+            ["Review Solana estimate","Проверьте оценку для Solana","Перевірте оцінку для Solana"],
+            ["Compare the provider's estimate and minimum receive amount. No transfer is available yet.","Сравните оценку провайдера и минимальную сумму получения. Перевод пока недоступен.","Порівняйте оцінку провайдера та мінімальну суму отримання. Переказ поки недоступний."],
+            ["Shared wallet. Separate user balances.","Общий кошелёк. У каждого пользователя отдельный баланс.","Спільний гаманець. У кожного користувача окремий баланс."],
+            ["Amount (USDC)","Сумма (USDC)","Сума (USDC)"],["Get quote","Запросить котировку","Запросити котирування"],
+            ["Send amount","Отправить","Надіслати"],["Estimated receive","Ожидается получить","Очікується отримати"],
+            ["Minimum receive","Минимум к получению","Мінімум до отримання"],
+            ["Available source balance","Доступно на исходном балансе","Доступно на балансі джерела"],
+            ["Estimated costs","Оценочные расходы","Орієнтовні витрати"],
+            ["Quote only. No transfer submitted or funds reserved.","Только котировка. Перевод не отправлен, средства не зарезервированы.","Лише котирування. Переказ не надіслано, кошти не зарезервовано."],
+            ["Quote provider","Провайдер котировки","Провайдер котирування"],
+            ["Quote expires","Котировка истекает","Котирування спливає"],
+            ["Provider fee","Комиссия провайдера","Комісія провайдера"],
+            ["Network fee","Сетевая комиссия","Мережевая комісія"],
+            ["No fee breakdown was returned.","Провайдер не вернул разбивку расходов.","Провайдер не повернув розбивку витрат."],
+            ["The amount is above your available in-app balance. This is only an estimate; no transfer can be sent.","Сумма превышает доступный баланс в приложении. Это только оценка; отправить перевод нельзя.","Сума перевищує доступний баланс у застосунку. Це лише оцінка; надіслати переказ неможливо."],
+            ["This Base quote would require USDC approval before a transfer. No approval was sent.","Для этого перевода Base потребовалось бы разрешение USDC. Разрешение не отправлялось.","Для цього переказу Base знадобився б дозвіл USDC. Дозвіл не надсилався."],
+            ["Requesting a live quote…","Запрашиваем актуальную котировку…","Запитуємо актуальне котирування…"],
+            ["Could not get a quote. No transaction was sent.","Не удалось получить котировку. Транзакция не отправлялась.","Не вдалося отримати котирування. Транзакцію не надсилали."],
+            ["Enter a valid USDC amount.","Введите корректную сумму USDC.","Введіть коректну суму USDC."],
+            ["Enter a valid USDC amount with at most six decimals.","Введите сумму USDC не более чем с шестью знаками после запятой.","Введіть суму USDC не більш ніж із шістьма знаками після коми."],
+            ["A quote is limited to 10,000 USDC.","Котировка ограничена суммой 10 000 USDC.","Котирування обмежене сумою 10 000 USDC."],
+            ["LI.FI API key is not configured on the server.","Ключ LI.FI API не настроен на сервере.","Ключ LI.FI API не налаштований на сервері."],
+            ["The Base hot-wallet address is not configured correctly.","Адрес Base hot wallet настроен неверно.","Адреса Base hot wallet налаштована неправильно."],
+            ["The Solana wallet is not configured correctly.","Адрес Solana-кошелька настроен неверно.","Адреса Solana-гаманця налаштована неправильно."],
+            ["The quote provider is unavailable. No transaction was sent.","Сервис котировок недоступен. Транзакция не отправлялась.","Сервіс котирувань недоступний. Транзакцію не надсилали."],
+            ["LI.FI is rate-limiting quotes. Try again shortly.","LI.FI временно ограничил частоту запросов. Попробуйте позже.","LI.FI тимчасово обмежив частоту запитів. Спробуйте пізніше."],
+            ["Wait a few seconds before requesting another quote.","Подождите несколько секунд перед следующим запросом котировки.","Зачекайте кілька секунд перед наступним запитом котирування."],
+            ["The temporary quote limit has been reached. Try again later.","Достигнут временный лимит котировок. Попробуйте позже.","Досягнуто тимчасового ліміту котирувань. Спробуйте пізніше."],
+            ["LI.FI returned a quote for a different route or invalid amount.","LI.FI вернул котировку для другого маршрута или неверной суммы.","LI.FI повернув котирування для іншого маршруту або неправильної суми."],
+            ["Estimate only. This screen cannot approve or send a transaction.","Только оценка. На этом экране нельзя подтвердить или отправить транзакцию.","Лише оцінка. На цьому екрані не можна підтвердити чи надіслати транзакцію."],
+            ["Quote requests are read-only. Transfers, approvals, and balance changes remain disabled.","Запросы котировок работают только на чтение. Переводы, разрешения и изменения баланса отключены.","Запити котирувань працюють лише для читання. Перекази, дозволи та зміни балансу вимкнені."],
+            ["See the estimated output, minimum receive amount, provider fees and network costs. No transfer is submitted.","Смотрите оценку суммы получения, минимальную сумму, комиссию провайдера и сетевые расходы. Перевод не отправляется.","Перегляньте оцінку суми отримання, мінімальну суму, комісію провайдера та мережеві витрати. Переказ не надсилається."],
+            ["Each user's in-app balances are tracked separately by account. This screen currently shows read-only route estimates only; it does not move funds or perform a withdrawal.","Баланс каждого пользователя в приложении учитывается отдельно. Сейчас на этом экране отображаются только оценки маршрута: средства не перемещаются, вывод не выполняется.","Баланс кожного користувача в застосунку обліковується окремо. Зараз на цьому екрані показуються лише оцінки маршруту: кошти не переміщуються, виведення не виконується."],
+            ["YOUR SOLANA USDC","ВАШИ USDC В SOLANA","ВАШІ USDC У SOLANA"],
+            ["YOUR BASE USDC","ВАШИ USDC В BASE","ВАШІ USDC У BASE"],
+            ["YOUR SOLANA BALANCE","ВАШ БАЛАНС SOLANA","ВАШ БАЛАНС SOLANA"],
+            ["YOUR BASE BALANCE","ВАШ БАЛАНС BASE","ВАШ БАЛАНС BASE"],
+            ["PROVIDER ESTIMATE","ОЦЕНКА ПРОВАЙДЕРА","ОЦІНКА ПРОВАЙДЕРА"],
+            ["BASE USDC ESTIMATE","ОЦЕНКА USDC В BASE","ОЦІНКА USDC У BASE"],
+            ["SOLANA USDC ESTIMATE","ОЦЕНКА USDC В SOLANA","ОЦІНКА USDC У SOLANA"],
+            ["Quote only","Только котировка","Лише котирування"],
+            ["Estimates can expire or change. No purchase or transfer is sent from this screen.","Оценки могут устареть или измениться. С этого экрана покупка или перевод не отправляются.","Оцінки можуть застаріти або змінитися. Із цього екрана покупка чи переказ не надсилаються."],
+            ["included","включено","включено"],
+            ["The quote service is temporarily unavailable.","Сервис котировок временно недоступен.","Сервіс котирувань тимчасово недоступний."],
+            ["Could not read your available account balance.","Не удалось прочитать доступный баланс аккаунта.","Не вдалося прочитати доступний баланс облікового запису."],
+            ["Specify the direction and USDC amount.","Укажите направление и сумму USDC.","Вкажіть напрямок і суму USDC."],
+            ["Choose a valid quote direction.","Выберите корректное направление котировки.","Виберіть коректний напрямок котирування."],
+            ["USDC route estimates for Solana and Base","Оценка маршрутов USDC между Solana и Base","Оцінка маршрутів USDC між Solana та Base"],
+            ["USDC · READ-ONLY ROUTE QUOTE","USDC · КОТИРОВКА МАРШРУТА","USDC · КОТИРУВАННЯ МАРШРУТУ"],
+            ["Choose quote direction","Выберите направление котировки","Виберіть напрямок котирування"],
+            ["Read-only quote details","Детали котировки","Деталі котирування"]
         ];
         const UI_COPY = {
             ru:Object.fromEntries(UI_COPY_ROWS.map(([english,russian])=>[english,russian])),
             uk:Object.fromEntries(UI_COPY_ROWS.map(([english,,ukrainian])=>[english,ukrainian]))
         };
         let currentUiLanguage='en';
+        let exchangeQuoteDirection='solana-to-base',exchangeQuoteBusy=false;
         const uiTextSources=new WeakMap(),uiAttributeSources=new WeakMap();
         const uiTranslationPairs={};
         for(const language of ['ru','uk'])
@@ -3189,6 +3287,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             const select=document.getElementById('ui-language-select');
             if(select)select.value=currentUiLanguage;
             translateUiTree();
+            setExchangeDirection(exchangeQuoteDirection);
         }
         async function saveUiLanguage(){
             const select=document.getElementById('ui-language-select'),status=document.getElementById('ui-language-status');
@@ -4355,23 +4454,111 @@ RAW_HTML = r"""<!DOCTYPE html>
             if(id==='wallet')refreshMonthlyTradingFee(true);
         }
 
+        function clearExchangeQuote(){
+            const result=document.getElementById('exchange-quote-result');
+            const status=document.getElementById('exchange-quote-status');
+            if(result)result.hidden=true;
+            if(status)status.textContent='';
+        }
         function setExchangeDirection(direction) {
-            const reverse = direction === 'base-to-solana';
+            exchangeQuoteDirection=direction==='base-to-solana'?'base-to-solana':'solana-to-base';
+            const reverse = exchangeQuoteDirection === 'base-to-solana';
             const source = reverse ? 'Base' : 'Solana';
             const destination = reverse ? 'Solana' : 'Base';
+            clearExchangeQuote();
             document.getElementById('exchange-direction-title').textContent = source + ' → ' + destination;
             document.getElementById('exchange-dir-solana-base').setAttribute('aria-pressed', String(!reverse));
             document.getElementById('exchange-dir-base-solana').setAttribute('aria-pressed', String(reverse));
             document.getElementById('exchange-bridge-stage').classList.toggle('bridge-stage--reverse', reverse);
             document.getElementById('exchange-arrow').textContent = reverse ? '←' : '→';
-            document.getElementById('exchange-source-title').textContent = 'Use your ' + source + ' USDC';
+            document.getElementById('exchange-source-title').textContent =
+                localizeUiText('Use your ' + source + ' USDC');
             document.getElementById('exchange-source-copy').textContent =
-                'Only your available ' + source + ' USDC balance can fund this direction. No external ' + destination + ' deposit is needed.';
-            document.getElementById('exchange-destination-title').textContent = 'Credit your ' + destination + ' balance';
+                localizeUiText('Get a read-only quote for your ' + source + ' USDC. No funds are reserved or moved.');
+            document.getElementById('exchange-destination-title').textContent =
+                localizeUiText('Review ' + destination + ' estimate');
             document.getElementById('exchange-destination-copy').textContent =
-                'Your ' + destination + ' balance is credited only after the destination-chain transfer reaches finality.';
-            document.getElementById('exchange-path-source').textContent = 'YOUR ' + source.toUpperCase() + ' USDC';
-            document.getElementById('exchange-path-destination').textContent = 'YOUR ' + destination.toUpperCase() + ' BALANCE';
+                localizeUiText("Compare the provider's estimate and minimum receive amount. No transfer is available yet.");
+            document.getElementById('exchange-path-source').textContent =
+                localizeUiText('YOUR ' + source.toUpperCase() + ' USDC');
+            document.getElementById('exchange-path-destination').textContent =
+                localizeUiText(destination.toUpperCase() + ' USDC ESTIMATE');
+        }
+
+        function exchangeQuoteAmount(value){
+            const amount=Number(value);
+            if(!Number.isFinite(amount))return '—';
+            return amount.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:6})+' USDC';
+        }
+        function renderExchangeQuote(quote){
+            if(!quote||quote.quote_only!==true||quote.transfer_enabled!==false
+                ||quote.direction!==exchangeQuoteDirection)
+                throw Error('Could not get a quote. No transaction was sent.');
+            document.getElementById('exchange-quote-in').textContent=exchangeQuoteAmount(quote.amount_in);
+            document.getElementById('exchange-quote-out').textContent=exchangeQuoteAmount(quote.amount_out);
+            document.getElementById('exchange-quote-min').textContent=exchangeQuoteAmount(quote.amount_out_min);
+            document.getElementById('exchange-quote-balance').textContent=exchangeQuoteAmount(quote.source_available);
+            document.getElementById('exchange-quote-provider').textContent=
+                localizeUiText('Quote provider')+': '+String(quote.provider||'LI.FI').slice(0,48);
+            const expires=new Date(Number(quote.expires_at)*1000);
+            document.getElementById('exchange-quote-expiry').textContent=
+                localizeUiText('Quote expires')+': '+(Number.isNaN(expires.getTime())?'—':expires.toLocaleTimeString());
+
+            const list=document.getElementById('exchange-quote-fees');
+            list.replaceChildren();
+            const fees=Array.isArray(quote.provider_fees)?quote.provider_fees:[];
+            if(!fees.length){
+                const item=document.createElement('li');
+                item.textContent=localizeUiText('No fee breakdown was returned.');
+                list.appendChild(item);
+            }else{
+                for(const fee of fees.slice(0,24)){
+                    const item=document.createElement('li');
+                    const feeKind=fee.kind==='network'?'Network fee':'Provider fee';
+                    const usd=Number(fee.amount_usd);
+                    const cost=Number.isFinite(usd)?'$'+usd.toFixed(4):'—';
+                    const included=fee.included?' · '+localizeUiText('included'):'';
+                    item.textContent=localizeUiText(feeKind)+': '+
+                        String(fee.name||feeKind).slice(0,80)+' · '+cost+' '+String(fee.symbol||'').slice(0,16)+included;
+                    list.appendChild(item);
+                }
+            }
+            const warnings=[];
+            if(quote.sufficient_source_balance===false)
+                warnings.push(localizeUiText('The amount is above your available in-app balance. This is only an estimate; no transfer can be sent.'));
+            if(quote.requires_approval===true)
+                warnings.push(localizeUiText('This Base quote would require USDC approval before a transfer. No approval was sent.'));
+            document.getElementById('exchange-quote-warning').textContent=warnings.join(' ');
+            document.getElementById('exchange-quote-result').hidden=false;
+        }
+        async function requestExchangeQuote(){
+            if(exchangeQuoteBusy)return;
+            const button=document.getElementById('exchange-quote-button');
+            const status=document.getElementById('exchange-quote-status');
+            const amount=document.getElementById('exchange-amount').value.trim();
+            exchangeQuoteBusy=true;
+            button.disabled=true;
+            status.textContent=localizeUiText('Requesting a live quote…');
+            clearExchangeQuote();
+            status.textContent=localizeUiText('Requesting a live quote…');
+            try{
+                const response=await apiFetch('/api/exchange/quote',{
+                    method:'POST',
+                    headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({direction:exchangeQuoteDirection,amount})
+                });
+                const data=await response.json();
+                if(!response.ok||!data.success)
+                    throw Error(data.message||'Could not get a quote. No transaction was sent.');
+                renderExchangeQuote(data.quote);
+                status.textContent=localizeUiText('Quote only. No transfer submitted or funds reserved.');
+            }catch(error){
+                status.textContent=localizeUiText(error.message||'Could not get a quote. No transaction was sent.');
+                document.getElementById('exchange-quote-result').hidden=true;
+            }finally{
+                exchangeQuoteBusy=false;
+                button.disabled=false;
+            }
         }
 
         function switchWalletTab(tab) {
@@ -5800,6 +5987,7 @@ async def main():
     app.router.add_get('/api/base-paper', wallet_handler(runtime.base_paper_report))
     app.router.add_post('/api/base-paper/budget', wallet_handler(runtime.save_base_paper_budget))
     app.router.add_post('/api/base-paper/scan', wallet_handler(runtime.scan_base_paper))
+    app.router.add_post('/api/exchange/quote', wallet_handler(runtime.exchange_quote))
     app.router.add_post('/api/trading_readiness', wallet_handler(runtime.trading_readiness))
     app.router.add_post('/api/ai_preview', wallet_handler(runtime.ai_preview))
     app.router.add_post('/api/recover_expired_operation', wallet_handler(runtime.recover_expired_operation))

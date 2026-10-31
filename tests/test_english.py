@@ -34,25 +34,28 @@ class EnglishTests(unittest.TestCase):
                       root.joinpath("deposit_payment.html").read_text()):
             self.assertIsNone(re.search("[А-Яа-яЁё]", value))
 
-    def test_exchange_is_informational_and_explicitly_disabled(self):
+    def test_exchange_only_displays_quotes_and_has_no_transfer_controls(self):
         root = Path(__file__).resolve().parents[1]
         source = ast.parse(root.joinpath("main.py").read_text())
         page = next(ast.literal_eval(node.value) for node in source.body if isinstance(node, ast.Assign)
                     and any(isinstance(t, ast.Name) and t.id == "RAW_HTML" for t in node.targets))
         exchange = page.split('<div id="tab-exchange"', 1)[1].split('<div id="tab-deposit"', 1)[0]
         for required in (
-                "Solana → Base", "Base → Solana", "NOT CONFIGURED",
-                "No transfer can be started in either direction",
-                "separate Base hot wallet", "Only your available Solana USDC balance",
-                "quote, estimated receive amount, provider charge and network costs will be shown before you manually confirm",
-                "only after the destination-chain transfer reaches finality",
-                "Shared wallet. Separate user balances.", "Telegram account UID",
-                "not an external withdrawal", "Do not retry a transfer",
-                'class="exchange-disabled" type="button" disabled'):
+                "Solana → Base", "Base → Solana", "QUOTE ONLY · SEND OFF",
+                "Quotes only · sending is disabled",
+                "Choose a direction and request a live LI.FI estimate",
+                "Get a read-only quote for your Solana USDC",
+                "See the estimated output, minimum receive amount, provider fees and network costs",
+                "Shared wallet. Separate user balances.", "tracked separately by account",
+                "perform a withdrawal",
+                "No transfer is submitted", "Estimate only. This screen cannot approve or send a transaction",
+                'id="exchange-quote-button"', 'id="exchange-amount"'):
             self.assertIn(required, exchange)
         self.assertIn("const source = reverse ? 'Base' : 'Solana'", page)
         self.assertIn("const destination = reverse ? 'Solana' : 'Base'", page)
-        self.assertNotRegex(exchange, r"<(form|input|select)\b")
+        self.assertNotRegex(exchange, r"<form\b")
+        self.assertNotIn("exchange-submit", exchange)
+        self.assertNotIn("exchange-approve", exchange)
         self.assertNotIn("fetch(", exchange)
 
     def test_presentation_does_not_change_money_status_or_identity(self):
