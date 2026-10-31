@@ -28,6 +28,24 @@ class EnglishTests(unittest.TestCase):
                       root.joinpath("deposit_payment.html").read_text()):
             self.assertIsNone(re.search("[А-Яа-яЁё]", value))
 
+    def test_exchange_is_informational_and_explicitly_disabled(self):
+        root = Path(__file__).resolve().parents[1]
+        source = ast.parse(root.joinpath("main.py").read_text())
+        page = next(ast.literal_eval(node.value) for node in source.body if isinstance(node, ast.Assign)
+                    and any(isinstance(t, ast.Name) and t.id == "RAW_HTML" for t in node.targets))
+        exchange = page.split('<div id="tab-exchange"', 1)[1].split('<div id="tab-deposit"', 1)[0]
+        for required in (
+                "Solana to Base", "NOT CONFIGURED", "No transfer can be started yet",
+                "not configured", "your own available Solana USDC balance",
+                "quote and provider or network costs will be shown before you manually confirm",
+                "only after the destination-chain transfer reaches finality",
+                "Shared wallet. Separate user balances.", "Telegram account UID",
+                "not an external withdrawal", "Do not retry a transfer",
+                'class="exchange-disabled" type="button" disabled'):
+            self.assertIn(required, exchange)
+        self.assertNotRegex(exchange, r"<(form|input|select)\b")
+        self.assertNotIn("fetch(", exchange)
+
     def test_presentation_does_not_change_money_status_or_identity(self):
         original = {"message": "Резерв комиссий: 0.001 SOL; требуется не меньше 0.005"
                     " SOL. В Настройках → Резерв комиссий выделите только свои SOL. Пользовательские средства автоматически не расходуются.",

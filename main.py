@@ -2025,6 +2025,74 @@ RAW_HTML = r"""<!DOCTYPE html>
             #app .partner-table, #app .partner-invite { max-width: 900px; }
             #app .sig-input, #app textarea { max-width: 100%; }
         }
+        /* Exchange: a deliberately informational bridge surface until the route is configured. */
+        #app #tab-exchange { max-width: 900px; }
+        .exchange-hero {
+            position: relative; overflow: hidden; min-height: 210px; padding: 22px;
+            border: 1px solid rgba(195, 231, 156, .2); border-radius: 24px;
+            background:
+                radial-gradient(ellipse at 76% 40%, rgba(159, 206, 139, .12), transparent 34%),
+                linear-gradient(145deg, #17221d 0%, #111b1b 55%, #111925 100%);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 22px 55px rgba(0,0,0,.18);
+        }
+        .exchange-hero::after {
+            content:""; position:absolute; inset:0; pointer-events:none; opacity:.13;
+            background-image: radial-gradient(rgba(219,239,203,.55) .6px,transparent .7px);
+            background-size: 13px 13px; mask-image: linear-gradient(90deg,transparent 12%,#000 100%);
+        }
+        .exchange-heading { position:relative; z-index:2; display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+        .exchange-heading h1 { margin:0; color:#f0f3e8; font-size:clamp(26px,6vw,34px); letter-spacing:-.045em; }
+        .exchange-kicker { margin:0 0 7px; color:#a9bc8e; font:700 10px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.16em; }
+        .exchange-status { flex:none; border:1px solid rgba(239,190,111,.35); border-radius:99px; padding:7px 10px; color:#efc77e; background:rgba(63,45,22,.35); font:700 9px/1 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.08em; }
+        .exchange-lede { position:relative; z-index:2; max-width:500px; margin:9px 0 0; color:#a8b6a9; font-size:13px; line-height:1.55; }
+        .bridge-stage { position:relative; height:224px; margin:4px auto 0; max-width:460px; perspective:800px; }
+        .bridge-track { position:absolute; left:14%; right:14%; top:52%; height:1px; background:linear-gradient(90deg,rgba(114,214,171,.08),#8bd8ae 48%,rgba(119,177,217,.2)); transform:rotateX(62deg); box-shadow:0 0 18px rgba(144,221,177,.24); }
+        .bridge-node { position:absolute; top:50%; width:118px; height:112px; transform-style:preserve-3d; }
+        .bridge-node--sol { left:6%; transform:translateY(-50%) rotateX(58deg) rotateZ(-25deg); }
+        .bridge-node--base { right:6%; transform:translateY(-50%) rotateX(58deg) rotateZ(25deg); }
+        .bridge-disc { position:absolute; inset:12px 8px 18px; border-radius:22px; background:linear-gradient(145deg,#314538,#19281f); border:1px solid rgba(180,224,174,.48); box-shadow:0 20px 0 -5px #152019,0 22px 0 -4px rgba(142,191,147,.38),0 34px 28px rgba(0,0,0,.38),inset 0 1px 0 rgba(255,255,255,.2); }
+        .bridge-node--base .bridge-disc { background:linear-gradient(145deg,#30485a,#1b2a35); border-color:rgba(144,194,224,.5); box-shadow:0 20px 0 -5px #17232c,0 22px 0 -4px rgba(137,176,203,.38),0 34px 28px rgba(0,0,0,.38),inset 0 1px 0 rgba(255,255,255,.2); }
+        .bridge-token { position:absolute; z-index:2; inset:26px 0 auto; color:#e4f0dc; text-align:center; font:800 14px/1 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.06em; transform:translateZ(26px); }
+        .bridge-node--base .bridge-token { color:#dceaf1; }
+        .bridge-chain { position:absolute; z-index:2; inset:auto 0 3px; color:#a3b1a1; text-align:center; font:700 8px/1 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.14em; transform:translateZ(28px); }
+        .bridge-center { position:absolute; z-index:3; left:50%; top:50%; display:grid; place-items:center; width:40px; height:40px; border:1px solid rgba(179,224,185,.42); border-radius:50%; color:#c9efb8; background:#1a2922; box-shadow:0 0 0 7px rgba(198,230,180,.04),0 8px 24px rgba(0,0,0,.4); transform:translate(-50%,-50%); font:600 18px/1 ui-monospace,monospace; }
+        .bridge-annotation { position:absolute; left:50%; bottom:4px; transform:translateX(-50%); color:#7f9185; white-space:nowrap; font:600 8px/1 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.13em; }
+        .exchange-callout { display:grid; grid-template-columns:22px 1fr; gap:12px; align-items:start; padding:16px; border:1px solid rgba(228,181,106,.27); border-radius:17px; background:linear-gradient(135deg,rgba(69,50,25,.42),rgba(38,33,25,.32)); }
+        .exchange-callout-mark { display:grid; place-items:center; width:21px; height:21px; border:1px solid rgba(230,185,112,.65); border-radius:50%; color:#e9c37f; font:700 12px/1 ui-monospace,monospace; }
+        .exchange-callout strong { display:block; color:#f0d49e; font-size:12px; }
+        .exchange-callout p { margin:5px 0 0; color:#bdad8e; font-size:11px; line-height:1.55; }
+        .exchange-flow { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin:14px 0; }
+        .exchange-step { min-width:0; padding:15px 13px; border:1px solid rgba(190,218,179,.14); border-radius:16px; background:linear-gradient(145deg,rgba(24,35,29,.9),rgba(16,24,25,.86)); }
+        .exchange-step-index { color:#9fbc82; font:700 9px/1 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.15em; }
+        .exchange-step h2 { margin:9px 0 5px; color:#e6eddf; font-size:13px; letter-spacing:-.02em; }
+        .exchange-step p { margin:0; color:#9fae9e; font-size:11px; line-height:1.55; }
+        .exchange-accounting { padding:18px; border:1px solid rgba(158,190,211,.18); border-radius:20px; background:linear-gradient(145deg,rgba(20,31,38,.92),rgba(16,24,29,.82)); }
+        .exchange-accounting h2 { margin:0 0 8px; color:#e4edf0; font-size:16px; }
+        .exchange-accounting p { margin:0; color:#a8b7b9; font-size:12px; line-height:1.65; }
+        .exchange-accounting strong { color:#d9e9de; }
+        .exchange-destination { display:flex; flex-wrap:wrap; align-items:center; gap:7px; margin:14px 0; color:#91a59e; font:700 9px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.08em; }
+        .exchange-destination span { padding:8px 10px; border:1px solid rgba(183,216,189,.17); border-radius:9px; background:rgba(9,16,15,.45); }
+        .exchange-disabled { width:100%; min-height:48px; margin-top:15px; border:1px solid #39443b; border-radius:13px; color:#a8b0a5; background:linear-gradient(180deg,#30382f,#252d26); font-size:12px; font-weight:750; cursor:not-allowed; opacity:.78; }
+        .exchange-disabled-note { margin:8px 0 0; color:#a0a99e; text-align:center; font-size:10px; line-height:1.5; }
+        .exchange-safety { margin-top:12px; padding:14px 15px; border-left:2px solid #d9a863; border-radius:0 12px 12px 0; background:rgba(55,42,24,.28); color:#c5b28f; font-size:11px; line-height:1.6; }
+        @media (max-width: 430px) {
+            #nav .nav-btn { padding-right:1px; padding-left:1px; font-size:9px; }
+            #nav .nav-btn span { font-size:16px; }
+            .exchange-hero { padding:18px 16px 12px; }
+            .exchange-flow { grid-template-columns:1fr; gap:8px; }
+            .exchange-step { display:grid; grid-template-columns:32px 1fr; column-gap:8px; padding:12px; }
+            .exchange-step-index { grid-row:span 2; padding-top:3px; }
+            .exchange-step h2 { margin:0 0 4px; }
+            .exchange-step p { grid-column:2; }
+            .bridge-stage { height:194px; }
+            .bridge-node { width:102px; height:98px; }
+        }
+        @media (min-width: 1024px) {
+            #app #tab-exchange.active { display:block; }
+            #app #tab-exchange > .exchange-hero, #app #tab-exchange > .exchange-callout,
+            #app #tab-exchange > .exchange-flow, #app #tab-exchange > .exchange-accounting,
+            #app #tab-exchange > .exchange-safety { max-width:900px; }
+        }
     </style>
 </head>
 <body>
@@ -2217,6 +2285,42 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div style="font-size: 13px; font-weight: 800; color: #f8fafc; margin-bottom: 12px;">YOUR TRADES</div>
                 <div id="history-box" style="color: #64748b; font-size: 11px; text-align: center; padding: 20px;">Loading trades...</div>
             </div>
+        </div>
+
+        <div id="tab-exchange" class="tab-panel" aria-labelledby="exchange-title">
+            <header class="page-heading"><div><p class="eyebrow">Cross-chain · Personal ledger</p><h1 id="exchange-title">Exchange</h1></div></header>
+            <section class="exchange-hero" aria-label="Solana to Base USDC bridge concept">
+                <div class="exchange-heading">
+                    <div><p class="exchange-kicker">USDC · MANUAL BRIDGE</p><h1>Solana to Base</h1></div>
+                    <span class="exchange-status">NOT CONFIGURED</span>
+                </div>
+                <p class="exchange-lede">Move value between your own in-app chain balances. This route is informational only: no bridge service or Base settlement wallet is configured.</p>
+                <div class="bridge-stage" aria-hidden="true">
+                    <div class="bridge-track"></div>
+                    <div class="bridge-node bridge-node--sol"><div class="bridge-disc"></div><span class="bridge-token">USDC</span><span class="bridge-chain">SOLANA</span></div>
+                    <div class="bridge-center">→</div>
+                    <div class="bridge-node bridge-node--base"><div class="bridge-disc"></div><span class="bridge-token">USDC</span><span class="bridge-chain">BASE</span></div>
+                    <div class="bridge-annotation">PERSONAL LEDGER · MANUAL CONFIRMATION</div>
+                </div>
+            </section>
+            <div class="exchange-callout" role="status" aria-live="polite" style="margin-top:14px">
+                <span class="exchange-callout-mark" aria-hidden="true">!</span>
+                <div><strong>No transfer can be started yet</strong><p>The bridge backend, Base hot wallet and quote integration are not configured. There is no transfer form, live quote or transaction action on this screen.</p></div>
+            </div>
+            <section class="exchange-flow" aria-label="How the bridge will work when enabled">
+                <article class="exchange-step"><span class="exchange-step-index">01 / SOURCE</span><h2>Use your Solana USDC</h2><p>You will use your own available Solana USDC balance. You will not need to deposit Base USDC externally to use the bridge.</p></article>
+                <article class="exchange-step"><span class="exchange-step-index">02 / REVIEW</span><h2>Review before confirming</h2><p>A quote and provider or network costs will be shown before you manually confirm. Nothing is submitted automatically.</p></article>
+                <article class="exchange-step"><span class="exchange-step-index">03 / SETTLE</span><h2>Credit after finality</h2><p>Only your Base balance will be credited, and only after the destination-chain transfer reaches finality.</p></article>
+            </section>
+            <section class="exchange-accounting" aria-labelledby="exchange-accounting-title">
+                <p class="exchange-kicker">ACCOUNTING · ISOLATED BY UID</p>
+                <h2 id="exchange-accounting-title">Shared wallet. Separate user balances.</h2>
+                <p>The bot's physical Base hot wallet is shared for settlement, but its ledger tracks each authenticated user's funds separately by Telegram account UID. A shared wallet does not make users' recorded balances shared. This internal bridge moves value between your in-app chain balances; it is <strong>not an external withdrawal</strong>.</p>
+                <div class="exchange-destination" aria-label="Bridge path"><span>YOUR SOLANA USDC</span><span aria-hidden="true">→</span><span>DESTINATION FINALITY</span><span aria-hidden="true">→</span><span>YOUR BASE BALANCE</span></div>
+                <button class="exchange-disabled" type="button" disabled aria-disabled="true">Bridge unavailable · not configured</button>
+                <p class="exchange-disabled-note">This control is disabled. No transfer can be started from this screen.</p>
+            </section>
+            <aside class="exchange-safety"><strong>Pending or unknown?</strong> Do not retry a transfer whose status is pending or unknown. Wait for its status to be resolved before taking any action.</aside>
         </div>
 
         <div id="tab-deposit" class="tab-panel">
@@ -2670,6 +2774,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         <button class="nav-btn active" onclick="gotoTab('terminal', this)"><span>◈</span>Overview</button>
         <button class="nav-btn" onclick="gotoTab('trading', this)"><span>↗</span>Trading</button>
         <button class="nav-btn" onclick="gotoTab('deposit', this)"><span>⇄</span>Wallet</button>
+        <button class="nav-btn" onclick="gotoTab('exchange', this)"><span>⇆</span>Exchange</button>
         <button class="nav-btn" onclick="gotoTab('settings', this)"><span>⚙</span>Settings</button>
         <button id="nav-tariffs" class="nav-btn" onclick="gotoTab('tariffs', this)"><span>▤</span>Tariffs</button>
     </div>

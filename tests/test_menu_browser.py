@@ -59,7 +59,19 @@ class MenuBrowserTests(unittest.TestCase):
             try {
                 proceedToTerminal(); await refresh();
                 const assert=(condition,message)=>{if(!condition)failures.push(message);};
-                assert(document.querySelectorAll('.nav-btn').length===5,'five navigation items');
+                assert(document.querySelectorAll('.nav-btn').length===6,'six navigation items including Exchange');
+                const exchangeNav=Array.from(document.querySelectorAll('.nav-btn')).find(button=>button.textContent.includes('Exchange'));
+                assert(!!exchangeNav,'Exchange is a distinct navigation destination');
+                assert(exchangeNav.getAttribute('onclick').includes("'exchange'"),'Exchange navigation opens its own tab');
+                const exchangePanel=document.getElementById('tab-exchange');
+                assert(!!exchangePanel,'Exchange panel exists');
+                assert(exchangePanel.textContent.includes('No transfer can be started yet'),'not-configured state is explicit');
+                assert(exchangePanel.textContent.includes('not configured'),'route availability is unambiguous');
+                assert(exchangePanel.textContent.includes('Shared wallet. Separate user balances.'),'UID-isolated ledger is explained');
+                assert(exchangePanel.textContent.includes('not an external withdrawal'),'internal bridge is distinguished from withdrawal');
+                assert(exchangePanel.textContent.includes('Do not retry a transfer'),'pending and unknown transfers must not be retried');
+                assert(exchangePanel.querySelector('.exchange-disabled').disabled,'bridge action is disabled');
+                assert(exchangePanel.querySelectorAll('input,select,form').length===0,'no transfer submission controls are present');
                 assert(document.getElementById('meme-sniper-card').closest('.tab-panel').id==='tab-trading','SOL sniper in Trading, not Overview');
                 assert(document.getElementById('sniper-sol-balance').textContent==='0.164009 SOL','sniper shows personal SOL');
                 assert(document.getElementById('sniper-position-cap').textContent==='Screened Solana candidates · up to 5 positions','sniper cap matches server policy');
@@ -150,7 +162,7 @@ class MenuBrowserTests(unittest.TestCase):
                 assert(chartText.includes('YES\\nJUP: fresh candles unavailable'),
                     'chart rows use real line breaks');
                 assert(!chartText.includes('\\\\n'),'chart zones do not show literal slash-n text');
-                const tabs=['terminal','trading','deposit','settings'];
+                const tabs=['terminal','trading','deposit','exchange','settings'];
                 for(let i=0;i<tabs.length;i++){
                     gotoTab(tabs[i],document.querySelectorAll('.nav-btn')[i]);
                     assert(document.querySelectorAll('.tab-panel.active').length===1,'single active panel');
