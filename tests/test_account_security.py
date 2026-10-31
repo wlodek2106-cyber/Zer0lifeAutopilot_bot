@@ -100,6 +100,20 @@ class AccountSecurityTests(unittest.IsolatedAsyncioTestCase):
         self.temp.cleanup()
     async def register(self,uid=101,nick="TraderOne"):
         return decoded(await self.accounts.register(Request({"nickname":nick,"accept_risk":True,"uid":999},uid)))
+    async def test_language_preference_is_account_scoped_and_defaults_to_english(self):
+        await self.register()
+        self.assertEqual(self.accounts.state(101)["ui_language"],"en")
+        response=decoded(await self.accounts.set_language(Request({"language":"ru"},101)))
+        self.assertEqual(response["ui_language"],"ru")
+        self.assertEqual(self.accounts.state(101)["ui_language"],"ru")
+        self.assertEqual(self.accounts.state(202)["ui_language"],"en")
+        response=decoded(await self.accounts.set_language(Request({"language":"uk"},101)))
+        self.assertEqual(response["ui_language"],"uk")
+        self.assertEqual(self.accounts.state(101)["ui_language"],"uk")
+        with self.assertRaises(WalletError):
+            await self.accounts.set_language(Request({"language":"fr"},101))
+        with self.assertRaises(WalletError):
+            await self.accounts.set_language(Request({"language":"ru"},202))
     async def ticket(self,purpose="enroll",uid=101,**fields):
         body={"purpose":purpose,"pin":"test-code",**fields}
         return decoded(await self.accounts.create_ticket(Request(body,uid)))["ticket"]

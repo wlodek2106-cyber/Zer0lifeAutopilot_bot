@@ -40,6 +40,7 @@ class MenuBrowserTests(unittest.TestCase):
         window.Telegram={WebApp:{initData:'fixture',initDataUnsafe:{user:{id:101,username:'fixture'}},expand(){},ready(){}}};
         const fixture=FIXTURE;
         window.feePosts=[];
+        window.languagePosts=[];
         window.prompt=()=>{throw new Error('native prompt must not be used for fees');};
         window.confirm=()=>{throw new Error('native confirm must not be used for fees');};
         window.fetch=async(url,options={})=>{
@@ -47,6 +48,12 @@ class MenuBrowserTests(unittest.TestCase):
                 window.feePosts.push(JSON.parse(options.body));
                 fixture.operator_fees={reserve_sol:'0.01',minimum_sol:'0.005',own_available_sol:'0.154009149',sufficient:true};
                 return new Response(JSON.stringify({success:true,message:'Allocated',operator_fees:fixture.operator_fees}),
+                    {status:200,headers:{'Content-Type':'application/json'}});
+            }
+            if(url==='/api/account/language'){
+                const body=JSON.parse(options.body);
+                window.languagePosts.push(body);
+                return new Response(JSON.stringify({success:true,ui_language:body.language}),
                     {status:200,headers:{'Content-Type':'application/json'}});
             }
             return new Response(JSON.stringify(fixture),{status:200,headers:{'Content-Type':'application/json'}});
@@ -84,6 +91,19 @@ class MenuBrowserTests(unittest.TestCase):
                  assert(document.getElementById('exchange-dir-base-solana').getAttribute('aria-pressed')==='true','reverse direction is accessible as selected');
                  setExchangeDirection('solana-to-base');
                  assert(document.getElementById('exchange-direction-title').textContent==='Solana → Base','forward route can be restored');
+                 applyUiLanguage('ru');
+                 assert(document.documentElement.lang==='ru','Russian language sets the document language');
+                 assert(exchangeNav.textContent.includes('Обмен'),'navigation is translated to Russian');
+                 assert(document.getElementById('ui-language-select').value==='ru','selector follows active language');
+                 applyUiLanguage('uk');
+                 assert(document.documentElement.lang==='uk','Ukrainian language sets document language');
+                 assert(exchangeNav.textContent.includes('Обмін'),'navigation is translated to Ukrainian');
+                 document.getElementById('ui-language-select').value='uk';
+                 await saveUiLanguage();
+                 assert(window.languagePosts.length===1&&window.languagePosts[0].language==='uk',
+                     'selected language is saved to the account API');
+                 applyUiLanguage('en');
+                 assert(exchangeNav.textContent.includes('Exchange'),'English can be restored');
                 assert(document.getElementById('meme-sniper-card').closest('.tab-panel').id==='tab-trading','SOL sniper in Trading, not Overview');
                 assert(document.getElementById('sniper-sol-balance').textContent==='0.164009 SOL','sniper shows personal SOL');
                 assert(document.getElementById('sniper-position-cap').textContent==='Screened Solana candidates · up to 5 positions','sniper cap matches server policy');
@@ -107,6 +127,7 @@ class MenuBrowserTests(unittest.TestCase):
                 assert(!document.getElementById('fee-confirm').checked,'confirmation cleared after success');
                 const copy=document.body.cloneNode(true);
                 copy.querySelectorAll('script,style').forEach(el=>el.remove());
+                copy.querySelector('#ui-language-select')?.remove();
                 assert(!/[А-Яа-яЁё]/.test(copy.textContent),'all UI text in English');
                 assert(document.getElementById('strategy-help').closest('.tab-panel').id==='tab-settings','long strategy text in Settings');
                 assert(!document.getElementById('strategy-help').open,'strategy help collapsed by default');

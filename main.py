@@ -2536,6 +2536,18 @@ RAW_HTML = r"""<!DOCTYPE html>
         </div>
         <div id="tab-settings" class="tab-panel">
             <header class="page-heading"><div><p class="eyebrow">Account preferences</p><h1>Settings</h1></div></header>
+            <div class="card" id="language-settings">
+                <h3 style="margin-top:0">Interface language</h3>
+                <p class="section-note">English is the default. Your choice is saved to your account and follows you across devices.</p>
+                <label class="settings-label" for="ui-language-select">Choose a language</label>
+                <select id="ui-language-select" class="sig-input" aria-label="Choose a language">
+                    <option value="en">English</option>
+                    <option value="ru">Русский</option>
+                    <option value="uk">Українська</option>
+                </select>
+                <button class="btn-green-main" type="button" onclick="saveUiLanguage()">Save language</button>
+                <p id="ui-language-status" class="section-note" role="status" aria-live="polite"></p>
+            </div>
             <div class="card" id="support-card">
                 <h3 style="margin-top:0">Technical support</h3>
                 <p class="section-note">Send a private message and an optional screenshot directly to the administrator.</p>
@@ -3032,6 +3044,172 @@ RAW_HTML = r"""<!DOCTYPE html>
                 document.getElementById('base-paper-status').textContent=error.message||'Base paper scan failed; no simulated action was recorded.';
             }finally{basePaperBusy=false;button.disabled=false;}
         }
+        const UI_COPY_ROWS = [
+            ["Interface language","Язык интерфейса","Мова інтерфейсу"],
+            ["English is the default. Your choice is saved to your account and follows you across devices.","По умолчанию выбран английский. Выбор сохраняется в аккаунте и действует на всех устройствах.","За замовчуванням вибрано англійську. Вибір зберігається в обліковому записі й діє на всіх пристроях."],
+            ["Choose a language","Выберите язык","Виберіть мову"],["Save language","Сохранить язык","Зберегти мову"],
+            ["Saving language preference…","Сохраняем язык…","Зберігаємо мову…"],
+            ["Language preference saved.","Язык сохранён.","Мову збережено."],
+            ["Could not save language preference.","Не удалось сохранить язык.","Не вдалося зберегти мову."],
+            ["Overview","Обзор","Огляд"],["Trading","Торговля","Торгівля"],["Wallet","Кошелёк","Гаманець"],
+            ["Exchange","Обмен","Обмін"],["Settings","Настройки","Налаштування"],["Tariffs","Тарифы","Тарифи"],
+            ["Account preferences","Настройки аккаунта","Налаштування облікового запису"],
+            ["Your account · USDC / SOL","Ваш аккаунт · USDC / SOL","Ваш обліковий запис · USDC / SOL"],
+            ["Personal funds. Trading carries risk.","Личные средства. Торговля связана с риском.","Особисті кошти. Торгівля пов’язана з ризиком."],
+            ["Available funds","Доступные средства","Доступні кошти"],["USDC · available","USDC · доступно","USDC · доступно"],
+            ["SOL · available","SOL · доступно","SOL · доступно"],["Your realized PnL:","Реализованный PnL:","Реалізований PnL:"],
+            ["Realized PnL · USDC","Реализованный PnL · USDC","Реалізований PnL · USDC"],
+            ["Realized PnL · SOL","Реализованный PnL · SOL","Реалізований PnL · SOL"],
+            ["Closed trades","Закрытые сделки","Закриті угоди"],["Profits","Прибыль","Прибуток"],
+            ["Losses","Убытки","Збитки"],["Net","Итого","Разом"],["YOUR TRADES","ВАШИ СДЕЛКИ","ВАШІ УГОДИ"],
+            ["Autopilot: OFF","Автопилот: ВЫКЛ","Автопілот: ВИМК"],["Refresh","Обновить","Оновити"],
+            ["Close all my positions","Закрыть все мои позиции","Закрити всі мої позиції"],
+            ["Meme Sniper · SOL","Meme Sniper · SOL","Meme Sniper · SOL"],
+            ["Available SOL","Доступно SOL","Доступно SOL"],["Order size","Размер ордера","Розмір ордера"],
+            ["Scan candidates","Сканировать кандидатов","Сканувати кандидатів"],
+            ["Candidate shortlist","Список кандидатов","Список кандидатів"],
+            ["No verified shortlist yet.","Пока нет проверенного списка кандидатов.","Перевіреного списку кандидатів ще немає."],
+            ["Market discovery · DexScreener + charts","Поиск рынка · DexScreener и графики","Пошук ринку · DexScreener і графіки"],
+            ["Core strategy · USDC","Стратегия Core · USDC","Стратегія Core · USDC"],
+            ["AI · BUY / SELL / HOLD","ИИ · ПОКУПКА / ПРОДАЖА / ОЖИДАНИЕ","ШІ · КУПІВЛЯ / ПРОДАЖ / ОЧІКУВАННЯ"],
+            ["Slippage","Проскальзывание","Прослизання"],["Profit trail","Трейлинг прибыли","Трейлінг прибутку"],
+            ["Stop loss","Стоп-лосс","Стоп-лос"],["ACTIVITY LOG","ЖУРНАЛ АКТИВНОСТИ","ЖУРНАЛ АКТИВНОСТІ"],
+            ["Cross-chain · Personal ledger","Межсетевой обмен · личный баланс","Міжмережевий обмін · особистий баланс"],
+            ["USDC · MANUAL CROSS-CHAIN TRANSFER","USDC · РУЧНОЙ МЕЖСЕТЕВОЙ ОБМЕН","USDC · РУЧНИЙ МІЖМЕРЕЖЕВИЙ ОБМІН"],
+            ["Amount · USDC","Сумма · USDC","Сума · USDC"],["Get live quote","Получить актуальную котировку","Отримати актуальну котировку"],
+            ["Quote only · live transfer is not enabled","Только котировка · переводы пока отключены","Лише котировка · перекази поки вимкнено"],
+            ["Review a current route and fees below. The server will not sign or broadcast a transaction from this screen yet.","Ниже проверьте маршрут и комиссии. На этом экране сервер пока не подписывает и не отправляет транзакции.","Нижче перевірте маршрут і комісії. На цьому екрані сервер поки не підписує та не надсилає транзакції."],
+            ["Use your Solana USDC","Использовать USDC в Solana","Використати USDC у Solana"],
+            ["Use your Base USDC","Использовать USDC в Base","Використати USDC у Base"],
+            ["Review quote and costs","Проверить котировку и расходы","Перевірити котировку та витрати"],
+            ["Credit your Base balance","Зачислить на баланс Base","Зарахувати на баланс Base"],
+            ["Credit your Solana balance","Зачислить на баланс Solana","Зарахувати на баланс Solana"],
+            ["Shared wallet. Separate user balances.","Общий кошелёк. Балансы пользователей раздельные.","Спільний гаманець. Баланси користувачів окремі."],
+            ["Pending or unknown?","Операция ожидает подтверждения?","Операція очікує підтвердження?"],
+            ["Do not retry a transfer whose status is pending or unknown. Wait for its status to be resolved before taking any action.","Не повторяйте перевод со статусом «ожидает» или «неизвестен». Дождитесь проверки результата.","Не повторюйте переказ зі статусом «очікує» або «невідомо». Дочекайтеся перевірки результату."],
+            ["Confirm and send this quote","Подтвердить и отправить обмен","Підтвердити й надіслати обмін"],
+            ["Approve exact USDC only","Разрешить списание только указанного USDC","Дозволити списання лише вказаного USDC"],
+            ["Deposit","Пополнение","Поповнення"],["Withdraw","Вывод","Виведення"],
+            ["Deposit / withdraw","Пополнение / вывод","Поповнення / виведення"],
+            ["Pay SOL with Solana Pay","Пополнить SOL через Solana Pay","Поповнити SOL через Solana Pay"],
+            ["Create payment request","Создать платёжный запрос","Створити платіжний запит"],
+            ["Verify your wallet","Подтвердить кошелёк","Підтвердити гаманець"],
+            ["Copy deposit address","Скопировать адрес пополнения","Скопіювати адресу поповнення"],
+            ["Verify deposit","Проверить пополнение","Перевірити поповнення"],
+            ["Monthly trading fee","Ежемесячная комиссия за торговлю","Щомісячна комісія за торгівлю"],
+            ["Cancel future monthly charges","Отменить будущие списания","Скасувати майбутні списання"],
+            ["Transactions","Операции","Операції"],["No transactions yet.","Операций пока нет.","Операцій поки немає."],
+            ["Access packages","Тарифы доступа","Тарифи доступу"],["AI Trader access","Доступ к AI Trader","Доступ до AI Trader"],
+            ["Choose a time-limited package to continue.","Выберите тариф с ограниченным сроком действия.","Виберіть тариф з обмеженим строком дії."],
+            ["Technical support","Техническая поддержка","Технічна підтримка"],
+            ["Contact support","Связаться с поддержкой","Зв’язатися з підтримкою"],
+            ["Account protection","Защита аккаунта","Захист облікового запису"],
+            ["Order sizes","Размеры ордеров","Розміри ордерів"],
+            ["Saving settings does not start trading.","Сохранение настроек не запускает торговлю.","Збереження налаштувань не запускає торгівлю."],
+            ["Partner program","Партнёрская программа","Партнерська програма"],
+            ["Your referral link","Ваша реферальная ссылка","Ваше реферальне посилання"],
+            ["Copy referral link","Скопировать реферальную ссылку","Скопіювати реферальне посилання"],
+            ["Strategy limits & risks","Ограничения и риски стратегии","Обмеження та ризики стратегії"],
+            ["Diagnostics","Диагностика","Діагностика"],["AI connection & costs","Подключение ИИ и расходы","Підключення ШІ та витрати"],
+            ["AI Crypto Investors","AI Crypto Investors","AI Crypto Investors"],
+            ["SIM ONLY · LIVE OFF","ТОЛЬКО СИМУЛЯЦИЯ · РЕАЛЬНАЯ ТОРГОВЛЯ ВЫКЛ","ЛИШЕ СИМУЛЯЦІЯ · РЕАЛЬНА ТОРГІВЛЯ ВИМК"],
+            ["Manual scan · No Base wallet or real transactions","Ручное сканирование · без кошелька Base и реальных транзакций","Ручне сканування · без гаманця Base та реальних транзакцій"],
+            ["Scan Base","Сканировать Base","Сканувати Base"],["Open paper positions","Открытые виртуальные позиции","Відкриті віртуальні позиції"],
+            ["No open paper positions.","Открытых виртуальных позиций нет.","Відкритих віртуальних позицій немає."],
+            ["Screened candidates","Проверенные кандидаты","Перевірені кандидати"],
+            ["Open positions","Открытые позиции","Відкриті позиції"],
+            ["Entry and exit rules","Правила входа и выхода","Правила входу та виходу"],
+            ["Allocated strategy budget","Выделенный бюджет стратегии","Виділений бюджет стратегії"],
+            ["Save Investor budget","Сохранить бюджет Investors","Зберегти бюджет Investors"],
+            ["Closed trades and realized results","Закрытые сделки и реализованные результаты","Закриті угоди та реалізовані результати"],
+            ["Launch Terminal","Запустить терминал","Запустити термінал"],
+            ["Create your account","Создать аккаунт","Створити обліковий запис"],
+            ["Loading...","Загрузка…","Завантаження…"],["Loading…","Загрузка…","Завантаження…"],
+            ["Pending","Ожидает подтверждения","Очікує підтвердження"],
+            ["COMPLETED","ЗАВЕРШЕНО","ЗАВЕРШЕНО"],["FAILED","ОШИБКА","ПОМИЛКА"],
+            ["Transfer submitted; destination funds will appear only after verified finality.","Обмен отправлен; средства появятся после подтверждения перевода в сети.","Обмін надіслано; кошти з’являться після підтвердження переказу в мережі."],
+            ["Only your available Solana USDC balance can fund this direction. No external Base deposit is needed.","Для этого направления используются только доступные USDC в Solana. Внешнее пополнение Base не требуется.","Для цього напрямку використовуються лише доступні USDC у Solana. Зовнішнє поповнення Base не потрібне."],
+            ["Only your available Base USDC balance can fund this direction. No external Solana deposit is needed.","Для этого направления используются только доступные USDC в Base. Внешнее пополнение Solana не требуется.","Для цього напрямку використовуються лише доступні USDC у Base. Зовнішнє поповнення Solana не потрібне."],
+            ["A quote, estimated receive amount, provider charge and network costs will be shown before you manually confirm. Nothing is submitted automatically.","Перед ручным подтверждением будут показаны котировка, ожидаемая сумма получения, комиссия провайдера и сетевые расходы. Ничего не отправляется автоматически.","Перед ручним підтвердженням буде показано котировку, очікувану суму отримання, комісію провайдера та мережеві витрати. Нічого не надсилається автоматично."],
+            ["I agree to this recurring fee and authorize the in-app SOL balance transfer described above.","Я соглашаюсь с регулярной комиссией и разрешаю описанный выше внутренний перевод SOL.","Я погоджуюся з регулярною комісією та дозволяю описаний вище внутрішній переказ SOL."],
+            ["Your device verifies you using Face ID, Touch ID or another system verification method. We verify the passkey signature, not a face photo. Face-only verification cannot be enforced on every device.","Устройство подтверждает вход через Face ID, Touch ID или другой системный способ. Проверяется подпись ключа доступа, а не фотография лица. Не на каждом устройстве можно принудительно включить распознавание только лица.","Пристрій підтверджує вхід через Face ID, Touch ID або інший системний спосіб. Перевіряється підпис ключа доступу, а не фото обличчя. Не на кожному пристрої можна примусово ввімкнути розпізнавання лише обличчя."],
+            ["Both modes use a 5% stop below entry. After a position reaches +3.5%, a trailing exit triggers after a 2% pullback from its highest tracked price. Exits are checked approximately every 20 seconds independently of AI availability. Model failures stop new AI orders. After a server restart both modes pause and need manual reactivation.","В обоих режимах стоп-лосс установлен на 5% ниже входа. После роста позиции на 3,5% трейлинг-выход срабатывает при откате на 2% от максимальной отслеживаемой цены. Выходы проверяются примерно каждые 20 секунд независимо от доступности ИИ. Сбои модели приостанавливают новые ордера ИИ. После перезапуска сервера оба режима остановятся и потребуют ручного включения.","В обох режимах стоп-лос установлено на 5% нижче входу. Після зростання позиції на 3,5% трейлінг-вихід спрацьовує при відкаті на 2% від найвищої відстеженої ціни. Виходи перевіряються приблизно кожні 20 секунд незалежно від доступності ШІ. Збої моделі зупиняють нові ордери ШІ. Після перезапуску сервера обидва режими зупиняються й потребують ручного ввімкнення."],
+            ["Stops and trailing exits are execution conditions, not guaranteed fill prices. A 5% stop can close a position, but fast price moves, fees, slippage and liquidity can make the realized loss larger. Returns are not guaranteed.","Стоп-лосс и трейлинг задают условия исполнения, но не гарантируют цену сделки. Стоп на 5% может закрыть позицию, однако резкое движение цены, комиссии, проскальзывание и ликвидность могут увеличить фактический убыток. Доходность не гарантируется.","Стоп-лос і трейлінг визначають умови виконання, але не гарантують ціну угоди. Стоп на 5% може закрити позицію, однак різкий рух ціни, комісії, прослизання та ліквідність можуть збільшити фактичний збиток. Дохідність не гарантована."]
+        ];
+        const UI_COPY = {
+            ru:Object.fromEntries(UI_COPY_ROWS.map(([english,russian])=>[english,russian])),
+            uk:Object.fromEntries(UI_COPY_ROWS.map(([english,,ukrainian])=>[english,ukrainian]))
+        };
+        let currentUiLanguage='en';
+        const uiTextSources=new WeakMap(),uiAttributeSources=new WeakMap();
+        const uiTranslationPairs={};
+        for(const language of ['ru','uk'])
+            uiTranslationPairs[language]=Object.entries(UI_COPY[language]).sort((a,b)=>b[0].length-a[0].length);
+        function localizeUiText(source,language=currentUiLanguage){
+            if(language==='en'||!UI_COPY[language])return source;
+            let output=source;
+            for(const [english,translated] of uiTranslationPairs[language])
+                if(output.includes(english))output=output.split(english).join(translated);
+            return output;
+        }
+        const nativeUiAlert=window.alert.bind(window),nativeUiConfirm=window.confirm.bind(window),nativeUiPrompt=window.prompt.bind(window);
+        window.alert=message=>nativeUiAlert(localizeUiText(String(message??'')));
+        window.confirm=message=>nativeUiConfirm(localizeUiText(String(message??'')));
+        window.prompt=(message,initial)=>nativeUiPrompt(localizeUiText(String(message??'')),
+            initial===undefined?undefined:localizeUiText(String(initial)));
+        function translateUiTree(root=document.body){
+            if(!root)return;
+            const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+            let node;
+            while((node=walker.nextNode())){
+                if(node.parentElement?.closest('script,style'))continue;
+                if(!uiTextSources.has(node))uiTextSources.set(node,node.nodeValue);
+                const source=uiTextSources.get(node),leading=source.match(/^\\s*/)?.[0]||'';
+                const trailing=source.match(/\\s*$/)?.[0]||'';
+                const body=source.slice(leading.length,source.length-trailing.length);
+                const next=leading+localizeUiText(body)+trailing;
+                if(node.nodeValue!==next)node.nodeValue=next;
+            }
+            root.querySelectorAll?.('[placeholder],[title],[aria-label]').forEach(element=>{
+                let state=uiAttributeSources.get(element);
+                if(!state){state={source:{},applied:{}};uiAttributeSources.set(element,state);}
+                for(const name of ['placeholder','title','aria-label']){
+                    if(!element.hasAttribute(name))continue;
+                    const current=element.getAttribute(name);
+                    if(!(name in state.source)||current!==state.applied[name])state.source[name]=current;
+                    const next=localizeUiText(state.source[name]);state.applied[name]=next;
+                    if(current!==next)element.setAttribute(name,next);
+                }
+            });
+        }
+        function applyUiLanguage(language){
+            currentUiLanguage=['en','ru','uk'].includes(language)?language:'en';
+            document.documentElement.lang=currentUiLanguage;
+            document.documentElement.dataset.uiLanguage=currentUiLanguage;
+            const select=document.getElementById('ui-language-select');
+            if(select)select.value=currentUiLanguage;
+            translateUiTree();
+        }
+        async function saveUiLanguage(){
+            const select=document.getElementById('ui-language-select'),status=document.getElementById('ui-language-status');
+            const language=select?.value||'en';applyUiLanguage(language);status.textContent='Saving language preference…';
+            try{
+                const response=await apiFetch('/api/account/language',{method:'POST',headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({language})});
+                const data=await response.json();
+                if(!response.ok||!data.success)throw new Error(data.message||'Could not save language preference.');
+                status.textContent='Language preference saved.';
+                if(accountState)accountState.ui_language=language;
+            }catch(error){status.textContent=error.message||'Could not save language preference.';}
+        }
+        let languageMutationScheduled=false;
+        const languageObserver=new MutationObserver(()=>{
+            if(currentUiLanguage==='en'||languageMutationScheduled)return;
+            languageMutationScheduled=true;
+            requestAnimationFrame(()=>{languageMutationScheduled=false;translateUiTree();});
+        });
+        languageObserver.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,
+            attributeFilter:['placeholder','title','aria-label']});
         let tg;
         try {
             tg = window.Telegram?.WebApp;
@@ -4032,6 +4210,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             const response=await apiFetch('/api/account'),data=await response.json();
             if(!response.ok||!data.success)throw Error(data.message||'Could not verify account.');
             accountState=data;
+            applyUiLanguage(data.ui_language||'en');
             document.getElementById('passkey-state').textContent='Telegram code required for withdrawals. '+
                 (data.has_passkey?'Browser passkey active · '+data.passkey_count+' key(s) · '+data.recovery_codes_remaining+' recovery codes remaining.':
                     'No browser passkey set up. Telegram withdrawals remain available.');
@@ -5648,6 +5827,7 @@ async def main():
     app.router.add_post('/api/withdraw/code', wallet_handler(runtime.request_withdrawal_code))
     app.router.add_get('/api/security_status', api_security_status)
     app.router.add_get('/api/account', wallet_handler(runtime.accounts.status))
+    app.router.add_post('/api/account/language', wallet_handler(runtime.accounts.set_language))
     app.router.add_post('/api/account/register', wallet_handler(runtime.accounts.register))
     app.router.add_post('/api/account/passkey', wallet_handler(runtime.accounts.create_ticket))
     app.router.add_get('/api/account/passkey_status', wallet_handler(runtime.accounts.ticket_status))

@@ -19,12 +19,18 @@ class EnglishTests(unittest.TestCase):
                     self.assertIsNone(re.search("[А-Яа-яЁё]", translate(node.value)),
                                       (name, node.lineno, node.value))
 
-    def test_interface_and_wallet_pages_have_no_russian_copy(self):
+    def test_interface_defaults_to_english_and_offers_three_languages(self):
         root = Path(__file__).resolve().parents[1]
         source = ast.parse(root.joinpath("main.py").read_text())
         page = next(ast.literal_eval(node.value) for node in source.body if isinstance(node, ast.Assign)
                     and any(isinstance(t, ast.Name) and t.id == "RAW_HTML" for t in node.targets))
-        for value in (page, root.joinpath("wallet_link.html").read_text(),
+        self.assertIn('<html lang="en" data-ui-language="en"', page)
+        self.assertIn('<option value="en">English</option>', page)
+        self.assertIn('<option value="ru">Русский</option>', page)
+        self.assertIn('<option value="uk">Українська</option>', page)
+        self.assertIn("applyUiLanguage(data.ui_language||'en')", page)
+        self.assertIn("/api/account/language", page)
+        for value in (root.joinpath("wallet_link.html").read_text(),
                       root.joinpath("deposit_payment.html").read_text()):
             self.assertIsNone(re.search("[А-Яа-яЁё]", value))
 

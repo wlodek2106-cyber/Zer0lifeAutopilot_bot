@@ -1012,7 +1012,7 @@ class CustodyRuntime(WalletRuntime):
                                             "save_base_paper_budget", "scan_base_paper"}):
                 self.web_access.trading_request(request)
             if (getattr(self, "accounts", None) and request.method == "POST" and action.__name__ in
-                    {"create_invoice","deposit","wallet_link","toggle","toggle_sniper","withdraw"}):
+                    {"create_invoice","deposit","wallet_link","toggle","toggle_sniper","withdraw","set_language"}):
                 self.accounts.require(self.uid(request))
             request_timeout = 70 if action.__name__ == "scan_base_paper" else 35
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=request_timeout)) as session:

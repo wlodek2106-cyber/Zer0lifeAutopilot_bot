@@ -94,7 +94,8 @@ class AccountSecurity:
                 CREATE TABLE IF NOT EXISTS app_profiles (
                     uid INTEGER PRIMARY KEY, nickname TEXT NOT NULL,
                     nickname_key TEXT NOT NULL UNIQUE, accepted_at INTEGER NOT NULL,
-                    partner_terms_accepted_at INTEGER NOT NULL DEFAULT 0);
+                    partner_terms_accepted_at INTEGER NOT NULL DEFAULT 0,
+                    ui_language TEXT NOT NULL DEFAULT 'en');
                 CREATE TABLE IF NOT EXISTS app_passkeys (
                     id TEXT PRIMARY KEY, uid INTEGER NOT NULL, public_key BLOB NOT NULL,
                     counter INTEGER NOT NULL, created_at INTEGER NOT NULL);
@@ -117,14 +118,17 @@ class AccountSecurity:
             profile_columns = {row[1] for row in db.execute("PRAGMA table_info(app_profiles)")}
             if "partner_terms_accepted_at" not in profile_columns:
                 db.execute("ALTER TABLE app_profiles ADD COLUMN partner_terms_accepted_at INTEGER NOT NULL DEFAULT 0")
+            if "ui_language" not in profile_columns:
+                db.execute("ALTER TABLE app_profiles ADD COLUMN ui_language TEXT NOT NULL DEFAULT 'en'")
 
     def state(self, uid):
         with self.ledger.db() as db:
-            row = db.execute("SELECT nickname,partner_terms_accepted_at FROM app_profiles WHERE uid=?", (uid,)).fetchone()
+            row = db.execute("SELECT nickname,partner_terms_accepted_at,ui_language FROM app_profiles WHERE uid=?", (uid,)).fetchone()
             keys = db.execute("SELECT COUNT(*) FROM app_passkeys WHERE uid=?", (uid,)).fetchone()[0]
             recovery = db.execute("SELECT COUNT(*) FROM app_recovery WHERE uid=?", (uid,)).fetchone()[0]
             referred = db.execute("SELECT 1 FROM custody_referrals WHERE uid=?", (uid,)).fetchone()
         return {"success": True, "registered": bool(row), "nickname": row["nickname"] if row else None,
+                "ui_language": row["ui_language"] if row else "en",
                 "has_passkey": keys > 0, "passkey_count": keys, "recovery_codes_remaining": recovery,
                 "partner_terms_required": bool(referred and (not row or not row["partner_terms_accepted_at"])),
                 "withdrawal_requires_passkey": False, "withdrawal_requires_telegram_code": True}
@@ -135,6 +139,24 @@ class AccountSecurity:
 
     async def status(self, request, session=None):
         return web.json_response(self.state(int(request["telegram_user"]["id"])), headers={"Cache-Control":"no-store"})
+
+    async def set_language(self, request, session=None):
+        uid = int(request["telegram_user"]["id"])
+        body = await request.json()
+        if not isinstance(body, dict) or set(body) != {"language"}:
+            raise WalletError("Choose English, Russian or Ukrainian.", 400)
+        language = body.get("language")
+        if language not in {"en", "ru", "uk"}:
+            raise WalletError("Choose English, Russian or Ukrainian.", 400)
+        with self.ledger.db() as db:
+            if not db.execute("SELECT 1 FROM app_profiles WHERE uid=?", (uid,)).fetchone():
+                raise WalletError("Create your account profile before saving preferences.", 409)
+            db.execute("UPDATE app_profiles SET ui_language=? WHERE uid=?", (language, uid))
+        return web.json_response({
+            "success": True,
+            "ui_language": language,
+            "message": "Language preference saved.",
+        }, headers={"Cache-Control": "no-store"})
 
     async def register(self, request, session=None):
         uid = int(request["telegram_user"]["id"])
