@@ -2010,7 +2010,27 @@ RAW_HTML = r"""<!DOCTYPE html>
                         <div id="closed-count" style="font-size: 18px; font-weight: 800; color: #fff; font-family: monospace;">0</div>
                     </div>
                 </div>
-                <div class="section-note" style="margin-top:12px;">Totals are shown separately in their settlement currencies; SOL is not converted to USDC.</div>
+                <div style="display:grid;grid-template-columns:1fr;gap:10px;margin-top:14px;">
+                    <section aria-label="USDC closed trade profit and loss" style="padding:12px;border:1px solid #263329;border-radius:14px;background:#090e0b;">
+                        <div style="font-size:11px;font-weight:800;letter-spacing:.08em;color:#d8e4d7;margin-bottom:9px;">USDC · CLOSED TRADES</div>
+                        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;">
+                            <div class="stat-box"><div class="stat-label">Profits</div><div id="pnl-usdc-gains" class="stat-val" style="color:#4ade80;">+$0.00</div></div>
+                            <div class="stat-box"><div class="stat-label">Losses</div><div id="pnl-usdc-losses" class="stat-val" style="color:#f87171;">−$0.00</div></div>
+                            <div class="stat-box"><div class="stat-label">Net</div><div id="pnl-usdc-net" class="stat-val">+$0.00</div></div>
+                        </div>
+                        <div class="section-note" style="margin-top:8px;">Wins / losses / even: <span id="pnl-usdc-record">0 / 0 / 0</span> · Partner commissions included: <span id="pnl-usdc-commission">$0.000000</span></div>
+                    </section>
+                    <section aria-label="SOL closed trade profit and loss" style="padding:12px;border:1px solid #263329;border-radius:14px;background:#090e0b;">
+                        <div style="font-size:11px;font-weight:800;letter-spacing:.08em;color:#d8e4d7;margin-bottom:9px;">SOL · CLOSED TRADES</div>
+                        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;">
+                            <div class="stat-box"><div class="stat-label">Profits</div><div id="pnl-sol-gains" class="stat-val" style="color:#4ade80;">+0.000000000</div></div>
+                            <div class="stat-box"><div class="stat-label">Losses</div><div id="pnl-sol-losses" class="stat-val" style="color:#f87171;">−0.000000000</div></div>
+                            <div class="stat-box"><div class="stat-label">Net</div><div id="pnl-sol-net" class="stat-val">+0.000000000</div></div>
+                        </div>
+                        <div class="section-note" style="margin-top:8px;">Wins / losses / even: <span id="pnl-sol-record">0 / 0 / 0</span> · Partner commissions included: <span id="pnl-sol-commission">0.000000000 SOL</span></div>
+                    </section>
+                </div>
+                <div class="section-note" style="margin-top:12px;">Closed trades only. Profit and loss figures are after partner commissions; separately paid network fees and Jito tips are excluded. SOL is kept separate from USDC.</div>
             </div>
 
             <div class="card" id="stats-history">
@@ -3898,17 +3918,26 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         async function closePosition(position, button) {
-            if (!position || position.status !== 'OPEN' || !position.position_id) {
-                alert('This position is no longer open. Refresh and check its status.');
+            const canSellNow=position?.status==='OPEN';
+            const canQueueRetry=position?.status==='RESERVED'&&position.pending_sell;
+            if (!position || (!canSellNow && !canQueueRetry) || !position.position_id) {
+                alert('This position cannot be sold while its current status is unresolved. Refresh and check the status.');
+                return;
+            }
+            if(position.manual_close_queued){
+                alert('A manual sale is already queued for this position.');
                 return;
             }
             const quantity=Number(position.amount_tokens).toLocaleString(undefined,{maximumFractionDigits:8});
             const symbol=position.symbol||position.token_symbol||'token';
             const funding=position.funding_currency||'account currency';
-            if (!confirm('Sell only this position: '+quantity+' '+symbol+' for '+funding+
-                '? This sends a real Solana transaction; the final amount can vary with price and slippage.')) return;
+            const confirmation=canQueueRetry
+                ? 'A sale for '+symbol+' is already pending. Queue one manual retry only if that sale is proven failed or expired? If it succeeds, no second sale will be sent.'
+                : 'Sell only this position: '+quantity+' '+symbol+' for '+funding+
+                    '? If another wallet operation is pending, the request will wait and the price may change. This sends a real Solana transaction; the final amount can vary with price and slippage.';
+            if (!confirm(confirmation)) return;
             button.disabled=true;
-            button.textContent='Submitting sell…';
+            button.textContent=canQueueRetry?'Queueing retry…':'Submitting sell…';
             try {
                 const response=await apiFetch('/api/close_position',{
                     method:'POST',headers:{'Content-Type':'application/json'},
@@ -3920,6 +3949,25 @@ RAW_HTML = r"""<!DOCTYPE html>
                 await refresh();
             } catch(e) {
                 alert(e.message||'Could not submit the sale.');
+                await refresh();
+            }
+        }
+
+        async function cancelQueuedManualClose(position, button) {
+            if(!position?.position_id||!position.manual_close_queued)return;
+            if(!confirm('Cancel the queued manual retry? This will not cancel any sale already submitted to Solana.'))return;
+            button.disabled=true;
+            try {
+                const response=await apiFetch('/api/cancel_manual_close',{
+                    method:'POST',headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({position_id:position.position_id})
+                });
+                const data=await response.json();
+                if(!response.ok||!data.success)throw new Error(data.message||'Could not cancel the queued retry.');
+                alert(data.message||'Queued manual retry cancelled.');
+                await refresh();
+            } catch(e) {
+                alert(e.message||'Could not cancel the queued retry.');
                 await refresh();
             }
         }
@@ -4212,6 +4260,39 @@ RAW_HTML = r"""<!DOCTYPE html>
                 solNode.textContent = (validSol >= 0 ? '+' : '-') + Math.abs(validSol).toFixed(9) + ' SOL';
                 solNode.style.color = validSol < 0 ? '#f87171' : '#4ade80';
             }
+            const breakdown = stats.pnl_breakdown || {};
+            const renderCurrency = (key, currency, digits) => {
+                const totals = breakdown[key] || {};
+                const positive = Number(totals.profit ?? 0);
+                const negative = Number(totals.loss ?? 0);
+                const net = Number(totals.net ?? 0);
+                const amount = value => {
+                    const safe = Number.isFinite(value) ? value : 0;
+                    const sign = safe > 0 ? '+' : safe < 0 ? '−' : '';
+                    const prefix = currency === 'USDC' ? '$' : '';
+                    const suffix = currency === 'SOL' ? ' SOL' : '';
+                    return sign + prefix + Math.abs(safe).toFixed(digits) + suffix;
+                };
+                const commission = Number(totals.partner_commission ?? 0);
+                const commissionText = currency === 'USDC'
+                    ? '$' + (Number.isFinite(commission) ? commission : 0).toFixed(6)
+                    : (Number.isFinite(commission) ? commission : 0).toFixed(9) + ' SOL';
+                const assign = (id, value, color) => {
+                    const node = document.getElementById(id);
+                    if (node) {
+                        node.textContent = value;
+                        if (color) node.style.color = color;
+                    }
+                };
+                assign('pnl-' + key + '-gains', amount(positive), '#4ade80');
+                assign('pnl-' + key + '-losses', amount(-Math.abs(negative)), '#f87171');
+                assign('pnl-' + key + '-net', amount(net), net < 0 ? '#f87171' : '#4ade80');
+                assign('pnl-' + key + '-record',
+                    `${Number(totals.wins || 0)} / ${Number(totals.losses || 0)} / ${Number(totals.break_even || 0)}`);
+                assign('pnl-' + key + '-commission', commissionText);
+            };
+            renderCurrency('usdc', 'USDC', 2);
+            renderCurrency('sol', 'SOL', 9);
         }
 
         async function manualRefresh() {
@@ -4558,13 +4639,19 @@ RAW_HTML = r"""<!DOCTYPE html>
                                         ${t.sell_tx ? '<a class="tx-link" style="color: #4ade80;" href="https://solscan.io/tx/' + t.sell_tx + '" target="_blank">↗ Sell transaction</a>' : ''}
                                     </div>
                                     ${renderTradeAudit(t)}
-                                    ${isOpen && t.position_id ? '<button type="button" class="position-close" data-position-id="' + t.position_id + '">Sell this position</button>' : ''}
+                                    ${t.manual_close_queued ? '<div class="section-note" style="margin-top:8px;color:#cbd5e1;">Manual sale queued. It waits for the current transaction; if that sale succeeds, no retry is sent. <button type="button" class="position-close-cancel" data-position-id="' + t.position_id + '">Cancel queued retry</button></div>' : ''}
+                                    ${isOpen && t.position_id && !t.manual_close_queued ? '<button type="button" class="position-close" data-position-id="' + t.position_id + '">Sell this position</button>' : ''}
+                                    ${t.status==='RESERVED' && t.pending_sell && t.position_id && !t.manual_close_queued ? '<button type="button" class="position-close" data-position-id="' + t.position_id + '">Queue manual retry</button>' : ''}
                                 </div>
                             `;
                         }).join('');
                         document.getElementById('history-box').querySelectorAll('.position-close').forEach(button => {
                             const position=s.trades.find(trade=>trade.position_id===button.dataset.positionId);
                             button.addEventListener('click',()=>closePosition(position,button));
+                        });
+                        document.getElementById('history-box').querySelectorAll('.position-close-cancel').forEach(button => {
+                            const position=s.trades.find(trade=>trade.position_id===button.dataset.positionId);
+                            button.addEventListener('click',()=>cancelQueuedManualClose(position,button));
                         });
                     }
                 }
@@ -5070,6 +5157,7 @@ async def main():
     app.router.add_post('/api/admin/legacy_balances/import', wallet_handler(runtime.import_legacy_balances))
     app.router.add_post('/api/close_all', wallet_handler(runtime.close_all))
     app.router.add_post('/api/close_position', wallet_handler(runtime.close_position))
+    app.router.add_post('/api/cancel_manual_close', wallet_handler(runtime.cancel_manual_close))
     app.router.add_post('/api/withdraw', wallet_handler(runtime.withdraw))
     app.router.add_post('/api/withdraw/code', wallet_handler(runtime.request_withdrawal_code))
     app.router.add_get('/api/security_status', api_security_status)

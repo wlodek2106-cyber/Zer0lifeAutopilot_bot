@@ -171,6 +171,22 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(messages), 1)
         self.service.trade.assert_not_awaited()
 
+    async def test_active_dex_cooldown_skips_candidate_price_request_and_keeps_entries_blocked(self):
+        self.service.prices_fn = AsyncMock(return_value={"SOL": 100})
+        self.service.discovery.prices = AsyncMock()
+        self.service.discovery.blocked = False
+        self.service.discovery_due = 0
+        dexscreener_client.scheduler().cooldown_until = time.monotonic() + 120
+
+        prices = await self.service.current_prices(None)
+
+        self.assertEqual(prices, {"SOL": 100})
+        self.service.discovery.prices.assert_not_awaited()
+        self.assertTrue(self.service.discovery.blocked)
+        self.assertGreaterEqual(self.service.discovery_due - time.time(), 119)
+        self.assertTrue(self.service.discovery.status_report()["entry_paused"])
+        self.service.trade.assert_not_awaited()
+
     async def test_finished_analysis_wakes_worker_without_waiting_for_next_tick(self):
         self.service.ai_snapshot = AsyncMock(return_value={"id": "new-analysis"})
         self.assertFalse(self.service._worker_wakeup.is_set())

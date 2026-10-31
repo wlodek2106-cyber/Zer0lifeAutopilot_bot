@@ -15,6 +15,9 @@ PRICE = 0
 CONTEXT = 1
 DISCOVERY = 2
 ORIGIN = "https://api.dexscreener.com"
+DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS = 300
+MAX_RATE_LIMIT_COOLDOWN_SECONDS = 1800
+HEALTHY_RESPONSES_TO_RESET_BACKOFF = 10
 
 
 class ProviderLimited(ValueError):
@@ -47,6 +50,7 @@ class Scheduler:
         self.next_request_at = 0
         self.cooldown_until = 0
         self.rate_limit_failures = 0
+        self.healthy_responses = 0
         self.active = False
         self.waiters = []
         self.sequence = 0
@@ -85,7 +89,11 @@ class Scheduler:
     async def limited(self, retry_after):
         async with self.condition:
             self.rate_limit_failures = min(6, self.rate_limit_failures + 1)
-            delay = max(60 * 2 ** (self.rate_limit_failures - 1),
+            self.healthy_responses = 0
+            backoff = min(
+                MAX_RATE_LIMIT_COOLDOWN_SECONDS,
+                DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS * 2 ** (self.rate_limit_failures - 1))
+            delay = max(backoff,
                         retry_after_seconds(retry_after))
             self.cooldown_until = max(self.cooldown_until, self.clock() + delay)
             self.condition.notify_all()
@@ -138,7 +146,10 @@ async def request(session, path, *, priority=CONTEXT, **kwargs):
                 await state.limited(headers.get("Retry-After"))
                 raise ProviderLimited(state.cooldown_remaining())
             if response.status == 200:
-                state.rate_limit_failures = 0
+                state.healthy_responses += 1
+                if state.healthy_responses >= HEALTHY_RESPONSES_TO_RESET_BACKOFF:
+                    state.rate_limit_failures = 0
+                    state.healthy_responses = 0
             yield response
     finally:
         if acquired:

@@ -78,11 +78,11 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_provider_429_stops_requests_and_respects_retry_after(self):
         discovery = MemeDiscovery(self.ledger, self.rpc, [])
-        session = self.provider_session(429, {"Retry-After": "240"})
+        session = self.provider_session(429, {"Retry-After": "480"})
         with patch.object(dexscreener.scheduler(), "clock", return_value=1000):
             with self.assertRaisesRegex(ValueError, "HTTP 429"):
                 await discovery.fetch(session, "/token-profiles/latest/v1")
-            self.assertEqual(discovery.cooldown_remaining(), 240)
+            self.assertEqual(discovery.cooldown_remaining(), 480)
             with self.assertRaisesRegex(ValueError, "HTTP 429"):
                 await discovery.fetch(session, "/tokens/v1/solana/" + MINT)
         self.assertEqual(session.get.call_count, 1)
@@ -111,15 +111,16 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(discovery.blocked)
         self.rpc.assert_not_awaited()
 
-    async def test_cooldown_expiry_allows_request_and_clears_failure_count(self):
+    async def test_cooldown_expiry_allows_request_but_preserves_backoff_until_stable(self):
         discovery = MemeDiscovery(self.ledger, self.rpc, [])
         state = dexscreener.scheduler()
         with patch.object(dexscreener.scheduler(), "clock", return_value=1000):
             with self.assertRaises(ValueError):
                 await discovery.fetch(self.provider_session(429), "/tokens/v1/solana/" + MINT)
-        with patch.object(state, "clock", return_value=1061):
+        with patch.object(state, "clock", return_value=1301):
             await discovery.fetch(self.provider_session(), "/tokens/v1/solana/" + MINT)
-            self.assertEqual(state.rate_limit_failures, 0)
+            self.assertEqual(state.rate_limit_failures, 1)
+            self.assertEqual(state.healthy_responses, 1)
             self.assertEqual(discovery.cooldown_remaining(), 0)
 
     def test_retry_after_accepts_http_date_and_rejects_invalid_values(self):

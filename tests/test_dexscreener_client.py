@@ -84,7 +84,7 @@ class DexScreenerClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_429_from_core_prices_is_shared_with_scanner_and_status(self):
         bad = Session(Response(429))
         self.assertEqual(await self.main_prices_function()(bad), {})
-        self.assertGreaterEqual(self.discovery.cooldown_remaining(), 59)
+        self.assertGreaterEqual(self.discovery.cooldown_remaining(), 299)
         status = self.discovery.status_report()
         self.assertTrue(status["entry_paused"])
         self.assertIn("Shared market-data requests", status["message"])
@@ -179,17 +179,49 @@ class DexScreenerClientTests(unittest.IsolatedAsyncioTestCase):
         state = client.scheduler()
         now = [1000]
         state.clock = lambda: now[0]
-        bad = Session(Response(429, headers={"Retry-After": "240"}))
+        bad = Session(Response(429, headers={"Retry-After": "480"}))
         with self.assertRaises(client.ProviderLimited):
             async with client.request(bad, "/tokens/v1/solana/mint"):
                 pass
-        self.assertEqual(state.cooldown_remaining(), 240)
-        now[0] = 1241
+        self.assertEqual(state.cooldown_remaining(), 480)
+        now[0] = 1481
         good = Session()
         async with client.request(good, "/tokens/v1/solana/mint"):
             pass
-        self.assertEqual(state.rate_limit_failures, 0)
+        self.assertEqual(state.rate_limit_failures, 1)
+        self.assertEqual(state.healthy_responses, 1)
         self.assertEqual(len(good.calls), 1)
+
+    async def test_backoff_needs_a_stable_run_of_successes_to_reset(self):
+        state = client.scheduler()
+        now = [1000]
+        state.clock = lambda: now[0]
+        state.min_interval = 0
+
+        with self.assertRaises(client.ProviderLimited):
+            async with client.request(Session(Response(429)), "/tokens/v1/solana/mint"):
+                pass
+        self.assertEqual(state.cooldown_remaining(), 300)
+
+        now[0] = 1301
+        good = Session()
+        for _ in range(client.HEALTHY_RESPONSES_TO_RESET_BACKOFF - 1):
+            async with client.request(good, "/tokens/v1/solana/mint"):
+                pass
+        self.assertEqual(state.rate_limit_failures, 1)
+
+        with self.assertRaises(client.ProviderLimited):
+            async with client.request(Session(Response(429)), "/tokens/v1/solana/mint"):
+                pass
+        self.assertEqual(state.rate_limit_failures, 2)
+        self.assertEqual(state.cooldown_remaining(), 600)
+
+        now[0] = 1902
+        for _ in range(client.HEALTHY_RESPONSES_TO_RESET_BACKOFF):
+            async with client.request(good, "/tokens/v1/solana/mint"):
+                pass
+        self.assertEqual(state.rate_limit_failures, 0)
+        self.assertEqual(state.healthy_responses, 0)
 
     async def test_independent_scanner_creation_never_clears_global_cooldown(self):
         await client.scheduler().limited("90")

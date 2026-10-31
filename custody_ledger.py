@@ -284,7 +284,8 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                     "peak_price": "REAL NOT NULL DEFAULT 0",
                     "strategy": "TEXT NOT NULL DEFAULT 'legacy'",
                     "entry_step": "INTEGER", "exit_step": "INTEGER",
-                    "exit_reason": "TEXT NOT NULL DEFAULT ''"},
+                    "exit_reason": "TEXT NOT NULL DEFAULT ''",
+                    "manual_close_requested": "INTEGER NOT NULL DEFAULT 0"},
                 "custody_invoices": {"deposit_wallet": "TEXT NOT NULL DEFAULT ''"},
                 "custody_operations": {"failure_reason": "TEXT NOT NULL DEFAULT ''"},
             }.items():
@@ -1738,7 +1739,7 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                     raise LedgerError("Частичная продажа требует отдельного разбора.")
                 closed_at = int(time.time())
                 db.execute("""UPDATE custody_positions SET state='CLOSED',sell_tx=?,proceeds_usdc=?,
-                    proceeds_raw=?,closed_at=?,exit_step=?,exit_reason=?
+                    proceeds_raw=?,closed_at=?,exit_step=?,exit_reason=?,manual_close_requested=0
                     WHERE id=? AND uid=?""",
                     (row["signature"], received if info["output_asset"] == USDC else None,
                      received, closed_at,
@@ -1806,6 +1807,39 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                 (" AND state=?" if state else "") + " ORDER BY created_at DESC",
                 (uid, state) if state else (uid,))
             return [dict(r) for r in rows]
+
+    def request_manual_close(self, uid, position_id):
+        with self.db() as db:
+            position = db.execute(
+                "SELECT state FROM custody_positions WHERE id=? AND uid=?",
+                (position_id, uid)).fetchone()
+            if not position or position["state"] == "CLOSED":
+                raise LedgerError("Open position was not found for this account.")
+            if position["state"] == "RESERVED":
+                pending_sell = db.execute("""SELECT id FROM custody_operations
+                    WHERE position_id=? AND uid=? AND kind='SELL'
+                    AND state IN ('RESERVED','PREPARED','SUBMITTED','UNKNOWN') LIMIT 1""",
+                    (position_id, uid)).fetchone()
+                if not pending_sell:
+                    raise LedgerError("The position reservation has no matching pending sale.")
+            elif position["state"] != "OPEN":
+                raise LedgerError("This position cannot be queued for manual sale.")
+            changed = db.execute("""UPDATE custody_positions SET manual_close_requested=1
+                WHERE id=? AND uid=? AND state IN ('OPEN','RESERVED')
+                AND manual_close_requested=0""", (position_id, uid)).rowcount
+            return {"queued": True, "already_queued": changed == 0,
+                    "position_state": position["state"]}
+
+    def manual_close_queue(self):
+        with self.db() as db:
+            return [dict(row) for row in db.execute("""SELECT * FROM custody_positions
+                WHERE manual_close_requested=1 ORDER BY created_at,id""")]
+
+    def clear_manual_close_request(self, uid, position_id):
+        with self.db() as db:
+            return db.execute("""UPDATE custody_positions SET manual_close_requested=0
+                WHERE id=? AND uid=? AND manual_close_requested=1""",
+                (position_id, uid)).rowcount == 1
 
     def hot_wallet_exposure(self, funding_asset):
         """Return cost basis still held or reserved for sale, in its funding asset."""

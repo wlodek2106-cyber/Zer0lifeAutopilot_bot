@@ -1225,6 +1225,141 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["trading_settings"]["order_usdc"], 1)
         self.assertEqual(data["wallet_history"][0]["amount"], "1.5 USDC")
 
+    async def test_stats_breaks_realized_profit_and_loss_out_by_funding_currency(self):
+        def close(position, request_id, received):
+            operation = self.ledger.reserve(
+                101, request_id, "SELL", position["asset"], position["raw"],
+                {"output_asset": position["funding_asset"], "symbol": position["symbol"]},
+                position_id=position["id"])
+            self.ledger.prepared(operation["id"], str(Signature.new_unique()), "offline-wire")
+            self.ledger.finalize(operation["id"], position["raw"], 0, received)
+
+        usdc_winner = self.open_position_for_close(
+            asset="pnl-test-usdc-winner", symbol="USDCWIN")
+        close(usdc_winner, "pnl-usdc-win", 1_310_000)
+        usdc_loser = self.open_position_for_close(
+            asset="pnl-test-usdc-loser", symbol="USDCLoss")
+        close(usdc_loser, "pnl-usdc-loss", 830_000)
+        usdc_new_winner = self.open_position_for_close(
+            asset="pnl-test-usdc-new-winner", symbol="USDCNEW")
+        close(usdc_new_winner, "pnl-usdc-new-win", 1_310_000)
+        open_usdc_position = self.open_position_for_close(
+            asset="pnl-test-usdc-open", symbol="USDCOPEN")
+
+        sol_invoice = self.ledger.invoice(101, SOL, 2_000_000_000)
+        self.ledger.credit_deposit(
+            sol_invoice["id"], str(Signature.new_unique()), SOL, 2_000_000_000,
+            sol_invoice["created_at"])
+        sol_buy = self.ledger.reserve(
+            101, "pnl-sol-buy", "BUY", SOL, 500_000_000,
+            {"output_asset": "pnl-test-mint", "symbol": "SOLWIN", "decimals": 6})
+        self.ledger.prepared(sol_buy["id"], str(Signature.new_unique()), "offline-wire")
+        self.ledger.finalize(sol_buy["id"], 500_000_000, 0, 1_000_000)
+        sol_position = next(p for p in self.ledger.positions(101) if p["id"] == sol_buy["id"])
+        close(sol_position, "pnl-sol-win", 600_000_000)
+
+        self.service.reconcile = AsyncMock()
+        data = json.loads((await self.service.stats(Request(), None)).text)
+        pnl = data["pnl_breakdown"]
+
+        self.assertEqual(pnl["usdc"], {
+            "profit": 0.62, "loss": 0.17, "net": 0.45,
+            "wins": 2, "losses": 1, "break_even": 0, "closed_trades": 3,
+            "partner_commission": 0.0,
+        })
+        self.assertAlmostEqual(pnl["sol"]["profit"], 0.1)
+        self.assertEqual(pnl["sol"]["loss"], 0)
+        self.assertAlmostEqual(pnl["sol"]["net"], 0.1)
+        self.assertEqual(pnl["sol"]["wins"], 1)
+        self.assertEqual(pnl["sol"]["closed_trades"], 1)
+        self.assertEqual(data["profit_usdc"], 0.45)
+        self.assertAlmostEqual(data["profit_sol"], 0.1)
+        self.assertEqual(data["closed_count"], 4)
+        self.assertEqual(open_usdc_position["state"], "OPEN")
+
+    async def test_manual_sale_waits_for_pending_sell_and_only_retries_after_proven_failure(self):
+        position = self.open_position_for_close(
+            asset="manual-queue-token", symbol="QUEUE")
+        cancel_position = self.open_position_for_close(
+            asset="manual-cancel-token", symbol="CANCEL")
+        existing_sell = self.ledger.reserve(
+            101, "manual-queue-existing-sell", "SELL", position["asset"], position["raw"],
+            {"output_asset": position["funding_asset"], "symbol": position["symbol"]},
+            position_id=position["id"])
+        self.ledger.prepared(existing_sell["id"], str(Signature.new_unique()), "pending-wire")
+        self.ledger.submitted(existing_sell["id"], True)
+
+        response = await self.service.close_position(
+            Request(101, {"confirm": True, "position_id": position["id"]}), None)
+        data = json.loads(response.text)
+        self.assertEqual(response.status, 202)
+        self.assertEqual(data["state"], "MANUAL_CLOSE_QUEUED")
+        self.assertTrue(next(p for p in self.ledger.positions(101)
+                             if p["id"] == position["id"])["manual_close_requested"])
+        self.service.reconcile = AsyncMock()
+        stats = json.loads((await self.service.stats(Request(101), None)).text)
+        queued_trade = next(t for t in stats["trades"] if t["position_id"] == position["id"])
+        self.assertTrue(queued_trade["pending_sell"])
+        self.assertTrue(queued_trade["manual_close_queued"])
+
+        self.ledger.request_manual_close(101, cancel_position["id"])
+        cancelled = await self.service.cancel_manual_close(
+            Request(101, {"position_id": cancel_position["id"]}), None)
+        self.assertEqual(cancelled.status, 200)
+        self.assertFalse(next(p for p in self.ledger.positions(101)
+                              if p["id"] == cancel_position["id"])["manual_close_requested"])
+
+        self.service.trade = AsyncMock()
+        await self.service.process_manual_close_queues(None)
+        self.service.trade.assert_not_awaited()
+
+        self.ledger.fail(existing_sell["id"], network_proven=True, fee=0,
+                         failure_reason="test confirmed failure")
+        self.assertEqual(self.service.pending(), [])
+        self.assertEqual(self.service.legacy_pending(), [])
+        failed_position = next(p for p in self.ledger.positions(101)
+                               if p["id"] == position["id"])
+        self.assertEqual(failed_position["state"], "OPEN")
+        self.assertTrue(failed_position["manual_close_requested"])
+
+        async def submit_manual_sell(session, uid, asset, funding_asset, raw, side,
+                                     metadata, position_id=None, manual=False):
+            self.assertTrue(manual)
+            self.assertEqual(side, "SELL")
+            retry = self.ledger.reserve(
+                uid, "manual-queue-retry-" + str(uuid.uuid4()), side, asset, raw,
+                metadata, position_id=position_id)
+            self.ledger.prepared(retry["id"], str(Signature.new_unique()), "retry-wire")
+            return web.json_response(
+                {"success": True, "state": "SUBMITTED", "message": "Manual sale submitted."},
+                status=202)
+
+        self.service.trade = AsyncMock(side_effect=submit_manual_sell)
+        await self.service.process_manual_close_queues(None)
+        self.service.trade.assert_awaited_once()
+        retry_operation = next(op for op in self.ledger.pending()
+                               if op["position_id"] == position["id"])
+        self.assertEqual(retry_operation["kind"], "SELL")
+        refreshed = next(p for p in self.ledger.positions(101)
+                         if p["id"] == position["id"])
+        self.assertFalse(refreshed["manual_close_requested"])
+        await self.service.process_manual_close_queues(None)
+        self.service.trade.assert_awaited_once()
+
+    async def test_manual_sale_submits_without_requiring_an_ai_decision(self):
+        position = self.open_position_for_close(
+            asset="manual-immediate-token", symbol="SELLNOW")
+        self.service.trade = AsyncMock(return_value=web.json_response(
+            {"success": True, "state": "SUBMITTED", "message": "Sale submitted."}, status=202))
+        response = await self.service.close_position(
+            Request(101, {"confirm": True, "position_id": position["id"]}), None)
+        self.assertEqual(response.status, 202)
+        self.service.trade.assert_awaited_once()
+        args, kwargs = self.service.trade.await_args
+        self.assertEqual(args[5], "SELL")
+        self.assertTrue(kwargs["manual"])
+        self.assertEqual(kwargs["position_id"], position["id"])
+
     async def test_stats_exposes_pending_operation_only_to_its_own_account(self):
         invoice = self.ledger.invoice(202, USDC, 2_000_000)
         self.ledger.credit_deposit(invoice["id"], str(Signature.new_unique()),
@@ -1267,16 +1402,17 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(other["trades"], [])
         self.assertNotIn('"wire"', json.dumps(trade["trade_review"]))
 
-    def open_position_for_close(self, uid=101):
+    def open_position_for_close(self, uid=101, asset=SOL, symbol="BOME"):
         invoice = self.ledger.invoice(uid, USDC, 2_000_000)
         self.ledger.credit_deposit(invoice["id"], str(Signature.new_unique()),
             USDC, 2_000_000, invoice["created_at"])
         buy = self.ledger.reserve(uid, "single-close-buy-" + str(uuid.uuid4()), "BUY",
-            USDC, 1_000_000, {"output_asset": SOL, "symbol": "BOME", "decimals": 9},
+            USDC, 1_000_000, {"output_asset": asset, "symbol": symbol, "decimals": 9},
             str(self.recipient))
         self.ledger.prepared(buy["id"], str(Signature.new_unique()), "offline-wire")
         self.ledger.finalize(buy["id"], 1_000_000, 5000, 10_000_000)
-        return self.ledger.positions(uid, "OPEN")[0]
+        return next(position for position in self.ledger.positions(uid, "OPEN")
+                    if position["asset"] == asset and position["symbol"] == symbol)
 
     def test_fresh_repeated_resistance_rejection_does_not_close_position(self):
         position = self.open_position_for_close()
@@ -1939,7 +2075,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.service.trade.assert_not_awaited()
         self.assertEqual(self.ledger.positions(202, "OPEN")[0]["id"], other["id"])
 
-    async def test_single_position_close_does_not_retry_a_reserved_position(self):
+    async def test_single_position_close_queues_a_reserved_position_without_duplicate_send(self):
         position = self.open_position_for_close()
         self.ledger.reserve(101, "single-close-pending", "SELL", position["asset"],
             position["raw"], {"output_asset": position["funding_asset"]},
@@ -1947,9 +2083,13 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.service.trade = AsyncMock()
         response = await self.service.handle(Request(101, {
             "position_id": position["id"], "confirm": True}), self.service.close_position)
-        self.assertEqual(response.status, 409)
+        self.assertEqual(response.status, 202)
+        self.assertEqual(json.loads(response.text)["state"], "MANUAL_CLOSE_QUEUED")
         self.service.trade.assert_not_awaited()
-        self.assertEqual(self.ledger.positions(101)[0]["state"], "RESERVED")
+        queued_position = next(p for p in self.ledger.positions(101)
+                               if p["id"] == position["id"])
+        self.assertEqual(queued_position["state"], "RESERVED")
+        self.assertTrue(queued_position["manual_close_requested"])
 
     async def test_toggle_and_close_only_current_user(self):
         self.service.trading_preflight = AsyncMock()

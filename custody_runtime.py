@@ -375,6 +375,12 @@ class CustodyRuntime(WalletRuntime):
     async def current_prices(self, session, extra_symbols=()):
         prices = await self.prices_fn(session)
         if getattr(self, "discovery", None):
+            cooldown = self.discovery.cooldown_remaining()
+            if cooldown:
+                if not self.discovery.blocked:
+                    self.discovery.fail("market-data HTTP 429")
+                self.discovery_due = max(self.discovery_due, time.time() + cooldown)
+                return prices
             try:
                 prices.update(await self.discovery.prices(
                     session, [*self.held_sniper_symbols(),
@@ -2807,15 +2813,39 @@ class CustodyRuntime(WalletRuntime):
                 "SELECT * FROM custody_invoices WHERE uid=? AND state='CREDITED' ORDER BY created_at DESC LIMIT 20", (uid,))]
             tx_deposits = [dict(r) for r in db.execute(
                 "SELECT * FROM custody_tx_deposits WHERE uid=? ORDER BY block_time DESC", (uid,))]
+        pending_sell_positions = {
+            row.get("position_id") for row in self.ledger.pending()
+            if row.get("uid") == uid and row.get("kind") == "SELL" and row.get("position_id")
+        }
         trades, history = [], []
+        pnl_totals_raw = {
+            "USDC": {"profit": 0, "loss": 0, "net": 0, "wins": 0, "losses": 0,
+                     "break_even": 0, "closed_trades": 0, "partner_commission": 0},
+            "SOL": {"profit": 0, "loss": 0, "net": 0, "wins": 0, "losses": 0,
+                    "break_even": 0, "closed_trades": 0, "partner_commission": 0},
+        }
         for p in positions:
             qty = p["raw"] / 10**p["decimals"]
             native = p["funding_asset"] == SOL
+            currency = "SOL" if native else "USDC"
             scale = 1e9 if native else 1e6
             cost = p["cost_raw"] / scale
             gross_profit_raw = (p["proceeds_raw"] or 0) - p["cost_raw"]
             net_profit_raw = gross_profit_raw - p["partner_commission_raw"]
             profit = net_profit_raw / scale if p["state"] == "CLOSED" else 0
+            if p["state"] == "CLOSED":
+                totals = pnl_totals_raw[currency]
+                totals["net"] += net_profit_raw
+                totals["partner_commission"] += p["partner_commission_raw"]
+                totals["closed_trades"] += 1
+                if net_profit_raw > 0:
+                    totals["profit"] += net_profit_raw
+                    totals["wins"] += 1
+                elif net_profit_raw < 0:
+                    totals["loss"] += -net_profit_raw
+                    totals["losses"] += 1
+                else:
+                    totals["break_even"] += 1
             review_rows = trade_reviews.get(p["id"], {})
             buy_review = review_rows.get("BUY", {}).get("report") or ""
             sell_review = review_rows.get("SELL", {}).get("report") or ""
@@ -2840,7 +2870,9 @@ class CustodyRuntime(WalletRuntime):
                               if p.get("closed_at") else None),
                 "timestamp": datetime.fromtimestamp(p["created_at"], timezone.utc).isoformat(),
                 "buy_tx": p["buy_tx"], "sell_tx": p["sell_tx"], "status": p["state"],
-                "position_id": p["id"]})
+                "position_id": p["id"],
+                "pending_sell": p["id"] in pending_sell_positions,
+                "manual_close_queued": bool(p.get("manual_close_requested"))})
         for row in operations:
             if row["kind"] == "WITHDRAW":
                 info = json.loads(row.get("metadata") or "{}")
@@ -2883,7 +2915,22 @@ class CustodyRuntime(WalletRuntime):
         user_usdc, user_sol = self.ledger.balance(uid, USDC) / 1e6, self.ledger.balance(uid, SOL) / 1e9
         withdrawable_usdc = self.ledger.withdrawal_capacity(uid, USDC) / 1e6
         withdrawable_sol = self.ledger.withdrawal_capacity(uid, SOL) / 1e9
-        profit = sum(t["profit_usdc"] for t in trades)
+        pnl_breakdown = {}
+        for currency, decimals in (("USDC", 6), ("SOL", 9)):
+            scale = 10 ** decimals
+            totals = pnl_totals_raw[currency]
+            pnl_breakdown[currency.lower()] = {
+                "profit": totals["profit"] / scale,
+                "loss": totals["loss"] / scale,
+                "net": totals["net"] / scale,
+                "wins": totals["wins"],
+                "losses": totals["losses"],
+                "break_even": totals["break_even"],
+                "closed_trades": totals["closed_trades"],
+                "partner_commission": totals["partner_commission"] / scale,
+            }
+        profit = pnl_totals_raw["USDC"]["net"] / 1e6
+        profit_sol = pnl_totals_raw["SOL"]["net"] / 1e9
         settings = self.ledger.settings(uid)
         investor_budget_raw = self.ledger.investor_budget_summary(uid)
         investor_budget = {
@@ -2936,7 +2983,8 @@ class CustodyRuntime(WalletRuntime):
             "sniper_active": bool(settings["sniper_trading"]),
             "sniper_settings": {"order_sol": settings["sniper_order_raw"]/1e9,
                 "max_positions": execution_policy.MAX_POSITIONS["sniper"]},
-            "profit_sol": sum(t["profit_units"] for t in trades if t["funding_currency"] == "SOL"),
+            "profit_sol": profit_sol,
+            "pnl_breakdown": pnl_breakdown,
             "ai_status": self.ai_status(),
             "execution_policy": execution_policy.describe(),
             "execution_check": self.ledger.execution_report(uid),
@@ -3232,16 +3280,82 @@ class CustodyRuntime(WalletRuntime):
                          if row["id"] == position_id), None)
         if not position:
             raise WalletError("Open position was not found for your account.", 404)
+        pending = self.ledger.pending()
+        if position["state"] == "RESERVED":
+            matching_sell = next((row for row in pending
+                if row["uid"] == uid and row["position_id"] == position_id
+                and row["kind"] == "SELL"), None)
+            if not matching_sell:
+                raise WalletError("The position is reserved without a matching pending sale.", 409)
+            queued = self.ledger.request_manual_close(uid, position_id)
+            message = (
+                "Manual retry queued for " + position["symbol"] +
+                ". The existing sale will not be duplicated: if it confirms, the retry is cleared; "
+                "if it is proven failed or expired, the server will try one manual sale.")
+            if not queued["already_queued"]:
+                activity_log.record_event(self, uid, "manual-close-queued-" + str(uuid.uuid4()),
+                    "manual_close_queued", message)
+            return web.json_response({"success": True, "state": "MANUAL_CLOSE_QUEUED",
+                "message": message}, status=202)
         if position["state"] != "OPEN":
-            raise WalletError("A sale for this position is already pending. Do not submit it again.", 409)
+            raise WalletError("This position is not open for manual sale.", 409)
+        if position.get("manual_close_requested"):
+            return web.json_response({"success": True, "state": "MANUAL_CLOSE_QUEUED",
+                "message": "A manual sale is already queued for this position. "
+                    "The server will wait for any pending operation before trying it."}, status=202)
+        if pending or self.legacy_pending():
+            queued = self.ledger.request_manual_close(uid, position_id)
+            message = (
+                "Manual sale queued for " + position["symbol"] +
+                ". The shared wallet is waiting for another transaction; this position will be sold "
+                "after that result is confirmed or safely recovered. No second transaction was sent.")
+            if not queued["already_queued"]:
+                activity_log.record_event(self, uid, "manual-close-queued-" + str(uuid.uuid4()),
+                    "manual_close_queued", message)
+            return web.json_response({"success": True, "state": "MANUAL_CLOSE_QUEUED",
+                "message": message}, status=202)
         metadata = {
             "output_asset": position["funding_asset"],
             "symbol": position["symbol"],
             "decimals": position["decimals"],
             "manual_close": True,
         }
-        return await self.trade(session, uid, position["asset"], position["funding_asset"],
-            position["raw"], "SELL", metadata, position_id=position_id, manual=True)
+        try:
+            return await self.trade(session, uid, position["asset"], position["funding_asset"],
+                position["raw"], "SELL", metadata, position_id=position_id, manual=True)
+        except Exception:
+            # The global active-operation guard can win a race between the
+            # initial check and reservation. Preserve the user's manual intent
+            # instead of making them re-submit the button.
+            if self.pending() or self.legacy_pending():
+                queued = self.ledger.request_manual_close(uid, position_id)
+                message = ("Manual sale queued for " + position["symbol"] +
+                    ". The wallet is waiting for another transaction; no duplicate was sent.")
+                if not queued["already_queued"]:
+                    activity_log.record_event(self, uid, "manual-close-queued-" + str(uuid.uuid4()),
+                        "manual_close_queued", message)
+                return web.json_response({"success": True, "state": "MANUAL_CLOSE_QUEUED",
+                    "message": message}, status=202)
+            raise
+
+    async def cancel_manual_close(self, request, session):
+        uid = self.uid(request)
+        self.admit(uid)
+        body = await request.json()
+        position_id = body.get("position_id")
+        if not isinstance(position_id, str) or not position_id or len(position_id) > 128:
+            raise WalletError("Invalid position.", 400)
+        async with self.lock:
+            if not self.ledger.clear_manual_close_request(uid, position_id):
+                raise WalletError("No queued manual sale remains to cancel. A submitted Solana transaction cannot be canceled.", 409)
+            self._manual_close_retry_after = getattr(self, "_manual_close_retry_after", {})
+            self._manual_close_retry_after.pop(position_id, None)
+            activity_log.record_event(self, uid, "manual-close-cancelled-" + str(uuid.uuid4()),
+                "manual_close_cancelled",
+                "Queued manual sale cancelled before a retry transaction was submitted. "
+                "Any already-submitted sale remains unchanged.")
+        return web.json_response({"success": True,
+            "message": "Queued manual retry cancelled. Any sale already submitted remains unchanged."})
 
     async def scan_deposits(self, session):
         with self.ledger.db() as db:
@@ -3567,6 +3681,77 @@ class CustodyRuntime(WalletRuntime):
                 return True
         return True
 
+    def schedule_manual_close_retry(self, position, reason):
+        retry_state = getattr(self, "_manual_close_retry_after", {})
+        attempts = retry_state.get(position["id"], {}).get("attempts", 0) + 1
+        delay = min(300, 20 * (2 ** min(attempts - 1, 4)))
+        retry_state[position["id"]] = {"attempts": attempts, "until": time.monotonic() + delay}
+        self._manual_close_retry_after = retry_state
+        symbol = activity_log.label(self, position.get("symbol", "")) or "position"
+        safe_reason = activity_log.safe_failure_reason(reason)
+        activity_log.record_event(self, position["uid"],
+            f"manual-close-retry-{position['id']}-{min(attempts, 8)}",
+            "manual_close_retry",
+            f"Manual sale for {symbol} was not submitted: {safe_reason}. "
+            f"The request remains queued; the next safe attempt is no sooner than {delay} seconds. "
+            "Cancel the queued retry from the position card if you no longer want it.")
+        return delay
+
+    async def process_manual_close_queues(self, session):
+        queued = self.ledger.manual_close_queue()
+        if not queued:
+            return False
+        if self.pending() or self.legacy_pending():
+            return True
+        for queued_position in queued:
+            retry = getattr(self, "_manual_close_retry_after", {}).get(queued_position["id"], {})
+            if retry.get("until", 0) > time.monotonic():
+                continue
+            async with self.lock:
+                if self.pending() or self.legacy_pending():
+                    return True
+                current = next((row for row in self.ledger.positions(queued_position["uid"])
+                                if row["id"] == queued_position["id"]), None)
+                if not current or current["state"] == "CLOSED":
+                    self.ledger.clear_manual_close_request(
+                        queued_position["uid"], queued_position["id"])
+                    getattr(self, "_manual_close_retry_after", {}).pop(queued_position["id"], None)
+                    activity_log.record_event(self, queued_position["uid"],
+                        "manual-close-satisfied-" + queued_position["id"],
+                        "manual_close_satisfied",
+                        "Queued manual sale cleared because the position is already closed; no second sale was sent.")
+                    continue
+                if current["state"] != "OPEN":
+                    continue
+                if getattr(self, "web_access", None):
+                    self.web_access.pause_expired(current["uid"])
+                try:
+                    await self.trade(session, current["uid"], current["asset"],
+                        current["funding_asset"], current["raw"], "SELL",
+                        {"output_asset": current["funding_asset"], "symbol": current["symbol"],
+                         "decimals": current["decimals"], "manual_close": True},
+                        position_id=current["id"], manual=True)
+                    pending_sell = any(row["position_id"] == current["id"] and
+                        row["kind"] == "SELL" for row in self.ledger.pending())
+                    refreshed = next((row for row in self.ledger.positions(current["uid"])
+                                      if row["id"] == current["id"]), None)
+                    if pending_sell or (refreshed and refreshed["state"] == "CLOSED"):
+                        # The queued intent has become an actual sale attempt.
+                        self.ledger.clear_manual_close_request(current["uid"], current["id"])
+                        getattr(self, "_manual_close_retry_after", {}).pop(current["id"], None)
+                    else:
+                        self.schedule_manual_close_retry(current,
+                            "the trade attempt ended without a pending or finalized sale")
+                except Exception as exc:
+                    if not any(row["position_id"] == current["id"] and
+                               row["kind"] == "SELL" for row in self.ledger.pending()):
+                        self.schedule_manual_close_retry(current, operation_failure_reason(exc))
+                    else:
+                        self.ledger.clear_manual_close_request(current["uid"], current["id"])
+                        getattr(self, "_manual_close_retry_after", {}).pop(current["id"], None)
+                return True
+        return True
+
     def schedule_close_retry(self, uid, reason, symbol=""):
         previous = self._close_retry_after.get(uid, {})
         attempts = previous.get("attempts", 0) + 1
@@ -3587,10 +3772,12 @@ class CustodyRuntime(WalletRuntime):
             self.web_access.pause_expired()
         await self.reconcile(session)
         close_queue_active = await self.process_close_queues(session)
+        manual_close_active = (False if close_queue_active
+                               else await self.process_manual_close_queues(session))
         await self.scan_deposits(session)
         self.ledger.credit_safe_partner_earnings()
         await self.process_due_monthly_trading_fees(session)
-        if close_queue_active:
+        if close_queue_active or manual_close_active:
             return
         users = self.ledger.active_users()
         if not users:
