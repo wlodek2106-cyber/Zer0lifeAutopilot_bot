@@ -35,14 +35,17 @@ class EnglishTests(unittest.TestCase):
                     and any(isinstance(t, ast.Name) and t.id == "RAW_HTML" for t in node.targets))
         exchange = page.split('<div id="tab-exchange"', 1)[1].split('<div id="tab-deposit"', 1)[0]
         for required in (
-                "Solana to Base", "NOT CONFIGURED", "No transfer can be started yet",
-                "not configured", "your own available Solana USDC balance",
-                "quote and provider or network costs will be shown before you manually confirm",
+                "Solana → Base", "Base → Solana", "NOT CONFIGURED",
+                "No transfer can be started in either direction",
+                "separate Base hot wallet", "Only your available Solana USDC balance",
+                "quote, estimated receive amount, provider charge and network costs will be shown before you manually confirm",
                 "only after the destination-chain transfer reaches finality",
                 "Shared wallet. Separate user balances.", "Telegram account UID",
                 "not an external withdrawal", "Do not retry a transfer",
                 'class="exchange-disabled" type="button" disabled'):
             self.assertIn(required, exchange)
+        self.assertIn("const source = reverse ? 'Base' : 'Solana'", page)
+        self.assertIn("const destination = reverse ? 'Solana' : 'Base'", page)
         self.assertNotRegex(exchange, r"<(form|input|select)\b")
         self.assertNotIn("fetch(", exchange)
 

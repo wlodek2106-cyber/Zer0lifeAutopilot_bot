@@ -2045,11 +2045,17 @@ RAW_HTML = r"""<!DOCTYPE html>
         .exchange-kicker { margin:0 0 7px; color:#a9bc8e; font:700 10px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.16em; }
         .exchange-status { flex:none; border:1px solid rgba(239,190,111,.35); border-radius:99px; padding:7px 10px; color:#efc77e; background:rgba(63,45,22,.35); font:700 9px/1 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.08em; }
         .exchange-lede { position:relative; z-index:2; max-width:500px; margin:9px 0 0; color:#a8b6a9; font-size:13px; line-height:1.55; }
+        .exchange-direction { position:relative; z-index:2; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:16px 0 0; }
+        .exchange-direction button { min-height:44px; border:1px solid rgba(190,218,179,.2); border-radius:12px; color:#aebcae; background:linear-gradient(145deg,rgba(18,28,24,.92),rgba(14,22,25,.92)); font-size:11px; font-weight:750; cursor:pointer; }
+        .exchange-direction button[aria-pressed="true"] { border-color:rgba(185,230,151,.56); color:#e8f8d7; background:linear-gradient(145deg,rgba(73,105,54,.58),rgba(30,54,46,.9)); box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 5px 20px rgba(120,177,87,.1); }
+        .exchange-direction button:focus-visible { outline:2px solid #c5ee9a; outline-offset:2px; }
         .bridge-stage { position:relative; height:224px; margin:4px auto 0; max-width:460px; perspective:800px; }
         .bridge-track { position:absolute; left:14%; right:14%; top:52%; height:1px; background:linear-gradient(90deg,rgba(114,214,171,.08),#8bd8ae 48%,rgba(119,177,217,.2)); transform:rotateX(62deg); box-shadow:0 0 18px rgba(144,221,177,.24); }
         .bridge-node { position:absolute; top:50%; width:118px; height:112px; transform-style:preserve-3d; }
         .bridge-node--sol { left:6%; transform:translateY(-50%) rotateX(58deg) rotateZ(-25deg); }
         .bridge-node--base { right:6%; transform:translateY(-50%) rotateX(58deg) rotateZ(25deg); }
+        .bridge-stage--reverse .bridge-node--sol { left:auto; right:6%; }
+        .bridge-stage--reverse .bridge-node--base { right:auto; left:6%; }
         .bridge-disc { position:absolute; inset:12px 8px 18px; border-radius:22px; background:linear-gradient(145deg,#314538,#19281f); border:1px solid rgba(180,224,174,.48); box-shadow:0 20px 0 -5px #152019,0 22px 0 -4px rgba(142,191,147,.38),0 34px 28px rgba(0,0,0,.38),inset 0 1px 0 rgba(255,255,255,.2); }
         .bridge-node--base .bridge-disc { background:linear-gradient(145deg,#30485a,#1b2a35); border-color:rgba(144,194,224,.5); box-shadow:0 20px 0 -5px #17232c,0 22px 0 -4px rgba(137,176,203,.38),0 34px 28px rgba(0,0,0,.38),inset 0 1px 0 rgba(255,255,255,.2); }
         .bridge-token { position:absolute; z-index:2; inset:26px 0 auto; color:#e4f0dc; text-align:center; font:800 14px/1 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.06em; transform:translateZ(26px); }
@@ -2289,35 +2295,39 @@ RAW_HTML = r"""<!DOCTYPE html>
 
         <div id="tab-exchange" class="tab-panel" aria-labelledby="exchange-title">
             <header class="page-heading"><div><p class="eyebrow">Cross-chain · Personal ledger</p><h1 id="exchange-title">Exchange</h1></div></header>
-            <section class="exchange-hero" aria-label="Solana to Base USDC bridge concept">
+            <section class="exchange-hero" aria-label="USDC transfer between Solana and Base">
                 <div class="exchange-heading">
-                    <div><p class="exchange-kicker">USDC · MANUAL BRIDGE</p><h1>Solana to Base</h1></div>
+                    <div><p class="exchange-kicker">USDC · MANUAL CROSS-CHAIN TRANSFER</p><h1 id="exchange-direction-title">Solana → Base</h1></div>
                     <span class="exchange-status">NOT CONFIGURED</span>
                 </div>
-                <p class="exchange-lede">Move value between your own in-app chain balances. This route is informational only: no bridge service or Base settlement wallet is configured.</p>
-                <div class="bridge-stage" aria-hidden="true">
+                <p class="exchange-lede">Choose a direction to move value between your own Solana and Base USDC balances. This is not available yet: the bridge backend and a separate Base hot wallet are not configured.</p>
+                <div class="exchange-direction" role="group" aria-label="Choose transfer direction">
+                    <button id="exchange-dir-solana-base" type="button" aria-pressed="true" onclick="setExchangeDirection('solana-to-base')">Solana → Base</button>
+                    <button id="exchange-dir-base-solana" type="button" aria-pressed="false" onclick="setExchangeDirection('base-to-solana')">Base → Solana</button>
+                </div>
+                <div class="bridge-stage" id="exchange-bridge-stage" aria-hidden="true">
                     <div class="bridge-track"></div>
                     <div class="bridge-node bridge-node--sol"><div class="bridge-disc"></div><span class="bridge-token">USDC</span><span class="bridge-chain">SOLANA</span></div>
-                    <div class="bridge-center">→</div>
+                    <div class="bridge-center" id="exchange-arrow">→</div>
                     <div class="bridge-node bridge-node--base"><div class="bridge-disc"></div><span class="bridge-token">USDC</span><span class="bridge-chain">BASE</span></div>
-                    <div class="bridge-annotation">PERSONAL LEDGER · MANUAL CONFIRMATION</div>
+                    <div class="bridge-annotation">YOUR BALANCES · MANUAL CONFIRMATION</div>
                 </div>
             </section>
             <div class="exchange-callout" role="status" aria-live="polite" style="margin-top:14px">
                 <span class="exchange-callout-mark" aria-hidden="true">!</span>
-                <div><strong>No transfer can be started yet</strong><p>The bridge backend, Base hot wallet and quote integration are not configured. There is no transfer form, live quote or transaction action on this screen.</p></div>
+                <div><strong>No transfer can be started in either direction</strong><p>The bridge backend, separate Base hot wallet and quote integration are not configured. There is no live quote or transaction submission yet.</p></div>
             </div>
-            <section class="exchange-flow" aria-label="How the bridge will work when enabled">
-                <article class="exchange-step"><span class="exchange-step-index">01 / SOURCE</span><h2>Use your Solana USDC</h2><p>You will use your own available Solana USDC balance. You will not need to deposit Base USDC externally to use the bridge.</p></article>
-                <article class="exchange-step"><span class="exchange-step-index">02 / REVIEW</span><h2>Review before confirming</h2><p>A quote and provider or network costs will be shown before you manually confirm. Nothing is submitted automatically.</p></article>
-                <article class="exchange-step"><span class="exchange-step-index">03 / SETTLE</span><h2>Credit after finality</h2><p>Only your Base balance will be credited, and only after the destination-chain transfer reaches finality.</p></article>
+            <section class="exchange-flow" aria-label="How transfers will work when enabled">
+                <article class="exchange-step"><span class="exchange-step-index">01 / SOURCE</span><h2 id="exchange-source-title">Use your Solana USDC</h2><p id="exchange-source-copy">Only your available Solana USDC balance can fund this direction. No external Base deposit is needed.</p></article>
+                <article class="exchange-step"><span class="exchange-step-index">02 / REVIEW</span><h2>Review quote and costs</h2><p>A quote, estimated receive amount, provider charge and network costs will be shown before you manually confirm. Nothing is submitted automatically.</p></article>
+                <article class="exchange-step"><span class="exchange-step-index">03 / SETTLE</span><h2 id="exchange-destination-title">Credit your Base balance</h2><p id="exchange-destination-copy">Your Base balance is credited only after the destination-chain transfer reaches finality.</p></article>
             </section>
             <section class="exchange-accounting" aria-labelledby="exchange-accounting-title">
                 <p class="exchange-kicker">ACCOUNTING · ISOLATED BY UID</p>
                 <h2 id="exchange-accounting-title">Shared wallet. Separate user balances.</h2>
                 <p>The bot's physical Base hot wallet is shared for settlement, but its ledger tracks each authenticated user's funds separately by Telegram account UID. A shared wallet does not make users' recorded balances shared. This internal bridge moves value between your in-app chain balances; it is <strong>not an external withdrawal</strong>.</p>
-                <div class="exchange-destination" aria-label="Bridge path"><span>YOUR SOLANA USDC</span><span aria-hidden="true">→</span><span>DESTINATION FINALITY</span><span aria-hidden="true">→</span><span>YOUR BASE BALANCE</span></div>
-                <button class="exchange-disabled" type="button" disabled aria-disabled="true">Bridge unavailable · not configured</button>
+                <div class="exchange-destination" aria-label="Transfer path"><span id="exchange-path-source">YOUR SOLANA USDC</span><span aria-hidden="true">→</span><span>DESTINATION FINALITY</span><span aria-hidden="true">→</span><span id="exchange-path-destination">YOUR BASE BALANCE</span></div>
+                <button class="exchange-disabled" type="button" disabled aria-disabled="true">Transfers unavailable · setup incomplete</button>
                 <p class="exchange-disabled-note">This control is disabled. No transfer can be started from this screen.</p>
             </section>
             <aside class="exchange-safety"><strong>Pending or unknown?</strong> Do not retry a transfer whose status is pending or unknown. Wait for its status to be resolved before taking any action.</aside>
@@ -4164,6 +4174,25 @@ RAW_HTML = r"""<!DOCTYPE html>
                 refreshTelegramTariffs();
             }
             if(id==='wallet')refreshMonthlyTradingFee(true);
+        }
+
+        function setExchangeDirection(direction) {
+            const reverse = direction === 'base-to-solana';
+            const source = reverse ? 'Base' : 'Solana';
+            const destination = reverse ? 'Solana' : 'Base';
+            document.getElementById('exchange-direction-title').textContent = source + ' → ' + destination;
+            document.getElementById('exchange-dir-solana-base').setAttribute('aria-pressed', String(!reverse));
+            document.getElementById('exchange-dir-base-solana').setAttribute('aria-pressed', String(reverse));
+            document.getElementById('exchange-bridge-stage').classList.toggle('bridge-stage--reverse', reverse);
+            document.getElementById('exchange-arrow').textContent = reverse ? '←' : '→';
+            document.getElementById('exchange-source-title').textContent = 'Use your ' + source + ' USDC';
+            document.getElementById('exchange-source-copy').textContent =
+                'Only your available ' + source + ' USDC balance can fund this direction. No external ' + destination + ' deposit is needed.';
+            document.getElementById('exchange-destination-title').textContent = 'Credit your ' + destination + ' balance';
+            document.getElementById('exchange-destination-copy').textContent =
+                'Your ' + destination + ' balance is credited only after the destination-chain transfer reaches finality.';
+            document.getElementById('exchange-path-source').textContent = 'YOUR ' + source.toUpperCase() + ' USDC';
+            document.getElementById('exchange-path-destination').textContent = 'YOUR ' + destination.toUpperCase() + ' BALANCE';
         }
 
         function switchWalletTab(tab) {
