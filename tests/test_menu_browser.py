@@ -339,6 +339,28 @@ class MenuBrowserTests(unittest.TestCase):
                     assert(getComputedStyle(document.getElementById('tab-'+tabs[i])).display==='block','visible '+tabs[i]);
                     assert(document.documentElement.scrollWidth<=innerWidth,'no horizontal overflow '+tabs[i]);
                 }
+                const investorTab=document.getElementById('tab-ai-crypto-investors');
+                investorTab.classList.add('active');
+                investorTab.style.display='block';
+                const baseCard=document.getElementById('base-paper-panel');
+                baseCard.style.display='block';
+                const baseHead=baseCard.querySelector('.base-paper-head');
+                const baseTitle=baseHead.querySelector('h2').getBoundingClientRect();
+                const baseBadge=baseHead.querySelector('.base-paper-badge').getBoundingClientRect();
+                assert(baseBadge.top>=baseTitle.bottom-1,'Base live-state badge sits below the title on mobile');
+                assert(getComputedStyle(baseCard.querySelector('.base-paper-metrics')).gridTemplateColumns.split(/\\s+/).length===2,
+                    'Base metrics use two readable columns on mobile');
+                const baseButtons=[...baseCard.querySelectorAll('.base-paper-controls button')].map(button=>button.getBoundingClientRect());
+                const baseCardRect=baseCard.getBoundingClientRect();
+                assert(baseButtons.every(rect=>rect.left>=baseCardRect.left&&rect.right<=baseCardRect.right),
+                    'Base controls stay within the card on mobile');
+                assert(baseButtons[0].right<=baseButtons[1].left+1,'Base action buttons do not overlap');
+                const solanaCard=investorTab.querySelector('.solana-investor-card');
+                const solanaHead=solanaCard.querySelector('.base-paper-head');
+                assert(solanaHead.querySelector('.solana-investor-badge').getBoundingClientRect().top
+                    >=solanaHead.querySelector('h2').getBoundingClientRect().bottom-1,
+                    'Solana autopilot badge does not overlap the title on mobile');
+                assert(document.documentElement.scrollWidth<=innerWidth,'AI Crypto Investors has no horizontal overflow');
                 fixture.is_admin=false;
                 fixture.trading_admitted=true;
                 await refresh();

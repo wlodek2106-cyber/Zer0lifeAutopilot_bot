@@ -2041,6 +2041,87 @@ RAW_HTML = r"""<!DOCTYPE html>
         #app .solana-investor-budget-form .settings-label { margin: 0 0 4px 2px; font-size: 9px; }
         #app .solana-investor-budget-form .sig-input { box-sizing: border-box; width: 100%; height: 42px; margin: 0; padding: 8px 9px; font-size: 12px; }
         #app .solana-investor-budget-save { grid-column: 1 / -1; width: 100%; min-height: 42px; margin: 0 !important; padding: 0 8px; font-size: 11px; }
+        /* Keep each network card readable even when desktop shows them side by side. */
+        #app .base-paper-card, #app .solana-investor-card {
+            container-type: inline-size;
+            container-name: investor-panel;
+        }
+        @container investor-panel (max-width: 480px) {
+            #app .base-paper-head {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr);
+                align-items: start;
+                gap: 9px;
+            }
+            #app .base-network-identity { width: 100%; }
+            #app .base-network-identity > div { min-width: 0; }
+            #app .base-paper-head h2 { overflow-wrap: anywhere; }
+            #app .base-paper-badge, #app .solana-investor-badge {
+                grid-column: 1;
+                justify-self: start;
+                max-width: 100%;
+                white-space: normal;
+                line-height: 1.25;
+            }
+            #app .base-paper-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            #app .base-paper-metric:last-child { grid-column: 1 / -1; }
+            #app .base-paper-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            #app .base-paper-budget-field { grid-column: 1 / -1; }
+            #app .base-paper-save, #app .base-paper-scan {
+                height: auto;
+                min-height: 44px;
+                padding: 7px 8px;
+                line-height: 1.2;
+                white-space: normal;
+                overflow-wrap: anywhere;
+            }
+            #app .base-paper-status, #app .base-paper-caption,
+            #app .solana-investor-caption, #app .solana-investor-help,
+            #app .solana-investor-rules { overflow-wrap: anywhere; }
+        }
+        @container investor-panel (max-width: 340px) {
+            #app .base-paper-controls { grid-template-columns: 1fr; }
+            #app .base-paper-budget-field { grid-column: 1; }
+            #app .base-paper-details { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 600px) {
+            #app .base-paper-head {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr);
+                align-items: start;
+                gap: 9px;
+            }
+            #app .base-network-identity { width: 100%; }
+            #app .base-network-identity > div { min-width: 0; }
+            #app .base-paper-head h2 { overflow-wrap: anywhere; }
+            #app .base-paper-badge, #app .solana-investor-badge {
+                grid-column: 1;
+                justify-self: start;
+                max-width: 100%;
+                white-space: normal;
+                line-height: 1.25;
+            }
+            #app .base-paper-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            #app .base-paper-metric:last-child { grid-column: 1 / -1; }
+            #app .base-paper-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            #app .base-paper-budget-field { grid-column: 1 / -1; }
+            #app .base-paper-save, #app .base-paper-scan {
+                height: auto;
+                min-height: 44px;
+                padding: 7px 8px;
+                line-height: 1.2;
+                white-space: normal;
+                overflow-wrap: anywhere;
+            }
+            #app .base-paper-status, #app .base-paper-caption,
+            #app .solana-investor-caption, #app .solana-investor-help,
+            #app .solana-investor-rules { overflow-wrap: anywhere; }
+        }
+        @media (max-width: 360px) {
+            #app .base-paper-controls { grid-template-columns: 1fr; }
+            #app .base-paper-budget-field { grid-column: 1; }
+            #app .base-paper-details { grid-template-columns: 1fr; }
+        }
         @media (max-width: 380px) {
             #app .tab-panel { padding-right: 14px; padding-left: 14px; }
             #app .card:not(#partner-program), #app .deposit-modal { padding: 15px; }
