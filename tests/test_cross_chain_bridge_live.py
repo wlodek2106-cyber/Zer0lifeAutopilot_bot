@@ -1,3 +1,4 @@
+import base64
 import os
 import json
 import tempfile
@@ -7,15 +8,26 @@ import unittest
 from unittest.mock import patch
 
 from eth_account import Account
+from solders.address_lookup_table_account import AddressLookupTableAccount
+from solders.hash import Hash
+from solders.instruction import AccountMeta, Instruction
+from solders.keypair import Keypair
+from solders.message import MessageV0
+from solders.pubkey import Pubkey
+from solders.signature import Signature
+from solders.transaction import VersionedTransaction
 
 from custody_ledger import CustodyLedger, LedgerError, available
 from cross_chain_bridge import (
     BASE_CHAIN_ID,
     BASE_USDC_ADDRESS,
     SOLANA_CHAIN_ID,
+    SOLANA_LOOKUP_TABLE_PROGRAM,
     SOLANA_USDC,
+    SOLANA_NEAR_INTENTS_PROGRAM,
     BridgeError,
     CrossChainBridge,
+    _ata,
     base_signer_address,
     build_exact_usdc_approval,
     normalize_quote,
@@ -23,6 +35,7 @@ from cross_chain_bridge import (
     sign_base_transaction,
     validate_solana_transaction,
 )
+from spl_token_support import TOKEN_PROGRAM_ID
 
 BASE_WALLET = "0x4574D50bB68D0A65F10b62655338A1C8b4315040"
 SOLANA_WALLET = "11111111111111111111111111111111"
@@ -104,6 +117,33 @@ def base_route():
     }
 
 
+def make_lookup_table_transaction():
+    wallet = Keypair()
+    mint = Pubkey.from_string(SOLANA_USDC)
+    source = Pubkey.from_string(_ata(str(wallet.pubkey())))
+    destination = Pubkey.new_unique()
+    raw_amount = 5_000_000
+    transfer_data = bytes([12]) + raw_amount.to_bytes(8, "little") + bytes([6])
+    transfer = Instruction(
+        Pubkey.from_string(TOKEN_PROGRAM_ID), transfer_data,
+        [AccountMeta(source, False, True), AccountMeta(mint, False, False),
+         AccountMeta(destination, False, True), AccountMeta(wallet.pubkey(), True, False)])
+    intent = Instruction(Pubkey.from_string(SOLANA_NEAR_INTENTS_PROGRAM), b"\x01", [])
+    table_key = Pubkey.new_unique()
+    table = AddressLookupTableAccount(table_key, [source, mint, destination])
+    message = MessageV0.try_compile(wallet.pubkey(), [transfer, intent], [table], Hash.default())
+    tx = VersionedTransaction.populate(message, [Signature.default()])
+    raw_table = bytearray(56)
+    raw_table[:4] = (1).to_bytes(4, "little")
+    raw_table[4:12] = ((1 << 64) - 1).to_bytes(8, "little")
+    raw_table[12:20] = (1).to_bytes(8, "little")
+    raw_table[20] = 0
+    raw_table[21] = 0
+    raw_table.extend(b"".join(bytes(address) for address in table.addresses))
+    return (base64.b64encode(bytes(tx)).decode("ascii"), str(wallet.pubkey()),
+            base64.b64encode(bytes(raw_table)).decode("ascii"), str(table_key))
+
+
 class LiveBridgePrimitiveTests(unittest.TestCase):
     def test_amount_is_integer_six_decimals_and_capped(self):
         self.assertEqual(parse_usdc_raw("10.000001"), 10_000_001)
@@ -151,6 +191,41 @@ class LiveBridgePrimitiveTests(unittest.TestCase):
     def test_malformed_solana_payload_is_rejected_before_signing(self):
         with self.assertRaises(BridgeError):
             validate_solana_transaction("not-base64", 0, SOLANA_WALLET, 5_000_000)
+
+    def test_solana_v0_lookup_table_is_resolved_and_transaction_still_fully_validated(self):
+        encoded, wallet, table_data, table_key = make_lookup_table_transaction()
+
+        async def rpc(_session, method, params):
+            self.assertEqual(method, "getMultipleAccounts")
+            self.assertEqual(params[0], [table_key])
+            return {"context": {"slot": 10}, "value": [{
+                "owner": str(SOLANA_LOOKUP_TABLE_PROGRAM),
+                "data": [table_data, "base64"],
+            }]}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "ledger.sqlite")
+            bridge = CrossChainBridge(path, EmptyLedger(path), SOLANA_WALLET, solana_rpc=rpc)
+            tables = __import__("asyncio").run(bridge.resolve_solana_lookup_tables(None, encoded))
+            tx = validate_solana_transaction(
+                encoded, 0, wallet, 5_000_000, lookup_table_accounts=tables)
+            self.assertEqual(len(tx.message.address_table_lookups), 1)
+            with self.assertRaisesRegex(BridgeError, "LOOKUP_TABLE_DATA_MISSING"):
+                validate_solana_transaction(encoded, 0, wallet, 5_000_000)
+
+    def test_solana_lookup_table_must_be_live_and_owned_by_lookup_program(self):
+        encoded, _wallet, table_data, table_key = make_lookup_table_transaction()
+
+        async def rpc(_session, method, params):
+            return {"context": {"slot": 10}, "value": [{
+                "owner": str(Pubkey.default()), "data": [table_data, "base64"],
+            }]}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "ledger.sqlite")
+            bridge = CrossChainBridge(path, EmptyLedger(path), SOLANA_WALLET, solana_rpc=rpc)
+            with self.assertRaisesRegex(BridgeError, "ALT_OWNER_MISMATCH"):
+                __import__("asyncio").run(bridge.resolve_solana_lookup_tables(None, encoded))
 
     def test_destination_credit_requires_explicit_chain_proofs(self):
         with self.assertRaises(BridgeError):

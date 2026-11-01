@@ -214,7 +214,8 @@ class CustodyRuntime(WalletRuntime):
         self.legacy_runtime = WalletRuntime(*args, **kwargs)
         self.ledger = CustodyLedger(self.db_file)
         self.base_paper = BasePaperEngine(self.ledger.path, self.owner_id)
-        self.cross_chain_bridge = CrossChainBridge(self.ledger.path, self.ledger, self.wallet)
+        self.cross_chain_bridge = CrossChainBridge(
+            self.ledger.path, self.ledger, self.wallet, solana_rpc=self.rpc)
         self.ledger.user(self.owner_id)
         self.ledger.tx_epoch()
         self.base_url = base_url.rstrip("/")
@@ -1149,8 +1150,11 @@ class CustodyRuntime(WalletRuntime):
             try:
                 if direction == "solana-to-base":
                     tx_request = route["transactionRequest"]
+                    lookup_tables = await self.cross_chain_bridge.resolve_solana_lookup_tables(
+                        session, tx_request["data"])
                     unsigned = validate_solana_transaction(
-                        tx_request["data"], tx_request["svmTransactionVersion"], self.wallet, amount_raw)
+                        tx_request["data"], tx_request["svmTransactionVersion"], self.wallet, amount_raw,
+                        lookup_table_accounts=lookup_tables)
                     signed = VersionedTransaction(unsigned.message, [signer])
                     signature = str(signed.signatures[0])
                     wire = base64.b64encode(bytes(signed)).decode("ascii")

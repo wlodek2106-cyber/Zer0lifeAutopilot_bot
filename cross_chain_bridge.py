@@ -10,6 +10,11 @@ import uuid
 from decimal import Decimal, InvalidOperation
 
 import aiohttp
+from solders.address_lookup_table_account import (
+    AddressLookupTable,
+    AddressLookupTableAccount,
+    ID as SOLANA_LOOKUP_TABLE_PROGRAM,
+)
 from solders.pubkey import Pubkey
 from solders.transaction import VersionedTransaction
 from custody_ledger import available as user_account
@@ -27,12 +32,19 @@ MAX_QUOTE_AMOUNT_RAW = 10_000_000_000
 SOLANA_NEAR_INTENTS_PROGRAM = "3i5JeuZuUxeKtVysUnwQNGerJP2bSMX9fTFfS4Nxe3Br"
 SOLANA_ASSOCIATED_TOKEN_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
 SOLANA_COMPUTE_BUDGET_PROGRAM = "ComputeBudget111111111111111111111111111111"
+SOLANA_U64_MAX = (1 << 64) - 1
 
 
 class BridgeError(Exception):
     def __init__(self, message, status=503):
         super().__init__(message)
         self.status = status
+
+
+class SolanaTransactionValidationError(ValueError):
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
 
 
 def parse_usdc_raw(value):
@@ -124,69 +136,107 @@ def _ata(wallet):
         [bytes(wallet_key), bytes(token_program), bytes(mint_key)], associated_program)[0])
 
 
-def validate_solana_transaction(encoded, version, wallet, amount_raw):
-    """Fail closed unless the unsigned payload is a narrow USDC bridge transaction."""
+def validate_solana_transaction(encoded, version, wallet, amount_raw, lookup_table_accounts=None):
+    """Fail closed unless the payload resolves to one narrow USDC bridge transaction."""
     try:
         if type(version) is not int or version not in (0, 1):
-            raise ValueError()
+            raise SolanaTransactionValidationError("UNSUPPORTED_VERSION")
         tx = VersionedTransaction.from_bytes(base64.b64decode(encoded, validate=True))
         msg = tx.message
         keys = [str(key) for key in msg.account_keys]
         if (msg.header.num_required_signatures != 1 or not keys or keys[0] != str(wallet)
-                or len(tx.signatures) != 1 or bytes(tx.signatures[0]) != bytes(64)
-                or getattr(msg, "address_table_lookups", [])):
-            raise ValueError()
+                or len(tx.signatures) != 1):
+            raise SolanaTransactionValidationError("SIGNER_MISMATCH")
+        if bytes(tx.signatures[0]) != bytes(64):
+            raise SolanaTransactionValidationError("QUOTE_ALREADY_SIGNED")
+        lookups = list(getattr(msg, "address_table_lookups", []))
+        tables = list(lookup_table_accounts or [])
+        if len(lookups) > 8:
+            raise SolanaTransactionValidationError("TOO_MANY_LOOKUP_TABLES")
+        if bool(lookups) != bool(tables):
+            raise SolanaTransactionValidationError("LOOKUP_TABLE_DATA_MISSING")
+        if lookups:
+            table_map = {str(table.key): table for table in tables}
+            lookup_keys = [str(lookup.account_key) for lookup in lookups]
+            if len(table_map) != len(tables) or set(table_map) != set(lookup_keys):
+                raise SolanaTransactionValidationError("LOOKUP_TABLE_MISMATCH")
+            loaded_writable, loaded_readonly = [], []
+            for lookup in lookups:
+                table = table_map[str(lookup.account_key)]
+                addresses = list(table.addresses)
+                writable_indexes = list(lookup.writable_indexes)
+                readonly_indexes = list(lookup.readonly_indexes)
+                if (len(set(writable_indexes + readonly_indexes)) != len(writable_indexes + readonly_indexes)
+                        or any(type(index) is not int or index < 0 or index >= len(addresses)
+                               for index in writable_indexes + readonly_indexes)):
+                    raise SolanaTransactionValidationError("LOOKUP_INDEX_INVALID")
+                loaded_writable.extend(str(addresses[index]) for index in writable_indexes)
+                loaded_readonly.extend(str(addresses[index]) for index in readonly_indexes)
+            keys.extend(loaded_writable)
+            keys.extend(loaded_readonly)
+            if len(keys) > 256 or len(set(keys)) != len(keys):
+                raise SolanaTransactionValidationError("LOOKUP_ACCOUNT_SET_INVALID")
         allowed = {TOKEN_PROGRAM_ID, SOLANA_NEAR_INTENTS_PROGRAM,
                    SOLANA_ASSOCIATED_TOKEN_PROGRAM, SOLANA_COMPUTE_BUDGET_PROGRAM}
         total, transfers, intents = 0, 0, 0
-        if len(msg.instructions) > 30 or len(keys) > 60:
-            raise ValueError()
+        if len(msg.instructions) > 30 or len(keys) > 256:
+            raise SolanaTransactionValidationError("TRANSACTION_TOO_LARGE")
         for ix in msg.instructions:
-            if ix.program_id_index >= len(keys):
-                raise ValueError()
+            if ix.program_id_index >= len(keys) or any(index >= len(keys) for index in ix.accounts):
+                raise SolanaTransactionValidationError("ACCOUNT_INDEX_INVALID")
             program, accounts, data = keys[ix.program_id_index], [keys[i] for i in ix.accounts], bytes(ix.data)
             if program not in allowed or not data:
-                raise ValueError()
+                raise SolanaTransactionValidationError("UNAPPROVED_PROGRAM")
             if program == TOKEN_PROGRAM_ID:
                 if len(data) != 10 or data[0] != 12 or len(accounts) != 4:
-                    raise ValueError()
+                    raise SolanaTransactionValidationError("UNEXPECTED_TOKEN_INSTRUCTION")
                 amount = int.from_bytes(data[1:9], "little")
                 if (accounts[0] != _ata(wallet) or accounts[1] != SOLANA_USDC
                         or accounts[3] != str(wallet) or data[9] != 6 or amount <= 0):
-                    raise ValueError()
+                    raise SolanaTransactionValidationError("USDC_ACCOUNT_MISMATCH")
                 transfers += 1
                 total += amount
             elif program == SOLANA_ASSOCIATED_TOKEN_PROGRAM:
                 if data not in (b"\x00", b"\x01") or len(accounts) != 6:
-                    raise ValueError()
+                    raise SolanaTransactionValidationError("ATA_INSTRUCTION_MISMATCH")
                 owner, mint, token_program = accounts[2], accounts[3], accounts[5]
                 if mint != SOLANA_USDC or token_program != TOKEN_PROGRAM_ID:
-                    raise ValueError()
+                    raise SolanaTransactionValidationError("ATA_MINT_MISMATCH")
                 derived = Pubkey.find_program_address(
                     [bytes(Pubkey.from_string(owner)), bytes(Pubkey.from_string(token_program)),
                      bytes(Pubkey.from_string(mint))],
                     Pubkey.from_string(SOLANA_ASSOCIATED_TOKEN_PROGRAM))[0]
                 if accounts[1] != str(derived):
-                    raise ValueError()
+                    raise SolanaTransactionValidationError("ATA_ADDRESS_MISMATCH")
             elif program == SOLANA_COMPUTE_BUDGET_PROGRAM:
                 if data[0] == 2 and len(data) == 5:
                     if not 10_000 <= int.from_bytes(data[1:5], "little") <= 1_400_000:
-                        raise ValueError()
+                        raise SolanaTransactionValidationError("COMPUTE_BUDGET_LIMIT")
                 elif data[0] == 3 and len(data) == 9:
                     if int.from_bytes(data[1:9], "little") > 2_000_000:
-                        raise ValueError()
+                        raise SolanaTransactionValidationError("COMPUTE_BUDGET_LIMIT")
                 else:
-                    raise ValueError()
+                    raise SolanaTransactionValidationError("COMPUTE_BUDGET_INSTRUCTION")
             elif program == SOLANA_NEAR_INTENTS_PROGRAM:
                 intents += 1
-        if intents != 1 or transfers != 1 or total != int(amount_raw):
-            raise ValueError()
+        if intents != 1:
+            raise SolanaTransactionValidationError("INTENTS_INSTRUCTION_COUNT")
+        if transfers != 1:
+            raise SolanaTransactionValidationError("USDC_TRANSFER_COUNT")
+        if total != int(amount_raw):
+            raise SolanaTransactionValidationError("USDC_AMOUNT_MISMATCH")
         return tx
-    except Exception as exc:
-        raise BridgeError("The Solana transaction failed USDC signer checks; nothing was sent.", 422) from exc
+    except SolanaTransactionValidationError as exc:
+        raise BridgeError(
+            f"The Solana transaction failed safe validation [{exc.code}]; nothing was sent.", 422
+        ) from None
+    except Exception:
+        raise BridgeError(
+            "The Solana transaction could not be decoded safely [PAYLOAD_INVALID]; nothing was sent.", 422
+        ) from None
 
 
-def normalize_quote(payload, expected):
+def normalize_quote(payload, expected, lookup_table_accounts=None):
     try:
         action, estimate, tx = payload["action"], payload["estimate"], payload["transactionRequest"]
         if (int(action["fromChainId"]) != expected["from_chain"]
@@ -219,22 +269,74 @@ def normalize_quote(payload, expected):
             if payload.get("tool") != "near":
                 raise ValueError()
             validate_solana_transaction(tx["data"], tx["svmTransactionVersion"],
-                                        expected["from_address"], expected["amount_raw"])
+                                        expected["from_address"], expected["amount_raw"],
+                                        lookup_table_accounts=lookup_table_accounts)
         return payload
     except (KeyError, TypeError, ValueError, InvalidOperation):
         raise BridgeError("The provider quote failed chain, wallet, token, amount, or transaction checks.", 502) from None
 
 
 class CrossChainBridge:
-    def __init__(self, db_file, ledger, solana_wallet):
+    def __init__(self, db_file, ledger, solana_wallet, solana_rpc=None):
         self.db_file, self.ledger = str(db_file), ledger
         self.solana_wallet = str(solana_wallet)
+        self.solana_rpc = solana_rpc
         try:
             self.base_wallet = normalize_evm_address(os.getenv("BASE_HOT_WALLET_ADDRESS", ""))
         except BridgeError:
             self.base_wallet = ""
         self.api_key = os.getenv("LIFI_API_KEY", "").strip()
         self._init_db()
+
+    async def resolve_solana_lookup_tables(self, session, encoded):
+        try:
+            tx = VersionedTransaction.from_bytes(base64.b64decode(encoded, validate=True))
+            lookups = list(getattr(tx.message, "address_table_lookups", []))
+            if not lookups:
+                return []
+            if not self.solana_rpc or len(lookups) > 8:
+                raise BridgeError("Solana lookup tables cannot be safely verified [ALT_RPC_UNAVAILABLE].", 503)
+            lookup_keys = [str(lookup.account_key) for lookup in lookups]
+            if len(set(lookup_keys)) != len(lookup_keys):
+                raise BridgeError("The quote contains duplicate lookup tables [ALT_DUPLICATE].", 422)
+            try:
+                result = await self.solana_rpc(session, "getMultipleAccounts", [
+                    lookup_keys, {"encoding": "base64", "commitment": "finalized"}])
+            except Exception:
+                raise BridgeError(
+                    "Solana lookup-table verification failed [ALT_RPC_UNAVAILABLE]; nothing was sent.", 503
+                ) from None
+            context_slot = int(result["context"]["slot"])
+            values = result["value"]
+            if not isinstance(values, list) or len(values) != len(lookups):
+                raise BridgeError("Solana returned incomplete lookup-table data [ALT_DATA_MISSING].", 422)
+            accounts = []
+            loaded_total = 0
+            for lookup, account in zip(lookups, values):
+                if not isinstance(account, dict) or account.get("owner") != str(SOLANA_LOOKUP_TABLE_PROGRAM):
+                    raise BridgeError("The quote references an unverified lookup table [ALT_OWNER_MISMATCH].", 422)
+                data = account.get("data")
+                if (not isinstance(data, list) or len(data) != 2
+                        or data[1] != "base64" or not isinstance(data[0], str)):
+                    raise BridgeError("Solana returned invalid lookup-table data [ALT_DATA_INVALID].", 422)
+                table = AddressLookupTable.deserialize(base64.b64decode(data[0], validate=True))
+                meta = table.meta
+                if (int(meta.deactivation_slot) != SOLANA_U64_MAX
+                        or int(meta.last_extended_slot) > context_slot):
+                    raise BridgeError("The quote references an inactive lookup table [ALT_INACTIVE].", 422)
+                addresses = list(table.addresses)
+                requested = list(lookup.writable_indexes) + list(lookup.readonly_indexes)
+                loaded_total += len(requested)
+                if (loaded_total > 256 or any(index >= len(addresses) for index in requested)
+                        or (int(meta.last_extended_slot) == context_slot
+                            and any(index >= int(meta.last_extended_slot_start_index) for index in requested))):
+                    raise BridgeError("The quote references unavailable lookup-table entries [ALT_INDEX_INVALID].", 422)
+                accounts.append(AddressLookupTableAccount(lookup.account_key, addresses))
+            return accounts
+        except BridgeError:
+            raise
+        except Exception:
+            raise BridgeError("Solana lookup-table data could not be validated [ALT_DATA_INVALID].", 422) from None
 
     def _init_db(self):
         with sqlite3.connect(self.db_file, timeout=10) as db:
@@ -319,9 +421,14 @@ class CrossChainBridge:
             raise
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
             raise BridgeError("The quote provider is unavailable; no transfer was sent.", 503) from None
+        lookup_tables = []
+        if direction == "solana-to-base":
+            transaction_request = payload.get("transactionRequest") or {}
+            lookup_tables = await self.resolve_solana_lookup_tables(
+                session, transaction_request.get("data", ""))
         route = normalize_quote(payload, {"from_chain": from_chain, "to_chain": to_chain,
             "amount_raw": raw, "from_address": from_address, "to_address": to_address,
-            "from_token": from_token, "to_token": to_token})
+            "from_token": from_token, "to_token": to_token}, lookup_table_accounts=lookup_tables)
         qid, expires = str(uuid.uuid4()), now + QUOTE_TTL_SECONDS
         with sqlite3.connect(self.db_file, timeout=10) as db:
             db.execute("""INSERT INTO custody_bridge_quotes
