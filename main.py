@@ -2842,7 +2842,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <div class="base-paper-metric">
                         <span>OPEN POSITIONS</span>
                         <strong id="base-paper-open-count">0</strong>
-                        <small><span id="base-paper-open-cost">$0.00</span> cost</small>
+                        <small><span id="base-paper-open-cost">$0.00</span> open cost</small>
                     </div>
                     <div class="base-paper-metric">
                         <span>REALIZED · GROSS</span>
@@ -3029,7 +3029,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                             <div>Observed return: ${Number.isFinite(snap.observed_return_pct) ? snap.observed_return_pct.toFixed(3)+'%' : 'Not recorded'}
                             · Peak return: ${Number.isFinite(snap.peak_return_pct) ? snap.peak_return_pct.toFixed(3)+'%' : 'Not recorded'}
                             · Pullback: ${Number.isFinite(snap.pullback_from_peak_pct) ? snap.pullback_from_peak_pct.toFixed(3)+'%' : 'Not recorded'}</div>
-                            <div>Trigger time: ${Number.isFinite(snap.observed_at) ? tradeAuditText(new Date(snap.observed_at*1000).toLocaleString()) : 'Not recorded'}
+                            <div>Trigger time: ${Number.isFinite(snap.observed_at) ? tradeAuditText(new Date(snap.observed_at*1000).toLocaleString(uiLocale())) : 'Not recorded'}
                             · Policy: ${tradeAuditText(snap.policy_version || 'Not recorded')}</div>` : '';
                     return `<div style="border-top:1px solid #25332a;padding:12px 0">
                         <strong>${kind} · Recorded facts</strong>
@@ -3041,9 +3041,9 @@ RAW_HTML = r"""<!DOCTYPE html>
                             +' · Trend: '+tradeAuditText(trigger.risk_trend)+'</div>' : ''}
                         ${triggerNumbers}
                         <div>Executed price: ${price(facts.fill_price)} ${tradeAuditText(facts.funding_currency)}</div>
-                        <div>Finalized: ${tradeAuditText(new Date(row.finalized_at*1000).toLocaleString())}</div>
+                        <div>Finalized: ${tradeAuditText(new Date(row.finalized_at*1000).toLocaleString(uiLocale()))}</div>
                         <div>Second agent: ${tradeAuditText(state)}</div>
-                        ${row.reviewed_at ? '<div>Reviewed: '+tradeAuditText(new Date(row.reviewed_at*1000).toLocaleString())+'</div>' : ''}
+                        ${row.reviewed_at ? '<div>Reviewed: '+tradeAuditText(new Date(row.reviewed_at*1000).toLocaleString(uiLocale()))+'</div>' : ''}
                         ${row.last_error ? '<div>'+tradeAuditText(row.last_error)+'</div>' : ''}
                         ${report ? '<div><strong>AI interpretation — not execution evidence</strong></div><div>'
                             +tradeAuditText(report.assessment)+'</div><div>Lesson: '
@@ -3124,13 +3124,32 @@ RAW_HTML = r"""<!DOCTYPE html>
                     +' · '+(t.closed_at||'time unavailable')).join('\n')
                 :'No AI Crypto Investors sales recorded.';
         }
-        let basePaperLoading=false,basePaperBusy=false;
+        let basePaperLoading=false,basePaperBusy=false,latestBasePaperData=null;
         function basePaperMoney(value){
             const parsed=Number(value);
-            return Number.isFinite(parsed)?'$'+parsed.toFixed(2):'—';
+            const locale=uiLocale();
+            return Number.isFinite(parsed)
+                ?new Intl.NumberFormat(locale,{style:'currency',currency:'USD',
+                    minimumFractionDigits:2,maximumFractionDigits:2}).format(parsed)
+                :'—';
+        }
+        function localizeBasePaperText(value){
+            const source=String(value??'');
+            const completed=source.match(/^Paper scan complete: (\d+) simulated buys, (\d+) simulated exits\. No live transactions\.$/);
+            if(completed&&currentUiLanguage==='uk')
+                return `Симуляцію завершено. Віртуальні покупки: ${completed[1]}; віртуальні виходи: ${completed[2]}. Реальних транзакцій не було.`;
+            if(completed&&currentUiLanguage==='ru')
+                return `Симуляция завершена. Виртуальные покупки: ${completed[1]}; виртуальные выходы: ${completed[2]}. Реальных транзакций не было.`;
+            const rateLimit=source.match(/^Base market data is rate-limited; retry in (\d+)s\.$/);
+            if(rateLimit&&currentUiLanguage==='uk')
+                return `Запити до ринкових даних Base тимчасово обмежені. Спробуйте ще раз через ${rateLimit[1]} с.`;
+            if(rateLimit&&currentUiLanguage==='ru')
+                return `Запросы рыночных данных Base временно ограничены. Повторите попытку через ${rateLimit[1]} с.`;
+            return localizeUiText(source);
         }
         function renderBasePaper(data){
             if(!data||!data.success)return;
+            latestBasePaperData=data;
             const budgetInput=document.getElementById('base-paper-budget-input');
             const openPositions=data.open_positions||[];
             const candidates=data.candidates||[];
@@ -3143,33 +3162,40 @@ RAW_HTML = r"""<!DOCTYPE html>
             document.getElementById('base-paper-closed-count').textContent=String(closedTrades.length);
             document.getElementById('base-paper-candidate-count').textContent=String(candidates.length);
             if(document.activeElement!==budgetInput)budgetInput.value=String(Number(data.budget_usd||0));
-            const scanned=data.scanned_at?new Date(Number(data.scanned_at)*1000).toLocaleString():'Not scanned';
+            const locale=uiLocale();
+            const scanned=data.scanned_at
+                ?new Date(Number(data.scanned_at)*1000).toLocaleString(locale)
+                :localizeBasePaperText('Not scanned');
             document.getElementById('base-paper-status').textContent=
-                data.message+'\nLast scan: '+scanned+'\nPaper only · live transactions: '+(data.live_trading?'unexpectedly enabled':'OFF')+
+                localizeBasePaperText(data.message)+'\n'+localizeBasePaperText('Last scan: ')+scanned+
+                '\n'+localizeBasePaperText('Paper only · live transactions: ')+
+                localizeBasePaperText(data.live_trading?'unexpectedly enabled':'OFF')+
                 '';
-            if(data.pnl_note)document.getElementById('base-paper-pnl-note').textContent=data.pnl_note;
+            if(data.pnl_note)document.getElementById('base-paper-pnl-note').textContent=localizeBasePaperText(data.pnl_note);
             document.getElementById('base-paper-candidates').textContent=candidates.length
                 ?candidates.map(c=>{
-                    const change='5m '+Number(c.change_m5_pct||0).toFixed(2)+'% / 1h '+Number(c.change_h1_pct||0).toFixed(2)+'%';
+                    const change='5m '+Number(c.change_m5_pct||0).toLocaleString(locale,{minimumFractionDigits:2,maximumFractionDigits:2})
+                        +'% / 1h '+Number(c.change_h1_pct||0).toLocaleString(locale,{minimumFractionDigits:2,maximumFractionDigits:2})+'%';
                     const reason=c.simulated_action||c.signal_reason||((c.rejection_reasons||[]).join(' ')||'No entry signal');
-                    return (c.symbol||'TOKEN')+' / '+(c.quote_asset||'—')+' · $'+Number(c.price_usd||0).toPrecision(6)
+                    return localizeBasePaperText((c.symbol||'TOKEN')+' / '+(c.quote_asset||'—')+' · '
+                        +Number(c.price_usd||0).toLocaleString(locale,{maximumSignificantDigits:6})
                         +' · liquidity '+basePaperMoney(c.liquidity_usd)+' · volume '+basePaperMoney(c.volume_24h_usd)
-                        +' · '+change+'\n'+reason;
+                        +' · '+change+'\n'+reason);
                 }).join('\n\n')
-                :'No eligible Base quote pools returned by the last scan.';
+                :localizeBasePaperText('No eligible Base quote pools returned by the last scan.');
             document.getElementById('base-paper-open-positions').textContent=openPositions.length
                 ?openPositions.map(p=>{
                     const pnl=p.unrealized_gross_pnl_usd==null?'price unavailable':basePaperMoney(p.unrealized_gross_pnl_usd)+' gross';
                     const stale=p.price_stale_seconds==null?'':p.price_stale_seconds>120?' · mark may be stale':'';
-                    return p.symbol+' · tranche '+p.entry_step+'/3 · '+basePaperMoney(p.amount_usd)+' · '+p.quote_asset
-                        +' · entry $'+Number(p.entry_price_usd||0).toPrecision(6)+' · current '+pnl+stale;
+                    return localizeBasePaperText(p.symbol+' · tranche '+p.entry_step+'/3 · '+basePaperMoney(p.amount_usd)+' · '+p.quote_asset
+                        +' · entry $'+Number(p.entry_price_usd||0).toLocaleString(locale,{maximumSignificantDigits:6})+' · current '+pnl+stale);
                 }).join('\n')
-                :'No open paper positions.';
+                :localizeBasePaperText('No open paper positions.');
             document.getElementById('base-paper-closed-trades').textContent=closedTrades.length
-                ?closedTrades.map(p=>p.symbol+' · tranche '+p.entry_step+'/3 · '+basePaperMoney(p.profit_usd)
-                    +' gross · '+(p.exit_reason||'exit')+' · '+new Date(Number(p.closed_at||0)*1000).toLocaleString())
+                ?closedTrades.map(p=>localizeBasePaperText(p.symbol+' · tranche '+p.entry_step+'/3 · '+basePaperMoney(p.profit_usd)
+                    +' gross · '+(p.exit_reason||'exit')+' · '+new Date(Number(p.closed_at||0)*1000).toLocaleString(locale)))
                     .join('\n')
-                :'No simulated exits.';
+                :localizeBasePaperText('No simulated exits.');
         }
         async function loadBasePaper(){
             if(basePaperLoading||!window.latestAccountStats?.is_admin)return;
@@ -3180,18 +3206,18 @@ RAW_HTML = r"""<!DOCTYPE html>
                 if(!response.ok||!data.success)throw Error(data.message||'Could not load Base paper simulation.');
                 renderBasePaper(data);
             }catch(error){
-                document.getElementById('base-paper-status').textContent=error.message||'Base paper simulation is unavailable.';
+                document.getElementById('base-paper-status').textContent=localizeBasePaperText(error.message||'Base paper simulation is unavailable.');
             }finally{basePaperLoading=false;}
         }
         async function saveBasePaperBudget(){
             const button=document.getElementById('base-paper-save-budget');
             const amount=Number(document.getElementById('base-paper-budget-input').value);
             if(!Number.isFinite(amount)||amount<0||amount>100000){
-                document.getElementById('base-paper-status').textContent='Enter a virtual budget from $0 to $100,000.';
+                document.getElementById('base-paper-status').textContent=localizeBasePaperText('Enter a virtual budget from $0 to $100,000.');
                 return;
             }
             if(amount>0&&amount<15){
-                document.getElementById('base-paper-status').textContent='Use $0 only after positions close, or at least $15 for 15 virtual tranches.';
+                document.getElementById('base-paper-status').textContent=localizeBasePaperText('Use $0 only after positions close, or at least $15 for 15 virtual tranches.');
                 return;
             }
             button.disabled=true;
@@ -3202,7 +3228,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 if(!response.ok||!data.success)throw Error(data.message||'Could not save virtual cap.');
                 renderBasePaper(data);
             }catch(error){
-                document.getElementById('base-paper-status').textContent=error.message||'Could not save virtual cap.';
+                document.getElementById('base-paper-status').textContent=localizeBasePaperText(error.message||'Could not save virtual cap.');
             }finally{button.disabled=false;}
         }
         async function runBasePaperScan(){
@@ -3210,14 +3236,14 @@ RAW_HTML = r"""<!DOCTYPE html>
             const button=document.getElementById('base-paper-scan');
             basePaperBusy=true;button.disabled=true;
             document.getElementById('base-paper-status').textContent=
-                'Scanning up to four Base pools and closed candles. This may take up to a minute; no live order is sent.';
+                localizeBasePaperText('Scanning up to four Base pools and closed candles. This may take up to a minute; no live order is sent.');
             try{
                 const response=await apiFetch('/api/base-paper/scan',{method:'POST'});
                 const data=await response.json();
                 if(!response.ok||!data.success)throw Error(data.message||'Base paper scan failed.');
                 renderBasePaper(data);
             }catch(error){
-                document.getElementById('base-paper-status').textContent=error.message||'Base paper scan failed; no simulated action was recorded.';
+                document.getElementById('base-paper-status').textContent=localizeBasePaperText(error.message||'Base paper scan failed; no simulated action was recorded.');
             }finally{basePaperBusy=false;button.disabled=false;}
         }
         const UI_COPY_ROWS = [
@@ -3240,7 +3266,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["Losses","Убытки","Збитки"],["Net","Итого","Разом"],["YOUR TRADES","ВАШИ СДЕЛКИ","ВАШІ УГОДИ"],
             ["Autopilot: OFF","Автопилот: ВЫКЛ","Автопілот: ВИМК"],["Refresh","Обновить","Оновити"],
             ["Close all my positions","Закрыть все мои позиции","Закрити всі мої позиції"],
-            ["Meme Sniper · SOL","Meme Sniper · SOL","Meme Sniper · SOL"],
+            ["Meme Sniper · SOL","Мем-снайпер · SOL","Мем-снайпер · SOL"],
             ["Available SOL","Доступно SOL","Доступно SOL"],["Order size","Размер ордера","Розмір ордера"],
             ["Scan candidates","Сканировать кандидатов","Сканувати кандидатів"],
             ["Candidate shortlist","Список кандидатов","Список кандидатів"],
@@ -3286,7 +3312,8 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["Copy referral link","Скопировать реферальную ссылку","Скопіювати реферальне посилання"],
             ["Strategy limits & risks","Ограничения и риски стратегии","Обмеження та ризики стратегії"],
             ["Diagnostics","Диагностика","Діагностика"],["AI connection & costs","Подключение ИИ и расходы","Підключення ШІ та витрати"],
-            ["AI Crypto Investors","AI Crypto Investors","AI Crypto Investors"],
+             ["AI Trader · Independent strategy","AI Trader · независимая стратегия","AI Trader · незалежна стратегія"],
+             ["AI Crypto Investors","AI-криптоинвесторы","AI-криптоінвестори"],
             ["Solana Investors","Solana Investors","Solana Investors"],
             ["SOLANA NETWORK · MAINNET","СЕТЬ SOLANA · MAINNET","МЕРЕЖА SOLANA · MAINNET"],
             ["USDC and SOL · screened discovery universe · separate real-money strategy","USDC и SOL · проверенные рыночные кандидаты · отдельная стратегия с реальными средствами","USDC і SOL · перевірені ринкові кандидати · окрема стратегія з реальними коштами"],
@@ -3302,6 +3329,73 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["Bridge status is rate-limited.","Провайдер ограничил частоту проверки статуса.","Провайдер обмежив частоту перевірки статусу."],
             ["Bridge status is unavailable.","Сервис проверки статуса временно недоступен.","Сервіс перевірки статусу тимчасово недоступний."],
             ["Provider status does not match this transfer; funds remain reserved.","Статус провайдера не совпадает с этим переводом; средства остаются зарезервированы.","Статус провайдера не відповідає цьому переказу; кошти залишаються зарезервованими."],
+             ["BASE NETWORK · L2","СЕТЬ BASE · L2","МЕРЕЖА BASE · L2"],
+             ["Paper Investors","Виртуальный режим инвестирования","Віртуальний трейдинг"],
+             ["Manual scan · No Base wallet or real transactions","Ручное сканирование · без Base-кошелька и реальных транзакций","Ручне сканування · без гаманця Base та реальних транзакцій"],
+             ["CAP / FREE","ЛИМИТ / ДОСТУПНО","ЛІМІТ / ВІЛЬНО"],
+             ["available","доступно","доступно"],["OPEN POSITIONS","ОТКРЫТЫЕ ПОЗИЦИИ","ВІДКРИТІ ПОЗИЦІЇ"],
+             ["open cost","стоимость открытых позиций","вкладено у відкриті позиції"],
+             ["REALIZED · GROSS","РЕАЛИЗОВАНО · ДО РАСХОДОВ","РЕАЛІЗОВАНО · ДО ВИТРАТ"],
+             ["closed · fees excluded","закрыто · комиссии не учтены","закрито · комісії не враховано"],
+             ["Virtual cap · USD","Виртуальный лимит · USD","Ліміт симуляції · USD"],
+             ["Save cap","Сохранить лимит","Зберегти ліміт"],
+             ["Ready · scan manually to update the simulation.","Готово · запустите сканирование вручную, чтобы обновить симуляцию.","Готово · запустіть сканування вручну, щоб оновити симуляцію."],
+             ["No scan results.","Результатов сканирования пока нет.","Результатів сканування ще немає."],
+             ["Closed tranches & results","Закрытые этапы и результаты","Закриті етапи та результати"],
+             ["Gross price-only simulation.","Симуляция учитывает только изменение цены.","Симуляція враховує лише зміну ціни."],
+             ["Gas, DEX fees, routing, price impact and failed fills are excluded;","Газ, комиссии DEX и маршрутизации, влияние на цену и неисполненные ордера не учитываются;","Газ, комісії DEX і маршрутизації, вплив на ціну та невиконані ордери не враховано;"],
+             ["results are not a profit forecast.","это не прогноз прибыли.","це не прогноз прибутку."],
+             ["Strategy & filters","Стратегия и фильтры","Стратегія та фільтри"],
+             ["Shared virtual USD cap across Base USDC and WETH · up to five positions · three equal entry tranches.","Общий виртуальный лимит в USD для Base USDC и WETH · до пяти позиций · три равные части для входа.","Спільний віртуальний ліміт у USD для Base USDC і WETH · до п’яти позицій · три рівні частини для входу."],
+             ["Entries require fresh closed 5m/1h candles.","Вход возможен только по свежим закрытым свечам 5m/1h.","Вхід можливий лише за свіжими закритими свічками 5m/1h."],
+             ["Profit exits: +3.5%, +7%, then +10% activation with a","Фиксация прибыли: +3,5%, +7%, затем активация на +10% с","Фіксація прибутку: +3,5%, +7%, далі активація на +10% із"],
+             ["5% pullback trail. No stop-loss.","трейлингом 5% от максимума. Стоп-лосса нет.","трейлінгом 5% від максимуму. Стоп-лосу немає."],
+             ["Pools need at least $10,000 liquidity, $100,000 24h volume,","Ликвидность пула должна быть не менее $10 000, объём за 24 часа — $100 000,","Ліквідність пулу має бути не меншою за $10 000, обсяг за 24 години — $100 000,"],
+             ["200 daily transactions, and 24h age. Only exact Base USDC/WETH quote contracts are accepted.","не менее 200 транзакций в сутки и возраст пула от 24 часов. Принимаются только точные контракты Base USDC/WETH.","не менш як 200 транзакцій на добу та вік пулу від 24 годин. Дозволені лише точні контракти Base USDC/WETH."],
+             ["No entry signal","Нет сигнала на вход","Немає сигналу для входу"],
+             ["No eligible Base quote pools returned by the last scan.","Последнее сканирование не нашло подходящих торговых пулов Base.","Під час останнього сканування не знайдено придатних торгових пулів Base."],
+             ["No simulated exits.","Виртуальных выходов пока нет.","Віртуальних виходів ще немає."],
+             ["Not scanned","Сканирование ещё не запускалось","Сканування ще не запускали"],
+             ["Last scan: ","Последнее сканирование: ","Останнє сканування: "],
+             ["Paper only · live transactions: ","Только симуляция · реальные транзакции: ","Лише симуляція · реальні транзакції: "],
+             ["unexpectedly enabled","НЕОЖИДАННО ВКЛЮЧЕНЫ","НЕОЧІКУВАНО УВІМКНЕНІ"],["OFF","ВЫКЛ","ВИМКНЕНО"],
+             ["Base scan completed; no entry or exit trigger passed. No live transactions.","Сканирование Base завершено: условия для входа или выхода не выполнены. Реальных транзакций не было.","Сканування Base завершено: умов для входу чи виходу не виявлено. Реальних транзакцій не було."],
+             ["Base scan completed but found no eligible quote pools.","Сканирование Base завершено, но подходящих торговых пулов не найдено.","Сканування Base завершено, але придатних торгових пулів не знайдено."],
+             ["Base scan completed","Сканирование Base завершено","Сканування Base завершено"],
+             ["simulated buys","виртуальных покупок","віртуальних покупок"],["simulated exits","виртуальных выходов","віртуальних виходів"],
+             ["No live transactions.","Реальных транзакций не было.","Реальних транзакцій не було."],
+             ["liquidity ","ликвидность ","ліквідність "],["volume ","объём ","обсяг "],
+             ["price unavailable","цена недоступна","ціна недоступна"],[" gross"," брутто"," брутто"],
+             ["mark may be stale","цена может быть устаревшей","ціна може бути застарілою"],
+             ["tranche ","этап входа ","етап входу "],["BUY tranche","ПОКУПКА, этап входа","КУПІВЛЯ, етап входу"],
+             ["SELL tranche","ПРОДАЖ, этап входа","ПРОДАЖ, етап входу"],["entry $","вход $","вхід $"],
+             ["current ","текущая цена ","поточна ціна "],["No entry signal","Нет сигнала на вход","Немає сигналу для входу"],
+             ["Tokenized stocks and ETFs are excluded.","Токенизированные акции и ETF исключены.","Токенізовані акції та ETF не допускаються."],
+             ["Valid token or quote price is unavailable.","Нет корректной цены токена или котируемого актива.","Немає коректної ціни токена або котируваного активу."],
+             ["Liquidity is below ","Ликвидность ниже ","Ліквідність нижча за "],
+             ["24h volume is below ","Объём за 24 часа ниже ","Обсяг за 24 години нижчий за "],
+             ["24h transactions are below ","Число транзакций за 24 часа меньше ","Кількість транзакцій за 24 години менша за "],
+             ["Pool is newer than 24h or creation time is unavailable.","Пулу меньше 24 часов или время его создания неизвестно.","Пулу менше ніж 24 години або час його створення невідомий."],
+             ["Fresh 5m/1h price-change data is unavailable.","Нет свежих данных об изменении цены за 5 минут / 1 час.","Немає свіжих даних про зміну ціни за 5 хвилин / 1 годину."],
+             ["Pool data is stale; no paper entry allowed.","Данные пула устарели; виртуальный вход запрещён.","Дані пулу застаріли; віртуальний вхід заборонено."],
+             ["Chart data was not requested in this bounded scan.","График не запрашивался в рамках ограниченного сканирования.","Графік не запитували в межах обмеженого сканування."],
+             ["Fresh, closed 5m and 1h chart data is unavailable.","Нет свежих данных закрытых свечей 5m и 1h.","Немає свіжих даних закритих свічок 5m та 1h."],
+             ["Fresh chart confirmation is required.","Для подтверждения нужен свежий график.","Для підтвердження потрібен свіжий графік."],
+             ["All three paper entry tranches have been used.","Все три виртуальных этапа входа использованы.","Усі три віртуальні етапи входу використано."],
+             ["Waiting for a new closed 5m candle before another tranche.","Ожидание новой закрытой свечи 5m перед следующим этапом входа.","Очікування нової закритої свічки 5m перед наступним етапом входу."],
+             ["Base paper slots are occupied.","Все места для виртуальных позиций Base заняты.","Усі місця для віртуальних позицій Base зайняті."],
+             ["Token is in the 24h paper re-entry cooldown.","Для токена действует 24-часовая пауза перед повторным виртуальным входом.","Для токена діє 24-годинна пауза перед повторним віртуальним входом."],
+             ["The shared virtual budget has no free tranche.","В общем виртуальном бюджете не осталось свободного этапа входа.","У спільному віртуальному бюджеті не залишилося вільного етапу входу."],
+             ["Paper quantity could not be calculated.","Не удалось рассчитать виртуальный объём сделки.","Не вдалося розрахувати віртуальний обсяг угоди."],
+             ["No entry or exit trigger passed","Ни одно условие входа или выхода не выполнено","Жодна умова входу чи виходу не виконана"],
+             ["Base market data is unavailable.","Рыночные данные Base недоступны.","Ринкові дані Base недоступні."],
+             ["Base market data is rate-limited; retry in ","Запросы рыночных данных Base ограничены; повторите через ","Запити ринкових даних Base обмежені; повторіть через "],
+             ["Enter a virtual budget from $0 to $100,000.","Введите виртуальный лимит от $0 до $100 000.","Введіть віртуальний ліміт від $0 до $100 000."],
+             ["Use $0 only after positions close, or at least $15 for 15 virtual tranches.","Установите $0 только после закрытия позиций или не менее $15 для 15 виртуальных этапов входа.","Встановлюйте $0 лише після закриття позицій або задайте щонайменше $15 для 15 віртуальних етапів входу."],
+             ["Could not save virtual cap.","Не удалось сохранить виртуальный лимит.","Не вдалося зберегти віртуальний ліміт."],
+             ["Scanning up to four Base pools and closed candles. This may take up to a minute; no live order is sent.","Проверяем до четырёх пулов Base и закрытые свечи. Это может занять до минуты; реальные ордера не отправляются.","Перевіряємо до чотирьох пулів Base і закриті свічки. Це може тривати до хвилини; реальні ордери не надсилаються."],
+             ["Base paper scan failed; no simulated action was recorded.","Не удалось просканировать Base; виртуальные операции не записаны.","Не вдалося просканувати Base; віртуальні операції не записано."],
+             ["Base paper simulation is unavailable.","Виртуальная симуляция Base недоступна.","Віртуальна симуляція Base недоступна."],
             ["SIM ONLY · LIVE OFF","ТОЛЬКО СИМУЛЯЦИЯ · РЕАЛЬНАЯ ТОРГОВЛЯ ВЫКЛ","ЛИШЕ СИМУЛЯЦІЯ · РЕАЛЬНА ТОРГІВЛЯ ВИМК"],
             ["Manual scan · No Base wallet or real transactions","Ручное сканирование · без кошелька Base и реальных транзакций","Ручне сканування · без гаманця Base та реальних транзакцій"],
             ["Scan Base","Сканировать Base","Сканувати Base"],["Open paper positions","Открытые виртуальные позиции","Відкриті віртуальні позиції"],
@@ -3397,21 +3491,378 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["Quote request","Запрос котировки","Запит котирування"],
             ["Quote route","Маршрут котировки","Маршрут котирування"]
         ];
+        const UI_COPY_ROWS_EXTRA = [
+            ["A quote never sends funds. Each approval or transfer requires your separate confirmation.","Котировка не отправляет средства. Каждое разрешение или перевод требуют отдельного подтверждения.","Котирування не переказує кошти. Кожне підтвердження або переказ потребує окремої згоди."],
+            ["ACCESS PACKAGES","ПАКЕТЫ ДОСТУПА","ПАКЕТИ ДОСТУПУ"],
+            ["AI SIGNAL / REVIEW","СИГНАЛ ИИ / ПРОВЕРКА","СИГНАЛ ШІ / ПЕРЕВІРКА"],
+            ["AI Trader","AI-трейдер","AI-трейдер"],
+            ["Ai Crypto Investors","AI-криптоинвесторы","AI-криптоінвестори"],
+            ["AI Trader · Personal account","AI-трейдер · личный аккаунт","AI-трейдер · особистий обліковий запис"],
+            ["AI Trader · Solana / USDC","AI-трейдер · Solana / USDC","AI-трейдер · Solana / USDC"],
+            ["AI decisions are not confirmed trades · times in your timezone","Решения ИИ не являются подтверждёнными сделками · время указано по вашему часовому поясу","Рішення ШІ не є підтвердженими угодами · час указано за вашим часовим поясом"],
+            ["AI makes decisions after you enable a mode. Orders require personal funds, permitted assets, at least 5 price samples, a fresh decision and stable pricing. Only one shared-wallet operation can be pending at a time.","ИИ принимает решения только после включения режима. Для ордера нужны личные средства, разрешённый актив, не менее 5 замеров цены, актуальное решение и стабильная цена. Одновременно может ожидать только одна операция общего кошелька.","ШІ ухвалює рішення лише після ввімкнення режиму. Для ордера потрібні особисті кошти, дозволений актив, щонайменше 5 вимірювань ціни, актуальне рішення та стабільна ціна. Одночасно може очікувати лише одна операція спільного гаманця."],
+            ["AI-ASSISTED · USER-DIRECTED","С ПОМОЩЬЮ ИИ · ПОД КОНТРОЛЕМ ПОЛЬЗОВАТЕЛЯ","ЗА ДОПОМОГОЮ ШІ · ПІД КОНТРОЛЕМ КОРИСТУВАЧА"],
+            ["Accept and activate","Принять и включить","Прийняти й активувати"],
+            ["Access package","Пакет доступа","Пакет доступу"],
+            ["Accumulated partner commissions","Накопленные партнёрские комиссии","Накопичені партнерські комісії"],
+            ["Active referral network","Активная реферальная сеть","Активна реферальна мережа"],
+            ["Amount in SOL","Сумма в SOL","Сума в SOL"],
+            ["Base → Solana","Base → Solana","Base → Solana"],
+            ["Budget limit · SOL","Лимит бюджета · SOL","Ліміт бюджету · SOL"],
+            ["Budget limit · USDC","Лимит бюджета · USDC","Ліміт бюджету · USDC"],
+            ["Candidate scan pending.","Ожидается сканирование кандидатов.","Очікується сканування кандидатів."],
+            ["Check estimated output, minimum receive amount, provider fees and network costs. Confirm each real transaction separately.","Проверьте расчётную сумму получения, минимум, комиссию провайдера и сетевые расходы. Каждый реальный перевод подтверждайте отдельно.","Перевірте розрахункову суму отримання, мінімум, комісію провайдера та мережеві витрати. Кожен реальний переказ підтверджуйте окремо."],
+            ["Check legacy operations","Проверить старые операции","Перевірити попередні операції"],
+            ["Check readiness · no trade","Проверить готовность · без сделки","Перевірити готовність · без угоди"],
+            ["Check rule signals · no trade","Проверить сигналы правил · без сделки","Перевірити сигнали правил · без угоди"],
+            ["Check transfer status","Проверить статус перевода","Перевірити статус переказу"],
+            ["Check wallet funds against account balances (read-only)","Сверить средства кошелька с балансом аккаунта (только чтение)","Звірити кошти гаманця з балансом облікового запису (лише читання)"],
+            ["Checking access…","Проверяем доступ…","Перевіряємо доступ…"],
+            ["Checking account access…","Проверяем доступ к аккаунту…","Перевіряємо доступ до облікового запису…"],
+            ["Checking signal status...","Проверяем статус сигнала…","Перевіряємо статус сигналу…"],
+            ["Close","Закрыть","Закрити"],
+            ["Commissions use realized trade profit — sale proceeds minus recorded purchase cost — after prior trading losses are recovered.","Комиссия начисляется с реализованной прибыли: сумма продажи минус учтённая стоимость покупки. Начисление начинается после компенсации предыдущих торговых убытков.","Комісія нараховується з реалізованого прибутку: сума продажу мінус облікована вартість купівлі. Нарахування починається після компенсації попередніх торгових збитків."],
+            ["Confirm withdrawals with a one-time Telegram code.","Подтверждайте вывод одноразовым кодом Telegram.","Підтверджуйте виведення одноразовим кодом Telegram."],
+            ["Contact technical support","Связаться с технической поддержкой","Зв’язатися з технічною підтримкою"],
+            ["Core entry cost budget: 2.50% of the order. Includes quoted DEX fees, price impact, slippage, estimated network fees, Jito tips and account rent for entry/exit. Estimates do not guarantee profit or exit costs. SELL exits are not blocked by this filter.","Лимит расходов на вход Core — 2,50% суммы ордера. Учитываются комиссии DEX, влияние на цену, проскальзывание, сетевые комиссии, чаевые Jito и аренда аккаунта при входе/выходе. Оценка не гарантирует прибыль или стоимость выхода. Фильтр не блокирует продажи.","Ліміт витрат на вхід Core — 2,50% суми ордера. Враховуються комісії DEX, вплив на ціну, прослизання, мережеві комісії, чайові Jito та оренда акаунта під час входу/виходу. Оцінка не гарантує прибуток або вартість виходу. Фільтр не блокує продажі."],
+            ["Core trades use your USDC; sniper trades use your SOL. Other users' funds and the operator fee reserve are never your trading capital. Automatic conversion or profit allocation between strategies is not implemented.","Для сделок Core используется ваш USDC, для Sniper — ваш SOL. Средства других пользователей и резерв комиссий оператора не являются вашим торговым капиталом. Автоматическая конвертация и распределение прибыли между стратегиями не поддерживаются.","Для угод Core використовується ваш USDC, для Sniper — ваш SOL. Кошти інших користувачів і резерв комісій оператора не є вашим торговим капіталом. Автоматична конвертація та розподіл прибутку між стратегіями не підтримуються."],
+            ["Create account","Создать аккаунт","Створити обліковий запис"],
+            ["Credit Base after finality","Зачислить в Base после окончательного подтверждения","Зарахувати в Base після остаточного підтвердження"],
+            ["Current SOL amount: checking…","Проверяем текущую сумму SOL…","Перевіряємо поточну суму SOL…"],
+            ["DIRECT CONTROL","ПРЯМОЕ УПРАВЛЕНИЕ","БЕЗПОСЕРЕДНЄ КЕРУВАННЯ"],
+            ["DIRECT REFERRALS","ПРЯМЫЕ РЕФЕРАЛЫ","ПРЯМІ РЕФЕРАЛИ"],
+            ["Direct","Первый уровень","Перший рівень"],
+            ["Do not send passwords, security codes, recovery codes, private keys, or seed phrases.","Не отправляйте пароли, коды безопасности и восстановления, закрытые ключи или seed-фразы.","Не надсилайте паролі, коди безпеки й відновлення, приватні ключі або seed-фрази."],
+            ["Estimates can expire or change. Review the minimum receive amount and costs before confirming.","Оценка может устареть или измениться. Перед подтверждением проверьте минимальную сумму получения и расходы.","Оцінка може застаріти або змінитися. Перед підтвердженням перевірте мінімальну суму отримання та витрати."],
+            ["Fee reserve · SOL","Резерв комиссий · SOL","Резерв комісій · SOL"],
+            ["Fees are paid from a separate operator reserve.","Комиссии оплачиваются из отдельного резерва оператора.","Комісії сплачуються з окремого резерву оператора."],
+            ["For USDC deposits, verify your wallet once, copy the address below, send USDC on Solana mainnet, then submit the transaction signature. The bot credits your balance only after it verifies the finalized transfer. SOL can also be deposited by standard transfer.","Для пополнения USDC один раз подтвердите кошелёк, скопируйте адрес ниже, отправьте USDC в основной сети Solana и укажите подпись транзакции. Бот зачислит средства только после проверки окончательного подтверждения. SOL можно пополнить обычным переводом.","Щоб поповнити USDC, один раз підтвердьте гаманець, скопіюйте адресу нижче, надішліть USDC в основній мережі Solana й укажіть підпис транзакції. Бот зарахує кошти лише після перевірки остаточного підтвердження. SOL також можна поповнити звичайним переказом."],
+            ["Free access has ended","Бесплатный доступ завершён","Безкоштовний доступ завершився"],
+            ["Free in Investor pool · SOL","Свободно в пуле Investor · SOL","Вільно в пулі Investor · SOL"],
+            ["Free in Investor pool · USDC","Свободно в пуле Investor · USDC","Вільно в пулі Investor · USDC"],
+            ["How commissions and payouts work","Как начисляются и выплачиваются комиссии","Як нараховуються та виплачуються комісії"],
+            ["I confirm the fee reserve being returned is my SOL, not customer funds.","Подтверждаю, что возвращаемый резерв — мой SOL, а не средства клиентов.","Підтверджую, що резерв, який повертається, — це мій SOL, а не кошти клієнтів."],
+            ["I understand trading can lose money and returns are not guaranteed.","Я понимаю, что торговля может привести к убыткам и прибыль не гарантирована.","Я розумію, що торгівля може призвести до збитків і прибуток не гарантований."],
+            ["IN-APP","В ПРИЛОЖЕНИИ","У ЗАСТОСУНКУ"],
+            ["Import backed old customer balances","Импортировать подтверждённые старые балансы клиентов","Імпортувати підтверджені старі баланси клієнтів"],
+            ["Import eligible balances","Импортировать подходящие балансы","Імпортувати придатні баланси"],
+            ["Import my legacy balance","Импортировать мой старый баланс","Імпортувати мій попередній баланс"],
+            ["Independent execution guard","Независимая проверка исполнения","Незалежна перевірка виконання"],
+            ["LEVEL / NETWORK","УРОВЕНЬ / СЕТЬ","РІВЕНЬ / МЕРЕЖА"],
+            ["Liquidity is checked through the executable route and price impact at the requested size, not a promise of market depth. Entry cost estimates are not profit forecasts. Entry-efficiency checks never block owned-position exits or withdrawals. A passed check is not proof of a filled trade.","Ликвидность оценивается по исполнимому маршруту и влиянию на цену при заданной сумме, а не по обещанной глубине рынка. Оценка расходов на вход не является прогнозом прибыли. Проверка входа никогда не блокирует выход из своих позиций или вывод средств. Успешная проверка не подтверждает исполнение сделки.","Ліквідність оцінюється за маршрутом виконання та впливом на ціну для вказаної суми, а не за обіцяною глибиною ринку. Оцінка витрат на вхід не є прогнозом прибутку. Перевірка входу ніколи не блокує вихід із власних позицій або виведення коштів. Успішна перевірка не підтверджує виконання угоди."],
+            ["Loading activity...","Загружаем историю активности…","Завантажуємо історію активності…"],
+            ["Loading assets...","Загружаем активы…","Завантажуємо активи…"],
+            ["Loading balance...","Загружаем баланс…","Завантажуємо баланс…"],
+            ["Loading fee status…","Загружаем статус резерва комиссий…","Завантажуємо статус резерву комісій…"],
+            ["Loading partner balances…","Загружаем балансы партнёров…","Завантажуємо баланси партнерів…"],
+            ["Loading trades...","Загружаем сделки…","Завантажуємо угоди…"],
+            ["Loading your account-specific link…","Загружаем персональную ссылку аккаунта…","Завантажуємо персональне посилання облікового запису…"],
+            ["Logs & position controls","Журналы и управление позициями","Журнали та керування позиціями"],
+            ["Manual confirmation","Ручное подтверждение","Ручне підтвердження"],
+            ["Manual transfer fallback. No Memo required.","Резервный ручной перевод. Memo не требуется.","Запасний ручний переказ. Memo не потрібен."],
+            ["Memecoin trades funded in SOL","Сделки с мемкоинами за SOL","Угоди з мемкоїнами за SOL"],
+            ["NOT CONNECTED","НЕ ПОДКЛЮЧЕНО","НЕ ПІДКЛЮЧЕНО"],
+            ["Nickname","Псевдоним","Псевдонім"],
+            ["No entry cost check yet.","Проверка расходов на вход ещё не проводилась.","Перевірку витрат на вхід ще не виконано."],
+            ["No execution check recorded yet.","Проверка исполнения ещё не записана.","Перевірку виконання ще не зафіксовано."],
+            ["No legacy balance preview has been run.","Предварительная проверка старого баланса ещё не запускалась.","Попередню перевірку попереднього балансу ще не запускали."],
+            ["Not now","Не сейчас","Не зараз"],
+            ["One-time USDC ledger migration. Preview checks old balances, new-ledger activity, and unassigned on-chain backing. Accounts with ambiguous new activity are skipped. This updates the internal ledger only; it never sends a Solana transaction.","Одноразовый перенос балансов USDC во внутренний реестр. Предварительная проверка сверяет старые балансы, операции в новом реестре и неподтверждённое покрытие в сети. Аккаунты с неоднозначной активностью пропускаются. Меняется только внутренний реестр; транзакция Solana не отправляется.","Одноразове перенесення балансів USDC до внутрішнього реєстру. Попередня перевірка звіряє старі баланси, операції в новому реєстрі та нерозподілене покриття в мережі. Облікові записи з неоднозначною активністю пропускаються. Змінюється лише внутрішній реєстр; транзакція Solana не надсилається."],
+            ["Open in Solana wallet","Открыть в кошельке Solana","Відкрити в гаманці Solana"],
+            ["Open investor positions","Открытые позиции Investor","Відкриті позиції Investor"],
+            ["Open payment status page","Открыть страницу статуса платежа","Відкрити сторінку стану платежу"],
+            ["Open secure checkout","Открыть защищённую оплату","Відкрити захищену оплату"],
+            ["Open-position cost · SOL","Стоимость открытых позиций · SOL","Вартість відкритих позицій · SOL"],
+            ["Open-position cost · USDC","Стоимость открытых позиций · USDC","Вартість відкритих позицій · USDC"],
+            ["Operator tools","Инструменты оператора","Інструменти оператора"],
+            ["Operator tools · fees & migration","Инструменты оператора · комиссии и перенос","Інструменти оператора · комісії та перенесення"],
+            ["Outcome memory: awaiting finalized trade history.","Память результатов: ожидается окончательная история сделок.","Пам’ять результатів: очікується остаточна історія угод."],
+            ["Owner shortfall adjustment","Корректировка дефицита владельца","Коригування нестачі власника"],
+            ["PERSONAL EXECUTION LAYER","ПЕРСОНАЛЬНЫЙ ТОРГОВЫЙ УРОВЕНЬ","ОСОБИСТИЙ ТОРГОВИЙ РІВЕНЬ"],
+            ["Passkeys & account recovery","Ключи доступа и восстановление аккаунта","Ключі доступу та відновлення облікового запису"],
+            ["Pay exactly","Оплатить точную сумму","Сплатити точну суму"],
+            ["Payment is separate from your trading balance. It does not enable Core or Sniper.","Оплата не списывается с торгового баланса и не включает Core или Sniper.","Оплата не списується з торгового балансу й не вмикає Core або Sniper."],
+            ["Policy loading...","Загружаем правила…","Завантажуємо правила…"],
+            ["Preview eligible balances (read-only)","Предварительно проверить подходящие балансы (только чтение)","Попередньо перевірити придатні баланси (лише читання)"],
+            ["REFERRAL LINK","РЕФЕРАЛЬНАЯ ССЫЛКА","РЕФЕРАЛЬНЕ ПОСИЛАННЯ"],
+            ["REFERRALS","РЕФЕРАЛЫ","РЕФЕРАЛИ"],
+            ["Realized SOL PnL: loading...","Реализованный PnL в SOL: загружаем…","Реалізований PnL у SOL: завантажуємо…"],
+            ["Recipient","Получатель","Отримувач"],
+            ["Recover using a saved code","Восстановить с помощью сохранённого кода","Відновити за збереженим кодом"],
+            ["Request expires","Срок действия запроса","Строк дії запиту"],
+            ["Required for this referred account","Требуется для этого реферала","Потрібно для цього реферала"],
+            ["Reserve not checked yet.","Резерв ещё не проверен.","Резерв ще не перевірено."],
+            ["Return excess fee reserve","Вернуть излишек резерва комиссий","Повернути надлишок резерву комісій"],
+            ["Risk controller: awaiting analysis.","Контроль рисков: ожидается анализ.","Контроль ризиків: очікується аналіз."],
+            ["Run the read-only wallet coverage check first.","Сначала запустите проверку покрытия кошелька без изменений.","Спочатку запустіть перевірку покриття гаманця без змін."],
+            ["SECOND CIRCLE","ВТОРОЙ УРОВЕНЬ","ДРУГИЙ РІВЕНЬ"],
+            ["RATE","СТАВКА","ЧАСТКА"],
+            ["SOL per sniper order","SOL на ордер Sniper","SOL на ордер Sniper"],
+            ["SOL · CLOSED TRADES","SOL · ЗАКРЫТЫЕ СДЕЛКИ","SOL · ЗАКРИТІ УГОДИ"],
+            ["SOLANA","SOLANA","SOLANA"],
+            ["SOLANA / USDC","SOLANA / USDC","SOLANA / USDC"],
+            ["SOLANA · USDC","SOLANA · USDC","SOLANA · USDC"],
+            ["Save order sizes","Сохранить размер ордеров","Зберегти розмір ордерів"],
+            ["Save recovery codes shown in the secure browser. Recovery requires your Telegram account, account security code and an unused recovery code; it replaces old passkeys.","Сохраните коды восстановления в защищённом браузере. Для восстановления нужны аккаунт Telegram, код безопасности и неиспользованный код восстановления; старые ключи доступа будут заменены.","Збережіть коди відновлення в захищеному браузері. Для відновлення потрібні обліковий запис Telegram, код безпеки та невикористаний код відновлення; старі ключі доступу буде замінено."],
+            ["Scheduled market scanning replaces the Helius whale stream. No whale event is required.","Плановое сканирование рынка заменяет поток китовых транзакций Helius. Событие от кита не требуется.","Планове сканування ринку замінює потік китових транзакцій Helius. Подія від кита не потрібна."],
+            ["Screened Solana candidates · Checking position limit…","Проверенные кандидаты Solana · проверяем лимит позиций…","Перевірені кандидати Solana · перевіряємо ліміт позицій…"],
+            ["Screenshot · optional","Снимок экрана · необязательно","Знімок екрана · необов’язково"],
+            ["Second level","Второй уровень","Другий рівень"],
+            ["See what the AI sees. Stay in control of every move.","Смотрите, что видит ИИ. Контролируйте каждое действие.","Бачте те, що бачить ШІ. Контролюйте кожну дію."],
+            ["Set up / add browser passkey","Настроить или добавить ключ доступа в браузере","Налаштувати або додати ключ доступу в браузері"],
+            ["Share eligible realized trading profit across three referral levels.","Распределяйте подходящую реализованную прибыль от торговли между тремя уровнями рефералов.","Розподіляйте придатний реалізований прибуток від торгівлі між трьома рівнями рефералів."],
+            ["Share your link. Eligible partner activity is tracked automatically.","Поделитесь ссылкой. Подходящая активность партнёров учитывается автоматически.","Поділіться посиланням. Придатна активність партнерів обліковується автоматично."],
+            ["Signal timings: awaiting a fresh market scan.","Время сигналов: ожидается новое сканирование рынка.","Час сигналів: очікується нове сканування ринку."],
+            ["Solana (SOL)","Solana (SOL)","Solana (SOL)"],
+            ["Solana network fees are paid from the operator reserve and are not deducted from the partner’s commission.","Сетевые комиссии Solana оплачиваются из резерва оператора и не вычитаются из комиссии партнёра.","Мережеві комісії Solana сплачуються з резерву оператора й не вираховуються з комісії партнера."],
+            ["Solana → Base","Solana → Base","Solana → Base"],
+            ["Start one-time 3-day free trial","Начать бесплатный пробный период на 3 дня","Почати безкоштовний пробний період на 3 дні"],
+            ["THIRD CIRCLE","ТРЕТИЙ УРОВЕНЬ","ТРЕТІЙ РІВЕНЬ"],
+            ["TRADE WITH CLARITY","ТОРГУЙТЕ ОСОЗНАННО","ТОРГУЙТЕ УСВІДОМЛЕНО"],
+            ["The rules engine proposes BUY / HOLD only. Server-owned checks decide whether an order is allowed. No model can change limits or disable checks.","Модуль правил предлагает только BUY / HOLD. Разрешение на ордер определяют серверные проверки. Ни одна модель не может менять лимиты или отключать проверки.","Модуль правил пропонує лише BUY / HOLD. Дозвіл на ордер визначають серверні перевірки. Жодна модель не може змінювати ліміти або вимикати перевірки."],
+            ["Third level","Третий уровень","Третій рівень"],
+            ["Type total budget · SOL","Введите общий бюджет · SOL","Вкажіть загальний бюджет · SOL"],
+            ["Type total budget · USDC","Введите общий бюджет · USDC","Вкажіть загальний бюджет · USDC"],
+            ["USDC / SOL · Solana mainnet","USDC / SOL · основная сеть Solana","USDC / SOL · основна мережа Solana"],
+            ["USDC and SOL are accounted for separately. Open trades and deposits do not count.","USDC и SOL учитываются отдельно. Открытые сделки и пополнения не входят в итог.","USDC і SOL обліковуються окремо. Відкриті угоди та поповнення не враховуються."],
+            ["USDC per core order","USDC на ордер Core","USDC на ордер Core"],
+            ["USDC · CLOSED TRADES","USDC · ЗАКРЫТЫЕ СДЕЛКИ","USDC · ЗАКРИТІ УГОДИ"],
+            ["Unresolved transfers stay reserved. Never submit an unresolved transfer again.","Средства по незавершённым переводам остаются в резерве. Не отправляйте такой перевод повторно.","Кошти за незавершеними переказами залишаються в резерві. Не надсилайте такий переказ повторно."],
+            ["View tariffs and pay","Посмотреть тарифы и оплатить","Переглянути тарифи й оплатити"],
+            ["Wins / losses / even:","Прибыль / убытки / без изменений:","Прибуток / збитки / без змін:"],
+            ["Withdrawals use a one-time Telegram code. A passkey is required for standalone browser sign-in.","Для вывода нужен одноразовый код Telegram. Для входа в браузер без Telegram требуется ключ доступа.","Для виведення потрібен одноразовий код Telegram. Для входу в браузері без Telegram потрібен ключ доступу."],
+            ["YOUR BALANCES · MANUAL CONFIRMATION","ВАШИ БАЛАНСЫ · РУЧНОЕ ПОДТВЕРЖДЕНИЕ","ВАШІ БАЛАНСИ · РУЧНЕ ПІДТВЕРДЖЕННЯ"],
+            ["YOUR CAPITAL. YOUR CALL.","ВАШ КАПИТАЛ. ВАШЕ РЕШЕНИЕ.","ВАШ КАПІТАЛ. ВАШЕ РІШЕННЯ."],
+            ["You may return only the amount above the required minimum. This changes your bot balance only; it does not send a Solana transaction.","Можно вернуть только сумму сверх обязательного минимума. Это меняет только баланс бота и не отправляет транзакцию Solana.","Можна повернути лише суму понад обов’язковий мінімум. Це змінює лише баланс бота й не надсилає транзакцію Solana."],
+            ["Your Base balance is credited only after the destination transfer is finalized and verified.","Баланс Base зачисляется только после окончательного подтверждения и проверки перевода в сети назначения.","Баланс Base зараховується лише після остаточного підтвердження та перевірки переказу в мережі призначення."],
+            ["Your capital only","Только ваш капитал","Лише ваш капітал"],
+            ["Your verified Telegram account is your login. No email or password required.","Вход выполняется через подтверждённый аккаунт Telegram. Электронная почта и пароль не нужны.","Вхід виконується через підтверджений обліковий запис Telegram. Електронна пошта й пароль не потрібні."],
+            ["Your wallet needs the full amount in the selected asset and a little SOL for network fees. It shows the fee before approval. The bot credits your balance after Solana finalizes the exact transfer. Do not pay twice.","В кошельке должна быть вся сумма в выбранном активе и немного SOL на комиссию сети. Комиссия показывается до подтверждения. Бот зачислит средства после окончательного подтверждения точного перевода в Solana. Не платите повторно.","У гаманці має бути вся сума у вибраному активі та трохи SOL на комісію мережі. Комісію показано до підтвердження. Бот зарахує кошти після остаточного підтвердження точного переказу в Solana. Не сплачуйте повторно."],
+            ["Zer0Life","Zer0Life","Zer0Life"],
+            ["partners","партнёров","партнерів"],
+            ["Русский","Русский","Російська"],["Українська","Українский","Українська"],
+            ["A source transfer does not prove the bridge completed delivery.","Исходный перевод не доказывает, что мост доставил средства.","Вихідний переказ не доводить, що міст доставив кошти."],
+            ["Rules v1 · OpenAI OFF · no paid AI requests · ","Правила v1 · OpenAI ВЫКЛ · платные запросы ИИ не отправляются · ","Правила v1 · OpenAI ВИМК · платні запити до ШІ не надсилаються · "],
+            ["Core · USDC","Основной режим · USDC","Основний режим · USDC"],
+            ["Meme Sniper","Мем-снайпер","Мем-снайпер"],
+            ["paid AI reviewer OFF","платный ИИ-аналитик выключен","платний ШІ-аналітик вимкнений"],
+            ["Helius WebSocket OFF","Helius WebSocket выключен","Helius WebSocket вимкнено"],
+            ["every 300 seconds","каждые 300 секунд","кожні 300 секунд"],
+            ["Neither waits for whale events.","Ни один режим не ждёт сигналов от китов.","Жоден режим не чекає на сигнали від китів."],
+            [" sec market scan"," с · сканирование рынка"," с · сканування ринку"],
+            [" sec interval"," с · интервал"," с · інтервал"],
+            ["analyzed","анализ выполнен","аналіз виконано"],
+            ["connection unverified","соединение не проверено","з’єднання не перевірено"],
+            ["whale-triggered","запущен сигналом кита","запущений сигналом кита"],
+            ["Candidate source: scheduled market scanning; Helius WebSocket OFF.","Источник кандидатов: плановое сканирование рынка; Helius WebSocket выключен.","Джерело кандидатів: планове сканування ринку; Helius WebSocket вимкнено."],
+            ["Whale-triggered analysis: ","Анализ после сигнала кита: ","Аналіз після сигналу кита: "],
+            ["No OpenAI requests. Market data, RPC provider use and on-chain transaction fees may still have costs.","Запросов к OpenAI нет. Рыночные данные, RPC-провайдер и сетевые комиссии могут быть платными.","Запитів до OpenAI немає. Ринкові дані, RPC-провайдер і мережеві комісії можуть бути платними."],
+            ["Last analysis timings · ","Время последнего анализа · ","Час останнього аналізу · "],
+            ["market data ","рыночные данные ","ринкові дані "],
+            ["analyst ","аналитик ","аналітик "],
+            ["risk controller ","контролёр рисков ","контролер ризиків "],
+            [" · total "," · всего "," · загалом "],
+            ["Network confirmation is separate.","Подтверждение в сети происходит отдельно.","Підтвердження в мережі відбувається окремо."],
+            ["Awaiting analysis","Ожидается анализ","Очікується аналіз"],
+            ["A manual sale is already queued for this position.","Ручная продажа этой позиции уже поставлена в очередь.","Ручний продаж цієї позиції вже додано до черги."],
+            ["A payment request is already open. Use the same wallet link; do not create or pay twice.","Запрос на оплату уже открыт. Используйте ту же ссылку на кошелёк; не создавайте новый запрос и не платите повторно.","Запит на оплату вже відкрито. Скористайтеся тим самим посиланням на гаманець; не створюйте новий запит і не сплачуйте повторно."],
+            ["A withdrawal is already processing. Do not submit it again.","Вывод уже обрабатывается. Не отправляйте его повторно.","Виведення вже обробляється. Не надсилайте його повторно."],
+            ["A withdrawal is already processing. Wait for its status; do not submit it again.","Вывод уже обрабатывается. Дождитесь обновления статуса; не отправляйте его повторно.","Виведення вже обробляється. Дочекайтеся оновлення статусу; не надсилайте його повторно."],
+            ["An operation is awaiting Solana confirmation. The server checks it automatically; do not repeat it.","Операция ожидает подтверждения Solana. Сервер проверяет её автоматически; не повторяйте операцию.","Операція очікує підтвердження Solana. Сервер перевіряє її автоматично; не повторюйте операцію."],
+            ["Approval result unknown.","Результат подтверждения неизвестен.","Результат підтвердження невідомий."],
+            ["Approval submitted. Wait for finality.","Подтверждение отправлено. Дождитесь окончательного завершения.","Підтвердження надіслано. Дочекайтеся остаточного завершення."],
+            ["Approval was not submitted.","Подтверждение не отправлено.","Підтвердження не надіслано."],
+            ["Allocation not confirmed.","Распределение не подтверждено.","Розподіл не підтверджено."],
+            ["Balance check unavailable.","Проверка баланса недоступна.","Перевірка балансу недоступна."],
+            ["Base paper scan failed.","Сканирование Base завершилось ошибкой.","Сканування Base завершилося помилкою."],
+            ["Could not cancel future charges.","Не удалось отменить будущие списания.","Не вдалося скасувати майбутні списання."],
+            ["Could not cancel the queued retry.","Не удалось отменить повторную попытку в очереди.","Не вдалося скасувати повторну спробу в черзі."],
+            ["Could not change the trading mode.","Не удалось изменить режим торговли.","Не вдалося змінити режим торгівлі."],
+            ["Could not check access.","Не удалось проверить доступ.","Не вдалося перевірити доступ."],
+            ["Could not check legacy operations.","Не удалось проверить старые операции.","Не вдалося перевірити старі операції."],
+            ["Could not check the withdrawal status. Do not repeat it until history is refreshed.","Не удалось проверить статус вывода. Не повторяйте операцию, пока история не обновится.","Не вдалося перевірити статус виведення. Не повторюйте операцію, доки історія не оновиться."],
+            ["Could not check verification.","Не удалось проверить подтверждение.","Не вдалося перевірити підтвердження."],
+            ["Could not create a Solana Pay request. Check your account access and try again.","Не удалось создать запрос Solana Pay. Проверьте доступ к аккаунту и попробуйте снова.","Не вдалося створити запит Solana Pay. Перевірте доступ до облікового запису й спробуйте ще раз."],
+            ["Could not create account.","Не удалось создать аккаунт.","Не вдалося створити обліковий запис."],
+            ["Could not load Base paper simulation.","Не удалось загрузить симуляцию Base.","Не вдалося завантажити симуляцію Base."],
+            ["Could not load fee status.","Не удалось загрузить статус комиссии.","Не вдалося завантажити статус комісії."],
+            ["Could not load partner earnings.","Не удалось загрузить доход партнёров.","Не вдалося завантажити дохід партнерів."],
+            ["Could not load wallet or payout status.","Не удалось загрузить статус кошелька или выплаты.","Не вдалося завантажити статус гаманця або виплати."],
+            ["Could not open wallet verification.","Не удалось открыть подтверждение кошелька.","Не вдалося відкрити підтвердження гаманця."],
+            ["Could not prepare the withdrawal request.","Не удалось подготовить запрос на вывод.","Не вдалося підготувати запит на виведення."],
+            ["Could not preview old balances. No balances were changed.","Не удалось предварительно проверить старые балансы. Балансы не изменены.","Не вдалося попередньо перевірити старі баланси. Баланси не змінено."],
+            ["Could not read the support service response. Please try again later.","Не удалось получить ответ службы поддержки. Попробуйте позже.","Не вдалося отримати відповідь служби підтримки. Спробуйте пізніше."],
+            ["Could not read wallet coverage.","Не удалось проверить покрытие кошелька.","Не вдалося перевірити забезпечення гаманця."],
+            ["Could not request a Telegram code.","Не удалось запросить код Telegram.","Не вдалося запросити код Telegram."],
+            ["Could not save the monthly fee agreement.","Не удалось сохранить согласие на ежемесячную комиссию.","Не вдалося зберегти згоду на щомісячну комісію."],
+            ["Could not save your agreement.","Не удалось сохранить ваше согласие.","Не вдалося зберегти вашу згоду."],
+            ["Could not save your code.","Не удалось сохранить код.","Не вдалося зберегти код."],
+            ["Could not send a Telegram code.","Не удалось отправить код Telegram.","Не вдалося надіслати код Telegram."],
+            ["Could not send the support request. Please try again later.","Не удалось отправить обращение в поддержку. Попробуйте позже.","Не вдалося надіслати звернення до служби підтримки. Спробуйте пізніше."],
+            ["Could not start the free trial.","Не удалось запустить бесплатный пробный период.","Не вдалося розпочати безкоштовний пробний період."],
+            ["Could not start verification.","Не удалось начать проверку.","Не вдалося розпочати перевірку."],
+            ["Could not submit the sale.","Не удалось отправить продажу.","Не вдалося надіслати продаж."],
+            ["Could not verify account.","Не удалось проверить аккаунт.","Не вдалося перевірити обліковий запис."],
+            ["Could not verify authorization. Reopen the app through Telegram.","Не удалось проверить авторизацию. Откройте приложение заново через Telegram.","Не вдалося перевірити авторизацію. Відкрийте застосунок знову через Telegram."],
+            ["Fee status unavailable. No fee charge is confirmed; refresh before accepting.","Статус комиссии недоступен. Списание не подтверждено; обновите экран перед принятием.","Статус комісії недоступний. Списання не підтверджено; оновіть екран перед прийняттям."],
+            ["Import could not be verified.","Не удалось проверить импорт.","Не вдалося перевірити імпорт."],
+            ["Import was not confirmed.","Импорт не подтверждён.","Імпорт не підтверджено."],
+            ["Independent policy unavailable. Do not enable real trading.","Независимая проверка правил недоступна. Не включайте реальную торговлю.","Незалежна перевірка правил недоступна. Не вмикайте реальну торгівлю."],
+            ["No Solana transaction was sent. Run a fresh preview before trying again.","Транзакция Solana не отправлена. Перед новой попыткой создайте свежий предварительный просмотр.","Транзакцію Solana не надіслано. Перед новою спробою створіть новий попередній перегляд."],
+            ["No response from server.","Нет ответа от сервера.","Немає відповіді від сервера."],
+            ["Outcome unconfirmed. No refund or repeat broadcast.","Результат не подтверждён. Возврат средств и повторная отправка не выполнялись.","Результат не підтверджено. Повернення коштів і повторне надсилання не виконувалися."],
+            ["Outcome unknown. Record preserved; no repeat broadcast. Do not delete it manually.","Результат неизвестен. Запись сохранена; повторной отправки не было. Не удаляйте запись вручную.","Результат невідомий. Запис збережено; повторного надсилання не було. Не видаляйте запис вручну."],
+            ["Payment status check is temporarily unavailable. Do not pay again.","Проверка статуса оплаты временно недоступна. Не платите повторно.","Перевірка статусу оплати тимчасово недоступна. Не сплачуйте повторно."],
+            ["Reserve insufficient.","Недостаточно средств в резерве.","Недостатньо коштів у резерві."],
+            ["Reserve release not confirmed.","Возврат средств в резерв не подтверждён.","Повернення коштів до резерву не підтверджено."],
+            ["Reserve sufficient for readiness checks.","Резерва достаточно для проверок готовности.","Резерву достатньо для перевірок готовності."],
+            ["Sale awaiting confirmation","Продажа ожидает подтверждения","Продаж очікує підтвердження"],
+            ["Sale submitted; waiting for Solana confirmation. Do not submit again.","Продажа отправлена; ожидается подтверждение Solana. Не отправляйте её повторно.","Продаж надіслано; очікується підтвердження Solana. Не надсилайте її повторно."],
+            ["Server did not respond. This check does not start trading.","Сервер не ответил. Эта проверка не запускает торговлю.","Сервер не відповів. Ця перевірка не запускає торгівлю."],
+            ["Server key does not match the wallet address.","Ключ сервера не соответствует адресу кошелька.","Ключ сервера не відповідає адресі гаманця."],
+            ["Status check unavailable.","Проверка статуса недоступна.","Перевірка статусу недоступна."],
+            ["Status unavailable.","Статус недоступен.","Статус недоступний."],
+            ["Submission outcome unknown.","Результат отправки неизвестен.","Результат надсилання невідомий."],
+            ["Submitted. Do not retry.","Отправлено. Не повторяйте операцию.","Надіслано. Не повторюйте операцію."],
+            ["The SOL/USD quote changed. Review the updated amount before agreeing.","Котировка SOL/USD изменилась. Проверьте обновлённую сумму перед подтверждением.","Котирування SOL/USD змінилося. Перевірте оновлену суму перед підтвердженням."],
+            ["The adjustment was not confirmed.","Корректировка не подтверждена.","Коригування не підтверджено."],
+            ["Transfer was not submitted.","Перевод не отправлен.","Переказ не надіслано."],
+            ["Verification expired or was replaced. Start again.","Срок проверки истёк или её заменили. Начните заново.","Строк перевірки минув або її замінили. Почніть знову."],
+            ["Verification timed out. Start again when ready.","Время проверки истекло. Начните заново, когда будете готовы.","Час перевірки минув. Почніть знову, коли будете готові."],
+            ["Waiting for payment confirmation. Do not send this payment again.","Ожидается подтверждение оплаты. Не отправляйте платёж повторно.","Очікується підтвердження оплати. Не надсилайте платіж повторно."],
+            ["Withdrawal failed; no new transfer was sent.","Вывод не выполнен; новый перевод не отправлялся.","Виведення не виконано; нового переказу не надсилали."],
+            ["Withdrawal is awaiting network confirmation. Do not submit it again.","Вывод ожидает подтверждения сети. Не отправляйте его повторно.","Виведення очікує підтвердження мережі. Не надсилайте його повторно."],
+            ["Withdrawal status is being checked automatically. Do not submit it again.","Статус вывода проверяется автоматически. Не отправляйте его повторно.","Статус виведення перевіряється автоматично. Не надсилайте його повторно."],
+            ["Withdrawal status is unclear. Do not submit it again; the server is checking automatically.","Статус вывода неясен. Не отправляйте его повторно; сервер проверяет операцию автоматически.","Статус виведення незрозумілий. Не надсилайте його повторно; сервер перевіряє операцію автоматично."],
+            ["Withdrawal submitted. Status is checked automatically; do not submit it again.","Вывод отправлен. Статус проверяется автоматически; не отправляйте операцию повторно.","Виведення надіслано. Статус перевіряється автоматично; не надсилайте операцію повторно."],
+            ["wallet funds do not cover recorded account balances","средств в кошельке недостаточно для зафиксированных балансов аккаунтов","коштів у гаманці недостатньо для зафіксованих балансів облікових записів"],
+            ["The Solana transaction failed safe validation","Транзакция Solana не прошла безопасную проверку","Транзакція Solana не пройшла безпечну перевірку"],
+            ["TRANSFERS: ","ПЕРЕВОДЫ: ","ПЕРЕКАЗИ: "],
+            [" (ATA owner not created in this transaction)"," (аккаунт ATA не создан этой транзакцией)"," (обліковий запис ATA не створено цією транзакцією)"],
+            ["; nothing was sent.","; ничего не отправлено.","; нічого не надіслано."],
+            ["No pending legacy operations.","Нет ожидающих старых операций.","Немає очікуваних старих операцій."],
+            ["No active shared-wallet operation.","Нет активной операции общего кошелька.","Немає активної операції спільного гаманця."],
+            ["No bridge transfers yet.","Переводов через мост пока нет.","Переказів через міст поки немає."],
+            ["Submission uncertain — check status","Отправка не подтверждена — проверьте статус","Надсилання не підтверджено — перевірте статус"],
+            ["No current rule signals yet. A fresh chart scan is required; no AI retry is running.","Актуальных сигналов правил пока нет. Нужно новое сканирование графика; повторный запрос к ИИ не выполняется.","Актуальних сигналів правил поки немає. Потрібне нове сканування графіка; повторний запит до ШІ не виконується."],
+            ["No current analysis.","Актуального анализа пока нет.","Актуального аналізу поки немає."],
+            ["Server-side chart gate · BUY signals only · paid AI reviewer OFF","Серверная проверка графика · только сигналы BUY · платный ИИ-аналитик выключен","Серверна перевірка графіка · лише сигнали BUY · платний ШІ-аналітик вимкнений"],
+            ["Independent risk & trend review · BUY only","Независимая проверка риска и тренда · только BUY","Незалежна перевірка ризику й тренду · лише BUY"],
+            ["no BUY review in this analysis.","в этом анализе нет проверки BUY.","у цьому аналізі немає перевірки BUY."],
+            ["APPROVED","ОДОБРЕНО","СХВАЛЕНО"],
+            ["BLOCKED","ЗАБЛОКИРОВАНО","ЗАБЛОКОВАНО"],
+            ["UP","ВВЕРХ","ВГОРУ"],
+            ["DOWN","ВНИЗ","ВНИЗ"],
+            ["RANGE","БОКОВОЙ ДИАПАЗОН","БОКОВИЙ ДІАПАЗОН"],
+            ["Trade outcome history","История результатов сделок","Історія результатів угод"],
+            ["Outcome memory","Память результатов","Пам’ять результатів"],
+            ["finalized closed trades included in the latest analysis (up to ","окончательно закрытых сделок учтено в последнем анализе (до ","остаточно закритих угод враховано в останньому аналізі (до "],
+            ["Fewer than ","Менее ","Менше "],
+            [" outcomes per token/mode is limited evidence. "," результатов по токену/режиму — ограниченные данные. "," результатів за токеном/режимом — обмежені дані. "],
+            ["Stored history only; no paid model training or profit guarantee. ","Только сохранённая история; платного обучения модели и гарантии прибыли нет. ","Лише збережена історія; платного навчання моделі й гарантії прибутку немає. "],
+            ["Automatic exits do not need AI approval.","Для автоматического выхода одобрение ИИ не требуется.","Для автоматичного виходу схвалення ШІ не потрібне."],
+            ["The second AI request shares the existing daily budget. Exits do not require its approval.","Второй запрос к ИИ расходует общий дневной лимит. Для выхода его одобрение не требуется.","Другий запит до ШІ використовує спільний денний ліміт. Для виходу його схвалення не потрібне."],
+            ["No significant signal.","Значимого сигнала нет.","Значущого сигналу немає."],
+            ["6h change ","Изменение за 6 ч ","Зміна за 6 год "],
+            [" is above the ","выше ","вище "],
+            [" floor.","нижней границы.","нижньої межі."],
+            ["No eligible candidates.","Нет подходящих кандидатов.","Немає придатних кандидатів."],
+            ["Hourly trend is declining.","Часовой тренд снижается.","Годинний тренд знижується."],
+            ["Fresh support bounce confirmed.","Подтверждён отскок от свежего уровня поддержки.","Підтверджено відскок від свіжого рівня підтримки."],
+            ["AI entry with recorded analysis","Вход по сигналу ИИ с сохранённым анализом","Вхід за сигналом ШІ зі збереженим аналізом"],
+            ["Risk/trend check:","Проверка риска и тренда:","Перевірка ризику й тренду:"],
+            ["Bound risk approval:","Подтверждение лимита риска:","Підтвердження ліміту ризику:"],
+            [" · risk controller "," · контролёр рисков "," · контролер ризиків "],
+            ["Last scan:","Последнее сканирование:","Останнє сканування:"],
+            ["previously screened (not current eligibility).","ранее отобрано (это не подтверждает текущую пригодность).","перевірено раніше (це не підтверджує поточну придатність)."],
+            ["Provider cooldown: ","Пауза провайдера: ","Пауза провайдера: "],
+            [" seconds."," с."," с."],
+            ["whale mints screened: ","mint китов проверено: ","mint китів перевірено: "],
+            [" eligible)"," подходят)"," придатні)"],
+            [" screened · "," проверено · "," перевірено · "],
+            [" scanned · refreshed "," просканировано · обновлено "," проскановано · оновлено "],
+            ["liquidity $","ликвидность $","ліквідність $"],
+            ["held asset","актив уже в позиции","актив уже є в позиції"],
+            ["Awaiting analysis","Ожидается анализ","Очікується аналіз"],
+            ["01 / SOURCE","01 / ИСТОЧНИК","01 / ДЖЕРЕЛО"],
+            ["02 / REVIEW","02 / ПРОВЕРКА","02 / ПЕРЕВІРКА"],
+            ["03 / SETTLE","03 / ЗАЧИСЛЕНИЕ","03 / ЗАРАХУВАННЯ"],
+            ["03 LEVELS","3 УРОВНЯ","3 РІВНІ"],
+            ["30 days · 0.5 SOL","30 дней · 0,5 SOL","30 днів · 0,5 SOL"],
+            ["7 days · 100,000 ZRL","7 дней · 100 000 ZRL","7 днів · 100 000 ZRL"],
+            ["6-digit Telegram code","6-значный код Telegram","6-значний код Telegram"],
+            ["Amount","Сумма","Сума"],
+            ["Base network paper simulation","Виртуальная симуляция в сети Base","Віртуальна симуляція в мережі Base"],
+            ["Partner commission rates and referrals by level","Ставки партнёрских комиссий и рефералы по уровням","Ставки партнерських комісій і реферали за рівнями"],
+            ["Quick amount choices","Быстрый выбор суммы","Швидкий вибір суми"],
+            ["Read-only quote result","Результат котировки без отправки","Результат котирування без надсилання"],
+            ["SOL closed trade profit and loss","Прибыль и убыток по закрытым сделкам в SOL","Прибуток і збиток за закритими угодами в SOL"],
+            ["Transaction signature or Solscan link","Подпись транзакции или ссылка Solscan","Підпис транзакції або посилання на Solscan"],
+            ["USDC closed trade profit and loss","Прибыль и убыток по закрытым сделкам в USDC","Прибуток і збиток за закритими угодами в USDC"],
+            ["What happened, and what did you expect?","Что произошло и чего вы ожидали?","Що сталося і чого ви очікували?"],
+            ["Your nickname","Ваш псевдоним","Ваш псевдонім"],
+            ["BUY","ПОКУПКА","КУПІВЛЯ"],
+            ["SELL","ПРОДАЖ","ПРОДАЖ"],
+            ["HOLD","УДЕРЖИВАТЬ","УТРИМУВАТИ"],
+            ["3–24 letters, numbers or underscores. Your balance stays linked to your Telegram account, not this name.","От 3 до 24 латинских букв, цифр или подчёркиваний. Баланс привязан к аккаунту Telegram, а не к этому имени.","Від 3 до 24 латинських літер, цифр або підкреслень. Баланс прив’язаний до облікового запису Telegram, а не до цього імені."],
+            ["Allocate my SOL to fees","Выделить мой SOL на сетевые комиссии","Виділити мій SOL на мережеві комісії"],
+            ["Apply exact shortfall to my balance","Списать точную недостающую сумму с моего баланса","Списати точну суму нестачі з мого балансу"],
+            ["Check current shared-wallet lock (read-only)","Проверить блокировку общего кошелька (только чтение)","Перевірити блокування спільного гаманця (лише читання)"],
+            ["Close support form","Закрыть форму обращения в поддержку","Закрити форму звернення до підтримки"],
+            ["Confirmed buy, sell, take-profit, and stop-loss alerts are sent to each participant's own Telegram chat. Enable Telegram notifications on your phone. Alerts are sent after Solana finalizes the trade; a safely failed stop-loss sale gets a separate alert saying the position remains open.","Уведомления о подтверждённых покупках, продажах, фиксации прибыли и стоп-лоссе отправляются в личный чат Telegram каждого участника. Включите уведомления Telegram на телефоне. Сообщение о сделке приходит после окончательного подтверждения в Solana; при безопасно отклонённой продаже по стоп-лоссу отдельно сообщается, что позиция остаётся открытой.","Сповіщення про підтверджені купівлі, продажі, фіксацію прибутку та стоп-лос сповіщення надсилаються в особистий чат Telegram кожного учасника. Увімкніть сповіщення Telegram на телефоні. Сповіщення про угоду надходить після остаточного підтвердження в Solana; якщо продаж за стоп-лосом безпечно відхилено, окремо повідомляється, що позиція залишається відкритою."],
+            ["Continue to secure checkout","Перейти к защищённой оплате","Перейти до захищеної оплати"],
+            ["Default: one analysis every 15 minutes, up to 96 attempted API calls per UTC day across the service, including failed calls. OpenAI API billing is separate and paid by the operator. Only market prices are sent to the model, not keys, Telegram identities or personal balances.","По умолчанию: один анализ каждые 15 минут, до 96 попыток вызова API в сутки по UTC для всего сервиса, включая неудачные запросы. API OpenAI оплачивает оператор отдельно. Модели передаются только рыночные цены, но не ключи, данные Telegram или личные балансы.","За замовчуванням: один аналіз кожні 15 хвилин, до 96 спроб виклику API на добу за UTC для всього сервісу, включно з невдалими запитами. API OpenAI окремо оплачує оператор. Моделі передаються лише ринкові ціни, а не ключі, дані Telegram чи особисті баланси."],
+            ["Deposit Crypto (USDC)","Пополнить криптовалютой (USDC)","Поповнити криптовалютою (USDC)"],
+            ["Deposit USDC by standard transfer and verify the transaction","Пополнить USDC обычным переводом и подтвердить транзакцию","Поповнити USDC звичайним переказом і підтвердити транзакцію"],
+            ["Describe the issue · up to 700 characters","Опишите проблему · до 700 символов","Опишіть проблему · до 700 символів"],
+            ["Each withdrawal is approved by a one-time code sent to your Telegram account. The code is tied to the exact amount, token and recipient address. Passkeys are used for standalone browser sign-in and account recovery, not for withdrawals.","Каждый вывод подтверждается одноразовым кодом, отправленным в ваш аккаунт Telegram. Код привязан к точной сумме, токену и адресу получателя. Ключи доступа используются для входа в браузере и восстановления аккаунта, но не для вывода средств.","Кожне виведення підтверджується одноразовим кодом, надісланим у ваш обліковий запис Telegram. Код прив’язаний до точної суми, токена й адреси отримувача. Ключі доступу використовуються для входу в браузері та відновлення облікового запису, але не для виведення коштів."],
+            ["Enter the SOL amount to create a payment request.","Введите сумму SOL для создания запроса на оплату.","Введіть суму SOL, щоб створити запит на оплату."],
+            ["I confirm these SOL belong to me, not to customers.","Подтверждаю, что этот SOL принадлежит мне, а не клиентам.","Підтверджую, що цей SOL належить мені, а не клієнтам."],
+            ["Non-admin withdrawals have a 1.5% fee, credited to the administrator in the same currency.","При выводе для всех, кроме администратора, удерживается комиссия 1,5% и зачисляется администратору в той же валюте.","З виведення для всіх, крім адміністратора, утримується комісія 1,5% і зараховується адміністратору в тій самій валюті."],
+            ["One JPG or PNG image, up to 5 MB. Images are sent directly and are not stored by the app.","Одно изображение JPG или PNG размером до 5 МБ. Изображения отправляются напрямую и не сохраняются приложением.","Одне зображення JPG або PNG розміром до 5 МБ. Зображення надсилаються безпосередньо й не зберігаються в застосунку."],
+            ["Open verification · hold to copy link","Открыть проверку · удерживайте, чтобы скопировать ссылку","Відкрити перевірку · утримуйте, щоб скопіювати посилання"],
+            ["Open wallet verification · hold to copy link","Открыть проверку кошелька · удерживайте, чтобы скопировать ссылку","Відкрити перевірку гаманця · утримуйте, щоб скопіювати посилання"],
+            ["Partner earnings credit to your main balance","Партнёрские начисления зачисляются на основной баланс","Партнерські нарахування зараховуються на основний баланс"],
+            ["Screened Solana candidates pass mint, liquidity, chart, quote and execution checks. Discovery checks up to 200 new mints and 40 on-chain candidates per scan; not every token is traded. Core and Meme Sniper remain separate.","Кандидаты Solana проходят проверку mint, ликвидности, графика, котировки и исполнения. При поиске проверяется до 200 новых mint и 40 кандидатов в сети за сканирование; торгуются не все токены. Core и Meme Sniper работают отдельно.","Кандидати Solana проходять перевірку mint, ліквідності, графіка, котирування та виконання. Під час пошуку перевіряється до 200 нових mint і 40 кандидатів у мережі за сканування; торгуються не всі токени. Core і Meme Sniper працюють окремо."],
+            ["Send a private message and an optional screenshot directly to the administrator.","Отправьте личное сообщение и при необходимости снимок экрана напрямую администратору.","Надішліть особисте повідомлення та, за бажанням, знімок екрана безпосередньо адміністратору."],
+            ["Send code in Telegram","Отправить код в Telegram","Надіслати код у Telegram"],
+            ["Send to support","Отправить в поддержку","Надіслати до підтримки"],
+            ["Set OPENAI_API_KEY only in Render Environment. Never enter secrets in chat or app fields. OPENAI_MODEL defaults to gpt-4.1; model availability and billing depend on the OpenAI account.","Добавляйте OPENAI_API_KEY только в переменные среды Render. Не вводите секреты в чат или поля приложения. По умолчанию OPENAI_MODEL — gpt-4.1; доступность модели и оплата зависят от аккаунта OpenAI.","Додавайте OPENAI_API_KEY лише до змінних середовища Render. Не вводьте секрети в чат або поля застосунку. За замовчуванням OPENAI_MODEL — gpt-4.1; доступність моделі та оплата залежать від облікового запису OpenAI."],
+            ["Sniper entry filters: approved DEX, at least $10k pool liquidity, $100k 24h volume, 200 daily trades, pool age 24h+, extreme-pump exclusion, standard SPL mints with no mint/freeze authority, or the exact approved OTC Token-2022 mint with immutable metadata and disabled mint/freeze authorities. Other Token-2022 assets are rejected. The shortlist rotates every 15 minutes through up to 40 on-chain-verified candidates; AI sees up to 8 at a time. After any completed close, all participants are blocked from re-buying that mint for 24 hours. Fresh eligibility is required for every buy. Scores rank liquidity/activity, not expected profit. Holder concentration, LP locks and every contract/market risk are not fully checked. Mint checks do not guarantee token safety.","Фильтры входа Sniper: разрешённая DEX, ликвидность пула от $10 000, объём за 24 часа от $100 000, не менее 200 сделок в сутки, возраст пула от 24 часов и исключение резких пампов. Допускаются стандартные mint SPL без прав mint/freeze либо конкретный разрешённый OTC mint Token-2022 с неизменяемыми метаданными и отключёнными правами mint/freeze. Остальные активы Token-2022 отклоняются. Список обновляется каждые 15 минут: до 40 проверенных в сети кандидатов, из них ИИ анализирует до 8 за раз. После закрытия позиции всем участникам запрещено повторно покупать этот mint в течение 24 часов. Перед каждой покупкой требуется новая проверка. Оценка ранжирует ликвидность и активность, а не ожидаемую прибыль. Концентрация держателей, блокировка LP и все риски контракта/рынка проверяются не полностью. Проверка mint не гарантирует безопасность токена.","Фільтри входу Sniper: дозволена DEX, ліквідність пулу від $10 000, обсяг за 24 години від $100 000, щонайменше 200 угод на добу, вік пулу від 24 годин і виключення різких пампів. Дозволені стандартні mint SPL без прав mint/freeze або конкретний схвалений OTC mint Token-2022 з незмінними метаданими та вимкненими правами mint/freeze. Інші активи Token-2022 відхиляються. Список оновлюється кожні 15 хвилин: до 40 перевірених у мережі кандидатів, з яких ШІ аналізує до 8 за раз. Після закриття позиції всім учасникам заборонено повторно купувати цей mint протягом 24 годин. Перед кожною купівлею потрібна нова перевірка. Оцінка ранжує ліквідність та активність, а не очікуваний прибуток. Концентрація власників, блокування LP та всі ризики контракту/ринку перевіряються не повністю. Перевірка mint не гарантує безпеку токена."],
+            ["Tap to view package details.","Нажмите, чтобы посмотреть описание пакета.","Натисніть, щоб переглянути опис пакета."],
+            ["The engine starts only after you press ON and pass readiness checks. It is OFF after every server restart. If it is OFF, open positions remain open and can still be sold manually. Results are recorded per funding currency and exclude separately paid operator/network fees.","Модуль запускается только после нажатия ON и успешной проверки готовности. После каждого перезапуска сервера он выключен. Пока он выключен, открытые позиции сохраняются и их можно продать вручную. Результаты учитываются отдельно по валюте финансирования; отдельно оплаченные комиссии оператора и сети не включены.","Модуль запускається лише після натискання ON і успішної перевірки готовності. Після кожного перезапуску сервера його вимкнено. Поки він вимкнений, відкриті позиції зберігаються, і їх можна продати вручну. Результати обліковуються окремо за валютою фінансування; окремо сплачені комісії оператора та мережі не враховано."],
+            ["Trading involves risk. No guaranteed returns.","Торговля связана с риском. Прибыль не гарантирована.","Торгівля пов’язана з ризиком. Прибуток не гарантований."],
+            ["Trading signals","Торговые сигналы","Торгові сигнали"],
+            ["Your SOL to allocate","Ваш SOL для распределения","Ваш SOL для розподілу"]
+        ];
         const UI_COPY = {
-            ru:Object.fromEntries(UI_COPY_ROWS.map(([english,russian])=>[english,russian])),
-            uk:Object.fromEntries(UI_COPY_ROWS.map(([english,,ukrainian])=>[english,ukrainian]))
+            ru:Object.fromEntries([...UI_COPY_ROWS,...UI_COPY_ROWS_EXTRA].map(([english,russian])=>[english,russian])),
+            uk:Object.fromEntries([...UI_COPY_ROWS,...UI_COPY_ROWS_EXTRA].map(([english,,ukrainian])=>[english,ukrainian]))
         };
         let currentUiLanguage='en';
         let exchangeQuoteDirection='solana-to-base',exchangeQuoteBusy=false;
+        function uiLocale(){
+            return currentUiLanguage==='uk'?'uk-UA':currentUiLanguage==='ru'?'ru-RU':undefined;
+        }
         const uiTextSources=new WeakMap(),uiAttributeSources=new WeakMap();
         const uiTranslationPairs={};
         for(const language of ['ru','uk'])
             uiTranslationPairs[language]=Object.entries(UI_COPY[language]).sort((a,b)=>b[0].length-a[0].length);
+        function escapeUiRegExp(value){
+            return value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+        }
         function localizeUiText(source,language=currentUiLanguage){
             if(language==='en'||!UI_COPY[language])return source;
-            let output=source;
-            for(const [english,translated] of uiTranslationPairs[language])
-                if(output.includes(english))output=output.split(english).join(translated);
+            let output=String(source??'');
+            for(const [english,translated] of uiTranslationPairs[language]){
+                if(!output.includes(english))continue;
+                if(/^[A-Za-z0-9_]+$/.test(english)){
+                    const matcher=new RegExp('(^|[^A-Za-z0-9_])'+escapeUiRegExp(english)+'(?=$|[^A-Za-z0-9_])','g');
+                    output=output.replace(matcher,(_match,prefix)=>prefix+translated);
+                }else{
+                    output=output.split(english).join(translated);
+                }
+            }
             return output;
         }
         const nativeUiAlert=window.alert.bind(window),nativeUiConfirm=window.confirm.bind(window),nativeUiPrompt=window.prompt.bind(window);
@@ -3432,10 +3883,10 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const next=leading+localizeUiText(body)+trailing;
                 if(node.nodeValue!==next)node.nodeValue=next;
             }
-            root.querySelectorAll?.('[placeholder],[title],[aria-label]').forEach(element=>{
+            root.querySelectorAll?.('[placeholder],[title],[aria-label],[alt]').forEach(element=>{
                 let state=uiAttributeSources.get(element);
                 if(!state){state={source:{},applied:{}};uiAttributeSources.set(element,state);}
-                for(const name of ['placeholder','title','aria-label']){
+                for(const name of ['placeholder','title','aria-label','alt']){
                     if(!element.hasAttribute(name))continue;
                     const current=element.getAttribute(name);
                     if(!(name in state.source)||current!==state.applied[name])state.source[name]=current;
@@ -3451,6 +3902,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             const select=document.getElementById('ui-language-select');
             if(select)select.value=currentUiLanguage;
             translateUiTree();
+            if(latestBasePaperData)renderBasePaper(latestBasePaperData);
             setExchangeDirection(exchangeQuoteDirection);
         }
         async function saveUiLanguage(){
@@ -3606,13 +4058,13 @@ RAW_HTML = r"""<!DOCTYPE html>
                         nameWrap.append(name,depth);nameCell.append(number,nameWrap);
                         const rate=document.createElement('strong');rate.className='partner-rate';rate.setAttribute('role','cell');rate.textContent=formatRate(rates[index]);
                         const referralCell=document.createElement('span');referralCell.className='partner-count';referralCell.setAttribute('role','cell');
-                        const referralCount=document.createElement('strong');referralCount.textContent=counts[index].toLocaleString('en-US');
+                        const referralCount=document.createElement('strong');referralCount.textContent=counts[index].toLocaleString(uiLocale());
                         const referralLabel=document.createElement('small');referralLabel.textContent='partners';
                         referralCell.append(referralCount,referralLabel);row.append(nameCell,rate,referralCell);levelRows.appendChild(row);
                     });
                 }
                 const totalReferrals=counts.reduce((total,count)=>total+count,0);
-                if(networkTotal)networkTotal.textContent=totalReferrals.toLocaleString('en-US')+' partners';
+                if(networkTotal)networkTotal.textContent=totalReferrals.toLocaleString(uiLocale())+' partners';
                 if(walletCard)walletCard.classList.remove('is-unlinked');
                 if(walletLabel)walletLabel.textContent='Partner earnings credit to your main balance';
                 if(walletDetail)walletDetail.textContent='Withdraw credited USDC or SOL through Wallet.';
@@ -3823,7 +4275,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             document.getElementById('solpay-checkout-amount').textContent = invoice.amount + ' ' + invoice.token;
             document.getElementById('solpay-recipient').textContent = invoice.deposit_wallet;
             document.getElementById('solpay-expiration').textContent =
-                new Date(Number(invoice.expires_at) * 1000).toLocaleString('en-GB');
+                new Date(Number(invoice.expires_at) * 1000).toLocaleString(uiLocale());
             if (invoice.state === 'CREDITED') {
                 openWallet.hidden = true;
                 statusPage.hidden = true;
@@ -3962,7 +4414,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 box.textContent = operations.map(op => {
                     const seconds = Number(op.created_at);
                     const created = Number.isFinite(seconds) && seconds > 0
-                        ? new Date(seconds * 1000).toLocaleString() : 'unknown';
+                        ? new Date(seconds * 1000).toLocaleString(uiLocale()) : 'unknown';
                     return 'Operation: ' + (op.kind || 'unknown') + ' / ' + (op.state || 'unknown')
                         + '\nCreated: ' + created
                         + '\nSignature: ' + (op.signature || 'not recorded');
@@ -4310,7 +4762,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     status.textContent='Administrator access is permanent; package payment is not required.';
                     note.textContent='The public free-access countdown below is for other accounts. A subscription never changes trading admission or starts Core or Sniper.';
                 }else if(data.trial_active){
-                    status.textContent='Your one-time 3-day free trial is active until '+new Date(Number(data.trial_expires_at)*1000).toLocaleString()+'.';
+                    status.textContent='Your one-time 3-day free trial is active until '+new Date(Number(data.trial_expires_at)*1000).toLocaleString(uiLocale())+'.';
                     note.textContent='The separate $5 monthly trading fee is waived during the trial. Access does not turn on Core or Sniper.';
                 }else if(data.trial_available){
                     status.textContent='This new account qualifies for one 3-day free trial.';
@@ -4319,7 +4771,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     status.textContent='Free AI Trader subscription is active for everyone through 1 November 2026.';
                     note.textContent='No payment is needed before the countdown ends. Payment is not credited to trading balance and never turns on Core or Sniper.';
                 }else if(data.active){
-                    status.textContent='Paid access is active until '+new Date(Number(data.expires_at)*1000).toLocaleString()+'.';
+                    status.textContent='Paid access is active until '+new Date(Number(data.expires_at)*1000).toLocaleString(uiLocale())+'.';
                     note.textContent='Access renewal does not change trading admission or start trading modes.';
                 }else{
                     status.textContent='Free access has ended. Choose a package to request continued access.';
@@ -4437,13 +4889,13 @@ RAW_HTML = r"""<!DOCTYPE html>
             }else if(data.admin_free){
                 status.textContent='Your administrator account has permanent free access. No package payment is needed.';
             }else if(data.trial_active){
-                status.textContent='Your 3-day free trial is active until '+new Date(Number(data.trial_expires_at)*1000).toLocaleString()+'. No package payment is due yet.';
+                status.textContent='Your 3-day free trial is active until '+new Date(Number(data.trial_expires_at)*1000).toLocaleString(uiLocale())+'. No package payment is due yet.';
             }else if(data.free_access){
                 status.textContent='Your free access is still active. Checkout opens after the public free-access period ends.';
             }else if(!data.purchase_available){
                 status.textContent='This account is not admitted for paid access. Payment would not change custody or trading admission.';
             }else if(data.active){
-                status.textContent='Your access is active until '+new Date(Number(data.expires_at)*1000).toLocaleString()+'. You can renew securely.';
+                status.textContent='Your access is active until '+new Date(Number(data.expires_at)*1000).toLocaleString(uiLocale())+'. You can renew securely.';
             }else{
                 status.textContent='Continue to the secure browser checkout to create an exact payment invoice.';
             }
@@ -4660,7 +5112,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         function exchangeQuoteAmount(value){
             const amount=Number(value);
             if(!Number.isFinite(amount))return '—';
-            return amount.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:6})+' USDC';
+            return amount.toLocaleString(uiLocale(),{minimumFractionDigits:2,maximumFractionDigits:6})+' USDC';
         }
         function renderExchangeQuote(quote){
             if(!quote||quote.quote_only!==true||quote.transfer_enabled!==false
@@ -4685,7 +5137,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 localizeUiText('Quote provider')+': '+String(quote.provider||'LI.FI').slice(0,48);
             const expires=new Date(Number(quote.expires_at)*1000);
             document.getElementById('exchange-quote-expiry').textContent=
-                localizeUiText('Quote expires')+': '+(Number.isNaN(expires.getTime())?'—':expires.toLocaleTimeString());
+                localizeUiText('Quote expires')+': '+(Number.isNaN(expires.getTime())?'—':expires.toLocaleTimeString(uiLocale()));
 
             const list=document.getElementById('exchange-quote-fees');
             list.replaceChildren();
@@ -4870,7 +5322,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
         function monthlyFeeDate(value){
             const stamp=Number(value||0);
-            return stamp>0?new Date(stamp*1000).toLocaleString():'Not scheduled';
+            return stamp>0?new Date(stamp*1000).toLocaleString(uiLocale()):'Not scheduled';
         }
         async function refreshMonthlyTradingFee(force=false){
             if(monthlyFeeLoading||!getUserData()||(!force&&Date.now()-monthlyFeeLastRefresh<5000))return;
@@ -5069,7 +5521,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 alert('A manual sale is already queued for this position.');
                 return;
             }
-            const quantity=Number(position.amount_tokens).toLocaleString(undefined,{maximumFractionDigits:8});
+            const quantity=Number(position.amount_tokens).toLocaleString(uiLocale(),{maximumFractionDigits:8});
             const symbol=position.symbol||position.token_symbol||'token';
             const funding=position.funding_currency||'account currency';
             const confirmation=canQueueRetry
@@ -5496,7 +5948,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     if (logBox) {
                         const entries = Array.isArray(l.entries) ? l.entries : [];
                         const lines = entries.map(e => {
-                            const stamp = new Date(e.created_at * 1000).toLocaleString();
+                            const stamp = new Date(e.created_at * 1000).toLocaleString(uiLocale());
                             return stamp + ' [' + e.category + '] ' + e.message +
                                 (e.signature ? '\nTx: ' + e.signature : '');
                         });
@@ -5557,7 +6009,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                             pendingDetails.textContent = pendingOperations.map(op => {
                                 const seconds = Number(op.created_at);
                                 const created = Number.isFinite(seconds) && seconds > 0
-                                    ? new Date(seconds * 1000).toLocaleString() : 'unknown';
+                                    ? new Date(seconds * 1000).toLocaleString(uiLocale()) : 'unknown';
                                 const instruction = op.kind === 'SELL' ? 'Do not sell this position again.' :
                                     op.kind === 'WITHDRAW' ? 'Do not submit this withdrawal again.' :
                                     op.kind === 'BUY' ? 'Do not repeat this purchase.' : 'Do not repeat this operation.';
@@ -5582,7 +6034,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                         ? 'Last entry check ('+(cost.symbol||'Core')+'): '+cost.status+' · '
                           +(Number.isFinite(cost.estimated_cost_pct)
                             ? cost.estimated_cost_pct.toFixed(2)+'% / 2.50% budget · ' : '')
-                          +new Date(cost.checked_at*1000).toLocaleString()+' · '+cost.reason
+                          +new Date(cost.checked_at*1000).toLocaleString(uiLocale())+' · '+cost.reason
                         : 'No entry cost check yet. Checked before each USDC-funded BUY; missing evidence blocks entry.';
                     const policy=s.execution_policy;
                     const sniperPositionCap=document.getElementById('sniper-position-cap');
@@ -5603,7 +6055,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                         : 'Independent policy unavailable. Do not enable real trading.';
                     const gate=s.execution_check;
                     document.getElementById('execution-policy-result').textContent=gate
-                        ? new Date(gate.checked_at*1000).toLocaleString()+' · '+gate.status+' · '
+                        ? new Date(gate.checked_at*1000).toLocaleString(uiLocale())+' · '+gate.status+' · '
                           +gate.stage+' / '+gate.action+(gate.symbol?' '+gate.symbol:'')+'\n'+normalizeAnalysisText(gate.reason)
                         : 'No execution check recorded yet. AI suggestions are not executed trades.';
                     const ai=s.ai_status||{};
@@ -5637,7 +6089,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     if(ai.last_decisions)document.getElementById('ai-decisions').textContent=Object.entries(ai.last_decisions).map(([mode,d])=>{
                         const analyzedAt=ai.decision_created_at?ai.decision_created_at[mode]:ai.last_analyzed_at;
                         const modeName=mode==='main'?'Core · USDC':mode==='sniper'?'Meme Sniper · SOL':'AI Crypto Investors';
-                        return modeName+' · '+(analyzedAt?new Date(analyzedAt*1000).toLocaleString('en-GB'):'Awaiting analysis')+'\n'+d.action+' '+((ai.asset_labels||{})[d.symbol]||d.symbol||'')+' — '+normalizeAnalysisText(d.reason);
+                        return modeName+' · '+(analyzedAt?new Date(analyzedAt*1000).toLocaleString(uiLocale()):'Awaiting analysis')+'\n'+d.action+' '+((ai.asset_labels||{})[d.symbol]||d.symbol||'')+' — '+normalizeAnalysisText(d.reason);
                     }).join('\n');
                     else document.getElementById('ai-decisions').textContent=
                         rulesOnly?'No current rule signals yet. A fresh chart scan is required; no AI retry is running.':'No current analysis.';
@@ -5664,13 +6116,13 @@ RAW_HTML = r"""<!DOCTYPE html>
                     renderCoreChartZones(ai.chart_context,ai.asset_labels);
                     const discovery=ai.discovery||{};
                     document.getElementById('discovery-status').textContent=discovery.entry_paused?discovery.message:
-                        discovery.checked_at?(discovery.eligible||0)+' screened · '+(discovery.scanned||0)+' scanned · refreshed '+new Date(discovery.checked_at*1000).toLocaleTimeString('en-GB'):discovery.message||'Candidate scan pending.';
-                    if(discovery.entry_paused&&discovery.checked_at)document.getElementById('discovery-status').textContent+=' Last scan: '+new Date(discovery.checked_at*1000).toLocaleTimeString('en-GB')+' · '+(discovery.eligible||0)+' previously screened (not current eligibility).';
+                        discovery.checked_at?(discovery.eligible||0)+' screened · '+(discovery.scanned||0)+' scanned · refreshed '+new Date(discovery.checked_at*1000).toLocaleTimeString(uiLocale()):discovery.message||'Candidate scan pending.';
+                    if(discovery.entry_paused&&discovery.checked_at)document.getElementById('discovery-status').textContent+=' Last scan: '+new Date(discovery.checked_at*1000).toLocaleTimeString(uiLocale())+' · '+(discovery.eligible||0)+' previously screened (not current eligibility).';
                     if(discovery.retry_after_seconds)document.getElementById('discovery-status').textContent+=' Provider cooldown: '+discovery.retry_after_seconds+' seconds.';
                     if(discovery.whale_prioritized)document.getElementById('discovery-status').textContent+=' · whale mints screened: '+discovery.whale_prioritized+' ('+(discovery.whale_candidates||0)+' eligible)';
                     document.getElementById('candidate-list').textContent=(ai.sniper_assets||[]).map(code=>{
                         const row=(discovery.candidates||[]).find(item=>item.code===code);
-                        return ((ai.asset_labels||{})[code]||code)+(row?' · liquidity $'+Math.round(row.liquidity_usd).toLocaleString('en-US'):' · held asset');
+                        return ((ai.asset_labels||{})[code]||code)+(row?' · liquidity $'+Math.round(row.liquidity_usd).toLocaleString(uiLocale()):' · held asset');
                     }).join('\n')||'No verified shortlist yet.';
                     const marketSource=ai.market_discovery||{};
                     document.getElementById('whale-signal-status').textContent=

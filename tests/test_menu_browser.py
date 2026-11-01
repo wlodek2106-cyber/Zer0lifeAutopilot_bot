@@ -3,6 +3,7 @@ import ast
 import html
 import json
 from pathlib import Path
+from html.parser import HTMLParser
 import re
 import shutil
 import subprocess
@@ -11,6 +12,75 @@ import unittest
 
 
 class MenuBrowserTests(unittest.TestCase):
+    def test_static_interface_copy_has_translations(self):
+        source = ast.parse(Path(__file__).resolve().parents[1].joinpath("main.py").read_text())
+        page = next(ast.literal_eval(node.value) for node in source.body
+                    if isinstance(node, ast.Assign) and any(
+                        isinstance(target, ast.Name) and target.id == "RAW_HTML" for target in node.targets))
+        rows_start = page.index("const UI_COPY_ROWS = [")
+        rows_end = page.index("const UI_COPY = {", rows_start)
+        rows_source = page[rows_start:rows_end]
+        row_pattern = re.compile(r'\[\s*("(?:\\.|[^"\\])*")\s*,\s*("(?:\\.|[^"\\])*")\s*,\s*("(?:\\.|[^"\\])*")\s*\]')
+        rows = [(json.loads(english), json.loads(russian), json.loads(ukrainian))
+                for english, russian, ukrainian in row_pattern.findall(rows_source)]
+        self.assertGreater(len(rows), 350, "both translation tables should be included in the audit")
+        keys = [english for english, _russian, _ukrainian in rows]
+
+        class VisibleCopy(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.skip_depth = 0
+                self.strings = set()
+
+            def handle_starttag(self, tag, attrs):
+                if tag in {"script", "style"}:
+                    self.skip_depth += 1
+                elif not self.skip_depth:
+                    self.strings.update(
+                        " ".join(value.split())
+                        for name, value in attrs
+                        if name in {"placeholder", "title", "aria-label", "alt"} and value
+                    )
+
+            def handle_endtag(self, tag):
+                if tag in {"script", "style"} and self.skip_depth:
+                    self.skip_depth -= 1
+
+            def handle_data(self, data):
+                text = " ".join(data.split())
+                if text and not self.skip_depth:
+                    self.strings.add(text)
+
+        visible = VisibleCopy()
+        visible.feed(page)
+        ignored_brand_or_placeholder = {
+            "English", "Life", "ZER0LIFE · PARTNER DESK", "Zer", "__DEPOSIT_WALLET__",
+            "BASE", "SOLANA", "SOLANA / USDC", "SOLANA · USDC", "USDC", "B",
+            "!", "×", "—", "→", "↗", "↻", "⇄", "⇆", "▤", "◇", "◈", "●", "⚙", "✕",
+        }
+
+        def is_translated(text):
+            for key in sorted(keys, key=len, reverse=True):
+                if text == key:
+                    return True
+                if len(key.strip()) < 8:
+                    continue
+                if re.fullmatch(r"[A-Za-z0-9_]+", key):
+                    if re.search(r"(?<![A-Za-z0-9_])" + re.escape(key) + r"(?![A-Za-z0-9_])", text):
+                        return True
+                elif key and key in text:
+                    return True
+            return False
+
+        uncovered = [
+            text for text in sorted(visible.strings)
+            if text not in ignored_brand_or_placeholder
+            and not re.fullmatch(r"[+\-−$€\d.,()%/· ]+", text)
+            and not re.fullmatch(r"[+\-−$€\d.,%/· ]+[A-Z]{2,5}", text)
+            and not is_translated(text)
+        ]
+        self.assertEqual(uncovered, [], "untranslated static interface copy: " + "; ".join(uncovered))
+
     @unittest.skipUnless(shutil.which("chromium"), "Chromium not installed")
     def test_mobile_sections_and_live_values(self):
         source = ast.parse(Path(__file__).resolve().parents[1].joinpath("main.py").read_text())
@@ -93,19 +163,65 @@ class MenuBrowserTests(unittest.TestCase):
                  assert(document.getElementById('exchange-dir-base-solana').getAttribute('aria-pressed')==='true','reverse direction is accessible as selected');
                  setExchangeDirection('solana-to-base');
                  assert(document.getElementById('exchange-direction-title').textContent==='Solana → Base','forward route can be restored');
-                 applyUiLanguage('ru');
+                  const basePaperFixture={
+                      success:true,budget_usd:100,open_cost_usd:25,free_budget_usd:75,realized_gross_pnl_usd:1.25,
+                      scanned_at:1793500000,live_trading:false,
+                      message:'Base scan completed; no entry or exit trigger passed. No live transactions.',
+                      pnl_note:'Gross price-only simulation. Gas, DEX fees, routing, price impact and failed fills are excluded; results are not a profit forecast.',
+                      candidates:[],open_positions:[],closed_trades:[]
+                  };
+                  renderBasePaper(basePaperFixture);
+                  applyUiLanguage('ru');
                  assert(document.documentElement.lang==='ru','Russian language sets the document language');
+                  assert(uiLocale()==='ru-RU','Russian dates and numbers use the Russian locale');
                  assert(exchangeNav.textContent.includes('Обмен'),'navigation is translated to Russian');
-                 assert(document.getElementById('ui-language-select').value==='ru','selector follows active language');
+                  assert(document.getElementById('ui-language-select').value==='ru','selector follows active language');
+                  assert(localizeUiText('Token to Base')==='Token на Base','short words translate without corrupting part of a token name');
+                  assert(localizeUiText('AI Crypto Investors')==='AI-криптоинвесторы','Investors title is localized in Russian');
+                  assert(document.getElementById('base-paper-status').textContent.includes('Сканирование Base завершено: условия для входа или выхода не выполнены.'),
+                      'dynamic Base scan status is translated in Russian');
+                  assert(document.getElementById('base-paper-status').textContent.includes('Только симуляция · реальные транзакции: ВЫКЛ'),
+                      'Base real-trading status is translated in Russian');
+                  assert(document.getElementById('base-paper-candidates').textContent.includes('Последнее сканирование не нашло подходящих торговых пулов Base.'),
+                      'empty Base candidate state is translated in Russian');
+                  assert(document.getElementById('base-paper-open-positions').textContent.includes('Открытых виртуальных позиций нет.'),
+                      'empty Base positions state is translated in Russian');
+                   const ruTransferError=localizeUiText('The Solana transaction failed safe validation [USDC_TRANSFER_COUNT_2]; nothing was sent.');
+                   assert(ruTransferError==='Транзакция Solana не прошла безопасную проверку [USDC_TRANSFER_COUNT_2]; ничего не отправлено.',
+                       'Solana validation errors are translated without hiding their diagnostic code');
+                   assert(localizeUiText('Withdrawal status is unclear. Do not submit it again; the server is checking automatically.')
+                       .includes('Статус вывода неясен'),
+                       'pending withdrawal warnings use the selected language');
+                  assert(localizeBasePaperText('Paper scan complete: 2 simulated buys, 1 simulated exits. No live transactions.')
+                      ==='Симуляция завершена. Виртуальные покупки: 2; виртуальные выходы: 1. Реальных транзакций не было.',
+                      'count-bearing scan results are localized in Russian');
                  applyUiLanguage('uk');
                  assert(document.documentElement.lang==='uk','Ukrainian language sets document language');
-                 assert(exchangeNav.textContent.includes('Обмін'),'navigation is translated to Ukrainian');
+                  assert(uiLocale()==='uk-UA','Ukrainian dates and numbers use the Ukrainian locale');
+                   const ukTransferError=localizeUiText('The Solana transaction failed safe validation [USDC_TRANSFER_COUNT_2]; nothing was sent.');
+                   assert(ukTransferError==='Транзакція Solana не пройшла безпечну перевірку [USDC_TRANSFER_COUNT_2]; нічого не надіслано.',
+                       'Solana validation errors are also translated into Ukrainian');
+                  assert(exchangeNav.textContent.includes('Обмін'),'navigation is translated to Ukrainian');
+                  assert(localizeUiText('Token to Base')==='Token до Base','whole-word translation also works in Ukrainian');
+                  assert(localizeUiText('BASE NETWORK · L2')==='МЕРЕЖА BASE · L2','Base network label is localized in Ukrainian');
+                  assert(document.getElementById('base-paper-status').textContent.includes('Сканування Base завершено: умов для входу чи виходу не виявлено.'),
+                      'dynamic Base scan status is translated in Ukrainian');
+                  assert(document.getElementById('base-paper-pnl-note').textContent.includes('Симуляція враховує лише зміну ціни.'),
+                      'Base simulation explanation is translated in Ukrainian');
+                  assert(document.getElementById('base-paper-budget').textContent.includes(','),
+                      'Base currency values follow the selected locale');
+                  assert(localizeBasePaperText('Paper scan complete: 2 simulated buys, 1 simulated exits. No live transactions.')
+                      ==='Симуляцію завершено. Віртуальні покупки: 2; віртуальні виходи: 1. Реальних транзакцій не було.',
+                      'count-bearing scan results are localized in Ukrainian');
                  document.getElementById('ui-language-select').value='uk';
                  await saveUiLanguage();
                  assert(window.languagePosts.length===1&&window.languagePosts[0].language==='uk',
                      'selected language is saved to the account API');
                  applyUiLanguage('en');
-                 assert(exchangeNav.textContent.includes('Exchange'),'English can be restored');
+                  assert(exchangeNav.textContent.includes('Exchange'),'English can be restored');
+                  assert(uiLocale()===undefined,'English keeps the device locale');
+                  assert(document.getElementById('base-paper-status').textContent.includes('Base scan completed; no entry or exit trigger passed.'),
+                      'Base status returns to English without stale translated copy');
                 assert(document.getElementById('meme-sniper-card').closest('.tab-panel').id==='tab-trading','SOL sniper in Trading, not Overview');
                 assert(document.getElementById('sniper-sol-balance').textContent==='0.164009 SOL','sniper shows personal SOL');
                 assert(document.getElementById('sniper-position-cap').textContent==='Screened Solana candidates · up to 5 positions','sniper cap matches server policy');
@@ -187,7 +303,26 @@ class MenuBrowserTests(unittest.TestCase):
                 const analysisText=document.getElementById('ai-decisions').textContent;
                 assert(analysisText.includes('No significant signal.\\n6h change -0.16%'),
                     'escaped model newlines render as line breaks');
-                assert(!analysisText.includes('\\\\n'),'analysis does not show literal slash-n text');
+                 assert(!analysisText.includes('\\\\n'),'analysis does not show literal slash-n text');
+                 applyUiLanguage('uk');
+                 const ukAiStatus=document.getElementById('ai-status').textContent;
+                 const ukAiDecisions=document.getElementById('ai-decisions').textContent;
+                 const ukAiRisk=document.getElementById('ai-risk-review').textContent;
+                 const ukAiLearning=document.getElementById('ai-learning').textContent;
+                 assert(ukAiStatus.includes('Правила v1')&&!ukAiStatus.includes('no paid AI requests'),
+                     'live AI status follows Ukrainian');
+                 assert(ukAiDecisions.includes('Значущого сигналу немає.')&&ukAiDecisions.includes('Зміна за 6 год'),
+                     'dynamic AI explanations follow Ukrainian');
+                 assert(ukAiRisk.includes('ЗАБЛОКОВАНО · ВНИЗ')&&ukAiRisk.includes('СХВАЛЕНО · ВГОРУ'),
+                     'dynamic risk verdicts follow Ukrainian');
+                 assert(ukAiLearning.includes('Історія результатів угод')&&ukAiLearning.includes('обмежені дані'),
+                     'dynamic outcome history follows Ukrainian');
+                 assert(!document.getElementById('ai-latency').textContent.includes('No OpenAI requests'),
+                     'provider-cost status is translated');
+                 applyUiLanguage('ru');
+                 assert(document.getElementById('ai-decisions').textContent.includes('Значимого сигнала нет.'),
+                     'dynamic analysis switches cleanly to Russian');
+                 applyUiLanguage('en');
                 fixture.ai_status.decision_created_at={main:null,sniper:fixture.ai_status.last_analyzed_at};
                 await refresh();
                 assert(document.getElementById('ai-decisions').textContent.includes('Core · USDC · Awaiting analysis'),
