@@ -1441,7 +1441,11 @@ class CustodyRuntime(WalletRuntime):
             raise WalletError("Операции разрешены только в Solana mainnet.")
         self.ledger.audit()
         backing = await self.total_backing_balances(session)
-        for asset, liability in self.ledger.liabilities().items():
+        for asset, liability in self.ledger.backed_liabilities().items():
+            # Base USDC is backed by the separate Base wallet, not the Solana
+            # balance snapshot used by this trade preflight.
+            if asset == BASE_USDC_ASSET:
+                continue
             if liability > backing.get(asset, {}).get("raw", 0):
                 raise WalletError(
                     "Withdrawals and trading are paused because wallet funds do not cover recorded account balances. "

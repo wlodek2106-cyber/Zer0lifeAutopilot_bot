@@ -1,4 +1,5 @@
 import base64
+import asyncio
 import os
 import json
 import tempfile
@@ -17,7 +18,10 @@ from solders.pubkey import Pubkey
 from solders.signature import Signature
 from solders.transaction import VersionedTransaction
 
-from custody_ledger import CustodyLedger, LedgerError, available
+from custody_ledger import (
+    CustodyLedger, LedgerError, SOL, FEE_CAP, available, position_account,
+)
+from custody_runtime import CustodyRuntime, GENESIS
 from cross_chain_bridge import (
     BASE_CHAIN_ID,
     BASE_USDC_ADDRESS,
@@ -410,13 +414,46 @@ class LiveBridgePrimitiveTests(unittest.TestCase):
     def test_bridge_lock_blocks_new_wallet_operations(self):
         with tempfile.TemporaryDirectory() as tmp:
             ledger = CustodyLedger(os.path.join(tmp, "ledger.sqlite"))
+            ledger.user(77, "test-user")
+            position_id = "owned-solana-position"
+            with ledger.db() as db:
+                ledger.post(db, "seed-exit-test", "test-only funds", [
+                    ("external", "TEST_MINT", -100),
+                    (position_account(position_id), "TEST_MINT", 100),
+                    ("external", SOL, -FEE_CAP),
+                    ("treasury", SOL, FEE_CAP),
+                ])
+                db.execute("""INSERT INTO custody_positions
+                    (id,uid,asset,symbol,decimals,raw,cost_usdc,state,buy_tx,
+                     funding_asset,created_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                    (position_id, 77, "TEST_MINT", "TEST", 6, 100, 5,
+                     "OPEN", "buy-signature", SOLANA_USDC, int(time.time())))
             with ledger.db() as db:
                 db.execute("""CREATE TABLE custody_bridge_transfers
                     (id TEXT PRIMARY KEY, state TEXT NOT NULL)""")
                 db.execute("INSERT INTO custody_bridge_transfers VALUES('pending','UNKNOWN')")
+                db.execute("""CREATE TABLE custody_bridge_approvals
+                    (id TEXT PRIMARY KEY, state TEXT NOT NULL)""")
+                db.execute("INSERT INTO custody_bridge_approvals VALUES('pending-approval','SUBMITTED')")
             with self.assertRaisesRegex(LedgerError, "bridge transfer"):
                 ledger.reserve(77, "request-1", "BUY", SOLANA_USDC, 1,
                                {"output_asset": "mint"})
+            sale = ledger.reserve(77, "manual-exit", "SELL", "TEST_MINT", 100,
+                                  {"output_asset": SOLANA_USDC, "symbol": "TEST"},
+                                  position_id=position_id)
+            self.assertEqual(sale["state"], "RESERVED")
+            with self.assertRaisesRegex(LedgerError, "предыдущей операции"):
+                ledger.reserve(77, "duplicate-exit", "SELL", "TEST_MINT", 100,
+                               {"output_asset": SOLANA_USDC, "symbol": "TEST"},
+                               position_id=position_id)
+            with ledger.db() as db:
+                self.assertEqual(db.execute(
+                    "SELECT state FROM custody_bridge_transfers WHERE id='pending'"
+                ).fetchone()["state"], "UNKNOWN")
+                self.assertEqual(db.execute(
+                    "SELECT state FROM custody_bridge_approvals WHERE id='pending-approval'"
+                ).fetchone()["state"], "SUBMITTED")
 
     def test_transfer_reserves_only_requesting_users_balance_and_locks_shared_wallet(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {
@@ -446,6 +483,20 @@ class LiveBridgePrimitiveTests(unittest.TestCase):
             self.assertEqual(transfer["state"], "RESERVED")
             self.assertEqual(ledger.balance(77, SOLANA_USDC), 5_000_000)
             self.assertEqual(ledger.balance(88, SOLANA_USDC), 0)
+            self.assertEqual(ledger.liabilities()[SOLANA_USDC], 10_000_000)
+            self.assertEqual(ledger.backed_liabilities()[SOLANA_USDC], 5_000_000)
+            runtime = CustodyRuntime.__new__(CustodyRuntime)
+            runtime.ledger = ledger
+
+            async def fake_rpc(session, method, params=None):
+                return GENESIS
+
+            async def fake_backing(session):
+                return {SOLANA_USDC: {"raw": 5_000_000}}
+
+            runtime.rpc = fake_rpc
+            runtime.total_backing_balances = fake_backing
+            asyncio.run(runtime.solvent(None))
             with self.assertRaisesRegex(LedgerError, "bridge transfer"):
                 ledger.reserve(88, "wallet-op", "BUY", SOLANA_USDC, 1,
                                {"output_asset": "another-mint"})

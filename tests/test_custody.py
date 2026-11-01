@@ -2873,7 +2873,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             runtime.WRAPPED_SOL: {"raw": 40_000_000, "decimals": 9},
         })
         self.service.rpc = AsyncMock(return_value=runtime.GENESIS)
-        with patch.object(self.ledger, "liabilities",
+        with patch.object(self.ledger, "backed_liabilities",
                           return_value={USDC: 150_000_000, SOL: 80_000_000}):
             backing = await self.service.solvent(None)
         self.assertEqual(backing[USDC]["raw"], 160_000_000)
