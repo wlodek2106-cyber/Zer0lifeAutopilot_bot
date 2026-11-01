@@ -24,7 +24,7 @@ from cross_chain_bridge import (
     SOLANA_CHAIN_ID,
     SOLANA_LOOKUP_TABLE_PROGRAM,
     SOLANA_USDC,
-    SOLANA_NEAR_INTENTS_PROGRAM,
+    SOLANA_LIFI_TRACKING_PROGRAM,
     BridgeError,
     CrossChainBridge,
     _ata,
@@ -117,7 +117,7 @@ def base_route():
     }
 
 
-def make_lookup_table_transaction():
+def make_lookup_table_transaction(extra_transfer=False):
     wallet = Keypair()
     mint = Pubkey.from_string(SOLANA_USDC)
     source = Pubkey.from_string(_ata(str(wallet.pubkey())))
@@ -128,10 +128,21 @@ def make_lookup_table_transaction():
         Pubkey.from_string(TOKEN_PROGRAM_ID), transfer_data,
         [AccountMeta(source, False, True), AccountMeta(mint, False, False),
          AccountMeta(destination, False, True), AccountMeta(wallet.pubkey(), True, False)])
-    intent = Instruction(Pubkey.from_string(SOLANA_NEAR_INTENTS_PROGRAM), b"\x01", [])
+    instructions = [transfer]
+    addresses = [source, mint, destination]
+    if extra_transfer:
+        extra_destination = Pubkey.new_unique()
+        extra_data = bytes([12]) + (1).to_bytes(8, "little") + bytes([6])
+        instructions.append(Instruction(
+            Pubkey.from_string(TOKEN_PROGRAM_ID), extra_data,
+            [AccountMeta(source, False, True), AccountMeta(mint, False, False),
+             AccountMeta(extra_destination, False, True), AccountMeta(wallet.pubkey(), True, False)]))
+        addresses.append(extra_destination)
+    intent = Instruction(Pubkey.from_string(SOLANA_LIFI_TRACKING_PROGRAM), b"\x01", [])
+    instructions.append(intent)
     table_key = Pubkey.new_unique()
-    table = AddressLookupTableAccount(table_key, [source, mint, destination])
-    message = MessageV0.try_compile(wallet.pubkey(), [transfer, intent], [table], Hash.default())
+    table = AddressLookupTableAccount(table_key, addresses)
+    message = MessageV0.try_compile(wallet.pubkey(), instructions, [table], Hash.default())
     tx = VersionedTransaction.populate(message, [Signature.default()])
     raw_table = bytearray(56)
     raw_table[:4] = (1).to_bytes(4, "little")
@@ -226,6 +237,22 @@ class LiveBridgePrimitiveTests(unittest.TestCase):
             bridge = CrossChainBridge(path, EmptyLedger(path), SOLANA_WALLET, solana_rpc=rpc)
             with self.assertRaisesRegex(BridgeError, "ALT_OWNER_MISMATCH"):
                 __import__("asyncio").run(bridge.resolve_solana_lookup_tables(None, encoded))
+
+    def test_solana_transfer_count_error_reports_safe_count(self):
+        encoded, wallet, table_data, table_key = make_lookup_table_transaction(extra_transfer=True)
+
+        async def rpc(_session, _method, _params):
+            return {"context": {"slot": 10}, "value": [{
+                "owner": str(SOLANA_LOOKUP_TABLE_PROGRAM), "data": [table_data, "base64"],
+            }]}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "ledger.sqlite")
+            bridge = CrossChainBridge(path, EmptyLedger(path), SOLANA_WALLET, solana_rpc=rpc)
+            tables = __import__("asyncio").run(bridge.resolve_solana_lookup_tables(None, encoded))
+            with self.assertRaisesRegex(BridgeError, "USDC_TRANSFER_COUNT_2"):
+                validate_solana_transaction(
+                    encoded, 0, wallet, 5_000_000, lookup_table_accounts=tables)
 
     def test_destination_credit_requires_explicit_chain_proofs(self):
         with self.assertRaises(BridgeError):

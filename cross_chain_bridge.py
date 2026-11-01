@@ -29,7 +29,8 @@ BASE_USDC = BASE_USDC_ADDRESS.lower()
 LIFI_API = "https://li.quest/v1"
 QUOTE_TTL_SECONDS = 45
 MAX_QUOTE_AMOUNT_RAW = 10_000_000_000
-SOLANA_NEAR_INTENTS_PROGRAM = "3i5JeuZuUxeKtVysUnwQNGerJP2bSMX9fTFfS4Nxe3Br"
+# LI.FI tracking/epoch program; this instruction does not itself transfer user tokens.
+SOLANA_LIFI_TRACKING_PROGRAM = "3i5JeuZuUxeKtVysUnwQNGerJP2bSMX9fTFfS4Nxe3Br"
 SOLANA_ASSOCIATED_TOKEN_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
 SOLANA_COMPUTE_BUDGET_PROGRAM = "ComputeBudget111111111111111111111111111111"
 SOLANA_U64_MAX = (1 << 64) - 1
@@ -176,7 +177,7 @@ def validate_solana_transaction(encoded, version, wallet, amount_raw, lookup_tab
             keys.extend(loaded_readonly)
             if len(keys) > 256 or len(set(keys)) != len(keys):
                 raise SolanaTransactionValidationError("LOOKUP_ACCOUNT_SET_INVALID")
-        allowed = {TOKEN_PROGRAM_ID, SOLANA_NEAR_INTENTS_PROGRAM,
+        allowed = {TOKEN_PROGRAM_ID, SOLANA_LIFI_TRACKING_PROGRAM,
                    SOLANA_ASSOCIATED_TOKEN_PROGRAM, SOLANA_COMPUTE_BUDGET_PROGRAM}
         total, transfers, intents = 0, 0, 0
         if len(msg.instructions) > 30 or len(keys) > 256:
@@ -217,12 +218,12 @@ def validate_solana_transaction(encoded, version, wallet, amount_raw, lookup_tab
                         raise SolanaTransactionValidationError("COMPUTE_BUDGET_LIMIT")
                 else:
                     raise SolanaTransactionValidationError("COMPUTE_BUDGET_INSTRUCTION")
-            elif program == SOLANA_NEAR_INTENTS_PROGRAM:
+            elif program == SOLANA_LIFI_TRACKING_PROGRAM:
                 intents += 1
         if intents != 1:
             raise SolanaTransactionValidationError("INTENTS_INSTRUCTION_COUNT")
         if transfers != 1:
-            raise SolanaTransactionValidationError("USDC_TRANSFER_COUNT")
+            raise SolanaTransactionValidationError(f"USDC_TRANSFER_COUNT_{transfers}")
         if total != int(amount_raw):
             raise SolanaTransactionValidationError("USDC_AMOUNT_MISMATCH")
         return tx
