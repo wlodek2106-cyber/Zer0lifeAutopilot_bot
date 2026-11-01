@@ -130,6 +130,7 @@ def make_lookup_table_transaction(extra_transfer=False):
          AccountMeta(destination, False, True), AccountMeta(wallet.pubkey(), True, False)])
     instructions = [transfer]
     addresses = [source, mint, destination]
+    transfer_recipients = [str(destination)]
     if extra_transfer:
         extra_destination = Pubkey.new_unique()
         extra_data = bytes([12]) + (1).to_bytes(8, "little") + bytes([6])
@@ -138,6 +139,7 @@ def make_lookup_table_transaction(extra_transfer=False):
             [AccountMeta(source, False, True), AccountMeta(mint, False, False),
              AccountMeta(extra_destination, False, True), AccountMeta(wallet.pubkey(), True, False)]))
         addresses.append(extra_destination)
+        transfer_recipients.append(str(extra_destination))
     intent = Instruction(Pubkey.from_string(SOLANA_LIFI_TRACKING_PROGRAM), b"\x01", [])
     instructions.append(intent)
     table_key = Pubkey.new_unique()
@@ -152,7 +154,8 @@ def make_lookup_table_transaction(extra_transfer=False):
     raw_table[21] = 0
     raw_table.extend(b"".join(bytes(address) for address in table.addresses))
     return (base64.b64encode(bytes(tx)).decode("ascii"), str(wallet.pubkey()),
-            base64.b64encode(bytes(raw_table)).decode("ascii"), str(table_key))
+            base64.b64encode(bytes(raw_table)).decode("ascii"), str(table_key),
+            transfer_recipients)
 
 
 class LiveBridgePrimitiveTests(unittest.TestCase):
@@ -204,7 +207,7 @@ class LiveBridgePrimitiveTests(unittest.TestCase):
             validate_solana_transaction("not-base64", 0, SOLANA_WALLET, 5_000_000)
 
     def test_solana_v0_lookup_table_is_resolved_and_transaction_still_fully_validated(self):
-        encoded, wallet, table_data, table_key = make_lookup_table_transaction()
+        encoded, wallet, table_data, table_key, _recipients = make_lookup_table_transaction()
 
         async def rpc(_session, method, params):
             self.assertEqual(method, "getMultipleAccounts")
@@ -225,7 +228,7 @@ class LiveBridgePrimitiveTests(unittest.TestCase):
                 validate_solana_transaction(encoded, 0, wallet, 5_000_000)
 
     def test_solana_lookup_table_must_be_live_and_owned_by_lookup_program(self):
-        encoded, _wallet, table_data, table_key = make_lookup_table_transaction()
+        encoded, _wallet, table_data, table_key, _recipients = make_lookup_table_transaction()
 
         async def rpc(_session, method, params):
             return {"context": {"slot": 10}, "value": [{
@@ -239,7 +242,7 @@ class LiveBridgePrimitiveTests(unittest.TestCase):
                 __import__("asyncio").run(bridge.resolve_solana_lookup_tables(None, encoded))
 
     def test_solana_transfer_count_error_reports_safe_count(self):
-        encoded, wallet, table_data, table_key = make_lookup_table_transaction(extra_transfer=True)
+        encoded, wallet, table_data, table_key, recipients = make_lookup_table_transaction(extra_transfer=True)
 
         async def rpc(_session, _method, _params):
             return {"context": {"slot": 10}, "value": [{
@@ -250,9 +253,13 @@ class LiveBridgePrimitiveTests(unittest.TestCase):
             path = os.path.join(tmp, "ledger.sqlite")
             bridge = CrossChainBridge(path, EmptyLedger(path), SOLANA_WALLET, solana_rpc=rpc)
             tables = __import__("asyncio").run(bridge.resolve_solana_lookup_tables(None, encoded))
-            with self.assertRaisesRegex(BridgeError, "USDC_TRANSFER_COUNT_2"):
+            with self.assertRaises(BridgeError) as error:
                 validate_solana_transaction(
                     encoded, 0, wallet, 5_000_000, lookup_table_accounts=tables)
+            message = str(error.exception)
+            self.assertIn("USDC_TRANSFER_COUNT_2", message)
+            self.assertIn(f"5.000000 USDC to {recipients[0]}", message)
+            self.assertIn(f"0.000001 USDC to {recipients[1]}", message)
 
     def test_destination_credit_requires_explicit_chain_proofs(self):
         with self.assertRaises(BridgeError):

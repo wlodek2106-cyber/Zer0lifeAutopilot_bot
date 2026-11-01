@@ -180,6 +180,7 @@ def validate_solana_transaction(encoded, version, wallet, amount_raw, lookup_tab
         allowed = {TOKEN_PROGRAM_ID, SOLANA_LIFI_TRACKING_PROGRAM,
                    SOLANA_ASSOCIATED_TOKEN_PROGRAM, SOLANA_COMPUTE_BUDGET_PROGRAM}
         total, transfers, intents = 0, 0, 0
+        transfer_details = []
         if len(msg.instructions) > 30 or len(keys) > 256:
             raise SolanaTransactionValidationError("TRANSACTION_TOO_LARGE")
         for ix in msg.instructions:
@@ -197,6 +198,9 @@ def validate_solana_transaction(encoded, version, wallet, amount_raw, lookup_tab
                     raise SolanaTransactionValidationError("USDC_ACCOUNT_MISMATCH")
                 transfers += 1
                 total += amount
+                transfer_details.append(
+                    f"{Decimal(amount) / Decimal(1_000_000):.6f} USDC to {accounts[2]}"
+                )
             elif program == SOLANA_ASSOCIATED_TOKEN_PROGRAM:
                 if data not in (b"\x00", b"\x01") or len(accounts) != 6:
                     raise SolanaTransactionValidationError("ATA_INSTRUCTION_MISMATCH")
@@ -223,7 +227,11 @@ def validate_solana_transaction(encoded, version, wallet, amount_raw, lookup_tab
         if intents != 1:
             raise SolanaTransactionValidationError("INTENTS_INSTRUCTION_COUNT")
         if transfers != 1:
-            raise SolanaTransactionValidationError(f"USDC_TRANSFER_COUNT_{transfers}")
+            detail = "; ".join(transfer_details)
+            code = f"USDC_TRANSFER_COUNT_{transfers}"
+            if detail:
+                code += f"; TRANSFERS: {detail}"
+            raise SolanaTransactionValidationError(code)
         if total != int(amount_raw):
             raise SolanaTransactionValidationError("USDC_AMOUNT_MISMATCH")
         return tx
