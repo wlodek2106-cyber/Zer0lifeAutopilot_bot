@@ -1160,9 +1160,12 @@ class CustodyRuntime(WalletRuntime):
                     tx_request = route["transactionRequest"]
                     lookup_tables = await self.cross_chain_bridge.resolve_solana_lookup_tables(
                         session, tx_request["data"])
+                    existing_ata_owners = await self.cross_chain_bridge.resolve_solana_existing_atas(
+                        session, tx_request["data"], lookup_tables)
                     unsigned = validate_solana_transaction(
                         tx_request["data"], tx_request["svmTransactionVersion"], self.wallet, amount_raw,
-                        lookup_table_accounts=lookup_tables)
+                        lookup_table_accounts=lookup_tables,
+                        existing_associated_token_owners=existing_ata_owners)
                     signed = VersionedTransaction(unsigned.message, [signer])
                     signature = str(signed.signatures[0])
                     wire = base64.b64encode(bytes(signed)).decode("ascii")
@@ -1376,8 +1379,10 @@ class CustodyRuntime(WalletRuntime):
         for transfer in transfers:
             try:
                 transfer = await self._reconcile_exchange_transfer(session, uid, transfer)
-            except BridgeError:
-                pass
+            except BridgeError as error:
+                # Status lookup failures are diagnostic only. Keep the persisted state
+                # and ledger hold untouched, but tell the user why UNKNOWN is unresolved.
+                transfer = {**transfer, "status_check_error": str(error)[:180]}
             checked.append(transfer)
         approvals, reviewed = self.cross_chain_bridge.approvals_for_user(uid), []
         for approval in approvals:

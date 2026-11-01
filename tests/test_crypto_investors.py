@@ -55,3 +55,8 @@ class CryptoInvestorsTests(unittest.TestCase):
         self.assertIn("Type total budget · SOL", panel_content)
         self.assertIn("withdrawals cannot spend the reserved amount", panel_content)
         self.assertIn("Save Investor budget", panel_content)
+        self.assertIn('class="card solana-investor-card"', panel_content)
+        self.assertIn('class="solana-network-mark"', panel_content)
+        self.assertIn("SOLANA NETWORK · MAINNET", panel_content)
+        self.assertIn('id="investor-open-count-fold"', panel_content)
+        self.assertIn("Strategy &amp; filters", panel_content)

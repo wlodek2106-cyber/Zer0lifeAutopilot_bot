@@ -142,7 +142,7 @@ def _ata(wallet):
 
 
 def validate_solana_transaction(encoded, version, wallet, amount_raw, lookup_table_accounts=None,
-                                return_details=False):
+                                return_details=False, existing_associated_token_owners=None):
     """Validate the exact LI.FI Solana fee + temporary deposit transfer pattern."""
     try:
         if type(version) is not int or version not in (0, 1):
@@ -261,6 +261,24 @@ def validate_solana_transaction(encoded, version, wallet, amount_raw, lookup_tab
                 intents += 1
         if intents != 1:
             raise SolanaTransactionValidationError("INTENTS_INSTRUCTION_COUNT")
+        existing_owners = existing_associated_token_owners or {}
+        if not isinstance(existing_owners, dict):
+            raise SolanaTransactionValidationError("LIFI_EXISTING_ATA_MAPPING_INVALID")
+        transfer_destinations = {record["destination"] for record in transfer_records}
+        for token_account, owner in existing_owners.items():
+            if (not isinstance(token_account, str) or not isinstance(owner, str)
+                    or token_account not in transfer_destinations
+                    or token_account in associated_token_owners
+                    or token_account == _ata(wallet)
+                    or token_account == _ata(SOLANA_LIFI_FEE_OWNER)):
+                raise SolanaTransactionValidationError("LIFI_EXISTING_ATA_MAPPING_INVALID")
+            derived = Pubkey.find_program_address(
+                [bytes(Pubkey.from_string(owner)), bytes(Pubkey.from_string(TOKEN_PROGRAM_ID)),
+                 bytes(Pubkey.from_string(SOLANA_USDC))],
+                Pubkey.from_string(SOLANA_ASSOCIATED_TOKEN_PROGRAM))[0]
+            if str(derived) != token_account:
+                raise SolanaTransactionValidationError("LIFI_EXISTING_ATA_MAPPING_INVALID")
+            associated_token_owners[token_account] = owner
         if transfers != 2:
             detail_items = []
             for record in transfer_records:
@@ -293,7 +311,7 @@ def validate_solana_transaction(encoded, version, wallet, amount_raw, lookup_tab
         deposit = deposit_records[0]
         if deposit["amount"] != int(amount_raw) - fee_amount:
             raise SolanaTransactionValidationError("LIFI_DEPOSIT_AMOUNT_MISMATCH")
-        if (ata_creates != 1 or len(associated_token_owners) != 1
+        if (ata_creates > 1 or len(associated_token_owners) != 1
                 or deposit["destination"] not in associated_token_owners):
             raise SolanaTransactionValidationError("LIFI_DEPOSIT_ATA_MISMATCH")
         deposit_owner = associated_token_owners[deposit["destination"]]
@@ -316,7 +334,8 @@ def validate_solana_transaction(encoded, version, wallet, amount_raw, lookup_tab
         ) from None
 
 
-def normalize_quote(payload, expected, lookup_table_accounts=None):
+def normalize_quote(payload, expected, lookup_table_accounts=None,
+                    existing_associated_token_owners=None):
     try:
         action, estimate, tx = payload["action"], payload["estimate"], payload["transactionRequest"]
         if (int(action["fromChainId"]) != expected["from_chain"]
@@ -351,7 +370,8 @@ def normalize_quote(payload, expected, lookup_table_accounts=None):
             _, solana_details = validate_solana_transaction(
                 tx["data"], tx["svmTransactionVersion"], expected["from_address"],
                 expected["amount_raw"], lookup_table_accounts=lookup_table_accounts,
-                return_details=True)
+                return_details=True,
+                existing_associated_token_owners=existing_associated_token_owners)
             payload["_solana_lifi_bridge_details"] = solana_details
         return payload
     except (KeyError, TypeError, ValueError, InvalidOperation):
@@ -419,6 +439,91 @@ class CrossChainBridge:
             raise
         except Exception:
             raise BridgeError("Solana lookup-table data could not be validated [ALT_DATA_INVALID].", 422) from None
+
+    async def resolve_solana_existing_atas(self, session, encoded, lookup_table_accounts=None):
+        """Resolve pre-existing LI.FI recipient ATAs from finalized Solana account data."""
+        try:
+            tx = VersionedTransaction.from_bytes(base64.b64decode(encoded, validate=True))
+            msg = tx.message
+            keys = [str(key) for key in msg.account_keys]
+            tables = list(lookup_table_accounts or [])
+            lookups = list(getattr(msg, "address_table_lookups", []))
+            if bool(lookups) != bool(tables):
+                raise BridgeError("Solana lookup-table data is unavailable.", 422)
+            if lookups:
+                table_map = {str(table.key): table for table in tables}
+                if len(table_map) != len(tables) or set(table_map) != {
+                        str(lookup.account_key) for lookup in lookups}:
+                    raise BridgeError("Solana lookup-table data does not match this quote.", 422)
+                writable, readonly = [], []
+                for lookup in lookups:
+                    addresses = list(table_map[str(lookup.account_key)].addresses)
+                    writable.extend(str(addresses[index]) for index in lookup.writable_indexes)
+                    readonly.extend(str(addresses[index]) for index in lookup.readonly_indexes)
+                keys.extend(writable)
+                keys.extend(readonly)
+
+            created_atas = set()
+            candidate_accounts = []
+            source_ata = _ata(self.solana_wallet)
+            fee_ata = _ata(SOLANA_LIFI_FEE_OWNER)
+            for ix in msg.instructions:
+                if ix.program_id_index >= len(keys) or any(index >= len(keys) for index in ix.accounts):
+                    raise BridgeError("Solana quote contains an invalid account index.", 422)
+                program = keys[ix.program_id_index]
+                accounts = [keys[index] for index in ix.accounts]
+                if program == SOLANA_ASSOCIATED_TOKEN_PROGRAM and len(accounts) == 6:
+                    created_atas.add(accounts[1])
+                if program == TOKEN_PROGRAM_ID and len(accounts) == 4:
+                    destination = accounts[2]
+                    if destination not in (source_ata, fee_ata) and destination not in created_atas:
+                        candidate_accounts.append(destination)
+            candidates = list(dict.fromkeys(candidate_accounts))
+            if not candidates:
+                return {}
+            if len(candidates) > 4 or not self.solana_rpc:
+                raise BridgeError(
+                    "The existing LI.FI receiving token account cannot be verified; nothing was sent.",
+                    503)
+            try:
+                result = await self.solana_rpc(session, "getMultipleAccounts", [
+                    candidates, {"encoding": "jsonParsed", "commitment": "finalized"}])
+            except Exception:
+                raise BridgeError(
+                    "Solana could not verify the existing LI.FI receiving token account; nothing was sent.",
+                    503) from None
+            values = result.get("value") if isinstance(result, dict) else None
+            if not isinstance(values, list) or len(values) != len(candidates):
+                raise BridgeError("Solana returned incomplete receiving-account data.", 503)
+            owners = {}
+            for address, account in zip(candidates, values):
+                parsed = ((account or {}).get("data") or {}).get("parsed") or {}
+                info = parsed.get("info") or {}
+                owner = info.get("owner")
+                if (not isinstance(account, dict)
+                        or account.get("owner") != TOKEN_PROGRAM_ID
+                        or parsed.get("type") != "account"
+                        or info.get("mint") != SOLANA_USDC
+                        or info.get("state") != "initialized"
+                        or not isinstance(owner, str)):
+                    raise BridgeError(
+                        "The existing LI.FI receiving account is not a verified USDC token account.",
+                        422)
+                derived = Pubkey.find_program_address(
+                    [bytes(Pubkey.from_string(owner)), bytes(Pubkey.from_string(TOKEN_PROGRAM_ID)),
+                     bytes(Pubkey.from_string(SOLANA_USDC))],
+                    Pubkey.from_string(SOLANA_ASSOCIATED_TOKEN_PROGRAM))[0]
+                if str(derived) != address:
+                    raise BridgeError(
+                        "The existing LI.FI receiving account is not its owner's USDC associated account.",
+                        422)
+                owners[address] = owner
+            return owners
+        except BridgeError:
+            raise
+        except Exception:
+            raise BridgeError(
+                "The existing LI.FI receiving account could not be verified safely.", 422) from None
 
     def _init_db(self):
         with sqlite3.connect(self.db_file, timeout=10) as db:
@@ -504,13 +609,17 @@ class CrossChainBridge:
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
             raise BridgeError("The quote provider is unavailable; no transfer was sent.", 503) from None
         lookup_tables = []
+        existing_ata_owners = {}
         if direction == "solana-to-base":
             transaction_request = payload.get("transactionRequest") or {}
             lookup_tables = await self.resolve_solana_lookup_tables(
                 session, transaction_request.get("data", ""))
+            existing_ata_owners = await self.resolve_solana_existing_atas(
+                session, transaction_request.get("data", ""), lookup_tables)
         route = normalize_quote(payload, {"from_chain": from_chain, "to_chain": to_chain,
             "amount_raw": raw, "from_address": from_address, "to_address": to_address,
-            "from_token": from_token, "to_token": to_token}, lookup_table_accounts=lookup_tables)
+            "from_token": from_token, "to_token": to_token}, lookup_table_accounts=lookup_tables,
+            existing_associated_token_owners=existing_ata_owners)
         qid, expires = str(uuid.uuid4()), now + QUOTE_TTL_SECONDS
         with sqlite3.connect(self.db_file, timeout=10) as db:
             db.execute("""INSERT INTO custody_bridge_quotes

@@ -1900,6 +1900,147 @@ RAW_HTML = r"""<!DOCTYPE html>
         #app .base-paper-list { max-height: 190px; overflow: auto; margin-top: 9px; color: #b4c3d7; font: 10px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-line; overflow-wrap: anywhere; }
         #app .base-paper-disclaimer, #app .base-paper-rules { display: block; margin: 9px 0 0; color: #8fa2bd; font-size: 10px; line-height: 1.5; }
         #app .base-paper-fold-wide { grid-column: 1 / -1; }
+        #app .solana-investor-card {
+            position: relative;
+            overflow: hidden;
+            padding: 16px !important;
+            background:
+                radial-gradient(180px 130px at 8% 0%, rgba(153, 69, 255, .24), transparent 92%),
+                radial-gradient(140px 100px at 100% 100%, rgba(20, 241, 149, .10), transparent 90%),
+                linear-gradient(145deg, #171329 0%, #0d1117 52%, #080d0d 100%) !important;
+            border: 1px solid rgba(153, 110, 230, .42) !important;
+            border-radius: 21px;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.10),
+                inset 0 -14px 24px rgba(0,0,0,.25), 0 7px 0 rgba(74, 35, 130, .52),
+                0 18px 38px rgba(0,0,0,.4);
+        }
+        #app .solana-investor-card::before {
+            content: "";
+            position: absolute;
+            inset: 0 12% auto;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(220,190,255,.7), transparent);
+            pointer-events: none;
+        }
+        #app .solana-investor-card .base-paper-head { justify-content: space-between; gap: 10px; }
+        #app .solana-investor-card .base-network-identity { min-width: 0; gap: 12px; }
+        #app .solana-network-mark {
+            position: relative;
+            display: grid;
+            place-items: center;
+            flex: 0 0 46px;
+            width: 46px;
+            height: 46px;
+            border: 1px solid rgba(226,207,255,.62);
+            border-radius: 14px;
+            background: linear-gradient(145deg, #492a76, #201333 68%, #140e20);
+            box-shadow: inset 0 2px 0 rgba(255,255,255,.3),
+                inset 0 -5px 9px rgba(0,0,0,.42), 0 5px 0 #24113c,
+                0 10px 18px rgba(153,69,255,.32);
+            transform: perspective(420px) rotateX(8deg) rotateY(-10deg);
+        }
+        #app .solana-network-mark::after {
+            content: "";
+            position: absolute;
+            inset: 4px;
+            border: 1px solid rgba(255,255,255,.2);
+            border-radius: 10px;
+            pointer-events: none;
+        }
+        #app .solana-network-mark span {
+            position: relative;
+            z-index: 1;
+            display: grid;
+            gap: 3px;
+            transform: skewY(-13deg);
+        }
+        #app .solana-network-mark i {
+            display: block;
+            width: 24px;
+            height: 4px;
+            border-radius: 4px;
+            background: linear-gradient(90deg, #20f59a, #b88bff 76%);
+            box-shadow: 0 1px 0 rgba(255,255,255,.36), 0 2px 5px rgba(0,0,0,.38);
+        }
+        #app .solana-network-mark i:nth-child(2) { background: linear-gradient(90deg, #ab71ff, #18e9aa); }
+        #app .solana-network-kicker {
+            margin: 0 0 3px;
+            color: #bd9aff;
+            font: 750 9px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+            letter-spacing: .12em;
+        }
+        #app .solana-investor-card .base-paper-head h2 { margin: 0; font-size: 18px; line-height: 1.2; }
+        #app .solana-investor-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            flex: 0 0 auto;
+            padding: 7px 9px;
+            border: 1px solid rgba(190,151,255,.38);
+            border-radius: 999px;
+            color: #e0d0ff;
+            background: linear-gradient(145deg, rgba(76,49,119,.56), rgba(23,18,39,.9));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.1), 0 3px 9px rgba(0,0,0,.2);
+            font: 750 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+            letter-spacing: .04em;
+            white-space: nowrap;
+        }
+        #app .solana-investor-caption { margin: 9px 0 11px; color: #b5a8ca; font-size: 11px; line-height: 1.4; }
+        #app .solana-investor-metrics { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; }
+        #app .solana-investor-metric {
+            min-width: 0;
+            padding: 9px;
+            border: 1px solid rgba(188,160,226,.18);
+            border-radius: 13px;
+            background: linear-gradient(150deg, rgba(31,25,48,.95), rgba(12,13,23,.98));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.055), 0 4px 10px rgba(0,0,0,.17);
+        }
+        #app .solana-investor-metric > span {
+            display: block;
+            overflow: hidden;
+            color: #b8a6d0;
+            font: 700 8px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+            letter-spacing: .07em;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        #app .solana-investor-metric strong {
+            display: block;
+            overflow: hidden;
+            margin-top: 4px;
+            color: #f4efff;
+            font: 760 15px/1.15 ui-monospace, SFMono-Regular, Menlo, monospace;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        #app .solana-investor-controls { display: grid; grid-template-columns: 1fr; gap: 8px; margin-top: 9px; }
+        #app .solana-investor-toggle {
+            width: 100%;
+            min-height: 44px;
+            margin: 0 !important;
+            border-radius: 12px;
+            font-size: 11px;
+        }
+        #app .solana-investor-fold {
+            min-width: 0;
+            padding: 9px 10px;
+            border: 1px solid rgba(171,139,217,.2);
+            border-radius: 12px;
+            background: linear-gradient(145deg, rgba(25,20,39,.82), rgba(10,13,20,.92));
+        }
+        #app .solana-investor-fold summary { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: #e0d1fa; font-size: 10px; }
+        #app .solana-investor-fold[open] { border-color: rgba(153,69,255,.42); }
+        #app .solana-investor-fold-count { min-width: 20px; padding: 3px 6px; border-radius: 999px; color: #e4d5ff; background: rgba(128,75,198,.3); text-align: center; font: 700 9px/1.1 ui-monospace, monospace; }
+        #app .solana-investor-list { max-height: 220px; overflow: auto; margin-top: 9px; color: #c6bbd8; font: 10px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-line; overflow-wrap: anywhere; }
+        #app .solana-investor-help, #app .solana-investor-rules { display: block; margin: 9px 0 0; color: #aa9dbd; font-size: 10px; line-height: 1.5; }
+        #app .solana-investor-budget-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 6px; margin-top: 9px; }
+        #app .solana-investor-budget-cell { min-width: 0; padding: 8px; border: 1px solid rgba(188,160,226,.14); border-radius: 10px; background: rgba(9,11,18,.55); }
+        #app .solana-investor-budget-cell span { display: block; color: #ac9fbd; font-size: 8px; line-height: 1.3; }
+        #app .solana-investor-budget-cell strong { display: block; overflow: hidden; margin-top: 4px; color: #e8ddf8; font: 700 10px/1.25 ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }
+        #app .solana-investor-budget-form { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; margin-top: 10px; }
+        #app .solana-investor-budget-form .settings-label { margin: 0 0 4px 2px; font-size: 9px; }
+        #app .solana-investor-budget-form .sig-input { box-sizing: border-box; width: 100%; height: 42px; margin: 0; padding: 8px 9px; font-size: 12px; }
+        #app .solana-investor-budget-save { grid-column: 1 / -1; width: 100%; min-height: 42px; margin: 0 !important; padding: 0 8px; font-size: 11px; }
         @media (max-width: 380px) {
             #app .tab-panel { padding-right: 14px; padding-left: 14px; }
             #app .card:not(#partner-program), #app .deposit-modal { padding: 15px; }
@@ -1912,6 +2053,10 @@ RAW_HTML = r"""<!DOCTYPE html>
             #app .base-paper-budget-field { grid-column: 1 / -1; }
             #app .base-paper-details { grid-template-columns: 1fr; }
             #app .base-paper-fold-wide { grid-column: auto; }
+            #app .solana-investor-card { padding: 13px !important; }
+            #app .solana-investor-metric { padding: 8px 7px; }
+            #app .solana-investor-metric strong { font-size: 13px; }
+            #app .solana-investor-budget-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
         }
         @media (prefers-reduced-motion: reduce) {
             #app .btn-ctl, #app .btn-copy, #app .wallet-tab, #app .token-btn,
@@ -2746,83 +2891,78 @@ RAW_HTML = r"""<!DOCTYPE html>
                     </details>
                 </div>
             </section>
-            <section class="card" aria-label="AI Crypto Investors status">
-                <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
-                    <div><h2 style="margin:0">Solana portfolio</h2>
-                        <p class="section-note" style="margin:5px 0 0">USDC and SOL · screened discovery universe</p></div>
-                    <span id="investor-mode-status" style="border:1px solid #536c20;border-radius:999px;padding:7px 11px;color:#c3f26b;font-size:11px;font-weight:800;letter-spacing:.06em" aria-live="polite">AUTOPILOT · OFF</span>
+            <section class="card solana-investor-card" aria-label="Solana network AI Crypto Investors">
+                <div class="base-paper-head">
+                    <div class="base-network-identity">
+                        <span class="solana-network-mark" aria-hidden="true"><span><i></i><i></i><i></i></span></span>
+                        <div>
+                            <p class="solana-network-kicker">SOLANA NETWORK · MAINNET</p>
+                            <h2>Solana Investors</h2>
+                        </div>
+                    </div>
+                    <span id="investor-mode-status" class="solana-investor-badge" aria-live="polite">AUTOPILOT · OFF</span>
                 </div>
-                <button id="investor-toggle" class="btn-ctl btn-toggle-off" style="margin-top:14px;width:100%" onclick="toggleInvestorTrading()">Autopilot: OFF · Turn on</button>
-                <p class="section-note" style="margin-top:16px">
-                    This is a separate real-money strategy. It can only trade screened Solana candidates after mint, liquidity,
-                    chart, quote and execution checks. Discovery is bounded to up to 200 new mints and 40 on-chain checks per scan;
-                    this does not mean every Solana token will be traded. Core and Meme Sniper remain separate.
-                </p>
-                <div class="grid-stats">
-                    <div class="stat-box"><div class="stat-label">Candidates screened</div><div class="stat-val" id="investor-candidate-count">Loading…</div></div>
-                    <div class="stat-box"><div class="stat-label">Open positions</div><div class="stat-val" id="investor-open-count">0</div></div>
-                    <div class="stat-box"><div class="stat-label">Realized result · USDC</div><div class="stat-val" id="investor-pnl-usdc">0.00</div></div>
-                    <div class="stat-box"><div class="stat-label">Realized result · SOL</div><div class="stat-val" id="investor-pnl-sol">0.000000000</div></div>
+                <p class="solana-investor-caption">USDC and SOL · screened discovery universe · separate real-money strategy</p>
+                <div class="solana-investor-metrics">
+                    <div class="solana-investor-metric"><span>CANDIDATES SCREENED</span><strong id="investor-candidate-count">Loading…</strong></div>
+                    <div class="solana-investor-metric"><span>OPEN POSITIONS</span><strong id="investor-open-count">0</strong></div>
+                    <div class="solana-investor-metric"><span>REALIZED · USDC</span><strong id="investor-pnl-usdc">0.00</strong></div>
+                    <div class="solana-investor-metric"><span>REALIZED · SOL</span><strong id="investor-pnl-sol">0.000000000</strong></div>
                 </div>
-            </section>
-            <section class="card" aria-label="AI Crypto Investors strategy">
-                <h2>Entry and exit rules</h2>
-                <p class="section-note">
-                    Three entry tranches only while fresh chart data confirms an upward trend; no averaging down.
-                    The next tranche requires continued upward confirmation.
-                </p>
-                <p class="section-note">
-                    Divide each currency's manually entered budget into five token slots per currency, with three equal tranches
-                    per slot. Sell tranche one at +3.5% and tranche two at +7%; activate the final tranche's profit trail after
-                    +10%, then exit after a 5% pullback from its peak. Automatic exits are blocked unless the quote's minimum
-                    return is above entry cost; a sudden price gap can leave the position open, and a manual sale can realize a loss.
-                    This strategy has no stop-loss; the allocation may lose most or all of its value. Targets use estimates; fills, returns
-                    and a profitable exit are not guaranteed. Manual sales remain available.
-                </p>
-                <p class="section-note">
-                    Results below are recorded per funding currency. They exclude separately paid operator/network
-                    fees and are not a promise of net profit.
-                </p>
-            </section>
-            <section class="card" aria-label="AI Crypto Investors budget">
-                <h2>Allocated strategy budget</h2>
-                <p class="section-note">
-                    Set one shared total for all AI Crypto Investors positions in each currency. The amount is reserved
-                    internally from your available bot balance; no on-chain transfer is made. Core, Meme Sniper and
-                    withdrawals cannot spend the reserved amount. Lower the allocation to release unused funds; the
-                    cost basis of open Investor positions cannot be released.
-                </p>
-                <p class="section-note">
-                    This is a hard cap. Profits above it return to your available balance. Trading losses reduce the
-                    reserved pool. Saving the same amount tops the pool back up from your available balance if funds
-                    allow; lowering it releases unused cash.
-                </p>
-                <p class="section-note">
-                    The engine starts only after you press ON and pass readiness checks. It is OFF after every server restart.
-                    If it is OFF, open positions remain open and can still be sold manually.
-                </p>
-                <div class="grid-stats">
-                    <div class="stat-box"><div class="stat-label">Budget limit · USDC</div><div class="stat-val" id="investor-budget-usdc-summary">0.000000</div></div>
-                    <div class="stat-box"><div class="stat-label">Free in Investor pool · USDC</div><div class="stat-val" id="investor-budget-usdc-free">0.000000</div></div>
-                    <div class="stat-box"><div class="stat-label">Open-position cost · USDC</div><div class="stat-val" id="investor-budget-usdc-invested">0.000000</div></div>
-                    <div class="stat-box"><div class="stat-label">Budget limit · SOL</div><div class="stat-val" id="investor-budget-sol-summary">0.000000000</div></div>
-                    <div class="stat-box"><div class="stat-label">Free in Investor pool · SOL</div><div class="stat-val" id="investor-budget-sol-free">0.000000000</div></div>
-                    <div class="stat-box"><div class="stat-label">Open-position cost · SOL</div><div class="stat-val" id="investor-budget-sol-invested">0.000000000</div></div>
+                <div class="solana-investor-controls">
+                    <button id="investor-toggle" class="btn-ctl btn-toggle-off solana-investor-toggle" type="button" onclick="toggleInvestorTrading()">Autopilot: OFF · Turn on</button>
                 </div>
-                <label class="settings-label" for="investor-budget-usdc">Type total budget · USDC</label>
-                <input id="investor-budget-usdc" class="sig-input" type="number" min="0" step="0.000001" value="0">
-                <label class="settings-label" for="investor-budget-sol">Type total budget · SOL</label>
-                <input id="investor-budget-sol" class="sig-input" type="number" min="0" step="0.000000001" value="0">
-                <button class="btn-green-main" style="margin-top:12px" onclick="saveInvestorBudget()">Save Investor budget</button>
-                <div id="investor-budget-status" class="section-note" role="status" aria-live="polite"></div>
-            </section>
-            <section class="card" aria-label="AI Crypto Investors open positions">
-                <h2>Open investor positions</h2>
-                <div id="investor-open-positions" class="section-note" style="white-space:pre-line">No AI Crypto Investors positions recorded.</div>
-            </section>
-            <section class="card" aria-label="AI Crypto Investors closed trades">
-                <h2>Closed trades and realized results</h2>
-                <div id="investor-closed-trades" class="section-note" style="white-space:pre-line">No AI Crypto Investors trades recorded.</div>
+                <p class="solana-investor-help">
+                    Screened Solana candidates pass mint, liquidity, chart, quote and execution checks. Discovery checks up to 200 new mints and 40 on-chain candidates per scan; not every token is traded. Core and Meme Sniper remain separate.
+                </p>
+                <div class="base-paper-details">
+                    <details class="solana-investor-fold">
+                        <summary>Allocated strategy budget</summary>
+                        <p class="solana-investor-help">
+                            Set one shared total for all AI Crypto Investors positions in each currency. The amount is reserved
+                            internally from your available bot balance; no on-chain transfer is made. Core, Meme Sniper and
+                            withdrawals cannot spend the reserved amount. Lower the allocation to release unused funds; the
+                            cost basis of open Investor positions cannot be released.
+                        </p>
+                        <p class="solana-investor-help">
+                            This is a hard cap. Profits above it return to your available balance. Trading losses reduce the
+                            reserved pool. Saving the same amount tops the pool back up from your available balance if funds
+                            allow; lowering it releases unused cash.
+                        </p>
+                        <div class="solana-investor-budget-grid">
+                            <div class="solana-investor-budget-cell"><span>Budget limit · USDC</span><strong id="investor-budget-usdc-summary">0.000000</strong></div>
+                            <div class="solana-investor-budget-cell"><span>Free in Investor pool · USDC</span><strong id="investor-budget-usdc-free">0.000000</strong></div>
+                            <div class="solana-investor-budget-cell"><span>Open-position cost · USDC</span><strong id="investor-budget-usdc-invested">0.000000</strong></div>
+                            <div class="solana-investor-budget-cell"><span>Budget limit · SOL</span><strong id="investor-budget-sol-summary">0.000000000</strong></div>
+                            <div class="solana-investor-budget-cell"><span>Free in Investor pool · SOL</span><strong id="investor-budget-sol-free">0.000000000</strong></div>
+                            <div class="solana-investor-budget-cell"><span>Open-position cost · SOL</span><strong id="investor-budget-sol-invested">0.000000000</strong></div>
+                        </div>
+                        <div class="solana-investor-budget-form">
+                            <div><label class="settings-label" for="investor-budget-usdc">Type total budget · USDC</label><input id="investor-budget-usdc" class="sig-input" type="number" min="0" step="0.000001" value="0"></div>
+                            <div><label class="settings-label" for="investor-budget-sol">Type total budget · SOL</label><input id="investor-budget-sol" class="sig-input" type="number" min="0" step="0.000000001" value="0"></div>
+                            <button class="btn-green-main solana-investor-budget-save" type="button" onclick="saveInvestorBudget()">Save Investor budget</button>
+                        </div>
+                        <div id="investor-budget-status" class="solana-investor-help" role="status" aria-live="polite"></div>
+                    </details>
+                    <details class="solana-investor-fold">
+                        <summary>Strategy &amp; filters</summary>
+                        <p class="solana-investor-rules">
+                            Three entry tranches only while fresh chart data confirms an upward trend; no averaging down.
+                            The next tranche requires continued upward confirmation. Divide each currency's manually entered budget into five token slots per currency, with three equal tranches per slot. Sell tranche one at +3.5% and tranche two at +7%; activate the final tranche's profit trail after +10%, then exit after a 5% pullback from its peak. Automatic exits are blocked unless the quote's minimum return is above entry cost; a sudden price gap can leave the position open, and a manual sale can realize a loss. This strategy has no stop-loss; the allocation may lose most or all of its value. Targets use estimates; fills, returns and a profitable exit are not guaranteed. Manual sales remain available.
+                        </p>
+                        <p class="solana-investor-rules">
+                            The engine starts only after you press ON and pass readiness checks. It is OFF after every server restart. If it is OFF, open positions remain open and can still be sold manually. Results are recorded per funding currency and exclude separately paid operator/network fees.
+                        </p>
+                    </details>
+                    <details class="solana-investor-fold">
+                        <summary>Open investor positions <span class="solana-investor-fold-count" id="investor-open-count-fold">0</span></summary>
+                        <div id="investor-open-positions" class="solana-investor-list" aria-live="polite">No AI Crypto Investors positions recorded.</div>
+                    </details>
+                    <details class="solana-investor-fold">
+                        <summary>Closed trades and realized results</summary>
+                        <div id="investor-closed-trades" class="solana-investor-list" aria-live="polite">No AI Crypto Investors trades recorded.</div>
+                    </details>
+                </div>
             </section>
         </div>
     </div>
@@ -2930,13 +3070,14 @@ RAW_HTML = r"""<!DOCTYPE html>
                 ?Number(value).toFixed(digits):'—';
             investorActive=!!stats.investor_active;
             document.getElementById('investor-mode-status').textContent=
-                investorActive?'AUTOPILOT · ON':'AUTOPILOT · OFF';
+                localizeUiText(investorActive?'AUTOPILOT · ON':'AUTOPILOT · OFF');
             const investorToggle=document.getElementById('investor-toggle');
             investorToggle.textContent=investorActive?'Autopilot: ON · Turn off':'Autopilot: OFF · Turn on';
-            investorToggle.className='btn-ctl '+(investorActive?'btn-toggle-on':'btn-toggle-off');
+            investorToggle.className='btn-ctl '+(investorActive?'btn-toggle-on':'btn-toggle-off')+' solana-investor-toggle';
             document.getElementById('investor-budget-usdc').disabled=investorActive;
             document.getElementById('investor-budget-sol').disabled=investorActive;
             document.getElementById('investor-open-count').textContent=String(open.length);
+            document.getElementById('investor-open-count-fold').textContent=String(open.length);
             document.getElementById('investor-pnl-usdc').textContent=fmt(usdcPnl,2)+' USDC';
             document.getElementById('investor-pnl-sol').textContent=fmt(solPnl,9)+' SOL';
             const budget=stats.investor_budget||{};
@@ -3146,6 +3287,19 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["Strategy limits & risks","Ограничения и риски стратегии","Обмеження та ризики стратегії"],
             ["Diagnostics","Диагностика","Діагностика"],["AI connection & costs","Подключение ИИ и расходы","Підключення ШІ та витрати"],
             ["AI Crypto Investors","AI Crypto Investors","AI Crypto Investors"],
+            ["Solana Investors","Solana Investors","Solana Investors"],
+            ["SOLANA NETWORK · MAINNET","СЕТЬ SOLANA · MAINNET","МЕРЕЖА SOLANA · MAINNET"],
+            ["USDC and SOL · screened discovery universe · separate real-money strategy","USDC и SOL · проверенные рыночные кандидаты · отдельная стратегия с реальными средствами","USDC і SOL · перевірені ринкові кандидати · окрема стратегія з реальними коштами"],
+            ["CANDIDATES SCREENED","КАНДИДАТОВ ПРОВЕРЕНО","КАНДИДАТІВ ПЕРЕВІРЕНО"],
+            ["REALIZED · USDC","РЕАЛИЗОВАНО · USDC","РЕАЛІЗОВАНО · USDC"],
+            ["REALIZED · SOL","РЕАЛИЗОВАНО · SOL","РЕАЛІЗОВАНО · SOL"],
+            ["AUTOPILOT · OFF","АВТОПИЛОТ · ВЫКЛ","АВТОПІЛОТ · ВИМК"],
+            ["AUTOPILOT · ON","АВТОПИЛОТ · ВКЛ","АВТОПІЛОТ · УВІМК"],
+            ["Status check failed:","Не удалось проверить статус:","Не вдалося перевірити статус:"],
+            ["Funds remain reserved. Do not submit again.","Средства остаются зарезервированы. Не отправляйте перевод повторно.","Кошти залишаються зарезервованими. Не надсилайте переказ повторно."],
+            ["Bridge status is rate-limited.","Провайдер ограничил частоту проверки статуса.","Провайдер обмежив частоту перевірки статусу."],
+            ["Bridge status is unavailable.","Сервис проверки статуса временно недоступен.","Сервіс перевірки статусу тимчасово недоступний."],
+            ["Provider status does not match this transfer; funds remain reserved.","Статус провайдера не совпадает с этим переводом; средства остаются зарезервированы.","Статус провайдера не відповідає цьому переказу; кошти залишаються зарезервованими."],
             ["SIM ONLY · LIVE OFF","ТОЛЬКО СИМУЛЯЦИЯ · РЕАЛЬНАЯ ТОРГОВЛЯ ВЫКЛ","ЛИШЕ СИМУЛЯЦІЯ · РЕАЛЬНА ТОРГІВЛЯ ВИМК"],
             ["Manual scan · No Base wallet or real transactions","Ручное сканирование · без кошелька Base и реальных транзакций","Ручне сканування · без гаманця Base та реальних транзакцій"],
             ["Scan Base","Сканировать Base","Сканувати Base"],["Open paper positions","Открытые виртуальные позиции","Відкриті віртуальні позиції"],
@@ -4654,8 +4808,11 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const latest=transfers[0], approval=approvals[0];
                 status.textContent=latest
                     ?latest.direction.replace(/-/g,' → ')+' · '+latest.state+' · '+
-                        (latest.received_raw==null?'destination pending':
-                        (Number(latest.received_raw)/1e6).toFixed(6)+' USDC credited')
+                        (latest.status_check_error
+                            ?localizeUiText('Status check failed:')+' '+localizeUiText(latest.status_check_error)+
+                                ' '+localizeUiText('Funds remain reserved. Do not submit again.')
+                            :latest.received_raw==null?'destination pending':
+                                (Number(latest.received_raw)/1e6).toFixed(6)+' USDC credited')
                     :approval?'Base approval · '+approval.state:'No bridge transfers yet.';
             }catch(error){
                 status.textContent=(error.message||'Status unavailable.')+' Do not retry an unresolved transfer.';
