@@ -26,6 +26,36 @@ class WebBrowserTests(unittest.TestCase):
         page=re.sub(r'<script src="[^"]+"></script>','',page)
         return page.replace("</head>",stub+"</head>")
 
+    def test_exchange_status_shows_server_transaction_link_not_deposit_address(self):
+        page=self.telegram_page("""<script>
+        window.Telegram={WebApp:{initData:'fixture',initDataUnsafe:{user:{id:101}},expand(){},ready(){}}};
+        window.fetch=async()=>new Response(JSON.stringify({success:true}));
+        </script>""")
+        browser.AccountBrowserTests().run_page(page,"""
+            const panel=document.getElementById('exchange-transfer-proof');
+            const signature='1'.repeat(87);
+            renderExchangeTransferProof({
+              direction:'solana-to-base',state:'UNKNOWN',source_tx_hash:signature
+            });
+            assert(!panel.hidden,'server-signed source transaction is visible');
+            let link=panel.querySelector('a');
+            assert(link&&link.href==='https://solscan.io/tx/'+signature,
+              'Solana signature opens the Solscan transaction');
+            assert(link.textContent===signature,'full signature is visible to copy');
+            renderExchangeTransferProof({
+              direction:'solana-to-base',state:'UNKNOWN',
+              source_tx_hash:'B1UNDM8EVvFBSHVcdDf9Cz6nUdyqWUMBZpb3EjJCGyVE'
+            });
+            assert(!panel.querySelector('a'),'temporary deposit address is not mistaken for a transaction');
+            assert(!panel.hidden,'missing transaction id is explained on the status card');
+            renderExchangeTransferProof({
+              direction:'base-to-solana',state:'SUBMITTED',source_tx_hash:'0x'+'a'.repeat(64)
+            });
+            link=panel.querySelector('a');
+            assert(link&&link.href==='https://basescan.org/tx/'+'0x'+'a'.repeat(64),
+              'Base source transaction opens the Base explorer');
+        """)
+
     def test_standalone_signed_out_click_opens_touchable_login_and_no_payments(self):
         page=self.page("""<script>
         window.PublicKeyCredential=function(){};

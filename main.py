@@ -2310,6 +2310,8 @@ RAW_HTML = r"""<!DOCTYPE html>
         .exchange-quote-button { min-height:48px; padding:0 18px; border:1px solid rgba(198,238,154,.6); border-radius:12px; color:#10170d; background:linear-gradient(135deg,#d9ff8d,#8ed21b); font-size:12px; font-weight:850; cursor:pointer; }
         .exchange-quote-button:disabled { cursor:wait; opacity:.6; }
         .exchange-quote-status { min-height:20px; margin:9px 0 0; color:#b8c4b5; font-size:11px; line-height:1.5; }
+        .exchange-transfer-proof { display:grid; gap:7px; margin-top:8px; color:#a4b1a2; font-size:10px; line-height:1.5; }
+        .exchange-transfer-proof a { color:#d7ff91; overflow-wrap:anywhere; word-break:break-all; }
         .exchange-quote-result { margin-top:14px; padding:15px; border:1px solid rgba(158,190,211,.24); border-radius:16px; background:linear-gradient(145deg,rgba(14,24,28,.96),rgba(13,20,22,.94)); }
         .exchange-quote-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }
         .exchange-quote-value { min-width:0; padding:11px; border:1px solid rgba(190,218,179,.12); border-radius:12px; background:rgba(5,11,10,.34); }
@@ -2574,6 +2576,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 </div>
                 <p id="exchange-quote-status" class="exchange-quote-status" role="status" aria-live="polite"></p>
                 <button type="button" class="exchange-quote-button" onclick="refreshExchangeTransfers()">Check transfer status</button>
+                <div id="exchange-transfer-proof" class="exchange-transfer-proof" aria-live="polite" hidden></div>
                 <section id="exchange-quote-result" class="exchange-quote-result" aria-label="Read-only quote result" hidden>
                     <div class="exchange-quote-grid">
                         <div class="exchange-quote-value"><span>Send amount</span><strong id="exchange-quote-in">—</strong></div>
@@ -3574,6 +3577,11 @@ RAW_HTML = r"""<!DOCTYPE html>
         ];
         const UI_COPY_ROWS_EXTRA = [
             ["A quote never sends funds. Each approval or transfer requires your separate confirmation.","Котировка не отправляет средства. Каждое разрешение или перевод требуют отдельного подтверждения.","Котирування не переказує кошти. Кожне підтвердження або переказ потребує окремої згоди."],
+            ["Solana source transaction","Исходная транзакция Solana","Вихідна транзакція Solana"],
+            ["Base source transaction","Исходная транзакция Base","Вихідна транзакція Base"],
+            ["Solana destination transaction","Транзакция назначения Solana","Транзакція призначення Solana"],
+            ["Base destination transaction","Транзакция назначения Base","Транзакція призначення Base"],
+            ["The bot has not recorded a source transaction signature. Funds remain reserved; do not submit again.","Бот не сохранил подпись исходной транзакции. Средства остаются в резерве; не отправляйте перевод повторно.","Бот не зберіг підпис вихідної транзакції. Кошти залишаються в резерві; не надсилайте переказ повторно."],
             ["ACCESS PACKAGES","ПАКЕТЫ ДОСТУПА","ПАКЕТИ ДОСТУПУ"],
             ["AI SIGNAL / REVIEW","СИГНАЛ ИИ / ПРОВЕРКА","СИГНАЛ ШІ / ПЕРЕВІРКА"],
             ["AI Trader","AI-трейдер","AI-трейдер"],
@@ -5331,6 +5339,48 @@ RAW_HTML = r"""<!DOCTYPE html>
                     (error.message||'Approval result unknown.')+' Do not retry.';
             }
         }
+        function renderExchangeTransferProof(transfer){
+            const panel=document.getElementById('exchange-transfer-proof');
+            panel.replaceChildren();
+            if(!transfer){panel.hidden=true;return;}
+            const sourceIsSolana=transfer.direction==='solana-to-base';
+            const transactions=[
+                {hash:transfer.source_tx_hash,chain:sourceIsSolana?'solana':'base',role:'source'},
+                {hash:transfer.destination_tx_hash,chain:sourceIsSolana?'base':'solana',role:'destination'}
+            ];
+            let shown=0;
+            for(const transaction of transactions){
+                const hash=String(transaction.hash||'');
+                const valid=transaction.chain==='solana'
+                    ?/^[1-9A-HJ-NP-Za-km-z]{80,90}$/.test(hash)
+                    :/^0x[a-fA-F0-9]{64}$/.test(hash);
+                if(!valid)continue;
+                const row=document.createElement('div');
+                const label=document.createElement('strong');
+                label.textContent=localizeUiText(
+                    transaction.chain==='solana'
+                        ?transaction.role==='source'?'Solana source transaction':'Solana destination transaction'
+                        :transaction.role==='source'?'Base source transaction':'Base destination transaction');
+                const link=document.createElement('a');
+                link.href=transaction.chain==='solana'
+                    ?'https://solscan.io/tx/'+encodeURIComponent(hash)
+                    :'https://basescan.org/tx/'+encodeURIComponent(hash);
+                link.target='_blank';
+                link.rel='noopener noreferrer';
+                link.textContent=hash;
+                row.append(label,document.createTextNode(' · '),link);
+                panel.append(row);
+                shown++;
+            }
+            if(shown===0&&['SIGNED','SUBMITTED','UNKNOWN','NEEDS_REVIEW'].includes(transfer.state)){
+                const note=document.createElement('div');
+                note.textContent=localizeUiText(
+                    'The bot has not recorded a source transaction signature. Funds remain reserved; do not submit again.');
+                panel.append(note);
+                shown++;
+            }
+            panel.hidden=shown===0;
+        }
         async function refreshExchangeTransfers(){
             const status=document.getElementById('exchange-quote-status');
             status.textContent=localizeUiText('Checking bridge status…');
@@ -5341,6 +5391,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const transfers=Array.isArray(result.transfers)?result.transfers:[];
                 const approvals=Array.isArray(result.approvals)?result.approvals:[];
                 const latest=transfers[0], approval=approvals[0];
+                renderExchangeTransferProof(latest);
                 status.textContent=latest
                     ?latest.direction.replace(/-/g,' → ')+' · '+latest.state+' · '+
                         (latest.status_message
@@ -5352,6 +5403,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                                 (Number(latest.received_raw)/1e6).toFixed(6)+' USDC credited')
                     :approval?'Base approval · '+approval.state:'No bridge transfers yet.';
             }catch(error){
+                renderExchangeTransferProof(null);
                 status.textContent=(error.message||'Status unavailable.')+' Do not retry an unresolved transfer.';
             }
         }
