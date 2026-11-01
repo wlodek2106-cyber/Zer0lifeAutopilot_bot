@@ -1388,6 +1388,19 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                                   (str(uid) + ":" + request_id,)).fetchone()
             if previous:
                 return dict(previous)
+            bridge_transfers = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='custody_bridge_transfers'"
+            ).fetchone()
+            if bridge_transfers and db.execute("""SELECT 1 FROM custody_bridge_transfers
+                    WHERE state IN ('RESERVED','SIGNED','SUBMITTED','UNKNOWN','NEEDS_REVIEW')
+                    LIMIT 1""").fetchone():
+                raise LedgerError("The shared wallet is resolving a bridge transfer.")
+            bridge_approvals = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='custody_bridge_approvals'"
+            ).fetchone()
+            if bridge_approvals and db.execute("""SELECT 1 FROM custody_bridge_approvals
+                    WHERE state IN ('RESERVED','SIGNED','SUBMITTED','UNKNOWN') LIMIT 1""").fetchone():
+                raise LedgerError("The shared wallet is resolving a bridge approval.")
             if db.execute("SELECT id FROM custody_operations WHERE state IN ('RESERVED','PREPARED','SUBMITTED','UNKNOWN')").fetchone():
                 raise LedgerError("Кошелёк ожидает подтверждения предыдущей операции.")
             source = available(uid)

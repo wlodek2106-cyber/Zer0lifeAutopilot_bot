@@ -2312,7 +2312,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             <section class="exchange-hero" aria-label="USDC route estimates for Solana and Base">
                 <div class="exchange-heading">
                     <div><p class="exchange-kicker">USDC · READ-ONLY ROUTE QUOTE</p><h1 id="exchange-direction-title">Solana → Base</h1></div>
-                    <span class="exchange-status">QUOTE ONLY · SEND OFF</span>
+                    <span class="exchange-status" id="exchange-status">QUOTE ONLY · SEND OFF</span>
                 </div>
                 <p class="exchange-lede">Choose a direction and request a live LI.FI estimate. This screen is quote-only: no transaction is submitted and no funds are moved.</p>
                 <div class="exchange-direction" role="group" aria-label="Choose quote direction">
@@ -2332,9 +2332,9 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div><strong>Quotes only · sending is disabled</strong><p>Review the estimated receive amount and costs. Quote requests do not reserve a balance, approve a wallet, or send a transaction.</p></div>
             </div>
             <section class="exchange-flow" aria-label="Read-only quote details">
-                <article class="exchange-step"><span class="exchange-step-index">01 / SOURCE</span><h2 id="exchange-source-title">Use your Solana USDC</h2><p id="exchange-source-copy">Get a read-only quote for your Solana USDC. No funds are reserved or moved.</p></article>
-                <article class="exchange-step"><span class="exchange-step-index">02 / REVIEW</span><h2>Review quote and costs</h2><p>See the estimated output, minimum receive amount, provider fees and network costs. No transfer is submitted.</p></article>
-                <article class="exchange-step"><span class="exchange-step-index">03 / REVIEW</span><h2 id="exchange-destination-title">Review Base estimate</h2><p id="exchange-destination-copy">Compare the provider's estimate and minimum receive amount. No transfer is available yet.</p></article>
+                <article class="exchange-step"><span class="exchange-step-index">01 / SOURCE</span><h2 id="exchange-source-title">Use your Solana USDC</h2><p id="exchange-source-copy">Get a quote for your available Solana USDC. Nothing moves until you confirm a live transfer.</p></article>
+                <article class="exchange-step"><span class="exchange-step-index">02 / REVIEW</span><h2>Review quote and costs</h2><p>Check estimated output, minimum receive amount, provider fees and network costs. Confirm each real transaction separately.</p></article>
+                <article class="exchange-step"><span class="exchange-step-index">03 / SETTLE</span><h2 id="exchange-destination-title">Credit Base after finality</h2><p id="exchange-destination-copy">Your Base balance is credited only after the destination transfer is finalized and verified.</p></article>
             </section>
             <section class="exchange-quote-panel" aria-label="Quote request">
                 <div class="exchange-destination" aria-label="Quote route"><span id="exchange-path-source">YOUR SOLANA USDC</span><span aria-hidden="true">→</span><span>PROVIDER ESTIMATE</span><span aria-hidden="true">→</span><span id="exchange-path-destination">BASE USDC ESTIMATE</span></div>
@@ -2347,6 +2347,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <button id="exchange-quote-button" class="exchange-quote-button" type="button" onclick="requestExchangeQuote()">Get quote</button>
                 </div>
                 <p id="exchange-quote-status" class="exchange-quote-status" role="status" aria-live="polite"></p>
+                <button type="button" class="exchange-quote-button" onclick="refreshExchangeTransfers()">Check transfer status</button>
                 <section id="exchange-quote-result" class="exchange-quote-result" aria-label="Read-only quote result" hidden>
                     <div class="exchange-quote-grid">
                         <div class="exchange-quote-value"><span>Send amount</span><strong id="exchange-quote-in">—</strong></div>
@@ -2358,11 +2359,12 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <h3 class="exchange-quote-cost-title">Estimated costs</h3>
                     <ul id="exchange-quote-fees" class="exchange-quote-fees"></ul>
                     <p id="exchange-quote-warning" class="exchange-quote-footnote"></p>
-                    <p class="exchange-quote-footnote">Estimate only. This screen cannot approve or send a transaction.</p>
+                    <p class="exchange-quote-footnote">A quote never sends funds. Each approval or transfer requires your separate confirmation.</p>
+                    <div id="exchange-live-actions"></div>
                 </section>
-                <p class="exchange-disabled-note">Quote requests are read-only. Transfers, approvals, and balance changes remain disabled.</p>
+                <p class="exchange-disabled-note">Unresolved transfers stay reserved. Never submit an unresolved transfer again.</p>
             </section>
-            <aside class="exchange-safety"><strong>Quote only</strong> Estimates can expire or change. No purchase or transfer is sent from this screen.</aside>
+            <aside class="exchange-safety"><strong>Manual confirmation</strong> Estimates can expire or change. Review the minimum receive amount and costs before confirming.</aside>
         </div>
 
         <div id="tab-deposit" class="tab-panel">
@@ -4522,7 +4524,90 @@ RAW_HTML = r"""<!DOCTYPE html>
             if(quote.requires_approval===true)
                 warnings.push(localizeUiText('This Base quote would require USDC approval before a transfer. No approval was sent.'));
             document.getElementById('exchange-quote-warning').textContent=warnings.join(' ');
+            const actions=document.getElementById('exchange-live-actions');
+            actions.replaceChildren();
+            if(quote.live_submission_enabled===true&&quote.sufficient_source_balance!==false){
+                const action=document.createElement('button');
+                action.type='button';
+                action.className='exchange-quote-button';
+                if(quote.direction==='base-to-solana'&&quote.requires_approval===true){
+                    action.textContent=localizeUiText('Approve exact USDC amount');
+                    action.onclick=()=>confirmExchangeApproval(quote,action);
+                }else{
+                    action.textContent=localizeUiText('Confirm and send bridge transfer');
+                    action.onclick=()=>confirmExchangeTransfer(quote,action);
+                }
+                actions.appendChild(action);
+                document.getElementById('exchange-quote-status').textContent=
+                    localizeUiText('Live bridge · manual confirmation required.');
+            }else{
+                document.getElementById('exchange-quote-status').textContent=
+                    localizeUiText('Quote only. Live submission is not configured.');
+            }
             document.getElementById('exchange-quote-result').hidden=false;
+        }
+        async function confirmExchangeTransfer(quote,button){
+            if(!window.confirm('Send '+quote.amount_in+' USDC to '+quote.destination_chain+
+                ' for at least '+Number(quote.amount_out_min).toFixed(6)+
+                ' USDC? This is a real transaction. Review the displayed fees.'))return;
+            button.disabled=true;
+            button.textContent=localizeUiText('Submitting…');
+            try{
+                const response=await apiFetch('/api/exchange/submit',{
+                    method:'POST',headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({quote_id:quote.quote_id,confirm:true})
+                });
+                const result=await response.json();
+                if(!response.ok||result.success!==true)throw Error(result.message||'Transfer was not submitted.');
+                document.getElementById('exchange-quote-status').textContent=result.message||'Submitted. Do not retry.';
+                button.remove();
+                await refreshExchangeTransfers();
+            }catch(error){
+                button.disabled=true;
+                button.textContent=localizeUiText('Submission uncertain — check status');
+                document.getElementById('exchange-quote-status').textContent=
+                    (error.message||'Submission outcome unknown.')+' Do not submit again.';
+            }
+        }
+        async function confirmExchangeApproval(quote,button){
+            if(!window.confirm('Approve exactly '+quote.amount_in+
+                ' USDC for this Base bridge? This approval alone does not send USDC.'))return;
+            button.disabled=true;
+            button.textContent=localizeUiText('Submitting approval…');
+            try{
+                const response=await apiFetch('/api/exchange/approve',{
+                    method:'POST',headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({quote_id:quote.quote_id,confirm_approval:true})
+                });
+                const result=await response.json();
+                if(!response.ok||result.success!==true)throw Error(result.message||'Approval was not submitted.');
+                document.getElementById('exchange-quote-status').textContent=result.message||'Approval submitted. Wait for finality.';
+                button.remove();
+                await refreshExchangeTransfers();
+            }catch(error){
+                button.disabled=true;
+                document.getElementById('exchange-quote-status').textContent=
+                    (error.message||'Approval result unknown.')+' Do not retry.';
+            }
+        }
+        async function refreshExchangeTransfers(){
+            const status=document.getElementById('exchange-quote-status');
+            status.textContent=localizeUiText('Checking bridge status…');
+            try{
+                const response=await apiFetch('/api/exchange/transfers');
+                const result=await response.json();
+                if(!response.ok||result.success!==true)throw Error(result.message||'Status check failed.');
+                const transfers=Array.isArray(result.transfers)?result.transfers:[];
+                const approvals=Array.isArray(result.approvals)?result.approvals:[];
+                const latest=transfers[0], approval=approvals[0];
+                status.textContent=latest
+                    ?latest.direction.replace(/-/g,' → ')+' · '+latest.state+' · '+
+                        (latest.received_raw==null?'destination pending':
+                        (Number(latest.received_raw)/1e6).toFixed(6)+' USDC credited')
+                    :approval?'Base approval · '+approval.state:'No bridge transfers yet.';
+            }catch(error){
+                status.textContent=(error.message||'Status unavailable.')+' Do not retry an unresolved transfer.';
+            }
         }
         async function requestExchangeQuote(){
             if(exchangeQuoteBusy)return;
@@ -4544,7 +4629,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                 if(!response.ok||!data.success)
                     throw Error(data.message||'Could not get a quote. No transaction was sent.');
                 renderExchangeQuote(data.quote);
-                status.textContent=localizeUiText('Quote only. No transfer submitted or funds reserved.');
+                if(data.quote.live_submission_enabled!==true)
+                    status.textContent=localizeUiText('Quote only. Live submission is not configured.');
             }catch(error){
                 status.textContent=localizeUiText(error.message||'Could not get a quote. No transaction was sent.');
                 document.getElementById('exchange-quote-result').hidden=true;
@@ -5981,6 +6067,9 @@ async def main():
     app.router.add_post('/api/base-paper/budget', wallet_handler(runtime.save_base_paper_budget))
     app.router.add_post('/api/base-paper/scan', wallet_handler(runtime.scan_base_paper))
     app.router.add_post('/api/exchange/quote', wallet_handler(runtime.exchange_quote))
+    app.router.add_post('/api/exchange/submit', wallet_handler(runtime.exchange_submit))
+    app.router.add_post('/api/exchange/approve', wallet_handler(runtime.exchange_approve))
+    app.router.add_get('/api/exchange/transfers', wallet_handler(runtime.exchange_transfers))
     app.router.add_post('/api/trading_readiness', wallet_handler(runtime.trading_readiness))
     app.router.add_post('/api/ai_preview', wallet_handler(runtime.ai_preview))
     app.router.add_post('/api/recover_expired_operation', wallet_handler(runtime.recover_expired_operation))

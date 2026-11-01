@@ -47,7 +47,12 @@ from meme_discovery import MemeDiscovery
 from whale_stream import HeliusWhaleStream
 from spl_token_support import validate_mint_account, token_account_data
 from base_paper import BasePaperEngine, BasePaperError
-from bridge_quotes import BridgeQuoteError, BridgeQuoteService
+from bridge_quotes import BridgeQuoteError
+from cross_chain_bridge import (
+    BridgeError, CrossChainBridge, BASE_CHAIN_ID, BASE_USDC_ADDRESS,
+    BASE_USDC_ASSET, SOLANA_CHAIN_ID, SOLANA_USDC, base_signer_address,
+    build_exact_usdc_approval, sign_base_transaction, validate_solana_transaction,
+)
 
 WRAPPED_SOL = "So11111111111111111111111111111111111111112"
 JITO_BUNDLE_SEND_URL = "https://mainnet.block-engine.jito.wtf/api/v1/transactions?bundleOnly=true"
@@ -209,7 +214,7 @@ class CustodyRuntime(WalletRuntime):
         self.legacy_runtime = WalletRuntime(*args, **kwargs)
         self.ledger = CustodyLedger(self.db_file)
         self.base_paper = BasePaperEngine(self.ledger.path, self.owner_id)
-        self.bridge_quotes = BridgeQuoteService(self.ledger.path, self.ledger, self.wallet)
+        self.cross_chain_bridge = CrossChainBridge(self.ledger.path, self.ledger, self.wallet)
         self.ledger.user(self.owner_id)
         self.ledger.tx_epoch()
         self.base_url = base_url.rstrip("/")
@@ -1015,7 +1020,7 @@ class CustodyRuntime(WalletRuntime):
                 self.web_access.trading_request(request)
             if (getattr(self, "accounts", None) and request.method == "POST" and action.__name__ in
                     {"create_invoice","deposit","wallet_link","toggle","toggle_sniper","withdraw",
-                     "set_language","exchange_quote"}):
+                     "set_language","exchange_quote","exchange_submit","exchange_approve"}):
                 self.accounts.require(self.uid(request))
             request_timeout = 70 if action.__name__ == "scan_base_paper" else 35
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=request_timeout)) as session:
@@ -1030,6 +1035,8 @@ class CustodyRuntime(WalletRuntime):
         except BasePaperError as exc:
             return web.json_response({"success": False, "message": str(exc)}, status=exc.status)
         except BridgeQuoteError as exc:
+            return web.json_response({"success": False, "message": str(exc)}, status=exc.status)
+        except BridgeError as exc:
             return web.json_response({"success": False, "message": str(exc)}, status=exc.status)
         except (ValueError, KeyError, TypeError, json.JSONDecodeError):
             return web.json_response({"success": False, "message": "Неверный запрос или неполный ответ провайдера."}, status=400)
@@ -1070,9 +1077,308 @@ class CustodyRuntime(WalletRuntime):
         body = await request.json()
         if not isinstance(body, dict) or set(body) != {"direction", "amount"}:
             raise WalletError("Specify the direction and USDC amount.", 400)
-        quote = await self.bridge_quotes.quote(
-            session, uid, body["direction"], body["amount"])
+        quote = await self.cross_chain_bridge.quote(session, uid, body["direction"], body["amount"])
+        quote["live_submission_enabled"] = self._bridge_live_enabled()
+        if body["direction"] == "base-to-solana":
+            quote["requires_approval"] = True
         return web.json_response({"success": True, "quote": quote})
+
+    def _bridge_live_enabled(self):
+        if os.getenv("BRIDGE_LIVE_SUBMISSION_ENABLED", "").lower() != "true":
+            return False
+        try:
+            key = os.getenv("BASE_HOT_WALLET_PRIVATE_KEY", "").strip()
+            return base_signer_address(key) == self.cross_chain_bridge.base_wallet
+        except BridgeError:
+            return False
+
+    async def exchange_submit(self, request, session):
+        uid = self.uid(request)
+        if self.accounts:
+            self.accounts.require(uid)
+        body = await request.json()
+        if not isinstance(body, dict) or set(body) != {"quote_id", "confirm"} or body["confirm"] is not True:
+            raise WalletError("Confirm this exact, unexpired quote before sending.", 400)
+        if not self._bridge_live_enabled():
+            raise BridgeError("Live bridge submission is locked until the Base signer is verified.", 503)
+        async with self.lock:
+            quote_row = self.cross_chain_bridge.quote_for_user(uid, body["quote_id"])
+            route = json.loads(quote_row["route_json"])
+            direction, amount_raw = quote_row["direction"], int(quote_row["amount_raw"])
+            if direction == "solana-to-base":
+                signer = self.ready()
+                if await self.rpc(session, "getGenesisHash") != GENESIS:
+                    raise BridgeError("Only Solana mainnet is allowed.", 409)
+                balances = await self.balances_for_wallet(session, self.wallet)
+                if int(balances.get(USDC, {}).get("raw", 0)) < self.cross_chain_bridge.user_liabilities(SOLANA_USDC):
+                    raise BridgeError("The Solana hot wallet does not cover recorded USDC balances.", 409)
+                if int(balances.get(SOL, {}).get("raw", 0)) < 5_000_000:
+                    raise BridgeError("The Solana hot wallet needs at least 0.005 SOL for fees.", 409)
+            elif direction == "base-to-solana":
+                key = os.getenv("BASE_HOT_WALLET_PRIVATE_KEY", "").strip()
+                if base_signer_address(key) != self.cross_chain_bridge.base_wallet:
+                    raise BridgeError("The Base signing key does not match the configured wallet.", 503)
+                if int(str(await self.cross_chain_bridge.base_rpc(session, "eth_chainId")), 16) != BASE_CHAIN_ID:
+                    raise BridgeError("Only Base mainnet is allowed.", 409)
+                if await self.cross_chain_bridge.base_usdc_balance(session) < self.cross_chain_bridge.user_liabilities(BASE_USDC_ASSET):
+                    raise BridgeError("The Base hot wallet does not cover recorded USDC balances.", 409)
+                spender = route["estimate"]["approvalAddress"]
+                approval = self.cross_chain_bridge.approval_for_quote(uid, body["quote_id"])
+                if (not approval or approval["state"] != "COMPLETED"
+                        or int(approval["amount_raw"]) != amount_raw
+                        or approval["spender"].lower() != str(spender).lower()):
+                    raise BridgeError("First confirm the exact approval and wait for its final confirmation.", 409)
+                if await self.cross_chain_bridge.base_usdc_allowance(session, spender) < amount_raw:
+                    raise BridgeError("Approve the exact USDC amount first; no funds were reserved.", 409)
+                native = int(await self.cross_chain_bridge.base_rpc(
+                    session, "eth_getBalance", [self.cross_chain_bridge.base_wallet, "pending"]), 16)
+                gas_price = int(await self.cross_chain_bridge.base_rpc(session, "eth_gasPrice"), 16)
+                tx_request = route["transactionRequest"]
+                gas_limit = int(tx_request["gasLimit"], 16)
+                estimated = int(await self.cross_chain_bridge.base_rpc(session, "eth_estimateGas", [{
+                    "from": self.cross_chain_bridge.base_wallet, "to": tx_request["to"],
+                    "data": tx_request["data"], "value": "0x0"}]), 16)
+                fee = gas_limit * gas_price
+                if estimated > gas_limit or fee > 5_000_000_000_000_000 or native < fee + 100_000_000_000_000:
+                    raise BridgeError("Base gas estimate or ETH reserve is insufficient.", 409)
+            else:
+                raise BridgeError("Unknown bridge direction.", 400)
+
+            transfer = self.cross_chain_bridge.reserve_transfer(uid, body["quote_id"])
+            signed_saved = False
+            try:
+                if direction == "solana-to-base":
+                    tx_request = route["transactionRequest"]
+                    unsigned = validate_solana_transaction(
+                        tx_request["data"], tx_request["svmTransactionVersion"], self.wallet, amount_raw)
+                    signed = VersionedTransaction(unsigned.message, [signer])
+                    signature = str(signed.signatures[0])
+                    wire = base64.b64encode(bytes(signed)).decode("ascii")
+                    self.cross_chain_bridge.save_signed_transfer(uid, transfer["id"], signature, wire)
+                    signed_saved = True
+                    try:
+                        returned = await self.rpc(session, "sendTransaction", [wire, {
+                            "encoding": "base64", "skipPreflight": False,
+                            "preflightCommitment": "confirmed"}])
+                    except Exception:
+                        returned = None
+                    transfer = self.cross_chain_bridge.mark_transfer_submitted(
+                        uid, transfer["id"], returned == signature)
+                else:
+                    tx_request = route["transactionRequest"]
+                    nonce = int(await self.cross_chain_bridge.base_rpc(
+                        session, "eth_getTransactionCount", [self.cross_chain_bridge.base_wallet, "pending"]), 16)
+                    gas_price = int(await self.cross_chain_bridge.base_rpc(session, "eth_gasPrice"), 16)
+                    tx = {"chainId": BASE_CHAIN_ID, "nonce": nonce,
+                          "gas": int(tx_request["gasLimit"], 16), "gasPrice": gas_price,
+                          "to": tx_request["to"], "value": 0, "data": tx_request["data"]}
+                    signed = sign_base_transaction(tx, key, self.cross_chain_bridge.base_wallet)
+                    self.cross_chain_bridge.save_signed_transfer(
+                        uid, transfer["id"], signed["transaction_hash"], signed["raw_transaction"])
+                    signed_saved = True
+                    try:
+                        returned = await self.cross_chain_bridge.base_rpc(
+                            session, "eth_sendRawTransaction", [signed["raw_transaction"]])
+                    except Exception:
+                        returned = None
+                    transfer = self.cross_chain_bridge.mark_transfer_submitted(
+                        uid, transfer["id"],
+                        str(returned or "").lower() == signed["transaction_hash"].lower())
+            except Exception:
+                current = self.cross_chain_bridge.transfer_for_user(uid, transfer["id"])
+                if current["state"] == "RESERVED" and not signed_saved:
+                    self.cross_chain_bridge.release_unsigned_transfer(uid, transfer["id"])
+                raise
+        return web.json_response({"success": True, "transfer": transfer,
+            "message": ("Transfer submitted; funds credit only after verified destination finality."
+                        if transfer["state"] == "SUBMITTED" else
+                        "Submission outcome is unknown. Do not retry; check status.")}, status=202)
+
+    async def exchange_approve(self, request, session):
+        uid = self.uid(request)
+        if self.accounts:
+            self.accounts.require(uid)
+        body = await request.json()
+        if (not isinstance(body, dict) or set(body) != {"quote_id", "confirm_approval"}
+                or body["confirm_approval"] is not True):
+            raise WalletError("Confirm the exact Base USDC approval.", 400)
+        if not self._bridge_live_enabled():
+            raise BridgeError("Live bridge approval is locked until the Base signer is verified.", 503)
+        async with self.lock:
+            quote_row = self.cross_chain_bridge.quote_for_user(uid, body["quote_id"])
+            if quote_row["direction"] != "base-to-solana":
+                raise BridgeError("Only Base-to-Solana quotes need approval.", 400)
+            route = json.loads(quote_row["route_json"])
+            key = os.getenv("BASE_HOT_WALLET_PRIVATE_KEY", "").strip()
+            if base_signer_address(key) != self.cross_chain_bridge.base_wallet:
+                raise BridgeError("The Base signing key does not match the configured wallet.", 503)
+            if int(str(await self.cross_chain_bridge.base_rpc(session, "eth_chainId")), 16) != BASE_CHAIN_ID:
+                raise BridgeError("Only Base mainnet is allowed.", 409)
+            amount = int(quote_row["amount_raw"])
+            spender = route["estimate"]["approvalAddress"]
+            if await self.cross_chain_bridge.base_usdc_balance(session) < self.cross_chain_bridge.user_liabilities(BASE_USDC_ASSET):
+                raise BridgeError("The Base hot wallet does not cover recorded USDC balances.", 409)
+            native = int(await self.cross_chain_bridge.base_rpc(
+                session, "eth_getBalance", [self.cross_chain_bridge.base_wallet, "pending"]), 16)
+            gas_price = int(await self.cross_chain_bridge.base_rpc(session, "eth_gasPrice"), 16)
+            estimate_tx = build_exact_usdc_approval(route, 0, gas_price)
+            gas_estimate = int(await self.cross_chain_bridge.base_rpc(session, "eth_estimateGas", [{
+                "from": self.cross_chain_bridge.base_wallet, "to": BASE_USDC_ADDRESS,
+                "data": estimate_tx["data"], "value": "0x0"}]), 16)
+            gas_limit = max(65_000, (gas_estimate * 120 + 99) // 100)
+            fee = gas_limit * gas_price
+            if gas_limit > 100_000 or fee > 5_000_000_000_000_000 or native < fee + 100_000_000_000_000:
+                raise BridgeError("Base ETH is insufficient for approval and gas reserve.", 409)
+            approval = self.cross_chain_bridge.reserve_approval(uid, body["quote_id"])
+            saved = False
+            try:
+                nonce = int(await self.cross_chain_bridge.base_rpc(
+                    session, "eth_getTransactionCount", [self.cross_chain_bridge.base_wallet, "pending"]), 16)
+                tx = build_exact_usdc_approval(route, nonce, gas_price, gas_limit)
+                signed = sign_base_transaction(tx, key, self.cross_chain_bridge.base_wallet)
+                self.cross_chain_bridge.save_signed_approval(
+                    uid, approval["id"], signed["transaction_hash"], signed["raw_transaction"])
+                saved = True
+                try:
+                    returned = await self.cross_chain_bridge.base_rpc(
+                        session, "eth_sendRawTransaction", [signed["raw_transaction"]])
+                except Exception:
+                    returned = None
+                approval = self.cross_chain_bridge.mark_approval_submitted(
+                    uid, approval["id"],
+                    str(returned or "").lower() == signed["transaction_hash"].lower())
+            except Exception:
+                if not saved:
+                    self.cross_chain_bridge.release_unsigned_approval(uid, approval["id"])
+                raise
+        return web.json_response({"success": True, "approval": approval,
+            "message": "Exact approval submitted; it does not send USDC. Wait for finality and request a fresh quote."},
+            status=202)
+
+    async def _exchange_solana_tx(self, session, signature):
+        result = await self.rpc(session, "getTransaction", [signature, {
+            "encoding": "jsonParsed", "commitment": "finalized",
+            "maxSupportedTransactionVersion": 0}])
+        if result is None:
+            return None
+        meta = result.get("meta") or {}
+        return {"failed": meta.get("err") is not None, "transaction": result}
+
+    async def _exchange_base_receipt(self, session, tx_hash):
+        receipt = await self.cross_chain_bridge.base_rpc(session, "eth_getTransactionReceipt", [tx_hash])
+        if receipt is None:
+            return None
+        block_number = int(receipt.get("blockNumber", "0x0"), 16)
+        current = int(await self.cross_chain_bridge.base_rpc(session, "eth_blockNumber"), 16)
+        if current - block_number + 1 < 12:
+            return None
+        canonical = await self.cross_chain_bridge.base_rpc(
+            session, "eth_getBlockByNumber", [hex(block_number), False])
+        if not canonical or str(canonical.get("hash", "")).lower() != str(receipt.get("blockHash", "")).lower():
+            return None
+        return {"failed": int(receipt.get("status", "0x0"), 16) != 1, "receipt": receipt}
+
+    async def _verify_exchange_destination(self, session, transfer, status):
+        tx_hash = status.get("receiving_hash", "")
+        if transfer["direction"] == "solana-to-base":
+            if not str(tx_hash).startswith("0x"):
+                return None
+            proof = await self._exchange_base_receipt(session, tx_hash)
+            if not proof or proof["failed"]:
+                return None
+            recipient = "0x" + self.cross_chain_bridge.base_wallet[2:].lower().rjust(64, "0")
+            topic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+            received = 0
+            for log in proof["receipt"].get("logs", []):
+                topics = log.get("topics") or []
+                if (str(log.get("address", "")).lower() == BASE_USDC_ADDRESS.lower()
+                        and len(topics) >= 3 and str(topics[0]).lower() == topic
+                        and str(topics[2]).lower() == recipient):
+                    try:
+                        received += int(log.get("data", "0x0"), 16)
+                    except ValueError:
+                        return None
+            if received < int(transfer["minimum_received_raw"]):
+                return None
+            return {"received_raw": received, "tx_hash": tx_hash}
+        proof = await self._exchange_solana_tx(session, tx_hash)
+        if not proof or proof["failed"]:
+            return None
+        meta, before, after = proof["transaction"].get("meta") or {}, {}, {}
+        for label, target in (("preTokenBalances", before), ("postTokenBalances", after)):
+            for token in meta.get(label) or []:
+                if token.get("mint") == SOLANA_USDC and token.get("owner") == self.wallet:
+                    try:
+                        target[int(token["accountIndex"])] = int(token["uiTokenAmount"]["amount"])
+                    except (KeyError, TypeError, ValueError):
+                        return None
+        received = sum(after.values()) - sum(before.values())
+        if received < int(transfer["minimum_received_raw"]):
+            return None
+        return {"received_raw": received, "tx_hash": tx_hash}
+
+    async def _reconcile_exchange_transfer(self, session, uid, transfer):
+        if transfer["state"] not in ("SIGNED", "SUBMITTED", "UNKNOWN", "NEEDS_REVIEW"):
+            return transfer
+        status = await self.cross_chain_bridge.lifi_status(session, transfer)
+        if status["status"] in ("NOT_FOUND", "PENDING"):
+            return transfer
+        if status["status"] == "FAILED":
+            source = (await self._exchange_solana_tx(session, transfer["source_tx_hash"])
+                      if transfer["direction"] == "solana-to-base"
+                      else await self._exchange_base_receipt(session, transfer["source_tx_hash"]))
+            if source and source.get("failed"):
+                return self.cross_chain_bridge.release_failed_source(
+                    uid, transfer["id"], verified_finalized_failure=True)
+            if source and transfer["state"] != "NEEDS_REVIEW":
+                return self.cross_chain_bridge.mark_transfer_needs_review(uid, transfer["id"])
+            return transfer
+        if status["status"] != "DONE":
+            return transfer
+        if status["substatus"] != "COMPLETED":
+            if transfer["state"] != "NEEDS_REVIEW":
+                return self.cross_chain_bridge.mark_transfer_needs_review(uid, transfer["id"])
+            return transfer
+        source = (await self._exchange_solana_tx(session, transfer["source_tx_hash"])
+                  if transfer["direction"] == "solana-to-base"
+                  else await self._exchange_base_receipt(session, transfer["source_tx_hash"]))
+        if not source:
+            return transfer
+        if source.get("failed"):
+            return self.cross_chain_bridge.release_failed_source(
+                uid, transfer["id"], verified_finalized_failure=True)
+        destination = await self._verify_exchange_destination(session, transfer, status)
+        if not destination:
+            return transfer
+        if destination["received_raw"] > int(transfer["amount_raw"]) * 2:
+            return self.cross_chain_bridge.mark_transfer_needs_review(uid, transfer["id"])
+        return self.cross_chain_bridge.settle_transfer(
+            uid, transfer["id"], destination["received_raw"], destination["tx_hash"],
+            verified_finality=True, verified_recipient=True, verified_token=True)
+
+    async def exchange_transfers(self, request, session):
+        uid = self.uid(request)
+        if self.accounts:
+            self.accounts.require(uid)
+        transfers, checked = self.cross_chain_bridge.transfers_for_user(uid), []
+        for transfer in transfers:
+            try:
+                transfer = await self._reconcile_exchange_transfer(session, uid, transfer)
+            except BridgeError:
+                pass
+            checked.append(transfer)
+        approvals, reviewed = self.cross_chain_bridge.approvals_for_user(uid), []
+        for approval in approvals:
+            if approval["state"] in ("SIGNED", "SUBMITTED", "UNKNOWN") and approval["tx_hash"]:
+                try:
+                    proof = await self._exchange_base_receipt(session, approval["tx_hash"])
+                    if proof is not None:
+                        approval = self.cross_chain_bridge.set_approval_final(
+                            uid, approval["id"], succeeded=not proof["failed"])
+                except BridgeError:
+                    pass
+            reviewed.append(approval)
+        return web.json_response({"success": True, "transfers": checked, "approvals": reviewed})
 
     async def balances_for_wallet(self, session, wallet):
         native = (await self.rpc(session, "getBalance", [wallet, {"commitment": "finalized"}]))["value"]
