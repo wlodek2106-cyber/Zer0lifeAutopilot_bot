@@ -1337,9 +1337,21 @@ class CustodyRuntime(WalletRuntime):
             return transfer
         status = await self.cross_chain_bridge.lifi_status(session, transfer)
         if status["status"] == "NOT_FOUND":
+            source = (await self._exchange_solana_tx(session, transfer["source_tx_hash"])
+                      if transfer["direction"] == "solana-to-base"
+                      else await self._exchange_base_receipt(session, transfer["source_tx_hash"]))
+            if source and source.get("failed"):
+                return self.cross_chain_bridge.release_failed_source(
+                    uid, transfer["id"], verified_finalized_failure=True)
             return {**transfer, "status_message":
                 "LI.FI has not found this transfer yet. Funds remain reserved. Do not submit again."}
         if status["status"] == "PENDING":
+            source = (await self._exchange_solana_tx(session, transfer["source_tx_hash"])
+                      if transfer["direction"] == "solana-to-base"
+                      else await self._exchange_base_receipt(session, transfer["source_tx_hash"]))
+            if source and source.get("failed"):
+                return self.cross_chain_bridge.release_failed_source(
+                    uid, transfer["id"], verified_finalized_failure=True)
             return {**transfer, "status_message":
                 "LI.FI still reports this transfer as pending. Funds remain reserved. Do not submit again."}
         if status["status"] not in ("FAILED", "DONE"):

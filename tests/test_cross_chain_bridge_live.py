@@ -246,6 +246,8 @@ class LiveBridgePrimitiveTests(unittest.TestCase):
                 bridge.lifi_status = AsyncMock(return_value={"status": provider_status})
                 service = object.__new__(CustodyRuntime)
                 service.cross_chain_bridge = bridge
+                service._exchange_solana_tx = AsyncMock(return_value=None)
+                service._exchange_base_receipt = AsyncMock(return_value=None)
 
                 result = asyncio.run(
                     service._reconcile_exchange_transfer(None, 77, transfer.copy()))
@@ -254,6 +256,62 @@ class LiveBridgePrimitiveTests(unittest.TestCase):
                 self.assertIsNone(result["received_raw"])
                 self.assertEqual(result["status_message"], expected_message)
                 bridge.lifi_status.assert_awaited_once()
+
+    def test_missing_provider_status_releases_only_on_finalized_source_failure(self):
+        for direction, status, source_method in (
+            ("solana-to-base", "NOT_FOUND", "_exchange_solana_tx"),
+            ("solana-to-base", "PENDING", "_exchange_solana_tx"),
+            ("base-to-solana", "NOT_FOUND", "_exchange_base_receipt"),
+            ("base-to-solana", "PENDING", "_exchange_base_receipt"),
+        ):
+            with self.subTest(direction=direction, status=status):
+                transfer = {
+                    "id": "pending-transfer",
+                    "direction": direction,
+                    "state": "UNKNOWN",
+                    "source_tx_hash": "source-signature",
+                }
+                bridge = Mock()
+                bridge.lifi_status = AsyncMock(return_value={"status": status})
+                bridge.release_failed_source.return_value = {**transfer, "state": "ABORTED"}
+                service = object.__new__(CustodyRuntime)
+                service.cross_chain_bridge = bridge
+                setattr(service, source_method, AsyncMock(return_value={"failed": True}))
+                other_method = ("_exchange_base_receipt" if source_method == "_exchange_solana_tx"
+                                else "_exchange_solana_tx")
+                setattr(service, other_method, AsyncMock(return_value=None))
+
+                result = asyncio.run(
+                    service._reconcile_exchange_transfer(None, 77, transfer))
+
+                self.assertEqual(result["state"], "ABORTED")
+                bridge.release_failed_source.assert_called_once_with(
+                    77, "pending-transfer", verified_finalized_failure=True)
+
+    def test_missing_provider_status_does_not_release_successful_source(self):
+        for direction, source_method in (
+            ("solana-to-base", "_exchange_solana_tx"),
+            ("base-to-solana", "_exchange_base_receipt"),
+        ):
+            with self.subTest(direction=direction):
+                transfer = {
+                    "id": "pending-transfer",
+                    "direction": direction,
+                    "state": "UNKNOWN",
+                    "source_tx_hash": "source-signature",
+                }
+                bridge = Mock()
+                bridge.lifi_status = AsyncMock(return_value={"status": "NOT_FOUND"})
+                service = object.__new__(CustodyRuntime)
+                service.cross_chain_bridge = bridge
+                setattr(service, source_method, AsyncMock(return_value={"failed": False}))
+
+                result = asyncio.run(
+                    service._reconcile_exchange_transfer(None, 77, transfer))
+
+                self.assertEqual(result["state"], "UNKNOWN")
+                self.assertIn("Do not submit again", result["status_message"])
+                bridge.release_failed_source.assert_not_called()
 
     def test_amount_is_integer_six_decimals_and_capped(self):
         self.assertEqual(parse_usdc_raw("10.000001"), 10_000_001)
