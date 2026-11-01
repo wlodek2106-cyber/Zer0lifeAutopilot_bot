@@ -2312,9 +2312,9 @@ RAW_HTML = r"""<!DOCTYPE html>
             <section class="exchange-hero" aria-label="USDC route estimates for Solana and Base">
                 <div class="exchange-heading">
                     <div><p class="exchange-kicker">USDC · READ-ONLY ROUTE QUOTE</p><h1 id="exchange-direction-title">Solana → Base</h1></div>
-                    <span class="exchange-status" id="exchange-status">QUOTE ONLY · SEND OFF</span>
+                    <span class="exchange-status" id="exchange-status">QUOTE FIRST · MANUAL CONFIRM</span>
                 </div>
-                <p class="exchange-lede">Choose a direction and request a live LI.FI estimate. This screen is quote-only: no transaction is submitted and no funds are moved.</p>
+                <p class="exchange-lede">Request a LI.FI estimate first. Nothing moves automatically; a separate confirmation is required for every live transfer.</p>
                 <div class="exchange-direction" role="group" aria-label="Choose quote direction">
                     <button id="exchange-dir-solana-base" type="button" aria-pressed="true" onclick="setExchangeDirection('solana-to-base')">Solana → Base</button>
                     <button id="exchange-dir-base-solana" type="button" aria-pressed="false" onclick="setExchangeDirection('base-to-solana')">Base → Solana</button>
@@ -2329,7 +2329,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             </section>
             <div class="exchange-callout" role="status" aria-live="polite" style="margin-top:14px">
                 <span class="exchange-callout-mark" aria-hidden="true">!</span>
-                <div><strong>Quotes only · sending is disabled</strong><p>Review the estimated receive amount and costs. Quote requests do not reserve a balance, approve a wallet, or send a transaction.</p></div>
+                <div><strong>Quote first · no automatic sending</strong><p>A quote does not reserve or move funds. If live sending is configured, each transfer still requires your separate confirmation.</p></div>
             </div>
             <section class="exchange-flow" aria-label="Read-only quote details">
                 <article class="exchange-step"><span class="exchange-step-index">01 / SOURCE</span><h2 id="exchange-source-title">Use your Solana USDC</h2><p id="exchange-source-copy">Get a quote for your available Solana USDC. Nothing moves until you confirm a live transfer.</p></article>
@@ -2359,6 +2359,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <h3 class="exchange-quote-cost-title">Estimated costs</h3>
                     <ul id="exchange-quote-fees" class="exchange-quote-fees"></ul>
                     <p id="exchange-quote-warning" class="exchange-quote-footnote"></p>
+                    <p id="exchange-quote-route-details" class="exchange-quote-footnote"></p>
                     <p class="exchange-quote-footnote">A quote never sends funds. Each approval or transfer requires your separate confirmation.</p>
                     <div id="exchange-live-actions"></div>
                 </section>
@@ -3168,10 +3169,16 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["Your device verifies you using Face ID, Touch ID or another system verification method. We verify the passkey signature, not a face photo. Face-only verification cannot be enforced on every device.","Устройство подтверждает вход через Face ID, Touch ID или другой системный способ. Проверяется подпись ключа доступа, а не фотография лица. Не на каждом устройстве можно принудительно включить распознавание только лица.","Пристрій підтверджує вхід через Face ID, Touch ID або інший системний спосіб. Перевіряється підпис ключа доступу, а не фото обличчя. Не на кожному пристрої можна примусово ввімкнути розпізнавання лише обличчя."],
             ["Both modes use a 5% stop below entry. After a position reaches +3.5%, a trailing exit triggers after a 2% pullback from its highest tracked price. Exits are checked approximately every 20 seconds independently of AI availability. Model failures stop new AI orders. After a server restart both modes pause and need manual reactivation.","В обоих режимах стоп-лосс установлен на 5% ниже входа. После роста позиции на 3,5% трейлинг-выход срабатывает при откате на 2% от максимальной отслеживаемой цены. Выходы проверяются примерно каждые 20 секунд независимо от доступности ИИ. Сбои модели приостанавливают новые ордера ИИ. После перезапуска сервера оба режима остановятся и потребуют ручного включения.","В обох режимах стоп-лос установлено на 5% нижче входу. Після зростання позиції на 3,5% трейлінг-вихід спрацьовує при відкаті на 2% від найвищої відстеженої ціни. Виходи перевіряються приблизно кожні 20 секунд незалежно від доступності ШІ. Збої моделі зупиняють нові ордери ШІ. Після перезапуску сервера обидва режими зупиняються й потребують ручного ввімкнення."],
             ["Stops and trailing exits are execution conditions, not guaranteed fill prices. A 5% stop can close a position, but fast price moves, fees, slippage and liquidity can make the realized loss larger. Returns are not guaranteed.","Стоп-лосс и трейлинг задают условия исполнения, но не гарантируют цену сделки. Стоп на 5% может закрыть позицию, однако резкое движение цены, комиссии, проскальзывание и ликвидность могут увеличить фактический убыток. Доходность не гарантируется.","Стоп-лос і трейлінг визначають умови виконання, але не гарантують ціну угоди. Стоп на 5% може закрити позицію, однак різкий рух ціни, комісії, прослизання та ліквідність можуть збільшити фактичний збиток. Дохідність не гарантована."],
+            ["QUOTE FIRST · MANUAL CONFIRM","СНАЧАЛА КОТИРОВКА · РУЧНОЕ ПОДТВЕРЖДЕНИЕ","СПОЧАТКУ КОТИРУВАННЯ · РУЧНЕ ПІДТВЕРДЖЕННЯ"],
+            ["LIVE · MANUAL CONFIRMATION","РЕАЛЬНЫЙ ПЕРЕВОД · РУЧНОЕ ПОДТВЕРЖДЕНИЕ","РЕАЛЬНИЙ ПЕРЕКАЗ · РУЧНЕ ПІДТВЕРДЖЕННЯ"],
             ["QUOTE ONLY · SEND OFF","ТОЛЬКО КОТИРОВКА · ОТПРАВКА ВЫКЛ","ЛИШЕ КОТИРУВАННЯ · НАДСИЛАННЯ ВИМК"],
-            ["Choose a direction and request a live LI.FI estimate. This screen is quote-only: no transaction is submitted and no funds are moved.","Выберите направление и запросите актуальную оценку LI.FI. Здесь доступны только котировки: транзакции не отправляются, средства не перемещаются.","Виберіть напрямок і запросіть актуальну оцінку LI.FI. Тут доступні лише котирування: транзакції не надсилаються, кошти не переміщуються."],
-            ["Quotes only · sending is disabled","Только котировки · отправка отключена","Лише котирування · надсилання вимкнено"],
-            ["Review the estimated receive amount and costs. Quote requests do not reserve a balance, approve a wallet, or send a transaction.","Проверьте ожидаемую сумму получения и расходы. Запрос котировки не резервирует баланс, не подтверждает кошелёк и не отправляет транзакцию.","Перевірте очікувану суму отримання та витрати. Запит котирування не резервує баланс, не підтверджує гаманець і не надсилає транзакцію."],
+            ["Request a LI.FI estimate first. Nothing moves automatically; a separate confirmation is required for every live transfer.","Сначала запросите оценку LI.FI. Ничего не перемещается автоматически; для каждого реального перевода нужно отдельное подтверждение.","Спочатку запросіть оцінку LI.FI. Нічого не переказується автоматично; для кожного реального переказу потрібне окреме підтвердження."],
+            ["Quote first · no automatic sending","Сначала котировка · автоматической отправки нет","Спочатку котирування · автоматичного надсилання немає"],
+            ["Live bridge · no automatic sending","Реальный обмен · без автоматической отправки","Реальний обмін · без автоматичного надсилання"],
+            ["Quote only · live sending is not configured","Только котировка · реальные переводы не настроены","Лише котирування · реальні перекази не налаштовані"],
+            ["A quote does not reserve or move funds. If live sending is configured, each transfer still requires your separate confirmation.","Котировка не резервирует и не перемещает средства. Если реальные переводы настроены, каждый всё равно требует отдельного подтверждения.","Котирування не резервує й не переказує кошти. Якщо реальні перекази налаштовані, кожен усе одно потребує окремого підтвердження."],
+            ["A quote does not move funds. The bot sends only after you confirm this exact transfer.","Котировка не перемещает средства. Бот отправит перевод только после твоего подтверждения именно этой операции.","Котирування не переказує кошти. Бот надішле переказ лише після твого підтвердження саме цієї операції."],
+            ["Live transfer · your confirmation required. After you confirm, the bot signs, sends, and tracks this transaction.","Реальный перевод · требуется твоё подтверждение. После него бот подписывает, отправляет транзакцию и отслеживает её.","Реальний переказ · потрібне твоє підтвердження. Після нього бот підписує, надсилає транзакцію та відстежує її."],
             ["Get a read-only quote for your Solana USDC. No funds are reserved or moved.","Получите котировку для своих USDC в Solana. Средства не резервируются и не перемещаются.","Отримайте котирування для своїх USDC у Solana. Кошти не резервуються й не переміщуються."],
             ["Get a read-only quote for your Base USDC. No funds are reserved or moved.","Получите котировку для своих USDC в Base. Средства не резервируются и не перемещаются.","Отримайте котирування для своїх USDC у Base. Кошти не резервуються й не переміщуються."],
             ["Request a quote and compare the estimated receive amount. Nothing is submitted automatically.","Запросите котировку и сравните ожидаемую сумму получения. Ничего не отправляется автоматически.","Запитайте котирування та порівняйте очікувану суму отримання. Нічого не надсилається автоматично."],
@@ -3185,6 +3192,12 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["Estimated costs","Оценочные расходы","Орієнтовні витрати"],
             ["Quote only. No transfer submitted or funds reserved.","Только котировка. Перевод не отправлен, средства не зарезервированы.","Лише котирування. Переказ не надіслано, кошти не зарезервовано."],
             ["Quote provider","Провайдер котировки","Провайдер котирування"],
+            ["LI.FI temporary Solana deposit","Временный депозитный адрес LI.FI в Solana","Тимчасова депозитна адреса LI.FI у Solana"],
+            ["Destination wallet","Кошелёк-получатель","Гаманець-отримувач"],
+            ["LI.FI Solana fee","Комиссия LI.FI в Solana","Комісія LI.FI у Solana"],
+            ["Send","Отправить","Надіслати"],["to","на","до"],["for at least","не менее","щонайменше"],
+            ["USDC? This is a real transaction. Review the displayed fees.","USDC? Это реальная транзакция. Проверь показанные комиссии.","USDC? Це реальна транзакція. Перевір показані комісії."],
+            ["LI.FI receives USDC at a temporary Solana address, then routes it to the displayed Base wallet. The Solana transaction does not prove LI.FI will complete delivery. Confirm only if you accept this provider risk.","LI.FI получает USDC на временный адрес в Solana, а затем переводит их на указанный Base-кошелёк. Транзакция Solana сама по себе не доказывает, что LI.FI завершит перевод. Подтверждай, только если принимаешь этот риск провайдера.","LI.FI отримує USDC на тимчасову адресу в Solana, а потім переказує їх на вказаний Base-гаманець. Транзакція Solana сама по собі не доводить, що LI.FI завершить переказ. Підтверджуй, лише якщо приймаєш цей ризик провайдера."],
             ["Quote expires","Котировка истекает","Котирування спливає"],
             ["Provider fee","Комиссия провайдера","Комісія провайдера"],
             ["Network fee","Сетевая комиссия","Мережевая комісія"],
@@ -4454,6 +4467,14 @@ RAW_HTML = r"""<!DOCTYPE html>
             const status=document.getElementById('exchange-quote-status');
             if(result)result.hidden=true;
             if(status)status.textContent='';
+            document.getElementById('exchange-status').textContent=
+                localizeUiText('QUOTE FIRST · MANUAL CONFIRM');
+            const callout=document.querySelector('#tab-exchange .exchange-callout');
+            if(callout){
+                callout.querySelector('strong').textContent=localizeUiText('Quote first · no automatic sending');
+                callout.querySelector('p').textContent=localizeUiText(
+                    'A quote does not reserve or move funds. If live sending is configured, each transfer still requires your separate confirmation.');
+            }
         }
         function setExchangeDirection(direction) {
             exchangeQuoteDirection=direction==='base-to-solana'?'base-to-solana':'solana-to-base';
@@ -4489,6 +4510,17 @@ RAW_HTML = r"""<!DOCTYPE html>
             if(!quote||quote.quote_only!==true||quote.transfer_enabled!==false
                 ||quote.direction!==exchangeQuoteDirection)
                 throw Error('Could not get a quote. No transaction was sent.');
+            const live=quote.live_submission_enabled===true&&quote.sufficient_source_balance!==false;
+            document.getElementById('exchange-status').textContent=localizeUiText(
+                live?'LIVE · MANUAL CONFIRMATION':'QUOTE ONLY · SEND OFF');
+            const callout=document.querySelector('#tab-exchange .exchange-callout');
+            if(callout){
+                callout.querySelector('strong').textContent=localizeUiText(
+                    live?'Live bridge · no automatic sending':'Quote only · live sending is not configured');
+                callout.querySelector('p').textContent=localizeUiText(
+                    live?'A quote does not move funds. The bot sends only after you confirm this exact transfer.':
+                        'A quote does not reserve or move funds. Live sending is not configured.');
+            }
             document.getElementById('exchange-quote-in').textContent=exchangeQuoteAmount(quote.amount_in);
             document.getElementById('exchange-quote-out').textContent=exchangeQuoteAmount(quote.amount_out);
             document.getElementById('exchange-quote-min').textContent=exchangeQuoteAmount(quote.amount_out_min);
@@ -4523,10 +4555,22 @@ RAW_HTML = r"""<!DOCTYPE html>
                 warnings.push(localizeUiText('The amount is above your available in-app balance. This is only an estimate; no transfer can be sent.'));
             if(quote.requires_approval===true)
                 warnings.push(localizeUiText('This Base quote would require USDC approval before a transfer. No approval was sent.'));
+            if(quote.direction==='solana-to-base')
+                warnings.push(localizeUiText('LI.FI receives USDC at a temporary Solana address, then routes it to the displayed Base wallet. The Solana transaction does not prove LI.FI will complete delivery. Confirm only if you accept this provider risk.'));
             document.getElementById('exchange-quote-warning').textContent=warnings.join(' ');
+            const routeDetails=[];
+            if(quote.provider_solana_deposit_address)
+                routeDetails.push(localizeUiText('LI.FI temporary Solana deposit')+': '+
+                    String(quote.provider_solana_deposit_address));
+            if(quote.destination_address)
+                routeDetails.push(localizeUiText('Destination wallet')+': '+String(quote.destination_address));
+            if(quote.solana_provider_fee_usdc)
+                routeDetails.push(localizeUiText('LI.FI Solana fee')+': '+
+                    exchangeQuoteAmount(quote.solana_provider_fee_usdc));
+            document.getElementById('exchange-quote-route-details').textContent=routeDetails.join(' · ');
             const actions=document.getElementById('exchange-live-actions');
             actions.replaceChildren();
-            if(quote.live_submission_enabled===true&&quote.sufficient_source_balance!==false){
+            if(live){
                 const action=document.createElement('button');
                 action.type='button';
                 action.className='exchange-quote-button';
@@ -4539,7 +4583,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 }
                 actions.appendChild(action);
                 document.getElementById('exchange-quote-status').textContent=
-                    localizeUiText('Live bridge · manual confirmation required.');
+                    localizeUiText('Live transfer · your confirmation required. After you confirm, the bot signs, sends, and tracks this transaction.');
             }else{
                 document.getElementById('exchange-quote-status').textContent=
                     localizeUiText('Quote only. Live submission is not configured.');
@@ -4547,9 +4591,17 @@ RAW_HTML = r"""<!DOCTYPE html>
             document.getElementById('exchange-quote-result').hidden=false;
         }
         async function confirmExchangeTransfer(quote,button){
-            if(!window.confirm('Send '+quote.amount_in+' USDC to '+quote.destination_chain+
-                ' for at least '+Number(quote.amount_out_min).toFixed(6)+
-                ' USDC? This is a real transaction. Review the displayed fees.'))return;
+            let confirmation=localizeUiText('Send')+' '+quote.amount_in+' USDC '+
+                localizeUiText('to')+' '+quote.destination_chain+' '+
+                localizeUiText('for at least')+' '+Number(quote.amount_out_min).toFixed(6)+
+                ' '+localizeUiText('USDC? This is a real transaction. Review the displayed fees.');
+            if(quote.direction==='solana-to-base'){
+                confirmation+='\n\n'+localizeUiText('LI.FI temporary Solana deposit')+': '+
+                    String(quote.provider_solana_deposit_address||'—')+'\n'+
+                    localizeUiText('Destination wallet')+': '+String(quote.destination_address||'—')+'\n'+
+                    localizeUiText('LI.FI receives USDC at a temporary Solana address, then routes it to the displayed Base wallet. The Solana transaction does not prove LI.FI will complete delivery. Confirm only if you accept this provider risk.');
+            }
+            if(!window.confirm(confirmation))return;
             button.disabled=true;
             button.textContent=localizeUiText('Submitting…');
             try{

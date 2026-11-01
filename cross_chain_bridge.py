@@ -31,6 +31,10 @@ QUOTE_TTL_SECONDS = 45
 MAX_QUOTE_AMOUNT_RAW = 10_000_000_000
 # LI.FI tracking/epoch program; this instruction does not itself transfer user tokens.
 SOLANA_LIFI_TRACKING_PROGRAM = "3i5JeuZuUxeKtVysUnwQNGerJP2bSMX9fTFfS4Nxe3Br"
+SOLANA_LIFI_FEE_OWNER = "34FKjAdVcTax2DHqV2XnbXa9J3zmyKcFuFKWbcmgxjgm"
+SOLANA_LIFI_FEE_BPS = 25
+SOLANA_CLOCK_SYSVAR = "SysvarC1ock11111111111111111111111111111111"
+SOLANA_SYSTEM_PROGRAM = "11111111111111111111111111111111"
 SOLANA_ASSOCIATED_TOKEN_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
 SOLANA_COMPUTE_BUDGET_PROGRAM = "ComputeBudget111111111111111111111111111111"
 SOLANA_U64_MAX = (1 << 64) - 1
@@ -137,8 +141,9 @@ def _ata(wallet):
         [bytes(wallet_key), bytes(token_program), bytes(mint_key)], associated_program)[0])
 
 
-def validate_solana_transaction(encoded, version, wallet, amount_raw, lookup_table_accounts=None):
-    """Fail closed unless the payload resolves to one narrow USDC bridge transaction."""
+def validate_solana_transaction(encoded, version, wallet, amount_raw, lookup_table_accounts=None,
+                                return_details=False):
+    """Validate the exact LI.FI Solana fee + temporary deposit transfer pattern."""
     try:
         if type(version) is not int or version not in (0, 1):
             raise SolanaTransactionValidationError("UNSUPPORTED_VERSION")
@@ -156,6 +161,7 @@ def validate_solana_transaction(encoded, version, wallet, amount_raw, lookup_tab
             raise SolanaTransactionValidationError("TOO_MANY_LOOKUP_TABLES")
         if bool(lookups) != bool(tables):
             raise SolanaTransactionValidationError("LOOKUP_TABLE_DATA_MISSING")
+        loaded_writable_count = 0
         if lookups:
             table_map = {str(table.key): table for table in tables}
             lookup_keys = [str(lookup.account_key) for lookup in lookups]
@@ -173,13 +179,31 @@ def validate_solana_transaction(encoded, version, wallet, amount_raw, lookup_tab
                     raise SolanaTransactionValidationError("LOOKUP_INDEX_INVALID")
                 loaded_writable.extend(str(addresses[index]) for index in writable_indexes)
                 loaded_readonly.extend(str(addresses[index]) for index in readonly_indexes)
+            loaded_writable_count = len(loaded_writable)
             keys.extend(loaded_writable)
             keys.extend(loaded_readonly)
             if len(keys) > 256 or len(set(keys)) != len(keys):
                 raise SolanaTransactionValidationError("LOOKUP_ACCOUNT_SET_INVALID")
+
+        header = msg.header
+        required_signatures = int(header.num_required_signatures)
+        readonly_signed = int(header.num_readonly_signed_accounts)
+        readonly_unsigned = int(header.num_readonly_unsigned_accounts)
+        static_key_count = len(msg.account_keys)
+
+        def is_signer(index):
+            return index < required_signatures
+
+        def is_writable(index):
+            if index < required_signatures:
+                return index < required_signatures - readonly_signed
+            if index < static_key_count:
+                return index < static_key_count - readonly_unsigned
+            return index < static_key_count + loaded_writable_count
+
         allowed = {TOKEN_PROGRAM_ID, SOLANA_LIFI_TRACKING_PROGRAM,
                    SOLANA_ASSOCIATED_TOKEN_PROGRAM, SOLANA_COMPUTE_BUDGET_PROGRAM}
-        total, transfers, intents = 0, 0, 0
+        total, transfers, intents, ata_creates = 0, 0, 0, 0
         transfer_records, associated_token_owners = [], {}
         if len(msg.instructions) > 30 or len(keys) > 256:
             raise SolanaTransactionValidationError("TRANSACTION_TOO_LARGE")
@@ -194,16 +218,22 @@ def validate_solana_transaction(encoded, version, wallet, amount_raw, lookup_tab
                     raise SolanaTransactionValidationError("UNEXPECTED_TOKEN_INSTRUCTION")
                 amount = int.from_bytes(data[1:9], "little")
                 if (accounts[0] != _ata(wallet) or accounts[1] != SOLANA_USDC
-                        or accounts[3] != str(wallet) or data[9] != 6 or amount <= 0):
+                        or accounts[3] != str(wallet) or data[9] != 6 or amount <= 0
+                        or not is_writable(ix.accounts[0]) or not is_writable(ix.accounts[2])
+                        or not is_signer(ix.accounts[3])):
                     raise SolanaTransactionValidationError("USDC_ACCOUNT_MISMATCH")
                 transfers += 1
                 total += amount
-                transfer_records.append((amount, accounts[2]))
+                transfer_records.append({"amount": amount, "destination": accounts[2]})
             elif program == SOLANA_ASSOCIATED_TOKEN_PROGRAM:
                 if data not in (b"\x00", b"\x01") or len(accounts) != 6:
                     raise SolanaTransactionValidationError("ATA_INSTRUCTION_MISMATCH")
+                ata_creates += 1
                 owner, mint, token_program = accounts[2], accounts[3], accounts[5]
-                if mint != SOLANA_USDC or token_program != TOKEN_PROGRAM_ID:
+                if (accounts[0] != str(wallet) or mint != SOLANA_USDC
+                        or accounts[4] != SOLANA_SYSTEM_PROGRAM or token_program != TOKEN_PROGRAM_ID
+                        or not is_signer(ix.accounts[0]) or not is_writable(ix.accounts[0])
+                        or not is_writable(ix.accounts[1]) or is_signer(ix.accounts[2])):
                     raise SolanaTransactionValidationError("ATA_MINT_MISMATCH")
                 derived = Pubkey.find_program_address(
                     [bytes(Pubkey.from_string(owner)), bytes(Pubkey.from_string(token_program)),
@@ -222,12 +252,19 @@ def validate_solana_transaction(encoded, version, wallet, amount_raw, lookup_tab
                 else:
                     raise SolanaTransactionValidationError("COMPUTE_BUDGET_INSTRUCTION")
             elif program == SOLANA_LIFI_TRACKING_PROGRAM:
+                if (data[0] != 0 or len(data) != 9 or len(accounts) != 2
+                        or accounts[0] != SOLANA_CLOCK_SYSVAR
+                        or accounts[1] == accounts[0]
+                        or is_signer(ix.accounts[0]) or is_writable(ix.accounts[0])
+                        or is_signer(ix.accounts[1]) or is_writable(ix.accounts[1])):
+                    raise SolanaTransactionValidationError("LIFI_TRACKING_INSTRUCTION")
                 intents += 1
         if intents != 1:
             raise SolanaTransactionValidationError("INTENTS_INSTRUCTION_COUNT")
-        if transfers != 1:
+        if transfers != 2:
             detail_items = []
-            for amount, destination in transfer_records:
+            for record in transfer_records:
+                amount, destination = record["amount"], record["destination"]
                 owner = associated_token_owners.get(destination)
                 owner_detail = f" (ATA owner {owner})" if owner else " (ATA owner not created in this transaction)"
                 detail_items.append(
@@ -240,7 +277,35 @@ def validate_solana_transaction(encoded, version, wallet, amount_raw, lookup_tab
             raise SolanaTransactionValidationError(code)
         if total != int(amount_raw):
             raise SolanaTransactionValidationError("USDC_AMOUNT_MISMATCH")
-        return tx
+
+        fee_amount = (int(amount_raw) * SOLANA_LIFI_FEE_BPS + 9_999) // 10_000
+        fee_destination = _ata(SOLANA_LIFI_FEE_OWNER)
+        fee_records = [record for record in transfer_records
+                       if record["destination"] == fee_destination]
+        if len(fee_records) != 1:
+            raise SolanaTransactionValidationError("LIFI_FEE_RECIPIENT_MISMATCH")
+        if fee_records[0]["amount"] != fee_amount:
+            raise SolanaTransactionValidationError("LIFI_FEE_AMOUNT_MISMATCH")
+        deposit_records = [record for record in transfer_records
+                           if record["destination"] != fee_destination]
+        if len(deposit_records) != 1 or fee_amount >= int(amount_raw):
+            raise SolanaTransactionValidationError("LIFI_DEPOSIT_TRANSFER_MISMATCH")
+        deposit = deposit_records[0]
+        if deposit["amount"] != int(amount_raw) - fee_amount:
+            raise SolanaTransactionValidationError("LIFI_DEPOSIT_AMOUNT_MISMATCH")
+        if (ata_creates != 1 or len(associated_token_owners) != 1
+                or deposit["destination"] not in associated_token_owners):
+            raise SolanaTransactionValidationError("LIFI_DEPOSIT_ATA_MISMATCH")
+        deposit_owner = associated_token_owners[deposit["destination"]]
+        if deposit_owner in (str(wallet), SOLANA_LIFI_FEE_OWNER):
+            raise SolanaTransactionValidationError("LIFI_DEPOSIT_OWNER_MISMATCH")
+        details = {
+            "fee_raw": fee_amount,
+            "fee_token_account": fee_destination,
+            "deposit_address": deposit_owner,
+            "deposit_token_account": deposit["destination"],
+        }
+        return (tx, details) if return_details else tx
     except SolanaTransactionValidationError as exc:
         raise BridgeError(
             f"The Solana transaction failed safe validation [{exc.code}]; nothing was sent.", 422
@@ -283,9 +348,11 @@ def normalize_quote(payload, expected, lookup_table_accounts=None):
         else:
             if payload.get("tool") != "near":
                 raise ValueError()
-            validate_solana_transaction(tx["data"], tx["svmTransactionVersion"],
-                                        expected["from_address"], expected["amount_raw"],
-                                        lookup_table_accounts=lookup_table_accounts)
+            _, solana_details = validate_solana_transaction(
+                tx["data"], tx["svmTransactionVersion"], expected["from_address"],
+                expected["amount_raw"], lookup_table_accounts=lookup_table_accounts,
+                return_details=True)
+            payload["_solana_lifi_bridge_details"] = solana_details
         return payload
     except (KeyError, TypeError, ValueError, InvalidOperation):
         raise BridgeError("The provider quote failed chain, wallet, token, amount, or transaction checks.", 502) from None
@@ -451,6 +518,7 @@ class CrossChainBridge:
                 VALUES(?,?,?,?,?,?,?)""",
                 (qid, int(uid), direction, raw, json.dumps(route, separators=(",", ":")), now, expires))
         estimate, action = payload["estimate"], payload["action"]
+        solana_details = payload.get("_solana_lifi_bridge_details") or {}
         fees = []
         for kind, key in (("provider", "feeCosts"), ("network", "gasCosts")):
             for fee in (estimate.get(key) or [])[:12]:
@@ -459,6 +527,8 @@ class CrossChainBridge:
                         "amount_usd": str(fee.get("amountUSD", "0")),
                         "symbol": str((fee.get("token") or {}).get("symbol") or "unknown")[:16],
                         "included": fee.get("included") is True})
+        gas_costs = [fee for fee in (estimate.get("gasCosts") or []) if isinstance(fee, dict)]
+        gas_estimate_usd = str(gas_costs[0].get("amountUSD", "0")) if gas_costs else "0"
         return {
             "quote_id": qid, "direction": direction,
             "amount_in": str(Decimal(raw) / 1_000_000),
@@ -466,11 +536,18 @@ class CrossChainBridge:
             "amount_out_min": str(Decimal(estimate["toAmountMin"]) / 1_000_000),
             "destination_chain": "Base" if to_chain == BASE_CHAIN_ID else "Solana",
             "provider": str(payload.get("tool") or "Bridge")[:48], "provider_fees": fees,
-            "gas_estimate_usd": str(estimate.get("gasCosts", [{}])[0].get("amountUSD", "0")),
+            "gas_estimate_usd": gas_estimate_usd,
             "source_available": str(Decimal(available_raw) / 1_000_000),
             "sufficient_source_balance": True,
             "requires_approval": direction == "base-to-solana",
-            "created_at": now, "expires_at": expires, "live_submission_enabled": False,
+            "destination_address": to_address,
+            "provider_solana_deposit_address": solana_details.get("deposit_address"),
+            "provider_solana_deposit_token_account": solana_details.get("deposit_token_account"),
+            "solana_provider_fee_usdc": (
+                str(Decimal(solana_details["fee_raw"]) / 1_000_000)
+                if solana_details.get("fee_raw") is not None else None),
+            "created_at": now, "expires_at": expires,
+            "quote_only": True, "transfer_enabled": False, "live_submission_enabled": False,
         }
 
     def quote_for_user(self, uid, quote_id):

@@ -72,11 +72,11 @@ class MenuBrowserTests(unittest.TestCase):
                 assert(exchangeNav.getAttribute('onclick').includes("'exchange'"),'Exchange navigation opens its own tab');
                 const exchangePanel=document.getElementById('tab-exchange');
                 assert(!!exchangePanel,'Exchange panel exists');
-                assert(exchangePanel.textContent.includes('Quotes only · sending is disabled'),'quote-only state is explicit');
-                assert(exchangePanel.textContent.includes('no transaction is submitted'),'route availability is unambiguous');
+                assert(exchangePanel.textContent.includes('Quote first · no automatic sending'),'manual-only state is explicit');
+                assert(exchangePanel.textContent.includes('each transfer still requires your separate confirmation'),'manual confirmation is required');
                 assert(!exchangePanel.textContent.includes('Separate user balances.'),'irrelevant balance note is omitted');
                 assert(!exchangePanel.textContent.includes("Each user's in-app balances"),'untranslated balance note is omitted');
-                assert(exchangePanel.textContent.includes('Transfers, approvals, and balance changes remain disabled'),'sending remains disabled');
+                assert(exchangePanel.querySelector('#exchange-quote-route-details'),'route recipient details are displayed');
                 assert(exchangePanel.querySelector('#exchange-amount'),'quote amount input is present');
                 assert(exchangePanel.querySelector('#exchange-quote-button'),'read-only quote control is present');
                 assert(!exchangePanel.querySelector('form'),'there is no transfer form');

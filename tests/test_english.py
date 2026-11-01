@@ -34,21 +34,24 @@ class EnglishTests(unittest.TestCase):
                       root.joinpath("deposit_payment.html").read_text()):
             self.assertIsNone(re.search("[А-Яа-яЁё]", value))
 
-    def test_exchange_only_displays_quotes_and_has_no_transfer_controls(self):
+    def test_exchange_requires_manual_confirmation_for_every_live_transfer(self):
         root = Path(__file__).resolve().parents[1]
         source = ast.parse(root.joinpath("main.py").read_text())
         page = next(ast.literal_eval(node.value) for node in source.body if isinstance(node, ast.Assign)
                     and any(isinstance(t, ast.Name) and t.id == "RAW_HTML" for t in node.targets))
         exchange = page.split('<div id="tab-exchange"', 1)[1].split('<div id="tab-deposit"', 1)[0]
         for required in (
-                "Solana → Base", "Base → Solana", "QUOTE ONLY · SEND OFF",
-                "Quotes only · sending is disabled",
-                "Choose a direction and request a live LI.FI estimate",
-                "Get a read-only quote for your Solana USDC",
-                "See the estimated output, minimum receive amount, provider fees and network costs",
-                "No transfer is submitted", "Estimate only. This screen cannot approve or send a transaction",
+                "Solana → Base", "Base → Solana", "QUOTE FIRST · MANUAL CONFIRM",
+                "Quote first · no automatic sending",
+                "Request a LI.FI estimate first",
+                "A quote never sends funds",
+                "Each approval or transfer requires your separate confirmation",
                 'id="exchange-quote-button"', 'id="exchange-amount"'):
             self.assertIn(required, exchange)
+        for required in ("window.confirm(confirmation)", "/api/exchange/submit",
+                         "provider_solana_deposit_address", "destination_address",
+                         "The Solana transaction does not prove LI.FI will complete delivery"):
+            self.assertIn(required, page)
         self.assertNotIn("Shared wallet. Separate user balances.", exchange)
         self.assertNotIn("Each user's in-app balances are tracked separately by account.", exchange)
         self.assertIn("const source = reverse ? 'Base' : 'Solana'", page)

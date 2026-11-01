@@ -1079,14 +1079,22 @@ class CustodyRuntime(WalletRuntime):
         if not isinstance(body, dict) or set(body) != {"direction", "amount"}:
             raise WalletError("Specify the direction and USDC amount.", 400)
         quote = await self.cross_chain_bridge.quote(session, uid, body["direction"], body["amount"])
-        quote["live_submission_enabled"] = self._bridge_live_enabled()
+        quote["live_submission_enabled"] = self._bridge_live_enabled(body["direction"])
         if body["direction"] == "base-to-solana":
             quote["requires_approval"] = True
         return web.json_response({"success": True, "quote": quote})
 
-    def _bridge_live_enabled(self):
+    def _bridge_live_enabled(self, direction="base-to-solana"):
         if os.getenv("BRIDGE_LIVE_SUBMISSION_ENABLED", "").lower() != "true":
             return False
+        if direction == "solana-to-base":
+            if not self.cross_chain_bridge.base_wallet:
+                return False
+            try:
+                self.ready()
+                return True
+            except WalletError:
+                return False
         try:
             key = os.getenv("BASE_HOT_WALLET_PRIVATE_KEY", "").strip()
             return base_signer_address(key) == self.cross_chain_bridge.base_wallet
@@ -1100,12 +1108,12 @@ class CustodyRuntime(WalletRuntime):
         body = await request.json()
         if not isinstance(body, dict) or set(body) != {"quote_id", "confirm"} or body["confirm"] is not True:
             raise WalletError("Confirm this exact, unexpired quote before sending.", 400)
-        if not self._bridge_live_enabled():
-            raise BridgeError("Live bridge submission is locked until the Base signer is verified.", 503)
         async with self.lock:
             quote_row = self.cross_chain_bridge.quote_for_user(uid, body["quote_id"])
             route = json.loads(quote_row["route_json"])
             direction, amount_raw = quote_row["direction"], int(quote_row["amount_raw"])
+            if not self._bridge_live_enabled(direction):
+                raise BridgeError("Live bridge submission is locked until the source signer is verified.", 503)
             if direction == "solana-to-base":
                 signer = self.ready()
                 if await self.rpc(session, "getGenesisHash") != GENESIS:

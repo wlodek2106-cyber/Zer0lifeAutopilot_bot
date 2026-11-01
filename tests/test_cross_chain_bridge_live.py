@@ -24,6 +24,8 @@ from cross_chain_bridge import (
     SOLANA_CHAIN_ID,
     SOLANA_ASSOCIATED_TOKEN_PROGRAM,
     SOLANA_LOOKUP_TABLE_PROGRAM,
+    SOLANA_CLOCK_SYSVAR,
+    SOLANA_LIFI_FEE_OWNER,
     SOLANA_USDC,
     SOLANA_LIFI_TRACKING_PROGRAM,
     BridgeError,
@@ -118,10 +120,15 @@ def base_route():
     }
 
 
-def make_lookup_table_transaction(extra_transfer=False, create_recipient_atas=False):
+def make_lookup_table_transaction(extra_transfer=False, create_recipient_atas=True,
+                                 fee_destination=None, fee_amount=None, tracker_valid=True,
+                                 use_lookup_table=True):
     wallet = Keypair()
     mint = Pubkey.from_string(SOLANA_USDC)
     source = Pubkey.from_string(_ata(str(wallet.pubkey())))
+    fee_ata = Pubkey.from_string(_ata(SOLANA_LIFI_FEE_OWNER))
+    if fee_destination is not None:
+        fee_ata = Pubkey.from_string(fee_destination)
     recipient_owners = []
     ata_instructions = []
 
@@ -142,32 +149,40 @@ def make_lookup_table_transaction(extra_transfer=False, create_recipient_atas=Fa
              AccountMeta(Pubkey.from_string(TOKEN_PROGRAM_ID), False, False)]))
         return destination
 
-    destination = make_recipient()
     raw_amount = 5_000_000
-    transfer_data = bytes([12]) + raw_amount.to_bytes(8, "little") + bytes([6])
-    transfer = Instruction(
-        Pubkey.from_string(TOKEN_PROGRAM_ID), transfer_data,
-        [AccountMeta(source, False, True), AccountMeta(mint, False, False),
-         AccountMeta(destination, False, True), AccountMeta(wallet.pubkey(), True, False)])
-    instructions = ata_instructions + [transfer]
-    addresses = [source, mint, destination]
-    transfer_recipients = [str(destination)]
-    if extra_transfer:
-        created_ata_count = len(ata_instructions)
-        extra_destination = make_recipient()
-        extra_data = bytes([12]) + (1).to_bytes(8, "little") + bytes([6])
-        instructions.extend(ata_instructions[created_ata_count:])
-        instructions.append(Instruction(
-            Pubkey.from_string(TOKEN_PROGRAM_ID), extra_data,
+    default_fee = (raw_amount * 25 + 9_999) // 10_000
+    actual_fee = default_fee if fee_amount is None else int(fee_amount)
+    destination = make_recipient()
+
+    def transfer_instruction(amount, recipient):
+        transfer_data = bytes([12]) + int(amount).to_bytes(8, "little") + bytes([6])
+        return Instruction(
+            Pubkey.from_string(TOKEN_PROGRAM_ID), transfer_data,
             [AccountMeta(source, False, True), AccountMeta(mint, False, False),
-             AccountMeta(extra_destination, False, True), AccountMeta(wallet.pubkey(), True, False)]))
+             AccountMeta(recipient, False, True), AccountMeta(wallet.pubkey(), True, False)])
+
+    instructions = list(ata_instructions)
+    instructions.append(transfer_instruction(actual_fee, fee_ata))
+    instructions.append(transfer_instruction(raw_amount - actual_fee, destination))
+    addresses = [source, mint, destination, fee_ata]
+    transfer_recipients = [str(fee_ata), str(destination)]
+    if extra_transfer:
+        extra_destination = make_recipient()
+        instructions.extend(ata_instructions[-1:])
+        instructions.append(transfer_instruction(1, extra_destination))
         addresses.append(extra_destination)
         transfer_recipients.append(str(extra_destination))
-    intent = Instruction(Pubkey.from_string(SOLANA_LIFI_TRACKING_PROGRAM), b"\x01", [])
+    epoch_account = Pubkey.new_unique()
+    intent_data = b"\x00" + (1).to_bytes(8, "little") if tracker_valid else b"\x01"
+    intent = Instruction(
+        Pubkey.from_string(SOLANA_LIFI_TRACKING_PROGRAM), intent_data,
+        [AccountMeta(Pubkey.from_string(SOLANA_CLOCK_SYSVAR), False, False),
+         AccountMeta(epoch_account, False, False)])
     instructions.append(intent)
     table_key = Pubkey.new_unique()
     table = AddressLookupTableAccount(table_key, addresses)
-    message = MessageV0.try_compile(wallet.pubkey(), instructions, [table], Hash.default())
+    message = MessageV0.try_compile(
+        wallet.pubkey(), instructions, [table] if use_lookup_table else [], Hash.default())
     tx = VersionedTransaction.populate(message, [Signature.default()])
     raw_table = bytearray(56)
     raw_table[:4] = (1).to_bytes(4, "little")
@@ -244,9 +259,13 @@ class LiveBridgePrimitiveTests(unittest.TestCase):
             path = os.path.join(tmp, "ledger.sqlite")
             bridge = CrossChainBridge(path, EmptyLedger(path), SOLANA_WALLET, solana_rpc=rpc)
             tables = __import__("asyncio").run(bridge.resolve_solana_lookup_tables(None, encoded))
-            tx = validate_solana_transaction(
-                encoded, 0, wallet, 5_000_000, lookup_table_accounts=tables)
+            tx, details = validate_solana_transaction(
+                encoded, 0, wallet, 5_000_000, lookup_table_accounts=tables,
+                return_details=True)
             self.assertEqual(len(tx.message.address_table_lookups), 1)
+            self.assertEqual(details["fee_raw"], 12_500)
+            self.assertEqual(details["deposit_address"], _owners[0])
+            self.assertEqual(details["deposit_token_account"], _recipients[1])
             with self.assertRaisesRegex(BridgeError, "LOOKUP_TABLE_DATA_MISSING"):
                 validate_solana_transaction(encoded, 0, wallet, 5_000_000)
 
@@ -281,9 +300,33 @@ class LiveBridgePrimitiveTests(unittest.TestCase):
                 validate_solana_transaction(
                     encoded, 0, wallet, 5_000_000, lookup_table_accounts=tables)
             message = str(error.exception)
-            self.assertIn("USDC_TRANSFER_COUNT_2", message)
-            self.assertIn(f"5.000000 USDC to {recipients[0]} (ATA owner {owners[0]})", message)
-            self.assertIn(f"0.000001 USDC to {recipients[1]} (ATA owner {owners[1]})", message)
+            self.assertIn("USDC_TRANSFER_COUNT_3", message)
+            self.assertIn(f"0.012500 USDC to {recipients[0]} (ATA owner not created in this transaction)", message)
+            self.assertIn(f"4.987500 USDC to {recipients[1]} (ATA owner {owners[0]})", message)
+            self.assertIn(f"0.000001 USDC to {recipients[2]} (ATA owner {owners[1]})", message)
+
+    def test_li_fi_solana_fee_and_deposit_must_match_exact_amounts_and_destinations(self):
+        cases = (
+            ({"fee_destination": str(Pubkey.new_unique())}, "LIFI_FEE_RECIPIENT_MISMATCH"),
+            ({"fee_amount": 12_501}, "LIFI_FEE_AMOUNT_MISMATCH"),
+            ({"tracker_valid": False}, "LIFI_TRACKING_INSTRUCTION"),
+        )
+        for options, expected_code in cases:
+            encoded, wallet, table_data, table_key, _recipients, _owners = (
+                make_lookup_table_transaction(**options))
+
+            async def rpc(_session, _method, _params):
+                return {"context": {"slot": 10}, "value": [{
+                    "owner": str(SOLANA_LOOKUP_TABLE_PROGRAM), "data": [table_data, "base64"],
+                }]}
+
+            with self.subTest(expected_code=expected_code), tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "ledger.sqlite")
+                bridge = CrossChainBridge(path, EmptyLedger(path), SOLANA_WALLET, solana_rpc=rpc)
+                tables = __import__("asyncio").run(bridge.resolve_solana_lookup_tables(None, encoded))
+                with self.assertRaisesRegex(BridgeError, expected_code):
+                    validate_solana_transaction(
+                        encoded, 0, wallet, 5_000_000, lookup_table_accounts=tables)
 
     def test_destination_credit_requires_explicit_chain_proofs(self):
         with self.assertRaises(BridgeError):
@@ -315,8 +358,54 @@ class LiveBridgePrimitiveTests(unittest.TestCase):
             self.assertEqual(quote["source_available"], "20")
             self.assertNotIn("transactionRequest", quote)
             self.assertNotIn("0x1234", str(quote))
+            self.assertTrue(quote["quote_only"])
+            self.assertFalse(quote["transfer_enabled"])
             self.assertEqual(session.calls[0][1]["params"]["toAddress"], SOLANA_WALLET)
             self.assertEqual(session.calls[0][1]["params"]["fromAddress"].lower(), BASE_WALLET.lower())
+
+    def test_solana_to_base_quote_exposes_verified_fee_and_manual_review_addresses(self):
+        encoded, wallet, _table, _table_key, recipients, owners = make_lookup_table_transaction(
+            use_lookup_table=False)
+        payload = {
+            "tool": "near",
+            "action": {
+                "fromChainId": SOLANA_CHAIN_ID, "toChainId": BASE_CHAIN_ID,
+                "fromAmount": "5000000", "fromAddress": wallet, "toAddress": BASE_WALLET,
+                "fromToken": {"address": SOLANA_USDC},
+                "toToken": {"address": BASE_USDC_ADDRESS},
+            },
+            "estimate": {
+                "fromAmount": "5000000", "toAmount": "4900000", "toAmountMin": "4800000",
+                "feeCosts": [], "gasCosts": [],
+            },
+            "transactionRequest": {
+                "data": encoded, "svmTransactionVersion": 0,
+            },
+        }
+        expected = {
+            "from_chain": SOLANA_CHAIN_ID, "to_chain": BASE_CHAIN_ID,
+            "amount_raw": 5_000_000, "from_address": wallet, "to_address": BASE_WALLET,
+            "from_token": SOLANA_USDC, "to_token": BASE_USDC_ADDRESS,
+        }
+        route = normalize_quote(payload, expected)
+        self.assertEqual(route["_solana_lifi_bridge_details"]["fee_raw"], 12_500)
+        self.assertEqual(route["_solana_lifi_bridge_details"]["deposit_address"], owners[0])
+        self.assertEqual(route["_solana_lifi_bridge_details"]["deposit_token_account"], recipients[1])
+
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {
+            "BASE_HOT_WALLET_ADDRESS": BASE_WALLET,
+            "LIFI_API_KEY": "test-only-key",
+        }):
+            path = os.path.join(tmp, "ledger.sqlite")
+            bridge = CrossChainBridge(path, EmptyLedger(path, balance=10_000_000), wallet)
+            quote = __import__("asyncio").run(
+                bridge.quote(FakeSession(payload), 77, "solana-to-base", "5"))
+            self.assertTrue(quote["quote_only"])
+            self.assertFalse(quote["transfer_enabled"])
+            self.assertEqual(quote["destination_address"].lower(), BASE_WALLET.lower())
+            self.assertEqual(quote["provider_solana_deposit_address"], owners[0])
+            self.assertEqual(quote["provider_solana_deposit_token_account"], recipients[1])
+            self.assertEqual(quote["solana_provider_fee_usdc"], "0.0125")
 
     def test_bridge_lock_blocks_new_wallet_operations(self):
         with tempfile.TemporaryDirectory() as tmp:
