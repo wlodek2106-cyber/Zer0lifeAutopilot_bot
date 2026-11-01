@@ -3582,6 +3582,19 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["Solana destination transaction","Транзакция назначения Solana","Транзакція призначення Solana"],
             ["Base destination transaction","Транзакция назначения Base","Транзакція призначення Base"],
             ["The bot has not recorded a source transaction signature. Funds remain reserved; do not submit again.","Бот не сохранил подпись исходной транзакции. Средства остаются в резерве; не отправляйте перевод повторно.","Бот не зберіг підпис вихідної транзакції. Кошти залишаються в резерві; не надсилайте переказ повторно."],
+            ["Solana source signature · broadcast not confirmed","Подпись Solana · отправка не подтверждена","Підпис Solana · надсилання не підтверджено"],
+            ["Base source signature · broadcast not confirmed","Подпись Base · отправка не подтверждена","Підпис Base · надсилання не підтверджено"],
+            ["Solana source transaction · RPC accepted; confirmation pending","Исходная транзакция Solana · RPC принял, ожидается подтверждение","Вихідна транзакція Solana · RPC прийняв, очікується підтвердження"],
+            ["Base source transaction · RPC accepted; confirmation pending","Исходная транзакция Base · RPC принял, ожидается подтверждение","Вихідна транзакція Base · RPC прийняв, очікується підтвердження"],
+            ["Submission RPC error:","Ошибка RPC при отправке:","Помилка RPC під час надсилання:"],
+            ["The Solana signature expired; two RPCs found no transaction and LI.FI found no transfer. The reserved amount has been returned to your available balance. Request a fresh quote before any new transfer.","Подпись Solana истекла; два RPC не нашли транзакцию, а LI.FI — перевод. Зарезервированная сумма возвращена на доступный баланс. Перед новой отправкой запросите свежую котировку.","Підпис Solana минув; два RPC не знайшли транзакцію, а LI.FI — переказ. Зарезервовану суму повернуто на доступний баланс. Перед новим переказом запросіть свіжу котировку."],
+            ["Solana source signature expired · transaction not found","Подпись Solana истекла · транзакция не найдена","Підпис Solana минув · транзакцію не знайдено"],
+            ["Solana has seen the source transaction, but it is not finalized yet.","Solana обнаружила исходную транзакцию, но она ещё не подтверждена окончательно.","Solana бачить вихідну транзакцію, але її ще не підтверджено остаточно."],
+            ["Base has seen the source transaction, but it is not finalized yet.","Base обнаружила исходную транзакцию, но она ещё не подтверждена окончательно.","Base бачить вихідну транзакцію, але її ще не підтверджено остаточно."],
+            ["Solana finalized the source transaction, but LI.FI has not found the bridge transfer. The outcome is unresolved; funds remain reserved. Do not submit again.","Solana окончательно подтвердила исходную транзакцию, но LI.FI не нашёл перевод. Результат не выяснен; средства остаются в резерве. Не отправляйте повторно.","Solana остаточно підтвердила вихідну транзакцію, але LI.FI не знайшов переказ. Результат не з’ясовано; кошти залишаються в резерві. Не надсилайте повторно."],
+            ["Base finalized the source transaction, but LI.FI has not found the bridge transfer. The outcome is unresolved; funds remain reserved. Do not submit again.","Base окончательно подтвердила исходную транзакцию, но LI.FI не нашёл перевод. Результат не выяснен; средства остаются в резерве. Не отправляйте повторно.","Base остаточно підтвердила вихідну транзакцію, але LI.FI не знайшов переказ. Результат не з’ясовано; кошти залишаються в резерві. Не надсилайте повторно."],
+            ["Solana has no finalized source transaction for this signature, and LI.FI has not found the transfer. The outcome is unresolved; funds remain reserved. Do not submit again.","В Solana нет окончательно подтверждённой исходной транзакции с этой подписью, а LI.FI не нашёл перевод. Результат не выяснен; средства остаются в резерве. Не отправляйте повторно.","У Solana немає остаточно підтвердженої вихідної транзакції з цим підписом, а LI.FI не знайшов переказ. Результат не з’ясовано; кошти залишаються в резерві. Не надсилайте повторно."],
+            ["Base has no finalized source transaction for this hash, and LI.FI has not found the transfer. The outcome is unresolved; funds remain reserved. Do not submit again.","В Base нет окончательно подтверждённой исходной транзакции с этим хешем, а LI.FI не нашёл перевод. Результат не выяснен; средства остаются в резерве. Не отправляйте повторно.","У Base немає остаточно підтвердженої вихідної транзакції з цим хешем, а LI.FI не знайшов переказ. Результат не з’ясовано; кошти залишаються в резерві. Не надсилайте повторно."],
             ["ACCESS PACKAGES","ПАКЕТЫ ДОСТУПА","ПАКЕТИ ДОСТУПУ"],
             ["AI SIGNAL / REVIEW","СИГНАЛ ИИ / ПРОВЕРКА","СИГНАЛ ШІ / ПЕРЕВІРКА"],
             ["AI Trader","AI-трейдер","AI-трейдер"],
@@ -5357,10 +5370,21 @@ RAW_HTML = r"""<!DOCTYPE html>
                 if(!valid)continue;
                 const row=document.createElement('div');
                 const label=document.createElement('strong');
-                label.textContent=localizeUiText(
-                    transaction.chain==='solana'
-                        ?transaction.role==='source'?'Solana source transaction':'Solana destination transaction'
-                        :transaction.role==='source'?'Base source transaction':'Base destination transaction');
+                let labelText=transaction.chain==='solana'
+                    ?transaction.role==='source'?'Solana source transaction':'Solana destination transaction'
+                    :transaction.role==='source'?'Base source transaction':'Base destination transaction';
+                if(transaction.role==='source'&&transfer.state==='UNKNOWN'){
+                    labelText=transaction.chain==='solana'
+                        ?'Solana source signature · broadcast not confirmed'
+                        :'Base source signature · broadcast not confirmed';
+                }else if(transaction.role==='source'&&transfer.expired_unbroadcast===true){
+                    labelText='Solana source signature expired · transaction not found';
+                }else if(transaction.role==='source'&&transfer.state==='SUBMITTED'){
+                    labelText=transaction.chain==='solana'
+                        ?'Solana source transaction · RPC accepted; confirmation pending'
+                        :'Base source transaction · RPC accepted; confirmation pending';
+                }
+                label.textContent=localizeUiText(labelText);
                 const link=document.createElement('a');
                 link.href=transaction.chain==='solana'
                     ?'https://solscan.io/tx/'+encodeURIComponent(hash)
@@ -5370,6 +5394,13 @@ RAW_HTML = r"""<!DOCTYPE html>
                 link.textContent=hash;
                 row.append(label,document.createTextNode(' · '),link);
                 panel.append(row);
+                shown++;
+            }
+            if(transfer.submission_error){
+                const note=document.createElement('div');
+                note.textContent=localizeUiText('Submission RPC error:')+' '+
+                    String(transfer.submission_error).slice(0,300);
+                panel.append(note);
                 shown++;
             }
             if(shown===0&&['SIGNED','SUBMITTED','UNKNOWN','NEEDS_REVIEW'].includes(transfer.state)){

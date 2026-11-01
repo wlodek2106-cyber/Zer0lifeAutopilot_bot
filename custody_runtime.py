@@ -9,7 +9,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_HALF_UP
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import aiohttp
 from aiohttp import web
@@ -1175,10 +1175,13 @@ class CustodyRuntime(WalletRuntime):
                         returned = await self.rpc(session, "sendTransaction", [wire, {
                             "encoding": "base64", "skipPreflight": False,
                             "preflightCommitment": "confirmed"}])
-                    except Exception:
+                        submission_error = (None if returned == signature else
+                            "Solana RPC did not acknowledge the signed transaction.")
+                    except Exception as exc:
                         returned = None
+                        submission_error = activity_log.safe_failure_reason(exc)
                     transfer = self.cross_chain_bridge.mark_transfer_submitted(
-                        uid, transfer["id"], returned == signature)
+                        uid, transfer["id"], returned == signature, submission_error)
                 else:
                     tx_request = route["transactionRequest"]
                     nonce = int(await self.cross_chain_bridge.base_rpc(
@@ -1194,11 +1197,16 @@ class CustodyRuntime(WalletRuntime):
                     try:
                         returned = await self.cross_chain_bridge.base_rpc(
                             session, "eth_sendRawTransaction", [signed["raw_transaction"]])
-                    except Exception:
+                        submission_error = (None if str(returned or "").lower()
+                                            == signed["transaction_hash"].lower() else
+                                            "Base RPC did not acknowledge the signed transaction.")
+                    except Exception as exc:
                         returned = None
+                        submission_error = activity_log.safe_failure_reason(exc)
                     transfer = self.cross_chain_bridge.mark_transfer_submitted(
                         uid, transfer["id"],
-                        str(returned or "").lower() == signed["transaction_hash"].lower())
+                        str(returned or "").lower() == signed["transaction_hash"].lower(),
+                        submission_error)
             except Exception:
                 current = self.cross_chain_bridge.transfer_for_user(uid, transfer["id"])
                 if current["state"] == "RESERVED" and not signed_saved:
@@ -1270,14 +1278,89 @@ class CustodyRuntime(WalletRuntime):
             "message": "Exact approval submitted; it does not send USDC. Wait for finality and request a fresh quote."},
             status=202)
 
-    async def _exchange_solana_tx(self, session, signature):
+    async def _independent_solana_rpc(self, session, url, method, params):
+        try:
+            async with session.post(url, json={
+                    "jsonrpc": "2.0", "id": 1, "method": method, "params": params}) as response:
+                if response.status != 200:
+                    return False, None
+                payload = await response.json()
+            if not isinstance(payload, dict) or "error" in payload or "result" not in payload:
+                return False, None
+            return True, payload["result"]
+        except Exception:
+            return False, None
+
+    async def _exchange_solana_tx(self, session, signature, signed_transaction=None):
+        statuses = await self.rpc(session, "getSignatureStatuses", [
+            [signature], {"searchTransactionHistory": True}])
+        values = statuses.get("value") if isinstance(statuses, dict) else None
+        status = values[0] if isinstance(values, list) and values else None
+        if status:
+            if status.get("confirmationStatus") != "finalized":
+                return {"pending": True,
+                        "confirmation_status": str(status.get("confirmationStatus") or "processed")}
+            if status.get("err") is not None:
+                return {"failed": True, "transaction": None}
         result = await self.rpc(session, "getTransaction", [signature, {
             "encoding": "jsonParsed", "commitment": "finalized",
             "maxSupportedTransactionVersion": 0}])
         if result is None:
-            return None
+            if status:
+                return {"failed": False, "finalized": True, "transaction": None}
+            if not isinstance(values, list) or len(values) != 1 or values[0] is not None:
+                return None
+            if not isinstance(signed_transaction, str):
+                return None
+            try:
+                signed = VersionedTransaction.from_bytes(
+                    base64.b64decode(signed_transaction, validate=True))
+                if not signed.signatures or str(signed.signatures[0]) != str(signature):
+                    return None
+                blockhash = str(signed.message.recent_blockhash)
+            except Exception:
+                return None
+
+            primary_validity = await self.rpc(session, "isBlockhashValid", [
+                blockhash, {"commitment": "finalized"}])
+            if not isinstance(primary_validity, dict) or primary_validity.get("value") is not False:
+                return None
+
+            primary_host = urlsplit(str(getattr(self, "rpc_url", ""))).hostname
+            candidates = (
+                "https://api.mainnet-beta.solana.com",
+                "https://solana-rpc.publicnode.com",
+            )
+            independent_url = next(
+                (url for url in candidates if urlsplit(url).hostname != primary_host), None)
+            if not independent_url:
+                return None
+            independent_ok, independent_statuses = await self._independent_solana_rpc(
+                session, independent_url, "getSignatureStatuses",
+                [[signature], {"searchTransactionHistory": True}])
+            if not independent_ok:
+                return None
+            independent_values = (independent_statuses.get("value")
+                                  if isinstance(independent_statuses, dict) else None)
+            if (not isinstance(independent_values, list) or len(independent_values) != 1
+                    or independent_values[0] is not None):
+                return None
+            tx_ok, independent_transaction = await self._independent_solana_rpc(
+                session, independent_url, "getTransaction", [signature, {
+                    "encoding": "jsonParsed", "commitment": "finalized",
+                    "maxSupportedTransactionVersion": 0}])
+            if not tx_ok or independent_transaction is not None:
+                return None
+            validity_ok, independent_validity = await self._independent_solana_rpc(
+                session, independent_url, "isBlockhashValid", [
+                    blockhash, {"commitment": "finalized"}])
+            if (not validity_ok or not isinstance(independent_validity, dict)
+                    or independent_validity.get("value") is not False):
+                return None
+            return {"expired_unbroadcast": True, "blockhash": blockhash}
         meta = result.get("meta") or {}
-        return {"failed": meta.get("err") is not None, "transaction": result}
+        return {"failed": meta.get("err") is not None, "finalized": True,
+                "transaction": result}
 
     async def _exchange_base_receipt(self, session, tx_hash):
         receipt = await self.cross_chain_bridge.base_rpc(session, "eth_getTransactionReceipt", [tx_hash])
@@ -1317,7 +1400,8 @@ class CustodyRuntime(WalletRuntime):
                 return None
             return {"received_raw": received, "tx_hash": tx_hash}
         proof = await self._exchange_solana_tx(session, tx_hash)
-        if not proof or proof["failed"]:
+        if (not proof or proof.get("failed") or proof.get("pending")
+                or not proof.get("transaction")):
             return None
         meta, before, after = proof["transaction"].get("meta") or {}, {}, {}
         for label, target in (("preTokenBalances", before), ("postTokenBalances", after)):
@@ -1337,14 +1421,46 @@ class CustodyRuntime(WalletRuntime):
             return transfer
         status = await self.cross_chain_bridge.lifi_status(session, transfer)
         if status["status"] == "NOT_FOUND":
-            source = (await self._exchange_solana_tx(session, transfer["source_tx_hash"])
-                      if transfer["direction"] == "solana-to-base"
-                      else await self._exchange_base_receipt(session, transfer["source_tx_hash"]))
+            if transfer["direction"] == "solana-to-base":
+                signed_transaction = self.cross_chain_bridge.signed_transaction_for_user(
+                    uid, transfer["id"])
+                source = await self._exchange_solana_tx(
+                    session, transfer["source_tx_hash"], signed_transaction)
+            else:
+                source = await self._exchange_base_receipt(
+                    session, transfer["source_tx_hash"])
             if source and source.get("failed"):
                 return self.cross_chain_bridge.release_failed_source(
                     uid, transfer["id"], verified_finalized_failure=True)
-            return {**transfer, "status_message":
-                "LI.FI has not found this transfer yet. Funds remain reserved. Do not submit again."}
+            if source and source.get("expired_unbroadcast"):
+                released = self.cross_chain_bridge.release_expired_unbroadcast_source(
+                    uid, transfer["id"], verified_expired_and_absent=True,
+                    verified_provider_not_found=True)
+                return {**released, "expired_unbroadcast": True, "status_message":
+                    "The Solana signature expired; two RPCs found no transaction and LI.FI found no transfer. "
+                    "The reserved amount has been returned to your available balance. Request a fresh quote "
+                    "before any new transfer."}
+            if source and source.get("pending"):
+                message = ("Solana has seen the source transaction, but it is not finalized yet."
+                           if transfer["direction"] == "solana-to-base" else
+                           "Base has seen the source transaction, but it is not finalized yet.")
+            elif source and source.get("finalized"):
+                message = ("Solana finalized the source transaction, but LI.FI has not found the "
+                           "bridge transfer. The outcome is unresolved; funds remain reserved. "
+                           "Do not submit again."
+                           if transfer["direction"] == "solana-to-base" else
+                           "Base finalized the source transaction, but LI.FI has not found the "
+                           "bridge transfer. The outcome is unresolved; funds remain reserved. "
+                           "Do not submit again.")
+            elif transfer["direction"] == "solana-to-base":
+                message = ("Solana has no finalized source transaction for this signature, and "
+                           "LI.FI has not found the transfer. The outcome is unresolved; funds "
+                           "remain reserved. Do not submit again.")
+            else:
+                message = ("Base has no finalized source transaction for this hash, and LI.FI "
+                           "has not found the transfer. The outcome is unresolved; funds remain "
+                           "reserved. Do not submit again.")
+            return {**transfer, "status_message": message}
         if status["status"] == "PENDING":
             source = (await self._exchange_solana_tx(session, transfer["source_tx_hash"])
                       if transfer["direction"] == "solana-to-base"

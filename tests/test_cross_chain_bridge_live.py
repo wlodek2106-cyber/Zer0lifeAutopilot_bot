@@ -200,6 +200,120 @@ def make_lookup_table_transaction(extra_transfer=False, create_recipient_atas=Tr
 
 
 class LiveBridgePrimitiveTests(unittest.TestCase):
+    def test_solana_status_check_distinguishes_unfinalized_from_missing_transaction(self):
+        service = object.__new__(CustodyRuntime)
+        calls = []
+
+        async def rpc(_session, method, params):
+            calls.append((method, params))
+            if method == "getSignatureStatuses":
+                return {"value": [{"err": None, "confirmationStatus": "processed"}]}
+            raise AssertionError("An unfinalized signature must not be reported as absent.")
+
+        service.rpc = rpc
+        pending = asyncio.run(service._exchange_solana_tx(None, "fixture-signature"))
+        self.assertEqual(pending, {"pending": True, "confirmation_status": "processed"})
+        self.assertEqual([call[0] for call in calls], ["getSignatureStatuses"])
+
+    def test_finalized_solana_failure_status_is_sufficient_failure_proof(self):
+        service = object.__new__(CustodyRuntime)
+        service.rpc = AsyncMock(return_value={
+            "value": [{"err": {"InstructionError": [0, "Custom"]},
+                       "confirmationStatus": "finalized"}]})
+        proof = asyncio.run(service._exchange_solana_tx(None, "fixture-signature"))
+        self.assertTrue(proof["failed"])
+        self.assertIsNone(proof["transaction"])
+        service.rpc.assert_awaited_once()
+
+    def test_expired_unbroadcast_proof_requires_both_rpc_histories_and_expired_blockhash(self):
+        keypair = Keypair()
+        message = MessageV0.try_compile(keypair.pubkey(), [], [], Hash.default())
+        signed = VersionedTransaction.populate(message, [Signature.default()])
+        signature = str(signed.signatures[0])
+        wire = base64.b64encode(bytes(signed)).decode("ascii")
+
+        class RpcSession:
+            def __init__(self, results):
+                self.results = results
+                self.calls = []
+
+            def post(self, url, json):
+                self.calls.append((url, json["method"]))
+                return FakeResponse({"jsonrpc": "2.0", "id": 1,
+                                     "result": self.results[json["method"]]})
+
+        runtime = object.__new__(CustodyRuntime)
+        runtime.rpc_url = "https://private-rpc.example/rpc"
+
+        async def primary_rpc(_session, method, _params=None):
+            return {
+                "getSignatureStatuses": {"value": [None]},
+                "getTransaction": None,
+                "isBlockhashValid": {"value": False},
+            }[method]
+
+        runtime.rpc = primary_rpc
+        session = RpcSession({
+            "getSignatureStatuses": {"value": [None]},
+            "getTransaction": None,
+            "isBlockhashValid": {"value": False},
+        })
+        proof = asyncio.run(runtime._exchange_solana_tx(session, signature, wire))
+        self.assertTrue(proof["expired_unbroadcast"])
+        self.assertEqual(len(session.calls), 3)
+        self.assertEqual(len({url for url, _ in session.calls}), 1)
+        self.assertEqual([method for _, method in session.calls], [
+            "getSignatureStatuses", "getTransaction", "isBlockhashValid"])
+
+    def test_expired_unbroadcast_recovery_fails_closed_if_independent_rpc_sees_tx(self):
+        keypair = Keypair()
+        message = MessageV0.try_compile(keypair.pubkey(), [], [], Hash.default())
+        signed = VersionedTransaction.populate(message, [Signature.default()])
+        signature = str(signed.signatures[0])
+        wire = base64.b64encode(bytes(signed)).decode("ascii")
+
+        class RpcSession:
+            def post(self, url, json):
+                result = {
+                    "getSignatureStatuses": {"value": [None]},
+                    "getTransaction": {"slot": 123, "meta": {"err": None}},
+                    "isBlockhashValid": {"value": False},
+                }[json["method"]]
+                return FakeResponse({"jsonrpc": "2.0", "id": 1, "result": result})
+
+        runtime = object.__new__(CustodyRuntime)
+        runtime.rpc_url = "https://private-rpc.example/rpc"
+
+        async def primary_rpc(_session, method, _params=None):
+            return {
+                "getSignatureStatuses": {"value": [None]},
+                "getTransaction": None,
+                "isBlockhashValid": {"value": False},
+            }[method]
+
+        runtime.rpc = primary_rpc
+        proof = asyncio.run(runtime._exchange_solana_tx(RpcSession(), signature, wire))
+        self.assertIsNone(proof)
+
+    def test_expired_unbroadcast_recovery_requires_signature_to_match_saved_transaction(self):
+        keypair = Keypair()
+        message = MessageV0.try_compile(keypair.pubkey(), [], [], Hash.default())
+        signed = VersionedTransaction.populate(message, [Signature.default()])
+        wire = base64.b64encode(bytes(signed)).decode("ascii")
+        runtime = object.__new__(CustodyRuntime)
+        runtime.rpc_url = "https://private-rpc.example/rpc"
+
+        async def primary_rpc(_session, method, _params=None):
+            if method == "getSignatureStatuses":
+                return {"value": [None]}
+            if method == "getTransaction":
+                return None
+            raise AssertionError("Signature mismatch must stop before expiry checks.")
+
+        runtime.rpc = primary_rpc
+        proof = asyncio.run(runtime._exchange_solana_tx(None, "different-signature", wire))
+        self.assertIsNone(proof)
+
     def test_status_lookup_error_is_visible_without_changing_unknown_transfer(self):
         transfer = {
             "id": "pending-transfer",
@@ -238,7 +352,11 @@ class LiveBridgePrimitiveTests(unittest.TestCase):
         }
         messages = {
             "PENDING": "LI.FI still reports this transfer as pending. Funds remain reserved. Do not submit again.",
-            "NOT_FOUND": "LI.FI has not found this transfer yet. Funds remain reserved. Do not submit again.",
+            "NOT_FOUND": (
+                "Solana has no finalized source transaction for this signature, and LI.FI has not "
+                "found the transfer. The outcome is unresolved; funds remain reserved. Do not "
+                "submit again."
+            ),
         }
         for provider_status, expected_message in messages.items():
             with self.subTest(provider_status=provider_status):
@@ -312,6 +430,32 @@ class LiveBridgePrimitiveTests(unittest.TestCase):
                 self.assertEqual(result["state"], "UNKNOWN")
                 self.assertIn("Do not submit again", result["status_message"])
                 bridge.release_failed_source.assert_not_called()
+
+    def test_not_found_provider_releases_only_after_expired_unbroadcast_proof(self):
+        transfer = {
+            "id": "pending-transfer",
+            "direction": "solana-to-base",
+            "state": "UNKNOWN",
+            "source_tx_hash": "test-signature",
+        }
+        bridge = Mock()
+        bridge.lifi_status = AsyncMock(return_value={"status": "NOT_FOUND"})
+        bridge.signed_transaction_for_user.return_value = "stored-signed-transaction"
+        bridge.release_expired_unbroadcast_source.return_value = {
+            **transfer, "state": "ABORTED"
+        }
+        service = object.__new__(CustodyRuntime)
+        service.cross_chain_bridge = bridge
+        service._exchange_solana_tx = AsyncMock(return_value={"expired_unbroadcast": True})
+
+        result = asyncio.run(service._reconcile_exchange_transfer(None, 77, transfer))
+
+        self.assertEqual(result["state"], "ABORTED")
+        self.assertTrue(result["expired_unbroadcast"])
+        self.assertIn("returned to your available balance", result["status_message"])
+        bridge.release_expired_unbroadcast_source.assert_called_once_with(
+            77, "pending-transfer", verified_expired_and_absent=True,
+            verified_provider_not_found=True)
 
     def test_amount_is_integer_six_decimals_and_capped(self):
         self.assertEqual(parse_usdc_raw("10.000001"), 10_000_001)
@@ -665,6 +809,20 @@ class LiveBridgePrimitiveTests(unittest.TestCase):
                      json.dumps(route), now, now + 45))
             transfer = bridge.reserve_transfer(77, quote_id)
             self.assertEqual(transfer["state"], "RESERVED")
+            keypair = Keypair()
+            message = MessageV0.try_compile(keypair.pubkey(), [], [], Hash.default())
+            signed = VersionedTransaction.populate(message, [Signature.default()])
+            signature = str(signed.signatures[0])
+            signed_wire = base64.b64encode(bytes(signed)).decode("ascii")
+            bridge.save_signed_transfer(77, transfer["id"], signature, signed_wire)
+            transfer = bridge.mark_transfer_submitted(
+                77, transfer["id"], False,
+                "Solana RPC: Transaction simulation failed.")
+            self.assertEqual(transfer["state"], "UNKNOWN")
+            self.assertEqual(transfer["submission_error"],
+                             "Solana RPC: Transaction simulation failed.")
+            self.assertEqual(bridge.transfers_for_user(77)[0]["submission_error"],
+                             "Solana RPC: Transaction simulation failed.")
             self.assertEqual(ledger.balance(77, SOLANA_USDC), 5_000_000)
             self.assertEqual(ledger.balance(88, SOLANA_USDC), 0)
             self.assertEqual(ledger.liabilities()[SOLANA_USDC], 10_000_000)
@@ -686,6 +844,22 @@ class LiveBridgePrimitiveTests(unittest.TestCase):
                                {"output_asset": "another-mint"})
             with self.assertRaises(BridgeError):
                 bridge.transfer_for_user(88, transfer["id"])
+            with self.assertRaises(BridgeError):
+                bridge.release_expired_unbroadcast_source(
+                    77, transfer["id"], verified_expired_and_absent=False,
+                    verified_provider_not_found=True)
+            self.assertEqual(ledger.balance(77, SOLANA_USDC), 5_000_000)
+            recovered = bridge.release_expired_unbroadcast_source(
+                77, transfer["id"], verified_expired_and_absent=True,
+                verified_provider_not_found=True)
+            self.assertEqual(recovered["state"], "ABORTED")
+            self.assertEqual(ledger.balance(77, SOLANA_USDC), 10_000_000)
+            self.assertIsNone(bridge.signed_transaction_for_user(77, transfer["id"]))
+            with self.assertRaises(BridgeError):
+                bridge.release_expired_unbroadcast_source(
+                    77, transfer["id"], verified_expired_and_absent=True,
+                    verified_provider_not_found=True)
+            self.assertEqual(ledger.balance(77, SOLANA_USDC), 10_000_000)
 
 
 if __name__ == "__main__":

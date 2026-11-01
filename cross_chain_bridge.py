@@ -543,7 +543,8 @@ class CrossChainBridge:
                     direction TEXT NOT NULL, source_asset TEXT NOT NULL, destination_asset TEXT NOT NULL,
                     amount_raw INTEGER NOT NULL, minimum_received_raw INTEGER NOT NULL, received_raw INTEGER,
                     state TEXT NOT NULL, source_tx_hash TEXT, signed_transaction TEXT,
-                    destination_tx_hash TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+                    destination_tx_hash TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+                    submission_error TEXT);
                 CREATE INDEX IF NOT EXISTS custody_bridge_transfers_active
                     ON custody_bridge_transfers(state,created_at);
                 CREATE TABLE IF NOT EXISTS custody_bridge_approvals (
@@ -551,6 +552,10 @@ class CrossChainBridge:
                     amount_raw INTEGER NOT NULL, spender TEXT NOT NULL, state TEXT NOT NULL,
                     tx_hash TEXT, signed_transaction TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
             """)
+            columns = {row[1] for row in db.execute(
+                "PRAGMA table_info(custody_bridge_transfers)").fetchall()}
+            if "submission_error" not in columns:
+                db.execute("ALTER TABLE custody_bridge_transfers ADD COLUMN submission_error TEXT")
 
     def source_asset(self, direction):
         if direction == "solana-to-base":
@@ -706,11 +711,20 @@ class CrossChainBridge:
             db.row_factory = sqlite3.Row
             row = db.execute("""SELECT id,uid,direction,source_asset,destination_asset,amount_raw,
                 minimum_received_raw,received_raw,state,source_tx_hash,destination_tx_hash,
-                created_at,updated_at FROM custody_bridge_transfers WHERE id=? AND uid=?""",
+                created_at,updated_at,submission_error FROM custody_bridge_transfers
+                WHERE id=? AND uid=?""",
                 (str(transfer_id), int(uid))).fetchone()
         if not row:
             raise BridgeError("The bridge transfer was not found.", 404)
         return dict(row)
+
+    def signed_transaction_for_user(self, uid, transfer_id):
+        with sqlite3.connect(self.db_file, timeout=10) as db:
+            row = db.execute("""SELECT signed_transaction FROM custody_bridge_transfers
+                WHERE id=? AND uid=?""", (str(transfer_id), int(uid))).fetchone()
+        if not row:
+            raise BridgeError("The bridge transfer was not found.", 404)
+        return row[0]
 
     def save_signed_transfer(self, uid, tid, tx_hash, signed_wire):
         now = int(time.time())
@@ -727,12 +741,14 @@ class CrossChainBridge:
                 raise BridgeError("Transfer state changed; do not send again.", 409)
         return self.transfer_for_user(uid, tid)
 
-    def mark_transfer_submitted(self, uid, tid, acknowledged):
+    def mark_transfer_submitted(self, uid, tid, acknowledged, submission_error=None):
         state = "SUBMITTED" if acknowledged else "UNKNOWN"
         with self.ledger.db() as db:
-            changed = db.execute("""UPDATE custody_bridge_transfers SET state=?,updated_at=?
+            changed = db.execute("""UPDATE custody_bridge_transfers
+                SET state=?,submission_error=?,updated_at=?
                 WHERE id=? AND uid=? AND state='SIGNED'""",
-                (state, int(time.time()), str(tid), int(uid))).rowcount
+                (state, str(submission_error or "")[:300] or None,
+                 int(time.time()), str(tid), int(uid))).rowcount
             if not changed:
                 raise BridgeError("Transfer state changed; do not resend.", 409)
         return self.transfer_for_user(uid, tid)
@@ -785,7 +801,7 @@ class CrossChainBridge:
         with sqlite3.connect(self.db_file, timeout=10) as db:
             db.row_factory = sqlite3.Row
             rows = db.execute("""SELECT id,direction,amount_raw,minimum_received_raw,received_raw,
-                state,source_tx_hash,destination_tx_hash,created_at,updated_at
+                state,source_tx_hash,destination_tx_hash,created_at,updated_at,submission_error
                 FROM custody_bridge_transfers WHERE uid=? ORDER BY created_at DESC LIMIT ?""",
                 (int(uid), max(1,min(int(limit),50)))).fetchall()
         return [dict(r) for r in rows]
@@ -831,6 +847,41 @@ class CrossChainBridge:
                 received_raw=?,destination_tx_hash=?,signed_transaction=NULL,updated_at=? WHERE id=?""",
                 (int(received),str(destination_hash),int(time.time()),str(tid)))
         return self.transfer_for_user(uid,tid)
+
+    def release_expired_unbroadcast_source(
+            self, uid, tid, *, verified_expired_and_absent=False,
+            verified_provider_not_found=False):
+        if verified_expired_and_absent is not True or verified_provider_not_found is not True:
+            raise BridgeError("Independent expired-source and provider absence proofs are required.", 409)
+        with self.ledger.db() as db:
+            row = db.execute("SELECT * FROM custody_bridge_transfers WHERE id=? AND uid=?",
+                             (str(tid), int(uid))).fetchone()
+            if (not row or row["direction"] != "solana-to-base"
+                    or row["source_asset"] != SOLANA_USDC
+                    or row["destination_asset"] != BASE_USDC_ASSET
+                    or int(row["amount_raw"]) <= 0
+                    or row["state"] not in ("SUBMITTED", "UNKNOWN", "NEEDS_REVIEW")
+                    or not row["source_tx_hash"] or not row["signed_transaction"]):
+                raise BridgeError("Transfer is not eligible for expired-source recovery.", 409)
+            try:
+                signed = VersionedTransaction.from_bytes(
+                    base64.b64decode(row["signed_transaction"], validate=True))
+            except Exception:
+                raise BridgeError("Stored signed transaction is invalid; funds remain reserved.", 409) from None
+            if not signed.signatures or str(signed.signatures[0]) != str(row["source_tx_hash"]):
+                raise BridgeError("Stored signature does not match the transfer; funds remain reserved.", 409)
+            hold = "bridge-operation:" + str(tid)
+            self.ledger.post(db, "bridge-expired-unbroadcast-release:" + str(tid),
+                "Return bridge reservation after expired-source and provider absence proofs",
+                [(hold, row["source_asset"], -int(row["amount_raw"])),
+                 (user_account(uid), row["source_asset"], int(row["amount_raw"]))])
+            changed = db.execute("""UPDATE custody_bridge_transfers SET state='ABORTED',
+                signed_transaction=NULL,updated_at=? WHERE id=? AND uid=?
+                AND state IN ('SUBMITTED','UNKNOWN','NEEDS_REVIEW')""",
+                (int(time.time()), str(tid), int(uid))).rowcount
+            if not changed:
+                raise BridgeError("Transfer changed during recovery; funds remain reserved.", 409)
+        return self.transfer_for_user(uid, tid)
 
     async def lifi_status(self, session, transfer):
         source_chain, destination_chain = (

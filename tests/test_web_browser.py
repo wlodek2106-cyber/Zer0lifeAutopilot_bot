@@ -42,12 +42,28 @@ class WebBrowserTests(unittest.TestCase):
             assert(link&&link.href==='https://solscan.io/tx/'+signature,
               'Solana signature opens the Solscan transaction');
             assert(link.textContent===signature,'full signature is visible to copy');
+            assert(panel.textContent.includes('broadcast not confirmed'),
+              'UNKNOWN signature is not presented as a sent transaction');
+            renderExchangeTransferProof({
+              direction:'solana-to-base',state:'SUBMITTED',source_tx_hash:signature,
+              submission_error:'RPC did not acknowledge'
+            });
+            assert(panel.textContent.includes('confirmation pending'),
+              'RPC acknowledgement is distinguished from final chain confirmation');
+            assert(panel.textContent.includes('RPC did not acknowledge'),
+              'submission diagnostic remains visible after status refresh');
             renderExchangeTransferProof({
               direction:'solana-to-base',state:'UNKNOWN',
               source_tx_hash:'B1UNDM8EVvFBSHVcdDf9Cz6nUdyqWUMBZpb3EjJCGyVE'
             });
             assert(!panel.querySelector('a'),'temporary deposit address is not mistaken for a transaction');
             assert(!panel.hidden,'missing transaction id is explained on the status card');
+            renderExchangeTransferProof({
+              direction:'solana-to-base',state:'ABORTED',source_tx_hash:signature,
+              expired_unbroadcast:true
+            });
+            assert(panel.textContent.includes('signature expired · transaction not found'),
+              'an expired, unbroadcast signature is not mislabeled as a transaction');
             renderExchangeTransferProof({
               direction:'base-to-solana',state:'SUBMITTED',source_tx_hash:'0x'+'a'.repeat(64)
             });
