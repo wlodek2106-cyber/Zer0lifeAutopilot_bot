@@ -1336,7 +1336,13 @@ class CustodyRuntime(WalletRuntime):
         if transfer["state"] not in ("SIGNED", "SUBMITTED", "UNKNOWN", "NEEDS_REVIEW"):
             return transfer
         status = await self.cross_chain_bridge.lifi_status(session, transfer)
-        if status["status"] in ("NOT_FOUND", "PENDING"):
+        if status["status"] == "NOT_FOUND":
+            return {**transfer, "status_message":
+                "LI.FI has not found this transfer yet. Funds remain reserved. Do not submit again."}
+        if status["status"] == "PENDING":
+            return {**transfer, "status_message":
+                "LI.FI still reports this transfer as pending. Funds remain reserved. Do not submit again."}
+        if status["status"] not in ("FAILED", "DONE"):
             return transfer
         if status["status"] == "FAILED":
             source = (await self._exchange_solana_tx(session, transfer["source_tx_hash"])

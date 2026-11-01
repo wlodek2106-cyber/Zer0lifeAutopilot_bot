@@ -228,6 +228,33 @@ class LiveBridgePrimitiveTests(unittest.TestCase):
         self.assertEqual(transfer["state"], "UNKNOWN")
         service._reconcile_exchange_transfer.assert_awaited_once()
 
+    def test_pending_and_not_found_statuses_are_explained_without_unlocking_transfer(self):
+        transfer = {
+            "id": "pending-transfer",
+            "direction": "solana-to-base",
+            "state": "UNKNOWN",
+            "received_raw": None,
+            "source_tx_hash": "test-signature",
+        }
+        messages = {
+            "PENDING": "LI.FI still reports this transfer as pending. Funds remain reserved. Do not submit again.",
+            "NOT_FOUND": "LI.FI has not found this transfer yet. Funds remain reserved. Do not submit again.",
+        }
+        for provider_status, expected_message in messages.items():
+            with self.subTest(provider_status=provider_status):
+                bridge = Mock()
+                bridge.lifi_status = AsyncMock(return_value={"status": provider_status})
+                service = object.__new__(CustodyRuntime)
+                service.cross_chain_bridge = bridge
+
+                result = asyncio.run(
+                    service._reconcile_exchange_transfer(None, 77, transfer.copy()))
+
+                self.assertEqual(result["state"], "UNKNOWN")
+                self.assertIsNone(result["received_raw"])
+                self.assertEqual(result["status_message"], expected_message)
+                bridge.lifi_status.assert_awaited_once()
+
     def test_amount_is_integer_six_decimals_and_capped(self):
         self.assertEqual(parse_usdc_raw("10.000001"), 10_000_001)
         for invalid in ("0", "-1", "1.0000001", "10000.000001", "NaN", "Infinity", True):

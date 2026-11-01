@@ -3297,6 +3297,8 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["AUTOPILOT · ON","АВТОПИЛОТ · ВКЛ","АВТОПІЛОТ · УВІМК"],
             ["Status check failed:","Не удалось проверить статус:","Не вдалося перевірити статус:"],
             ["Funds remain reserved. Do not submit again.","Средства остаются зарезервированы. Не отправляйте перевод повторно.","Кошти залишаються зарезервованими. Не надсилайте переказ повторно."],
+            ["LI.FI has not found this transfer yet. Funds remain reserved. Do not submit again.","LI.FI пока не нашёл этот перевод. Средства остаются зарезервированы. Не отправляйте перевод повторно.","LI.FI поки не знайшов цей переказ. Кошти залишаються зарезервованими. Не надсилайте переказ повторно."],
+            ["LI.FI still reports this transfer as pending. Funds remain reserved. Do not submit again.","LI.FI всё ещё показывает перевод в обработке. Средства остаются зарезервированы. Не отправляйте перевод повторно.","LI.FI усе ще показує переказ в обробці. Кошти залишаються зарезервованими. Не надсилайте переказ повторно."],
             ["Bridge status is rate-limited.","Провайдер ограничил частоту проверки статуса.","Провайдер обмежив частоту перевірки статусу."],
             ["Bridge status is unavailable.","Сервис проверки статуса временно недоступен.","Сервіс перевірки статусу тимчасово недоступний."],
             ["Provider status does not match this transfer; funds remain reserved.","Статус провайдера не совпадает с этим переводом; средства остаются зарезервированы.","Статус провайдера не відповідає цьому переказу; кошти залишаються зарезервованими."],
@@ -4808,7 +4810,9 @@ RAW_HTML = r"""<!DOCTYPE html>
                 const latest=transfers[0], approval=approvals[0];
                 status.textContent=latest
                     ?latest.direction.replace(/-/g,' → ')+' · '+latest.state+' · '+
-                        (latest.status_check_error
+                        (latest.status_message
+                            ?localizeUiText(latest.status_message)
+                            :latest.status_check_error
                             ?localizeUiText('Status check failed:')+' '+localizeUiText(latest.status_check_error)+
                                 ' '+localizeUiText('Funds remain reserved. Do not submit again.')
                             :latest.received_raw==null?'destination pending':
