@@ -180,7 +180,7 @@ def validate_solana_transaction(encoded, version, wallet, amount_raw, lookup_tab
         allowed = {TOKEN_PROGRAM_ID, SOLANA_LIFI_TRACKING_PROGRAM,
                    SOLANA_ASSOCIATED_TOKEN_PROGRAM, SOLANA_COMPUTE_BUDGET_PROGRAM}
         total, transfers, intents = 0, 0, 0
-        transfer_details = []
+        transfer_records, associated_token_owners = [], {}
         if len(msg.instructions) > 30 or len(keys) > 256:
             raise SolanaTransactionValidationError("TRANSACTION_TOO_LARGE")
         for ix in msg.instructions:
@@ -198,9 +198,7 @@ def validate_solana_transaction(encoded, version, wallet, amount_raw, lookup_tab
                     raise SolanaTransactionValidationError("USDC_ACCOUNT_MISMATCH")
                 transfers += 1
                 total += amount
-                transfer_details.append(
-                    f"{Decimal(amount) / Decimal(1_000_000):.6f} USDC to {accounts[2]}"
-                )
+                transfer_records.append((amount, accounts[2]))
             elif program == SOLANA_ASSOCIATED_TOKEN_PROGRAM:
                 if data not in (b"\x00", b"\x01") or len(accounts) != 6:
                     raise SolanaTransactionValidationError("ATA_INSTRUCTION_MISMATCH")
@@ -213,6 +211,7 @@ def validate_solana_transaction(encoded, version, wallet, amount_raw, lookup_tab
                     Pubkey.from_string(SOLANA_ASSOCIATED_TOKEN_PROGRAM))[0]
                 if accounts[1] != str(derived):
                     raise SolanaTransactionValidationError("ATA_ADDRESS_MISMATCH")
+                associated_token_owners[accounts[1]] = owner
             elif program == SOLANA_COMPUTE_BUDGET_PROGRAM:
                 if data[0] == 2 and len(data) == 5:
                     if not 10_000 <= int.from_bytes(data[1:5], "little") <= 1_400_000:
@@ -227,7 +226,14 @@ def validate_solana_transaction(encoded, version, wallet, amount_raw, lookup_tab
         if intents != 1:
             raise SolanaTransactionValidationError("INTENTS_INSTRUCTION_COUNT")
         if transfers != 1:
-            detail = "; ".join(transfer_details)
+            detail_items = []
+            for amount, destination in transfer_records:
+                owner = associated_token_owners.get(destination)
+                owner_detail = f" (ATA owner {owner})" if owner else " (ATA owner not created in this transaction)"
+                detail_items.append(
+                    f"{Decimal(amount) / Decimal(1_000_000):.6f} USDC to {destination}{owner_detail}"
+                )
+            detail = "; ".join(detail_items)
             code = f"USDC_TRANSFER_COUNT_{transfers}"
             if detail:
                 code += f"; TRANSFERS: {detail}"
