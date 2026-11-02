@@ -119,6 +119,32 @@ class WebBrowserTests(unittest.TestCase):
             assert(!investorActive,'a candidate refresh does not turn real trading on');
         """)
 
+    def test_sniper_scan_conflict_alert_is_fully_localized(self):
+        page=self.telegram_page("""<script>
+        window.Telegram={WebApp:{initData:'fixture',initDataUnsafe:{user:{id:101}},expand(){},ready(){}}};
+        window.lastAlert='';
+        window.alert=message=>{window.lastAlert=String(message)};
+        window.confirm=()=>true;
+        window.fetch=async(url)=>{
+          if(String(url).includes('/api/toggle_sniper'))
+            return new Response(JSON.stringify({success:false,message:
+              'Candidate checks expired (valid for 30 minutes). The displayed scan counts are historical. Refresh candidates before new buys. A candidate scan is already running. Sniper remains OFF; wait for the scan to finish, then try again. No trade was submitted.'}),
+              {status:409,headers:{'Content-Type':'application/json'}});
+          return new Response(JSON.stringify({success:true}),{headers:{'Content-Type':'application/json'}});
+        };
+        </script>""")
+        browser.AccountBrowserTests().run_page(page,"""
+            scanCandidates=async()=>{};
+            currentUiLanguage='uk';
+            await toggleMemeTrading();
+            assert(window.lastAlert==='Перевірка кандидатів застаріла (діє 30 хвилин). Показані кількості сканувань стосуються попередніх перевірок. Оновіть кандидатів перед новими купівлями. Перевірка кандидатів уже триває. Снайпер залишається вимкненим. Дочекайтеся завершення сканування й спробуйте знову. Угоду не було надіслано.',
+              'the full Sniper scan conflict alert is Ukrainian');
+            currentUiLanguage='ru';
+            await toggleMemeTrading();
+            assert(window.lastAlert==='Проверка кандидатов устарела (срок действия — 30 минут). Показанные количества сканирований относятся к прошлым проверкам. Обновите кандидатов перед новыми покупками. Проверка кандидатов уже выполняется. Снайпер остаётся выключенным. Дождитесь завершения сканирования и попробуйте снова. Сделка не была отправлена.',
+              'the full Sniper scan conflict alert is Russian');
+        """)
+
     def test_standalone_signed_out_click_opens_touchable_login_and_no_payments(self):
         page=self.page("""<script>
         window.PublicKeyCredential=function(){};
