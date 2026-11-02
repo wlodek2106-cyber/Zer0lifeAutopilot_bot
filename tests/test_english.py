@@ -34,18 +34,25 @@ class EnglishTests(unittest.TestCase):
                       root.joinpath("deposit_payment.html").read_text()):
             self.assertIsNone(re.search("[А-Яа-яЁё]", value))
 
-    def test_trading_policy_descriptions_are_collapsible_and_localized(self):
+    def test_long_trading_and_investor_descriptions_are_collapsible_and_localized(self):
         root = Path(__file__).resolve().parents[1]
         source = ast.parse(root.joinpath("main.py").read_text())
         page = next(ast.literal_eval(node.value) for node in source.body if isinstance(node, ast.Assign)
                     and any(isinstance(t, ast.Name) and t.id == "RAW_HTML" for t in node.targets))
         self.assertEqual(page.count('<details class="trading-description-disclosure">'), 2)
+        self.assertEqual(page.count('<details class="trading-analysis-disclosure">'), 3)
+        self.assertIn('<details class="base-paper-fold solana-investor-description-disclosure">', page)
         self.assertIn("Exit rules &amp; risk", page)
         self.assertIn("Entry-cost details", page)
         for translation in (
                 '["Exit rules & risk","Правила выхода и риски","Правила виходу та ризики"]',
                 '["Entry-cost details","Расходы на вход","Витрати на вхід"]',
-                ',"Автовыходы: стоп −5%; трейлинг −2% после +3,5%. Ручная продажа доступна.","Автовиходи: стоп −5%; трейл −2% після +3,5%. Ручний продаж доступний."'):
+                ',"Автовыходы: стоп −5%; трейлинг −2% после +3,5%. Ручная продажа доступна.","Автовиходи: стоп −5%; трейл −2% після +3,5%. Ручний продаж доступний."',
+                '["Scan timing & costs","Частота сканирования и расходы","Частота сканування та витрати"]',
+                '["AI decisions & risk checks","Решения ИИ и проверки рисков","Рішення ШІ та перевірки ризиків"]',
+                '["Outcome history & chart levels","История результатов и уровни графика","Історія результатів і рівні графіка"]',
+                '["Candidate screening details","Как проверяются кандидаты","Як перевіряються кандидати"]',
+                '["Candidates are screened before entry; not every candidate is traded.","Кандидаты проходят проверку перед входом; покупается не каждый.","Кандидати проходять перевірку перед входом; купується не кожен."]'):
             self.assertIn(translation, page)
 
     def test_exchange_requires_manual_confirmation_for_every_live_transfer(self):

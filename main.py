@@ -1896,6 +1896,20 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
         #app .base-paper-fold summary { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: #c6d7f1; font-size: 10px; }
         #app .base-paper-fold[open] { border-color: rgba(89,146,255,.35); }
+        #app .solana-investor-compact-description {
+            margin: 8px 2px 0;
+            color: #aebdd1;
+            font-size: 10px;
+            line-height: 1.5;
+        }
+        #app details.solana-investor-description-disclosure { margin-top: 8px; }
+        #app details.solana-investor-description-disclosure > summary {
+            min-height: 34px;
+            cursor: pointer;
+        }
+        #app details.solana-investor-description-disclosure > .solana-investor-help {
+            margin: 9px 0 0;
+        }
         #app .base-paper-fold-count { min-width: 20px; padding: 3px 6px; border-radius: 999px; color: #b7d4ff; background: rgba(49,106,196,.24); text-align: center; font: 700 9px/1.1 ui-monospace, monospace; }
         #app .base-paper-list { max-height: 190px; overflow: auto; margin-top: 9px; color: #b4c3d7; font: 10px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-line; overflow-wrap: anywhere; }
         #app .base-paper-disclaimer, #app .base-paper-rules { display: block; margin: 9px 0 0; color: #8fa2bd; font-size: 10px; line-height: 1.5; }
@@ -2792,6 +2806,29 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
         #app #tab-trading #trading-ai-activity details p { max-width: 100ch; }
         #app #tab-trading #trading-ai-activity details p:last-child { color: #b3c1b5; }
+        #app #tab-trading #trading-ai-activity details.trading-analysis-disclosure {
+            margin-top: 7px;
+            padding: 0;
+            border: 1px solid rgba(182, 215, 179, .15);
+            border-radius: 10px;
+            background: rgba(5, 11, 9, .3);
+        }
+        #app #tab-trading #trading-ai-activity details.trading-analysis-disclosure > summary {
+            min-height: 36px;
+            padding: 9px 11px;
+            color: #cbdac9;
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        #app #tab-trading #trading-ai-activity details.trading-analysis-disclosure[open] > summary {
+            border-bottom: 1px solid rgba(182, 215, 179, .12);
+            color: #e1edda;
+        }
+        #app #tab-trading #trading-ai-activity details.trading-analysis-disclosure > p {
+            margin-top: 8px;
+            margin-bottom: 8px;
+        }
         #app #tab-trading #trading-strategy,
         #app #tab-trading #trading-sniper { min-width: 0; }
         #app #tab-trading #core-strategy-card,
@@ -3428,12 +3465,21 @@ RAW_HTML = r"""<!DOCTYPE html>
             <div id="trading-controls"></div>
             <div class="card" id="trading-ai-activity"><h3 style="margin-top:0">Trading signals</h3>
                 <p id="ai-status" class="status-output">Checking signal status...</p>
-                <p id="ai-latency" class="section-note">Signal timings: awaiting a fresh market scan.</p>
+                <details class="trading-analysis-disclosure">
+                    <summary>Scan timing &amp; costs</summary>
+                    <p id="ai-latency" class="section-note">Signal timings: awaiting a fresh market scan.</p>
+                </details>
                 <button class="btn-copy" onclick="previewAI()">Check rule signals · no trade</button>
-                <p id="ai-decisions" class="status-output"></p>
-                <p id="ai-risk-review" class="status-output">Risk controller: awaiting analysis.</p>
-                <p id="ai-learning" class="section-note">Outcome memory: awaiting finalized trade history.</p>
-                <p id="ai-chart-zones" class="status-output"></p>
+                <details class="trading-analysis-disclosure">
+                    <summary>AI decisions &amp; risk checks</summary>
+                    <p id="ai-decisions" class="status-output"></p>
+                    <p id="ai-risk-review" class="status-output">Risk controller: awaiting analysis.</p>
+                </details>
+                <details class="trading-analysis-disclosure">
+                    <summary>Outcome history &amp; chart levels</summary>
+                    <p id="ai-learning" class="section-note">Outcome memory: awaiting finalized trade history.</p>
+                    <p id="ai-chart-zones" class="status-output"></p>
+                </details>
                 <details>
                     <summary>Independent execution guard</summary>
                     <p class="section-note">The rules engine proposes BUY / HOLD only. Server-owned checks decide whether an order is allowed. No model can change limits or disable checks.</p>
@@ -3673,9 +3719,13 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <button id="investor-toggle" class="btn-ctl btn-toggle-off solana-investor-toggle" type="button" onclick="toggleInvestorTrading()">Autopilot: OFF · Turn on</button>
                 </div>
                 <p id="investor-toggle-status" class="solana-investor-help" role="status" aria-live="polite" hidden></p>
-                <p class="solana-investor-help">
+                <p class="solana-investor-compact-description">Candidates are screened before entry; not every candidate is traded.</p>
+                <details class="base-paper-fold solana-investor-description-disclosure">
+                    <summary>Candidate screening details</summary>
+                    <p class="solana-investor-help">
                     Screened Solana candidates pass mint, liquidity, chart, quote and execution checks. Discovery checks up to 200 new mints and 40 on-chain candidates per scan; not every token is traded. Core and Meme Sniper remain separate.
-                </p>
+                    </p>
+                </details>
                 <div class="base-paper-details">
                     <details class="solana-investor-fold">
                         <summary>Allocated strategy budget</summary>
@@ -4660,7 +4710,12 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["Automatic exits only: −5% stop; after +3.5%, exit on a 2% pullback from the peak. AI SELL and resistance exits are disabled. Manual sales remain available. Thresholds are measured in this position's funding currency, not the USD chart; fills and profit are not guaranteed.","Только автоматические выходы: стоп −5%; после +3,5% — продажа при откате на 2% от пика. Продажи ИИ и выходы по сопротивлению отключены. Ручная продажа доступна. Пороговые значения считаются в валюте позиции, а не по графику в USD; исполнение и прибыль не гарантированы.","Лише автоматичні виходи: стоп −5%; після +3,5% — продаж при відкаті на 2% від піка. Продажі ШІ та виходи за рівнем опору вимкнені. Ручний продаж доступний. Порогові значення вимірюються у валюті позиції, а не за графіком у USD; виконання й прибуток не гарантовані."],
             ["Entry-cost cap: 2.50% of the order; sell exits are not blocked.","Лимит затрат на вход: 2,50% ордера; продажи этим фильтром не блокируются.","Ліміт витрат на вхід: 2,50% ордера; продажі цим фільтром не блокуються."],
             ["Entry-cost details","Расходы на вход","Витрати на вхід"],
-            ["Core entry cost budget: 2.50% of the order. Includes quoted DEX fees, price impact, slippage, estimated network fees, Jito tips and account rent for entry/exit. Estimates do not guarantee profit or exit costs. SELL exits are not blocked by this filter.","Лимит затрат на вход Core — 2,50% суммы ордера. Учитываются котировки комиссий DEX, влияние на цену, проскальзывание, сетевые комиссии, чаевые Jito и аренда аккаунта при входе/выходе. Оценка не гарантирует прибыль или стоимость выхода. Фильтр не блокирует продажи.","Ліміт витрат на вхід Core — 2,50% суми ордера. Враховуються котирування комісій DEX, вплив на ціну, прослизання, мережеві комісії, чайові Jito та оренда акаунта під час входу/виходу. Оцінка не гарантує прибуток або вартість виходу. Фільтр не блокує продажі."]
+            ["Core entry cost budget: 2.50% of the order. Includes quoted DEX fees, price impact, slippage, estimated network fees, Jito tips and account rent for entry/exit. Estimates do not guarantee profit or exit costs. SELL exits are not blocked by this filter.","Лимит затрат на вход Core — 2,50% суммы ордера. Учитываются котировки комиссий DEX, влияние на цену, проскальзывание, сетевые комиссии, чаевые Jito и аренда аккаунта при входе/выходе. Оценка не гарантирует прибыль или стоимость выхода. Фильтр не блокирует продажи.","Ліміт витрат на вхід Core — 2,50% суми ордера. Враховуються котирування комісій DEX, вплив на ціну, прослизання, мережеві комісії, чайові Jito та оренда акаунта під час входу/виходу. Оцінка не гарантує прибуток або вартість виходу."],
+            ["Scan timing & costs","Частота сканирования и расходы","Частота сканування та витрати"],
+            ["AI decisions & risk checks","Решения ИИ и проверки рисков","Рішення ШІ та перевірки ризиків"],
+            ["Outcome history & chart levels","История результатов и уровни графика","Історія результатів і рівні графіка"],
+            ["Candidates are screened before entry; not every candidate is traded.","Кандидаты проходят проверку перед входом; покупается не каждый.","Кандидати проходять перевірку перед входом; купується не кожен."],
+            ["Candidate screening details","Как проверяются кандидаты","Як перевіряються кандидати"]
         ];
         const UI_COPY = {
             ru:Object.fromEntries([...UI_COPY_ROWS,...UI_COPY_ROWS_EXTRA].map(([english,russian])=>[english,russian])),
