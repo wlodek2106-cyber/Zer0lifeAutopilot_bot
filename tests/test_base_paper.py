@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 import base_paper
+import geckoterminal_client as gecko
 
 
 OWNER_ID = 17
@@ -173,6 +174,50 @@ class BasePaperLedgerTests(unittest.TestCase):
         self.assertIn("slots are occupied", blocked["signal_reason"])
         with self.assertRaisesRegex(ValueError, "below open paper-position cost"):
             self.engine.set_budget(OWNER_ID, 1, now=1_000_001)
+
+
+class BaseGeckoTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_base_requests_share_gecko_cooldown_with_other_market_data(self):
+        state = gecko.scheduler()
+        state.cooldown_until = 0
+        state.next_request_at = 0
+        state.rate_limit_failures = 0
+        state.healthy_responses = 0
+
+        class Response:
+            status = 429
+            headers = {"Retry-After": "120"}
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        class Session:
+            def __init__(self):
+                self.calls = []
+
+            def get(self, url, **kwargs):
+                self.calls.append(url)
+                return Response()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            first_engine = base_paper.BasePaperEngine(
+                os.path.join(temp_dir, "first.sqlite"), OWNER_ID)
+            second_engine = base_paper.BasePaperEngine(
+                os.path.join(temp_dir, "second.sqlite"), OWNER_ID)
+            session = Session()
+
+            with self.assertRaises(base_paper.BasePaperError) as caught:
+                await first_engine._gecko_json(session, "/networks/base/pools")
+            self.assertEqual(caught.exception.status, 429)
+            self.assertGreaterEqual(gecko.cooldown_remaining(), 119)
+
+            with self.assertRaises(base_paper.BasePaperError) as blocked:
+                await second_engine._gecko_json(session, "/networks/base/pools")
+            self.assertEqual(blocked.exception.status, 429)
+            self.assertEqual(len(session.calls), 1)
 
 
 class BasePaperUiTests(unittest.TestCase):

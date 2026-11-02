@@ -19,6 +19,7 @@ import aiohttp
 import chart_analysis
 import dexscreener_client
 import execution_policy
+import geckoterminal_client as gecko
 
 
 BASE_CHAIN_ID = 8453
@@ -26,7 +27,6 @@ BASE_NETWORK = "base"
 BASE_USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 BASE_WETH = "0x4200000000000000000000000000000000000006"
 BASE_QUOTES = {BASE_USDC: "USDC", BASE_WETH: "WETH"}
-GECKO_ORIGIN = "https://api.geckoterminal.com/api/v2"
 MIN_LIQUIDITY_USD = 10_000
 MIN_VOLUME_24H_USD = 100_000
 MIN_TXNS_24H = 200
@@ -39,8 +39,6 @@ PAPER_DEFAULT_BUDGET_USD = 100.0
 MAX_PAPER_BUDGET_USD = 100_000.0
 M5_CACHE_SECONDS = 180
 H1_CACHE_SECONDS = 900
-GECKO_MIN_REQUEST_INTERVAL = 2.05
-GECKO_DEFAULT_COOLDOWN_SECONDS = 60
 ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 SYMBOL_RE = re.compile(r"[^a-zA-Z0-9._-]")
 BLOCKED_EQUITY_TERMS = (
@@ -217,9 +215,6 @@ class BasePaperEngine:
         self.db_path = db_path
         self.owner_id = int(owner_id)
         self._scan_lock = asyncio.Lock()
-        self._gecko_request_lock = asyncio.Lock()
-        self._last_gecko_request = 0.0
-        self._gecko_cooldown_until = 0.0
         self._pool_cache = None
         self._pool_cache_at = 0.0
         self._candle_cache = {}
@@ -405,48 +400,31 @@ class BasePaperEngine:
         }
 
     async def _gecko_json(self, session, path):
-        now_mono = time.monotonic()
-        if now_mono < self._gecko_cooldown_until:
-            retry = max(1, math.ceil(self._gecko_cooldown_until - now_mono))
-            raise BasePaperError(f"Base market data is rate-limited; retry in {retry}s.", 429)
-        async with self._gecko_request_lock:
-            now_mono = time.monotonic()
-            if now_mono < self._gecko_cooldown_until:
-                retry = max(1, math.ceil(self._gecko_cooldown_until - now_mono))
-                raise BasePaperError(f"Base market data is rate-limited; retry in {retry}s.", 429)
-            wait = GECKO_MIN_REQUEST_INTERVAL - (now_mono - self._last_gecko_request)
-            if wait > 0:
-                await asyncio.sleep(wait)
-            self._last_gecko_request = time.monotonic()
-            try:
-                async with session.get(
-                    GECKO_ORIGIN + path,
-                    headers={"Accept": "application/json", "User-Agent": "Zer0Life-Base-Paper"},
-                    timeout=aiohttp.ClientTimeout(total=7),
-                ) as response:
-                    if response.status == 429:
-                        try:
-                            retry = max(GECKO_DEFAULT_COOLDOWN_SECONDS,
-                                        int(response.headers.get("Retry-After", 0)))
-                        except (TypeError, ValueError):
-                            retry = GECKO_DEFAULT_COOLDOWN_SECONDS
-                        self._gecko_cooldown_until = time.monotonic() + min(retry, 1800)
-                        raise BasePaperError(
-                            f"Base market data is rate-limited; retry in {min(retry, 1800)}s.", 429)
-                    if response.status != 200:
-                        raise BasePaperError(
-                            f"Base market-data provider returned HTTP {response.status}.", 503)
-                    try:
-                        payload = await response.json()
-                    except (aiohttp.ContentTypeError, json.JSONDecodeError, ValueError) as exc:
-                        raise BasePaperError("Base market-data provider returned invalid JSON.", 503) from exc
-                    if not isinstance(payload, dict):
-                        raise BasePaperError("Base market-data provider returned invalid data.", 503)
-                    return payload
-            except BasePaperError:
-                raise
-            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-                raise BasePaperError("Base market-data provider is unavailable.", 503) from exc
+        try:
+            async with gecko.request(
+                session, path, priority=gecko.DISCOVERY,
+                headers={"Accept": "application/json", "User-Agent": "Zer0Life-Base-Paper"},
+                timeout=aiohttp.ClientTimeout(total=7),
+            ) as response:
+                if response.status != 200:
+                    raise BasePaperError(
+                        f"Base market-data provider returned HTTP {response.status}.", 503)
+                try:
+                    payload = await response.json()
+                except (aiohttp.ContentTypeError, json.JSONDecodeError, ValueError) as exc:
+                    raise BasePaperError(
+                        "Base market-data provider returned invalid JSON.", 503) from exc
+                if not isinstance(payload, dict):
+                    raise BasePaperError("Base market-data provider returned invalid data.", 503)
+                return payload
+        except gecko.ProviderLimited as exc:
+            retry = max(1, gecko.cooldown_remaining())
+            raise BasePaperError(
+                f"Base market data is rate-limited; retry in {retry}s.", 429) from exc
+        except BasePaperError:
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            raise BasePaperError("Base market-data provider is unavailable.", 503) from exc
 
     async def _pools(self, session):
         now_mono = time.monotonic()
