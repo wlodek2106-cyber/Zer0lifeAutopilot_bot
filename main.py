@@ -2459,7 +2459,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 </div>
                 <p id="sniper-position-cap" class="section-note">Screened Solana candidates · Checking position limit…</p>
                 <p class="section-note">Automatic exits only: −5% stop; after +3.5%, exit on a 2% pullback from the peak. AI SELL and resistance exits are disabled. Manual sales remain available. Thresholds are measured in this position's funding currency, not the USD chart; fills and profit are not guaranteed.</p>
-                <div id="discovery-status" class="section-note">Candidate scan pending.</div>
+                <div id="discovery-status" class="section-note" role="status" aria-live="polite">Candidate scan pending.</div>
                 <button class="action-btn" id="scan-candidates" onclick="scanCandidates()">Scan candidates</button>
                 <details><summary>Candidate shortlist</summary><div id="candidate-list" class="section-note" style="white-space:pre-line">No verified shortlist yet.</div></details>
                 <details><summary>Market discovery · DexScreener + charts</summary><div id="whale-signal-status" class="section-note" style="white-space:pre-line">Scheduled market scanning replaces the Helius whale stream. No whale event is required.</div></details>
@@ -2996,6 +2996,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div class="solana-investor-controls">
                     <button id="investor-toggle" class="btn-ctl btn-toggle-off solana-investor-toggle" type="button" onclick="toggleInvestorTrading()">Autopilot: OFF · Turn on</button>
                 </div>
+                <p id="investor-toggle-status" class="solana-investor-help" role="status" aria-live="polite" hidden></p>
                 <p class="solana-investor-help">
                     Screened Solana candidates pass mint, liquidity, chart, quote and execution checks. Discovery checks up to 200 new mints and 40 on-chain candidates per scan; not every token is traded. Core and Meme Sniper remain separate.
                 </p>
@@ -3156,7 +3157,8 @@ RAW_HTML = r"""<!DOCTYPE html>
             document.getElementById('investor-mode-status').textContent=
                 localizeUiText(investorActive?'AUTOPILOT · ON':'AUTOPILOT · OFF');
             const investorToggle=document.getElementById('investor-toggle');
-            investorToggle.textContent=investorActive?'Autopilot: ON · Turn off':'Autopilot: OFF · Turn on';
+            investorToggle.textContent=localizeUiText(
+                investorActive?'Autopilot: ON · Turn off':'Autopilot: OFF · Turn on');
             investorToggle.className='btn-ctl '+(investorActive?'btn-toggle-on':'btn-toggle-off')+' solana-investor-toggle';
             document.getElementById('investor-budget-usdc').disabled=investorActive;
             document.getElementById('investor-budget-sol').disabled=investorActive;
@@ -3348,6 +3350,9 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["Realized PnL · SOL","Реализованный PnL · SOL","Реалізований PnL · SOL"],
             ["Closed trades","Закрытые сделки","Закриті угоди"],["Profits","Прибыль","Прибуток"],
             ["Losses","Убытки","Збитки"],["Net","Итого","Разом"],["YOUR TRADES","ВАШИ СДЕЛКИ","ВАШІ УГОДИ"],
+            ["Checking scan status…","Проверяем статус сканирования…","Перевіряємо стан сканування…"],
+            ["Autopilot: OFF · Turn on","Автопилот: ВЫКЛ · Включить","Автопілот: ВИМК · Увімкнути"],
+            ["Autopilot: ON · Turn off","Автопилот: ВКЛ · Выключить","Автопілот: УВІМК · Вимкнути"],
             ["Autopilot: OFF","Автопилот: ВЫКЛ","Автопілот: ВИМК"],["Refresh","Обновить","Оновити"],
             ["Close all my positions","Закрыть все мои позиции","Закрити всі мої позиції"],
             ["Meme Sniper · SOL","Мем-снайпер · SOL","Мем-снайпер · SOL"],
@@ -3375,6 +3380,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["Candidate checks are unavailable.","Проверка кандидатов недоступна.","Перевірка кандидатів недоступна."],
             ["No candidates currently pass the verified shortlist. Previous scan counts do not guarantee current eligibility.","Сейчас ни один кандидат не прошёл проверку. Количество кандидатов в прошлых сканированиях не подтверждает их текущую пригодность.","Наразі жоден кандидат не пройшов перевірку. Кількість кандидатів у попередніх скануваннях не підтверджує їхню поточну придатність."],
             ["Candidate scan unavailable","Сканирование кандидатов недоступно","Сканування кандидатів недоступне"],
+            ["market-data HTTP 429","ограничение источника рыночных данных HTTP 429","обмеження джерела ринкових даних HTTP 429"],
             [". New sniper entries paused; automatic retry scheduled.",". Новые входы Sniper приостановлены; автоматическая повторная попытка запланирована.",". Нові входи Sniper призупинено; автоматичну повторну спробу заплановано."],
             ["DexScreener rate limit (HTTP 429). Shared market-data requests are paused; automatic retry after at least ","Ограничение DexScreener (HTTP 429). Общие запросы рыночных данных приостановлены; автоматическая повторная попытка не ранее чем через ","Обмеження DexScreener (HTTP 429). Спільні запити ринкових даних призупинено; автоматичну повторну спробу буде виконано не раніше ніж через "],
             ["DexScreener rate limit (HTTP 429); shared market-data requests paused for ","Ограничение DexScreener (HTTP 429); общие запросы рыночных данных приостановлены на ","Обмеження DexScreener (HTTP 429); спільні запити ринкових даних призупинено на "],
@@ -4130,20 +4136,30 @@ RAW_HTML = r"""<!DOCTYPE html>
                 'Enable real-money AI Crypto Investors? It uses only the reserved USDC/SOL budget, has no stop-loss, and can lose most or all of that budget. Autopilot turns OFF after a server restart.'
             ))return;
             const button=document.getElementById('investor-toggle');
+            const status=document.getElementById('investor-toggle-status');
+            if(button.disabled)return;
+            if(status){status.hidden=true;status.textContent='';}
             button.disabled=true;
+            button.setAttribute('aria-busy','true');
+            button.textContent=localizeUiText('Checking scan status…');
             try {
                 const response=await apiFetch('/api/toggle_investor',{method:'POST'});
                 const result=await response.json();
                 if(!response.ok||!result.success)throw new Error(result.message);
+                if(status){status.hidden=true;status.textContent='';}
                 await refresh();
             } catch(e) {
                 const message=String(e.message||'Could not change AI Crypto Investors mode.');
-                alert(message);
-                if(/candidate checks|candidate scan/i.test(message))
-                    await scanCandidates({waitForCompletion:true});
-                else await refresh();
+                if(status){status.hidden=false;status.textContent=localizeUiText(message);}
+                if(/candidate checks|candidate scan|market-data rate limit|market-data HTTP 429/i.test(message)){
+                    await scanCandidates({waitForCompletion:false,refreshDashboard:false});
+                    if(status){status.hidden=false;status.textContent=localizeUiText(message);}
+                }else await refresh();
             } finally {
                 button.disabled=false;
+                button.removeAttribute('aria-busy');
+                button.textContent=localizeUiText(
+                    investorActive?'Autopilot: ON · Turn off':'Autopilot: OFF · Turn on');
             }
         }
         async function loadPartnerProgram() {
@@ -4313,7 +4329,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             }).join('\n');
         }
         let withdrawSending = false;
-        async function scanCandidates({waitForCompletion=false}={}) {
+        async function scanCandidates({waitForCompletion=false,refreshDashboard=true}={}) {
             const button=document.getElementById('scan-candidates');
             const status=document.getElementById('discovery-status');
             if(button)button.disabled=true;
@@ -4336,7 +4352,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     return;
                 }
                 status.textContent=localizeUiText(data.message||'Scan unavailable.');
-                await refresh();
+                if(refreshDashboard)await refresh();
             }catch(e){status.textContent=localizeUiText(e.message||'Scan unavailable.');}
             finally{if(button)button.disabled=false;}
         }
@@ -6025,6 +6041,13 @@ RAW_HTML = r"""<!DOCTYPE html>
 
         async function toggleMemeTrading() {
             if(!sniperActive&&!confirm('Start autonomous AI sniper with your SOL? You can lose money. Order size is set in Settings.'))return;
+            const button=document.getElementById('btn-meme-toggle');
+            const status=document.getElementById('discovery-status');
+            if(button.disabled)return;
+            button.disabled=true;
+            button.setAttribute('aria-busy','true');
+            const label=document.getElementById('meme-toggle-text');
+            if(label)label.textContent=localizeUiText('Checking scan status…');
             try {
                 const response=await apiFetch('/api/toggle_sniper',{method:'POST'});
                 const result=await response.json();
@@ -6032,10 +6055,14 @@ RAW_HTML = r"""<!DOCTYPE html>
                 await refresh();
             }catch(e){
                 const message=String(e.message||'Sniper mode unchanged: no server response.');
-                alert(message);
-                if(/candidate checks|candidate scan/i.test(message))
-                    await scanCandidates({waitForCompletion:true});
-                else await refresh();
+                if(status)status.textContent=localizeUiText(message);
+                if(/candidate checks|candidate scan|market-data rate limit|market-data HTTP 429/i.test(message)){
+                    await scanCandidates({waitForCompletion:false,refreshDashboard:false});
+                    if(status)status.textContent=localizeUiText(message);
+                }else await refresh();
+            }finally{
+                button.removeAttribute('aria-busy');
+                updateMemeToggleUI(sniperActive);
             }
         }
 

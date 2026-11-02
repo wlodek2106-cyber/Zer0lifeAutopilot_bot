@@ -72,14 +72,14 @@ class WebBrowserTests(unittest.TestCase):
               'Base source transaction opens the Base explorer');
         """)
 
-    def test_candidate_refresh_waits_for_completion_and_uses_selected_language(self):
+    def test_investor_toggle_returns_control_while_scan_runs(self):
         page=self.telegram_page("""<script>
         window.Telegram={WebApp:{initData:'fixture',initDataUnsafe:{user:{id:101}},expand(){},ready(){}}};
         let scanPolls=0;
         window.fetch=async(url)=>{
           if(String(url).includes('/api/toggle_investor')){
             return new Response(JSON.stringify({success:false,message:
-              'Candidate checks expired (valid for 30 minutes). The displayed scan counts are historical. Refresh candidates before new buys. A fresh candidate scan has started. Investors remain OFF; wait for it to finish, then tap ON again. No trade was sent.'}),
+              'Candidate checks expired (valid for 30 minutes). The displayed scan counts are historical. Refresh candidates before new buys. A candidate scan is already running. Investors remain OFF; wait for it to finish, then try again. No trade was sent.'}),
               {status:409,headers:{'Content-Type':'application/json'}});
           }
           if(String(url).includes('/api/meme_scan')){
@@ -109,49 +109,72 @@ class WebBrowserTests(unittest.TestCase):
             assert(localizeUiText('DexScreener rate limit (HTTP 429); shared market-data requests paused for 292 seconds. No trade was sent.')
               ==='Обмеження DexScreener (HTTP 429); спільні запити ринкових даних призупинено на 292 с. Угоду не було надіслано.',
               'market data 429 alert is fully translated in Ukrainian');
+            assert(localizeUiText('Autopilot: OFF · Turn on')
+              ==='Автопілот: ВИМК · Увімкнути',
+              'the Investor activation button is fully translated in Ukrainian');
+            assert(localizeUiText('Candidate scan unavailable (market-data HTTP 429). New sniper entries paused; automatic retry scheduled.')
+              ==='Сканування кандидатів недоступне (обмеження джерела ринкових даних HTTP 429). Нові входи Sniper призупинено; автоматичну повторну спробу заплановано.',
+              'the scan rate-limit status is fully translated in Ukrainian');
             currentUiLanguage='ru';
             assert(localizeUiText('Market-data rate limit. Retry in 282 seconds. No mode was enabled and no trade was submitted.')
               ==='Ограничение запросов рыночных данных. Повтор через 282 с. Режим не включён, сделка не отправлялась.',
               'rate-limit toggle alert is fully translated in Russian');
+            assert(localizeUiText('Autopilot: OFF · Turn on')
+              ==='Автопилот: ВЫКЛ · Включить',
+              'the Investor activation button is fully translated in Russian');
             assert(localizeUiText(pending)==='Покупка всё ещё проверяется. Средства остаются заблокированы; не запускайте другую транзакцию. AI-криптоинвесторы остаётся выключенным.',
               'pending operation warning is localized in Russian');
             currentUiLanguage='uk';
-            const nativeTimeout=window.setTimeout;
-            window.setTimeout=(callback)=>nativeTimeout(callback,0);
             window.refresh=async()=>{};
             await toggleInvestorTrading();
-            window.setTimeout=nativeTimeout;
-            assert(scanPolls===2,'enabling Investors follows the started scan until it completes');
-            assert(document.getElementById('discovery-status').textContent.includes('актуальна'),
-              'latest scan status replaces the historical warning');
+            assert(scanPolls===1,'toggle performs one short status check instead of waiting for the full scan');
+            assert(document.getElementById('investor-toggle-status').textContent.includes('Перевірка кандидатів уже триває'),
+              'the Investor card explains why activation is waiting');
+            assert(!document.getElementById('investor-toggle-status').hidden,
+              'the activation explanation is visible inline');
             assert(!document.getElementById('scan-candidates').disabled,'refresh button is re-enabled');
+            assert(!document.getElementById('investor-toggle').disabled,
+              'the Investor toggle is re-enabled after the short check');
             assert(!investorActive,'a candidate refresh does not turn real trading on');
         """)
 
-    def test_sniper_scan_conflict_alert_is_fully_localized(self):
+    def test_sniper_scan_conflict_is_inline_and_button_returns(self):
         page=self.telegram_page("""<script>
         window.Telegram={WebApp:{initData:'fixture',initDataUnsafe:{user:{id:101}},expand(){},ready(){}}};
         window.lastAlert='';
         window.alert=message=>{window.lastAlert=String(message)};
         window.confirm=()=>true;
+        let scanPolls=0;
         window.fetch=async(url)=>{
           if(String(url).includes('/api/toggle_sniper'))
             return new Response(JSON.stringify({success:false,message:
               'Candidate checks expired (valid for 30 minutes). The displayed scan counts are historical. Refresh candidates before new buys. A candidate scan is already running. Sniper remains OFF; wait for the scan to finish, then try again. No trade was submitted.'}),
               {status:409,headers:{'Content-Type':'application/json'}});
+          if(String(url).includes('/api/meme_scan')){
+            scanPolls++;
+            return new Response(JSON.stringify({success:true,scan_state:'running',scan_running:true,
+              message:'Candidate scan is running. No trade is submitted.'}),
+              {headers:{'Content-Type':'application/json'}});
+          }
           return new Response(JSON.stringify({success:true}),{headers:{'Content-Type':'application/json'}});
         };
         </script>""")
         browser.AccountBrowserTests().run_page(page,"""
-            scanCandidates=async()=>{};
+            aiConfigured=true;
+            updateMemeToggleUI(false);
             currentUiLanguage='uk';
             await toggleMemeTrading();
-            assert(window.lastAlert==='Перевірка кандидатів застаріла (діє 30 хвилин). Показані кількості сканувань стосуються попередніх перевірок. Оновіть кандидатів перед новими купівлями. Перевірка кандидатів уже триває. Снайпер залишається вимкненим. Дочекайтеся завершення сканування й спробуйте знову. Угоду не було надіслано.',
-              'the full Sniper scan conflict alert is Ukrainian');
+            assert(window.lastAlert==='','scan conflicts are shown inline, not in a blocking popup');
+            assert(scanPolls===1,'Sniper toggle performs only one brief scan-status check');
+            assert(document.getElementById('discovery-status').textContent.includes('Перевірка кандидатів уже триває'),
+              'the Sniper section shows the localized reason inline');
+            assert(!document.getElementById('btn-meme-toggle').disabled,
+              'the Sniper button is re-enabled after the brief status check');
+            assert(!sniperActive,'a failed scan check never enables Sniper');
             currentUiLanguage='ru';
             await toggleMemeTrading();
-            assert(window.lastAlert==='Проверка кандидатов устарела (срок действия — 30 минут). Показанные количества сканирований относятся к прошлым проверкам. Обновите кандидатов перед новыми покупками. Проверка кандидатов уже выполняется. Снайпер остаётся выключенным. Дождитесь завершения сканирования и попробуйте снова. Сделка не была отправлена.',
-              'the full Sniper scan conflict alert is Russian');
+            assert(document.getElementById('discovery-status').textContent.includes('Проверка кандидатов уже выполняется'),
+              'the Sniper status is localized in Russian too');
         """)
 
     def test_standalone_signed_out_click_opens_touchable_login_and_no_payments(self):
