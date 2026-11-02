@@ -3384,6 +3384,14 @@ RAW_HTML = r"""<!DOCTYPE html>
             [". New sniper entries paused; automatic retry scheduled.",". Новые входы Sniper приостановлены; автоматическая повторная попытка запланирована.",". Нові входи Sniper призупинено; автоматичну повторну спробу заплановано."],
             ["DexScreener rate limit (HTTP 429). Shared market-data requests are paused; automatic retry after at least ","Ограничение DexScreener (HTTP 429). Общие запросы рыночных данных приостановлены; автоматическая повторная попытка не ранее чем через ","Обмеження DexScreener (HTTP 429). Спільні запити ринкових даних призупинено; автоматичну повторну спробу буде виконано не раніше ніж через "],
             ["DexScreener rate limit (HTTP 429); shared market-data requests paused for ","Ограничение DexScreener (HTTP 429); общие запросы рыночных данных приостановлены на ","Обмеження DexScreener (HTTP 429); спільні запити ринкових даних призупинено на "],
+            ["GeckoTerminal rate limit (HTTP 429). Automatic retry after at least ","Ограничение GeckoTerminal (HTTP 429). Автоматическая повторная попытка не ранее чем через ","Обмеження GeckoTerminal (HTTP 429). Автоматична повторна спроба не раніше ніж через "],
+            ["GeckoTerminal market-data HTTP 429","ограничение источника рыночных данных GeckoTerminal HTTP 429","обмеження джерела ринкових даних GeckoTerminal HTTP 429"],
+            ["GeckoTerminal backup is active. Fresh pool data, charts, mint checks and quotes remain required; discovery is limited to the provider's current trending pools.","Резервный источник GeckoTerminal активен. Поиск ограничен актуальными трендовыми пулами; для допуска по-прежнему нужны свежие данные пула, графика, mint и котировки.","Резервне джерело GeckoTerminal активне. Пошук обмежений актуальними трендовими пулами; для допуску потрібні свіжі дані пулу, графіка, mint і котирування."],
+            ["GeckoTerminal trending pools (DexScreener fallback)","Трендовые пулы GeckoTerminal (резерв вместо DexScreener)","Трендові пули GeckoTerminal (резерв замість DexScreener)"],
+            ["DexScreener profiles + meme meta feeds + bounded searches","Профили DexScreener, метаданные мем-токенов и ограниченный поиск","Профілі DexScreener, метадані мем-токенів і обмежений пошук"],
+            ["DexScreener profiles + meme/pump search","Профили DexScreener и поиск meme/pump","Профілі DexScreener і пошук meme/pump"],
+            ["DexScreener is rate-limited. Fresh GeckoTerminal screening is required before new entries.","Достигнут лимит DexScreener. Перед новыми входами нужна свежая проверка через GeckoTerminal.","Досягнуто ліміт DexScreener. Перед новими входами потрібна свіжа перевірка через GeckoTerminal."],
+            ["DexScreener is unavailable. Fresh GeckoTerminal screening is required before new entries.","DexScreener недоступен. Перед новыми входами нужна свежая проверка через GeckoTerminal.","DexScreener недоступний. Перед новими входами потрібна свіжа перевірка через GeckoTerminal."],
             ["Market-data rate limit: retry available in ","Ограничение запросов рыночных данных: повторная попытка будет доступна через ","Обмеження запитів ринкових даних: повторна спроба буде доступна через "],
             ["Market-data rate limit. Retry in ","Ограничение запросов рыночных данных. Повтор через ","Обмеження запитів ринкових даних. Повтор через "],
             [" seconds. No trade was sent."," с. Сделка не отправлялась."," с. Угоду не було надіслано."],
@@ -6374,7 +6382,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     }).join('\n')||'No verified shortlist yet.';
                     const marketSource=ai.market_discovery||{};
                     document.getElementById('whale-signal-status').textContent=
-                        (marketSource.provider||'DexScreener + GeckoTerminal')
+                        localizeUiText(marketSource.provider||'DexScreener profiles + meme meta feeds + bounded searches')
                         +' · Helius WebSocket OFF'
                         +'\nCandidate refresh: every '+(marketSource.scan_interval_seconds||300)+' seconds; bounded to 200 discovered / 40 checked.'
                         +'\nLiquidity and activity screening → fresh 5m/1h charts → rules engine → execution checks.'

@@ -4,6 +4,7 @@ import json
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 import dexscreener_client as dexscreener
 from unittest.mock import AsyncMock, patch
 
@@ -26,6 +27,34 @@ def pool(mint=MINT, **updates):
            "priceUsd":"0.01","priceChange":{"m5":1,"h1":10}}
     row.update(updates)
     return row
+
+
+def gecko_pool_payload(mint=MINT, *, price="0.01", pool_address=None):
+    pool_id = pool_address or str(Pubkey.from_bytes(hashlib.sha256(b"gecko-pool").digest()))
+    token_id = "solana_" + mint
+    created = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    return {
+        "data": [{
+            "id": "solana_" + pool_id,
+            "attributes": {
+                "address": pool_id,
+                "pool_created_at": created,
+                "reserve_in_usd": "200000",
+                "volume_usd": {"h24": "300000"},
+                "transactions": {"h24": {"buys": 600, "sells": 400}},
+                "base_token_price_usd": price,
+                "price_change_percentage": {"m5": "1", "h1": "10"},
+            },
+            "relationships": {
+                "base_token": {"data": {"id": token_id, "type": "token"}},
+                "dex": {"data": {"id": "raydium", "type": "dex"}},
+            },
+        }],
+        "included": [{
+            "id": token_id,
+            "attributes": {"address": mint, "symbol": "CAT"},
+        }],
+    }
 
 
 def mint_account(**updates):
@@ -108,10 +137,80 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_scan_stops_immediately_on_provider_cooldown(self):
         discovery = MemeDiscovery(self.ledger, self.rpc, [])
         session = self.provider_session(429)
-        with self.assertRaisesRegex(ValueError, "HTTP 429"):
+        with self.assertRaisesRegex(ValueError, "GeckoTerminal unavailable: HTTP 429"):
             await discovery.scan(session)
-        self.assertEqual(session.get.call_count, 1)
+        self.assertEqual(session.get.call_count, 2)
         self.assertTrue(discovery.blocked)
+        self.rpc.assert_not_awaited()
+
+    async def test_scan_uses_fresh_gecko_data_when_dexscreener_is_limited(self):
+        state = dexscreener.scheduler()
+        state.cooldown_until = state.clock() + 60
+        self.discovery.rpc = AsyncMock(return_value={"value": [mint_account()]})
+        self.discovery._gecko_json = AsyncMock(return_value=gecko_pool_payload())
+
+        self.assertEqual(self.discovery.scan_cooldown_remaining(), 0)
+        self.assertGreater(self.discovery.cooldown_remaining(), 0)
+        report = await self.discovery.scan(None)
+
+        self.assertEqual(report["provider"], "geckoterminal")
+        self.assertTrue(report["fallback"])
+        self.assertEqual(report["eligible"], 1)
+        self.assertEqual(report["candidates"][0]["mint"], MINT)
+        self.assertTrue(report["candidates"][0]["pool_address"])
+        self.assertTrue(self.discovery.entry_allowed(report["candidates"][0]["code"]))
+        self.discovery.fetch.assert_not_awaited()
+        self.discovery._gecko_json.assert_awaited_once()
+        self.discovery.rpc.assert_awaited_once()
+
+    async def test_gecko_price_fallback_requires_a_full_screen_before_new_entries(self):
+        await self.discovery.scan(None)
+        code = self.discovery.report["candidates"][0]["code"]
+        self.assertTrue(self.discovery.entry_allowed(code))
+        state = dexscreener.scheduler()
+        state.cooldown_until = state.clock() + 60
+        self.discovery._gecko_json = AsyncMock(return_value=gecko_pool_payload())
+
+        prices = await self.discovery.prices(None)
+
+        self.assertIn(code, prices)
+        self.assertEqual(self.discovery.active_provider, "geckoterminal")
+        self.assertTrue(self.discovery.blocked)
+        self.assertFalse(self.discovery.entry_allowed(code))
+
+    async def test_gecko_price_refresh_is_fresh_and_cannot_restore_rejected_candidate(self):
+        state = dexscreener.scheduler()
+        state.cooldown_until = state.clock() + 60
+        self.discovery.rpc = AsyncMock(return_value={"value": [mint_account()]})
+        self.discovery._gecko_json = AsyncMock(return_value=gecko_pool_payload())
+        report = await self.discovery.scan(None)
+        code = report["candidates"][0]["code"]
+
+        with self.ledger.db() as db:
+            row = db.execute(
+                "SELECT metrics FROM custody_meme_assets WHERE code=?", (code,)).fetchone()
+            metrics = json.loads(row["metrics"])
+            metrics["eligible"] = False
+            db.execute("UPDATE custody_meme_assets SET metrics=? WHERE code=?",
+                       (json.dumps(metrics), code))
+        self.discovery._gecko_json = AsyncMock(
+            return_value=gecko_pool_payload(price="0.02"))
+
+        prices = await self.discovery.prices(None, held=[code])
+
+        self.assertEqual(prices[code], 0.02)
+        self.assertFalse(json.loads(self.discovery.assets()[0]["metrics"])["eligible"])
+        self.discovery.fetch.assert_not_awaited()
+
+    async def test_invalid_gecko_fallback_stays_fail_closed(self):
+        state = dexscreener.scheduler()
+        state.cooldown_until = state.clock() + 60
+        self.discovery._gecko_json = AsyncMock(return_value={"data": "invalid"})
+
+        with self.assertRaisesRegex(ValueError, "invalid Solana pool list"):
+            await self.discovery.scan(None)
+
+        self.assertFalse(self.discovery.entry_allowed("MINT"))
         self.rpc.assert_not_awaited()
 
     async def test_cooldown_expiry_allows_request_but_preserves_backoff_until_stable(self):

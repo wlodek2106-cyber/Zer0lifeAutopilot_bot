@@ -8,6 +8,7 @@ import aiohttp
 
 import chart_analysis
 import dexscreener_client as dexscreener
+import geckoterminal_client as gecko
 from meme_discovery import DEXES
 
 
@@ -126,13 +127,12 @@ async def _get_candles(session, pool_address, timeframe):
         cached = _CANDLE_CACHE.get(key)
         if cached and now - cached["fetched_at"] <= _CANDLE_TTL[timeframe]:
             return cached["candles"], False
-        url = (f"https://api.geckoterminal.com/api/v2/networks/solana/pools/"
-               f"{pool_address}/ohlcv/{timeframe_name}")
+        path = f"/networks/solana/pools/{pool_address}/ohlcv/{timeframe_name}"
         try:
             semaphore = _CANDLE_SEMAPHORES.setdefault(loop_id, asyncio.Semaphore(2))
             async with semaphore:
-                async with session.get(
-                    url,
+                async with gecko.request(
+                    session, path, priority=gecko.CONTEXT,
                     params={"aggregate": aggregate, "limit": 100, "currency": "usd"},
                     headers={"Accept": "application/json", "User-Agent": "Zer0Life-AI-Trader"},
                     timeout=aiohttp.ClientTimeout(total=8),

@@ -5,7 +5,7 @@ import os
 import tempfile
 import time
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from solders.keypair import Keypair
 from solders.signature import Signature
@@ -13,6 +13,7 @@ from solders.signature import Signature
 import ai_decisions
 import openai_client
 import dexscreener_client
+import geckoterminal_client
 from custody_ledger import CustodyLedger, LedgerError, SOL, USDC
 from custody_runtime import CustodyRuntime, WRAPPED_SOL
 from wallet_runtime import WalletError
@@ -190,19 +191,25 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(messages), 1)
         self.service.trade.assert_not_awaited()
 
-    async def test_active_dex_cooldown_skips_candidate_price_request_and_keeps_entries_blocked(self):
+    async def test_active_dex_cooldown_uses_gecko_quotes_and_requires_full_rescan(self):
         self.service.prices_fn = AsyncMock(return_value={"SOL": 100})
-        self.service.discovery.prices = AsyncMock()
+        async def gecko_quotes(_session, _held):
+            self.service.discovery.active_provider = "geckoterminal"
+            self.service.discovery.blocked = True
+            return {}
+        self.service.discovery.prices = AsyncMock(side_effect=gecko_quotes)
         self.service.discovery.blocked = False
         self.service.discovery_due = 0
+        self.service.poll_discovery = Mock()
         dexscreener_client.scheduler().cooldown_until = time.monotonic() + 120
 
         prices = await self.service.current_prices(None)
 
         self.assertEqual(prices, {"SOL": 100})
-        self.service.discovery.prices.assert_not_awaited()
+        self.service.discovery.prices.assert_awaited_once()
         self.assertTrue(self.service.discovery.blocked)
-        self.assertGreaterEqual(self.service.discovery_due - time.time(), 119)
+        self.assertLessEqual(self.service.discovery_due - time.time(), 0)
+        self.service.poll_discovery.assert_called_once()
         self.assertTrue(self.service.discovery.status_report()["entry_paused"])
         self.service.trade.assert_not_awaited()
 
@@ -317,6 +324,9 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(status["whale_stream"]["enabled"])
         self.assertFalse(status["market_discovery"]["helius_websocket_enabled"])
         self.assertEqual(status["market_discovery"]["scan_interval_seconds"], 300)
+        runtime.discovery.active_provider = "geckoterminal"
+        self.assertEqual(runtime.ai_status()["market_discovery"]["provider"],
+                         "GeckoTerminal trending pools (DexScreener fallback)")
         self.assertEqual(runtime.whale_stream.transaction_lookups, 0)
         self.assertIsNone(runtime.whale_stream_task)
 
@@ -556,10 +566,11 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(self.service.discovery_due - time.time(), 299)
         self.assertLessEqual(self.service.discovery_due - time.time(), 300)
 
-    async def test_scan_retry_respects_provider_cooldown_even_with_whale_pending(self):
-        dexscreener_client.scheduler().cooldown_until = time.monotonic() + 240
+    async def test_scan_retry_respects_gecko_cooldown_even_with_whale_pending(self):
+        geckoterminal_client.scheduler().cooldown_until = time.monotonic() + 240
+        self.service.discovery.active_provider = "geckoterminal"
         self.service.discovery.scan = AsyncMock(
-            side_effect=ValueError("DexScreener unavailable: HTTP 429"))
+            side_effect=ValueError("GeckoTerminal unavailable: HTTP 429"))
         self.service.discovery.pending_whale_mints = lambda: ["pending"]
         self.service.log = lambda message: None
         await self.service.background_discovery()
@@ -567,14 +578,15 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.service.discovery.blocked)
         self.service.trade.assert_not_awaited()
 
-    async def test_poll_discovery_cannot_bypass_provider_cooldown(self):
+    async def test_poll_discovery_uses_gecko_while_dexscreener_is_limited(self):
         dexscreener_client.scheduler().cooldown_until = time.monotonic() + 240
         self.service.discovery_due = 0
         self.service.discovery_task = None
         self.service.background_discovery = AsyncMock()
         self.service.poll_discovery()
-        self.assertIsNone(self.service.discovery_task)
-        self.service.background_discovery.assert_not_called()
+        self.assertIsNotNone(self.service.discovery_task)
+        await self.service.discovery_task
+        self.service.background_discovery.assert_awaited_once()
 
     async def test_whale_trigger_cannot_call_paid_ai_or_bypass_rules_cache(self):
         self.service.market_context_fn = AsyncMock(return_value={

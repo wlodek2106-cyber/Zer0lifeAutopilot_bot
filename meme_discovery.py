@@ -5,10 +5,12 @@ import json
 import math
 import re
 import time
+from datetime import datetime
 from urllib.parse import quote
 
 import aiohttp
 import dexscreener_client as dexscreener
+import geckoterminal_client as gecko
 from solders.pubkey import Pubkey
 from spl_token_support import (
     TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, validate_mint_account,
@@ -22,6 +24,7 @@ MAX_DISCOVERED_MINTS = 200
 MAX_VERIFIED_CANDIDATES = 40
 AI_SHORTLIST_SIZE = 8
 SHORTLIST_ROTATION_SECONDS = 15 * 60
+MAX_GECKO_PRICE_LOOKUPS = 12
 # Discovery hints only. Every result remains subject to the same market and
 # on-chain checks below; a matching ticker is not treated as token identity.
 TARGETED_SEARCH_TERMS = ("FARTCOIN", "PONKE", "GIGA", "GOAT", "MOTHER", "MYRO", "SLERF")
@@ -95,8 +98,68 @@ def pool_metrics(pair, now=None):
     return {"mint": mint, "symbol": symbol, "price": price, "liquidity_usd": liquid,
             "volume_24h_usd": vol, "transactions_24h": activity, "age_hours": max(age, 0),
             "change_m5_pct": number(change.get("m5")), "change_h1_pct": number(change.get("h1")),
-            "dex": pair.get("dexId"), "score": score, "eligible": not reasons,
+            "dex": pair.get("dexId"), "pool_address": pair.get("pairAddress")
+                if valid_mint(pair.get("pairAddress")) else None,
+            "score": score, "eligible": not reasons,
             "rejection_reasons": reasons}
+
+
+def gecko_pools_to_pairs(payload):
+    """Convert fresh GeckoTerminal pool data to the scanner's strict metrics shape."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+        raise ValueError("GeckoTerminal returned an invalid Solana pool list.")
+    included_rows = payload.get("included", [])
+    included = {
+        row.get("id"): row.get("attributes", {})
+        for row in included_rows if isinstance(row, dict)
+        and isinstance(row.get("id"), str) and isinstance(row.get("attributes"), dict)
+    } if isinstance(included_rows, list) else {}
+    pairs = []
+    for pool in payload["data"]:
+        if not isinstance(pool, dict) or not isinstance(pool.get("attributes"), dict):
+            continue
+        attrs = pool["attributes"]
+        relations = pool.get("relationships")
+        if not isinstance(relations, dict):
+            continue
+        base_data = (relations.get("base_token") or {}).get("data")
+        dex_data = (relations.get("dex") or {}).get("data")
+        if not isinstance(base_data, dict) or not isinstance(dex_data, dict):
+            continue
+        token = included.get(base_data.get("id"))
+        address = token.get("address") if isinstance(token, dict) else None
+        if not valid_mint(address):
+            continue
+        created_at = attrs.get("pool_created_at")
+        try:
+            created_at_ms = int(datetime.fromisoformat(
+                str(created_at).replace("Z", "+00:00")).timestamp() * 1000)
+        except (TypeError, ValueError, OverflowError, OSError):
+            created_at_ms = 0
+        raw_changes = attrs.get("price_change_percentage")
+        changes = {}
+        if isinstance(raw_changes, dict):
+            for window in ("m5", "h1"):
+                value = raw_changes.get(window)
+                try:
+                    parsed = float(value)
+                    if math.isfinite(parsed):
+                        changes[window] = parsed
+                except (TypeError, ValueError, OverflowError):
+                    pass
+        pairs.append({
+            "chainId": "solana",
+            "dexId": str(dex_data.get("id") or "").lower(),
+            "pairAddress": attrs.get("address"),
+            "baseToken": {"address": address, "symbol": token.get("symbol", "")},
+            "liquidity": {"usd": attrs.get("reserve_in_usd")},
+            "volume": attrs.get("volume_usd"),
+            "txns": attrs.get("transactions"),
+            "pairCreatedAt": created_at_ms,
+            "priceUsd": attrs.get("base_token_price_usd"),
+            "priceChange": changes,
+        })
+    return pairs
 
 
 class MemeDiscovery:
@@ -106,6 +169,8 @@ class MemeDiscovery:
         self.aliases = {info["mint"]: code for code, info in self.seeds.items()}
         self.whale_priorities = {}
         self.whale_seen = {}
+        self.active_provider = "dexscreener"
+        self.gecko_price_cursor = 0
         self.blocked = True
         self.lock = asyncio.Lock()
         # Provider pacing/cooldown belongs to the application, not this scanner.
@@ -144,7 +209,17 @@ class MemeDiscovery:
             self.whale_priorities.items(), key=lambda item: item[1])[:30]]
 
     def cooldown_remaining(self):
+        if self.active_provider == "geckoterminal":
+            return gecko.cooldown_remaining()
         return dexscreener.cooldown_remaining()
+
+    def scan_cooldown_remaining(self):
+        """Wait only when both the active source and its available fallback are limited."""
+        if self.active_provider == "geckoterminal":
+            return gecko.cooldown_remaining()
+        if dexscreener.cooldown_remaining():
+            return gecko.cooldown_remaining()
+        return 0
 
     @staticmethod
     def retry_after_seconds(value):
@@ -156,8 +231,8 @@ class MemeDiscovery:
         hint = not path.startswith("/tokens/")
         state = dexscreener.scheduler()
         now = state.clock()
-        if self.cooldown_remaining():
-            raise dexscreener.ProviderLimited(self.cooldown_remaining())
+        if dexscreener.cooldown_remaining():
+            raise dexscreener.ProviderLimited(dexscreener.cooldown_remaining())
         cached = self.hint_cache.get(path) if hint else None
         if cached and 0 <= now - cached[0] < DISCOVERY_HINT_CACHE_TTL_SECONDS:
             return cached[1]
@@ -186,60 +261,117 @@ class MemeDiscovery:
             found.extend(data)
         return found
 
+    async def _dex_scan_data(self, session, whale_mints):
+        meta_paths = []
+        try:
+            metas = await self.fetch(session, "/metas/trending/v1")
+            meta_paths = ["/metas/meta/v1/" + row["slug"] for row in metas
+                if isinstance(row, dict) and isinstance(row.get("slug"), str)
+                and re.fullmatch(r"[a-z0-9-]{1,80}", row["slug"])
+                and "meme" in str(row.get("name", "")).lower()][:2]
+        except Exception:
+            pass
+        paths = [
+            "/token-profiles/latest/v1",
+            "/token-profiles/recent-updates/v1",
+            "/latest/dex/search?q=" + quote("meme"),
+            "/latest/dex/search?q=" + quote("pump"),
+            *["/latest/dex/search?q=" + term
+              for term in ("BONK", "POPCAT", "BOME", *TARGETED_SEARCH_TERMS)],
+            *meta_paths]
+        results = []
+        for path in paths:
+            try:
+                results.append(await self.fetch(session, path))
+            except Exception as exc:
+                results.append(exc)
+                if dexscreener.cooldown_remaining():
+                    raise
+        mints, failures, sources = list(dict.fromkeys([*whale_mints, *self.aliases])), 0, []
+        for result in results:
+            if isinstance(result, BaseException):
+                failures += 1
+                continue
+            if isinstance(result, list):
+                values = [item.get("tokenAddress") for item in result
+                          if isinstance(item, dict) and item.get("chainId") == "solana"]
+            elif isinstance(result, dict):
+                values = [p.get("baseToken", {}).get("address") for p in result.get("pairs", [])
+                          if isinstance(p, dict) and p.get("chainId") == "solana"]
+            else:
+                failures += 1
+                continue
+            sources.append(values[:30])
+        for values in zip(*[source + [None] * (30-len(source)) for source in sources]):
+            for mint in values:
+                if valid_mint(mint) and mint not in self.excluded and mint not in mints:
+                    mints.append(mint)
+        mints = mints[:MAX_DISCOVERED_MINTS]
+        if not mints:
+            raise ValueError("Sources returned no Solana candidates.")
+        return mints, await self.pairs(session, mints), failures
+
+    async def _gecko_json(self, session, path, *, priority=gecko.DISCOVERY):
+        async with gecko.request(
+            session, path, priority=priority,
+            headers={"Accept": "application/json", "User-Agent": "Zer0Life-AI-Trader"},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as response:
+            if response.status != 200:
+                raise ValueError(f"GeckoTerminal unavailable: HTTP {response.status}")
+            payload = await response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("GeckoTerminal returned invalid Solana market data.")
+        return payload
+
+    async def _gecko_scan_data(self, session, whale_mints):
+        payload = await self._gecko_json(
+            session, "/networks/solana/trending_pools?include=base_token,quote_token&page=1")
+        pairs = gecko_pools_to_pairs(payload)
+        if not pairs:
+            raise ValueError("GeckoTerminal returned no valid Solana trending pools.")
+        discovered = [pair["baseToken"]["address"] for pair in pairs]
+        mints = list(dict.fromkeys([*whale_mints, *self.aliases, *discovered]))[
+            :MAX_DISCOVERED_MINTS]
+        return mints, pairs, 0
+
     async def scan(self, session):
         async with self.lock:
             whale_mints = self.pending_whale_mints()
-            meta_paths = []
-            try:
-                metas = await self.fetch(session, "/metas/trending/v1")
-                meta_paths = ["/metas/meta/v1/" + row["slug"] for row in metas
-                    if isinstance(row, dict) and isinstance(row.get("slug"), str)
-                    and re.fullmatch(r"[a-z0-9-]{1,80}", row["slug"])
-                    and "meme" in str(row.get("name", "")).lower()][:2]
-            except Exception:
-                pass
-            # Do not queue a burst ahead of protective position-price refreshes.
-            paths = [
-                "/token-profiles/latest/v1",
-                "/token-profiles/recent-updates/v1",
-                "/latest/dex/search?q=" + quote("meme"),
-                "/latest/dex/search?q=" + quote("pump"),
-                *["/latest/dex/search?q=" + term
-                  for term in ("BONK", "POPCAT", "BOME", *TARGETED_SEARCH_TERMS)],
-                *meta_paths]
-            results = []
-            for path in paths:
+            dex_cooldown = dexscreener.cooldown_remaining()
+            provider = "dexscreener"
+            if dex_cooldown:
+                provider = "geckoterminal"
+                self.active_provider = provider
+                self.blocked = True
+                self.report = {**self.report, "message":
+                    "DexScreener is rate-limited. Fresh GeckoTerminal screening is required before new entries."}
+                mints, pairs, failures = await self._gecko_scan_data(session, whale_mints)
+            else:
                 try:
-                    results.append(await self.fetch(session, path))
+                    mints, pairs, failures = await self._dex_scan_data(session, whale_mints)
                 except Exception as exc:
-                    results.append(exc)
-                    if self.cooldown_remaining():
+                    provider_failure = (
+                        isinstance(exc, (dexscreener.ProviderLimited, aiohttp.ClientError,
+                                         asyncio.TimeoutError))
+                        or isinstance(exc, ValueError) and (
+                            str(exc).startswith("DexScreener unavailable: HTTP ")
+                            or str(exc) == "DexScreener returned an invalid list."))
+                    if not provider_failure:
                         raise
-            mints, failures, sources = list(dict.fromkeys([*whale_mints, *self.aliases])), 0, []
-            for result in results:
-                if isinstance(result, BaseException):
-                    failures += 1
-                    continue
-                if isinstance(result, list):
-                    values = [item.get("tokenAddress") for item in result if isinstance(item, dict) and item.get("chainId") == "solana"]
-                elif isinstance(result, dict):
-                    values = [p.get("baseToken", {}).get("address") for p in result.get("pairs", [])
-                              if isinstance(p, dict) and p.get("chainId") == "solana"]
+                    provider = "geckoterminal"
+                    self.active_provider = provider
+                    self.blocked = True
+                    self.report = {**self.report, "message":
+                        "DexScreener is unavailable. Fresh GeckoTerminal screening is required before new entries."}
+                    mints, pairs, failures = await self._gecko_scan_data(session, whale_mints)
                 else:
-                    failures += 1
-                    continue
-                sources.append(values[:30])
-            # Round robin prevents a single latest-profile feed crowding out search.
-            for values in zip(*[source + [None] * (30-len(source)) for source in sources]):
-                for mint in values:
-                    if valid_mint(mint) and mint not in self.excluded and mint not in mints:
-                        mints.append(mint)
-            mints = mints[:MAX_DISCOVERED_MINTS]
+                    self.active_provider = provider
             if not mints:
                 raise ValueError("Sources returned no Solana candidates.")
             best = {}
             rejected_pools = {}
-            for pair in await self.pairs(session, mints):
+            for pair in pairs:
                 item = pool_metrics(pair)
                 if not item or item["mint"] not in mints:
                     continue
@@ -332,12 +464,20 @@ class MemeDiscovery:
                     "mint": mint[:6] + "…" + mint[-5:],
                     "reasons": reasons[:6],
                 })
-            self.report = {"source": "DexScreener profiles + meme meta feeds + bounded searches", "complete": False,
+            fallback = provider == "geckoterminal"
+            source = ("GeckoTerminal trending pools (DexScreener fallback)" if fallback else
+                      "DexScreener profiles + meme meta feeds + bounded searches")
+            message = ("GeckoTerminal backup is active. Fresh pool data, charts, mint checks and quotes "
+                       "remain required; discovery is limited to the provider's current trending pools."
+                       if fallback else
+                       "Bounded Solana candidate sample, not every project or a profit forecast. "
+                       "Whale signals are leads only; all candidates still pass the existing screen.")
+            self.report = {"source": source, "provider": provider, "fallback": fallback, "complete": False,
                 "checked_at": now, "scanned": len(mints), "eligible": len(accepted), "source_failures": failures,
                 "whale_prioritized": len([mint for mint in whale_mints if mint in mints]),
                 "whale_candidates": sum(1 for item in accepted if item["mint"] in whale_mints),
                 "whale_rejections": whale_rejections,
-                "message": "Bounded Solana candidate sample, not every project or a profit forecast. Whale signals are leads only; all candidates still pass the existing screen.",
+                "message": message,
                 "candidates": accepted}
             self.blocked = False
             return self.report
@@ -364,9 +504,11 @@ class MemeDiscovery:
                   "retry_after_seconds": self.cooldown_remaining()}
         checked = report.get("checked_at")
         if report["retry_after_seconds"]:
+            provider = ("GeckoTerminal" if self.active_provider == "geckoterminal"
+                        else "DexScreener")
             report.update(entry_paused=True, message=
-                "DexScreener rate limit (HTTP 429). Shared market-data requests are paused; "
-                f"automatic retry after at least {report['retry_after_seconds']} seconds.")
+                f"{provider} rate limit (HTTP 429). Automatic retry after at least "
+                f"{report['retry_after_seconds']} seconds.")
         elif self.blocked:
             report.update(entry_paused=True, message=report.get("message")
                           or "Candidate checks unavailable. New sniper entries paused.")
@@ -384,6 +526,8 @@ class MemeDiscovery:
 
     @staticmethod
     def failure_category(exc):
+        if isinstance(exc, gecko.ProviderLimited):
+            return "GeckoTerminal market-data HTTP 429"
         if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
             return "network timeout"
         if isinstance(exc, aiohttp.ClientResponseError):
@@ -394,6 +538,9 @@ class MemeDiscovery:
         match = re.fullmatch(r"DexScreener unavailable: HTTP (\d{3})", message)
         if match:
             return f"market-data HTTP {match.group(1)}"
+        match = re.fullmatch(r"GeckoTerminal unavailable: HTTP (\d{3})", message)
+        if match:
+            return f"GeckoTerminal market-data HTTP {match.group(1)}"
         if "Solana RPC" in message:
             return "Solana RPC error"
         if isinstance(exc, ValueError):
@@ -409,7 +556,83 @@ class MemeDiscovery:
                        "message": message + ". New sniper entries paused; automatic retry scheduled.",
                        "entry_paused": True}
 
+    async def _gecko_prices(self, session, held=(), candidate_codes=None):
+        held = list(dict.fromkeys(held))
+        eligible_codes = ({row["code"] for row in self.candidates()}
+                          if candidate_codes is None else set(candidate_codes))
+        wanted = eligible_codes | set(held)
+        assets = [row for row in self.assets() if row["code"] in wanted]
+        held_rows = [row for row in assets if row["code"] in held]
+        other_rows = [row for row in assets if row["code"] not in held]
+        ordered = held_rows + other_rows
+        if len(ordered) > MAX_GECKO_PRICE_LOOKUPS:
+            if len(held_rows) > MAX_GECKO_PRICE_LOOKUPS:
+                offset = self.gecko_price_cursor % len(held_rows)
+                held_rows = (held_rows[offset:] + held_rows[:offset])
+                ordered = held_rows[:MAX_GECKO_PRICE_LOOKUPS]
+                self.gecko_price_cursor = (offset + MAX_GECKO_PRICE_LOOKUPS) % len(held_rows)
+            else:
+                ordered = ordered[:MAX_GECKO_PRICE_LOOKUPS]
+        if not ordered:
+            return {}
+
+        payload = await self._gecko_json(
+            session, "/networks/solana/trending_pools?include=base_token,quote_token&page=1",
+            priority=gecko.PRICE)
+        metrics_by_mint = {}
+
+        def add_pool_rows(pool_payload):
+            for pair in gecko_pools_to_pairs(pool_payload):
+                item = pool_metrics(pair)
+                if (item and item["dex"] in DEXES and item["price"] > 0
+                        and item["mint"] in {row["mint"] for row in ordered}
+                        and item["liquidity_usd"] > metrics_by_mint.get(
+                            item["mint"], {}).get("liquidity_usd", -1)):
+                    metrics_by_mint[item["mint"]] = item
+
+        add_pool_rows(payload)
+        missing = [row for row in ordered if row["mint"] not in metrics_by_mint]
+        for asset in missing:
+            try:
+                old = json.loads(asset["metrics"])
+            except (TypeError, ValueError):
+                old = {}
+            pool_address = old.get("pool_address")
+            if valid_mint(pool_address):
+                path = (f"/networks/solana/pools/{pool_address}"
+                        "?include=base_token,quote_token")
+            else:
+                path = (f"/networks/solana/tokens/{asset['mint']}/pools"
+                        "?include=base_token,quote_token&page=1")
+            add_pool_rows(await self._gecko_json(session, path, priority=gecko.PRICE))
+
+        prices = {}
+        with self.ledger.db() as db:
+            for asset in ordered:
+                item = metrics_by_mint.get(asset["mint"])
+                if not item:
+                    continue
+                prices[asset["code"]] = item["price"]
+                try:
+                    old = json.loads(asset["metrics"])
+                except (TypeError, ValueError):
+                    old = {}
+                old.update({key: value for key, value in item.items() if key != "eligible"})
+                old["eligible"] = bool(old.get("eligible")) and item["eligible"]
+                db.execute("UPDATE custody_meme_assets SET metrics=? WHERE code=?",
+                           (json.dumps(old), asset["code"]))
+        return prices
+
     async def prices(self, session, held=()):
+        candidate_codes = {row["code"] for row in self.candidates()}
+        if (self.active_provider == "geckoterminal"
+                or dexscreener.cooldown_remaining()):
+            if self.active_provider != "geckoterminal":
+                self.active_provider = "geckoterminal"
+                self.blocked = True
+                self.report = {**self.report, "message":
+                    "DexScreener is rate-limited. Fresh GeckoTerminal screening is required before new entries."}
+            return await self._gecko_prices(session, held, candidate_codes=candidate_codes)
         wanted = {row["code"] for row in self.candidates()} | set(held)
         assets = [row for row in self.assets() if row["code"] in wanted]
         prices = {}

@@ -327,7 +327,7 @@ class CustodyRuntime(WalletRuntime):
                 retry_delay = min(900, 60 * (2 ** (self.discovery_failures - 1)))
                 if self.discovery.pending_whale_mints():
                     retry_delay = 60
-                retry_delay = max(retry_delay, self.discovery.cooldown_remaining())
+                retry_delay = max(retry_delay, self.discovery.scan_cooldown_remaining())
                 reason = self.discovery.failure_category(exc)
                 self.discovery.fail(reason)
                 self.log("Candidate scan failed (" + reason +
@@ -341,7 +341,7 @@ class CustodyRuntime(WalletRuntime):
         finally:
             if self.discovery.pending_whale_mints():
                 retry_delay = 60
-            retry_delay = max(retry_delay, self.discovery.cooldown_remaining())
+            retry_delay = max(retry_delay, self.discovery.scan_cooldown_remaining())
             self.discovery_due = time.time() + retry_delay
 
     def on_whale_signal(self, event):
@@ -363,13 +363,13 @@ class CustodyRuntime(WalletRuntime):
         if self.discovery_task and self.discovery_task.done():
             self.discovery_task = None
         if (self.discovery_task is None and time.time() >= self.discovery_due
-                and not self.discovery.cooldown_remaining()):
+                and not self.discovery.scan_cooldown_remaining()):
             self.discovery_started = time.time()
             self.discovery_task = asyncio.create_task(self.background_discovery())
 
     async def scan_candidates(self, request, session):
         self.admit(self.uid(request))
-        cooldown = self.discovery.cooldown_remaining()
+        cooldown = self.discovery.scan_cooldown_remaining()
         self.poll_discovery()
         task = self.discovery_task
         scan_running = bool(task and not task.done())
@@ -403,7 +403,7 @@ class CustodyRuntime(WalletRuntime):
         prices = await self.prices_fn(session)
         if getattr(self, "discovery", None):
             cooldown = self.discovery.cooldown_remaining()
-            if cooldown:
+            if cooldown and self.discovery.active_provider == "geckoterminal":
                 if not self.discovery.blocked:
                     self.discovery.fail("market-data HTTP 429")
                 self.discovery_due = max(self.discovery_due, time.time() + cooldown)
@@ -412,6 +412,11 @@ class CustodyRuntime(WalletRuntime):
                 prices.update(await self.discovery.prices(
                     session, [*self.held_sniper_symbols(),
                               *self.held_investor_symbols(), *extra_symbols]))
+                if (self.discovery.active_provider == "geckoterminal"
+                        and self.discovery.blocked):
+                    now = time.time()
+                    self.discovery_due = min(self.discovery_due or now, now)
+                    self.poll_discovery()
             except Exception as exc:
                 reason = self.discovery.failure_category(exc)
                 was_blocked = self.discovery.blocked
@@ -877,6 +882,14 @@ class CustodyRuntime(WalletRuntime):
         decisions = dict(latest_record.get("decisions") or {})
         if scheduled_record.get("decisions"):
             decisions["main"] = scheduled_record["decisions"]["main"]
+        discovery_report = (self.discovery.status_report()
+                            if getattr(self, "discovery", None) else None)
+        if (getattr(self, "discovery", None)
+                and self.discovery.active_provider == "geckoterminal"):
+            market_provider = "GeckoTerminal trending pools (DexScreener fallback)"
+        else:
+            market_provider = ((discovery_report or {}).get("source")
+                               or "DexScreener profiles + meme meta feeds + bounded searches")
         return {**config, "last_analyzed_at": latest["created_at"] if latest else None,
                 "last_decisions": decisions or None,
                 "decision_created_at": {
@@ -904,9 +917,9 @@ class CustodyRuntime(WalletRuntime):
                 "sniper_assets": self.ai_universes()["sniper"],
                 "asset_labels": {s: info.get("label", s) + (" · "+info["mint"][:4]+"…"+info["mint"][-4:]
                                  if s.startswith("M_") else "") for s, info in self.watchlist.items()},
-                "discovery": self.discovery.status_report() if getattr(self, "discovery", None) else None,
+                "discovery": discovery_report,
                 "market_discovery": {
-                    "provider": "DexScreener + GeckoTerminal",
+                    "provider": market_provider,
                     "mode": "scheduled_market_scan",
                     "scan_interval_seconds": MARKET_SCAN_INTERVAL_SECONDS,
                     "helius_websocket_enabled": False,

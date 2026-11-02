@@ -81,13 +81,13 @@ class DexScreenerClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(good.calls, [])
         self.assertGreaterEqual(other.cooldown_remaining(), 239)
 
-    async def test_429_from_core_prices_is_shared_with_scanner_and_status(self):
+    async def test_429_from_core_prices_pauses_dex_scan_until_gecko_fallback(self):
         bad = Session(Response(429))
         self.assertEqual(await self.main_prices_function()(bad), {})
         self.assertGreaterEqual(self.discovery.cooldown_remaining(), 59)
         status = self.discovery.status_report()
         self.assertTrue(status["entry_paused"])
-        self.assertIn("Shared market-data requests", status["message"])
+        self.assertIn("DexScreener rate limit (HTTP 429)", status["message"])
         with self.assertRaises(client.ProviderLimited):
             await self.discovery.fetch(Session(), "/tokens/v1/solana/mint")
         self.assertFalse(self.discovery.entry_allowed("ANY"))
