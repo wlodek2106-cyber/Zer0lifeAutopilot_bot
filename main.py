@@ -2848,6 +2848,43 @@ RAW_HTML = r"""<!DOCTYPE html>
         #app #tab-trading #sniper-pnl { color: #b1c0b2 !important; }
         #app #tab-trading #core-strategy-card > p,
         #app #tab-trading #meme-sniper-card > p { font-size: 11px; }
+        #app #tab-terminal .trading-compact-description,
+        #app #tab-trading .trading-compact-description {
+            margin: 8px 2px 0;
+            color: #bdcabc;
+            font-size: 11px;
+            line-height: 1.45;
+        }
+        #app #tab-terminal details.trading-description-disclosure,
+        #app #tab-trading details.trading-description-disclosure {
+            margin: 7px 0 0;
+            padding: 0;
+            border: 1px solid rgba(179, 220, 173, .13);
+            border-radius: 10px;
+            background: rgba(6, 12, 9, .42);
+        }
+        #app #tab-terminal details.trading-description-disclosure > summary,
+        #app #tab-trading details.trading-description-disclosure > summary {
+            min-height: 36px;
+            padding: 9px 11px;
+            color: #c9d9c5;
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        #app #tab-terminal details.trading-description-disclosure[open] > summary,
+        #app #tab-trading details.trading-description-disclosure[open] > summary {
+            border-bottom: 1px solid rgba(179, 220, 173, .12);
+            color: #e1edda;
+        }
+        #app #tab-terminal details.trading-description-disclosure > .section-note,
+        #app #tab-trading details.trading-description-disclosure > .section-note {
+            margin: 0;
+            padding: 10px 11px 12px;
+            color: #aebcae;
+            font-size: 11px;
+            line-height: 1.55;
+        }
         #app #tab-trading .trading-readiness-card {
             padding: 16px;
             border-color: rgba(222, 190, 112, .22) !important;
@@ -3089,7 +3126,11 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <div class="stat-box"><div class="stat-label">Order size</div><div class="stat-val" id="sniper-order-size">Loading...</div></div>
                 </div>
                 <p id="sniper-position-cap" class="section-note">Screened Solana candidates · Checking position limit…</p>
-                <p class="section-note">Automatic exits only: −5% stop; after +3.5%, exit on a 2% pullback from the peak. AI SELL and resistance exits are disabled. Manual sales remain available. Thresholds are measured in this position's funding currency, not the USD chart; fills and profit are not guaranteed.</p>
+                <p class="section-note trading-compact-description">Automatic exits: −5% stop; −2% trail after +3.5%. Manual sales available.</p>
+                <details class="trading-description-disclosure">
+                    <summary>Exit rules &amp; risk</summary>
+                    <p class="section-note">Automatic exits only: −5% stop; after +3.5%, exit on a 2% pullback from the peak. AI SELL and resistance exits are disabled. Manual sales remain available. Thresholds are measured in this position's funding currency, not the USD chart; fills and profit are not guaranteed.</p>
+                </details>
                 <div id="discovery-status" class="section-note" role="status" aria-live="polite">Candidate scan pending.</div>
                 <button class="action-btn" id="scan-candidates" onclick="scanCandidates()">Scan candidates</button>
                 <details><summary>Candidate shortlist</summary><div id="candidate-list" class="section-note" style="white-space:pre-line">No verified shortlist yet.</div></details>
@@ -3112,7 +3153,11 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <div class="stat-box"><div class="stat-label">Profit trail</div><div class="stat-val" style="color: #4ade80;">+3.50% / −2.00%</div></div>
                     <div class="stat-box"><div class="stat-label">Stop loss</div><div class="stat-val" style="color: #f87171;">−5.00%</div></div>
                 </div>
-                <p class="section-note">Core entry cost budget: 2.50% of the order. Includes quoted DEX fees, price impact, slippage, estimated network fees, Jito tips and account rent for entry/exit. Estimates do not guarantee profit or exit costs. SELL exits are not blocked by this filter.</p>
+                <p class="section-note trading-compact-description">Entry-cost cap: 2.50% of the order; sell exits are not blocked.</p>
+                <details class="trading-description-disclosure">
+                    <summary>Entry-cost details</summary>
+                    <p class="section-note">Core entry cost budget: 2.50% of the order. Includes quoted DEX fees, price impact, slippage, estimated network fees, Jito tips and account rent for entry/exit. Estimates do not guarantee profit or exit costs. SELL exits are not blocked by this filter.</p>
+                </details>
                 <p id="entry-cost-check" class="section-note" aria-live="polite">No entry cost check yet.</p>
             </div>
 
@@ -4609,7 +4654,13 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["The engine starts only after you press ON and pass readiness checks. It is OFF after every server restart. If it is OFF, open positions remain open and can still be sold manually. Results are recorded per funding currency and exclude separately paid operator/network fees.","Модуль запускается только после нажатия ON и успешной проверки готовности. После каждого перезапуска сервера он выключен. Пока он выключен, открытые позиции сохраняются и их можно продать вручную. Результаты учитываются отдельно по валюте финансирования; отдельно оплаченные комиссии оператора и сети не включены.","Модуль запускається лише після натискання ON і успішної перевірки готовності. Після кожного перезапуску сервера його вимкнено. Поки він вимкнений, відкриті позиції зберігаються, і їх можна продати вручну. Результати обліковуються окремо за валютою фінансування; окремо сплачені комісії оператора та мережі не враховано."],
             ["Trading involves risk. No guaranteed returns.","Торговля связана с риском. Прибыль не гарантирована.","Торгівля пов’язана з ризиком. Прибуток не гарантований."],
             ["Trading signals","Торговые сигналы","Торгові сигнали"],
-            ["Your SOL to allocate","Ваш SOL для распределения","Ваш SOL для розподілу"]
+            ["Your SOL to allocate","Ваш SOL для распределения","Ваш SOL для розподілу"],
+            ["Automatic exits: −5% stop; −2% trail after +3.5%. Manual sales available.","Автовыходы: стоп −5%; трейлинг −2% после +3,5%. Ручная продажа доступна.","Автовиходи: стоп −5%; трейл −2% після +3,5%. Ручний продаж доступний."],
+            ["Exit rules & risk","Правила выхода и риски","Правила виходу та ризики"],
+            ["Automatic exits only: −5% stop; after +3.5%, exit on a 2% pullback from the peak. AI SELL and resistance exits are disabled. Manual sales remain available. Thresholds are measured in this position's funding currency, not the USD chart; fills and profit are not guaranteed.","Только автоматические выходы: стоп −5%; после +3,5% — продажа при откате на 2% от пика. Продажи ИИ и выходы по сопротивлению отключены. Ручная продажа доступна. Пороговые значения считаются в валюте позиции, а не по графику в USD; исполнение и прибыль не гарантированы.","Лише автоматичні виходи: стоп −5%; після +3,5% — продаж при відкаті на 2% від піка. Продажі ШІ та виходи за рівнем опору вимкнені. Ручний продаж доступний. Порогові значення вимірюються у валюті позиції, а не за графіком у USD; виконання й прибуток не гарантовані."],
+            ["Entry-cost cap: 2.50% of the order; sell exits are not blocked.","Лимит затрат на вход: 2,50% ордера; продажи этим фильтром не блокируются.","Ліміт витрат на вхід: 2,50% ордера; продажі цим фільтром не блокуються."],
+            ["Entry-cost details","Расходы на вход","Витрати на вхід"],
+            ["Core entry cost budget: 2.50% of the order. Includes quoted DEX fees, price impact, slippage, estimated network fees, Jito tips and account rent for entry/exit. Estimates do not guarantee profit or exit costs. SELL exits are not blocked by this filter.","Лимит затрат на вход Core — 2,50% суммы ордера. Учитываются котировки комиссий DEX, влияние на цену, проскальзывание, сетевые комиссии, чаевые Jito и аренда аккаунта при входе/выходе. Оценка не гарантирует прибыль или стоимость выхода. Фильтр не блокирует продажи.","Ліміт витрат на вхід Core — 2,50% суми ордера. Враховуються котирування комісій DEX, вплив на ціну, прослизання, мережеві комісії, чайові Jito та оренда акаунта під час входу/виходу. Оцінка не гарантує прибуток або вартість виходу. Фільтр не блокує продажі."]
         ];
         const UI_COPY = {
             ru:Object.fromEntries([...UI_COPY_ROWS,...UI_COPY_ROWS_EXTRA].map(([english,russian])=>[english,russian])),
