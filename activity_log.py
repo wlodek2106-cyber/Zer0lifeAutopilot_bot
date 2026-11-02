@@ -37,11 +37,13 @@ def record_event(runtime, uid, event_id, code, message):
                 db.execute("""DELETE FROM custody_activity_events WHERE uid=? AND rowid NOT IN
                     (SELECT rowid FROM custody_activity_events WHERE uid=?
                      ORDER BY created_at DESC,rowid DESC LIMIT 200)""", (uid, uid))
+            return bool(inserted)
     except Exception:
         try:
             runtime.log("Activity history write unavailable.")
         except Exception:
             pass
+        return None
 
 
 def record_jito_stage(runtime, operation, code, message):
@@ -58,8 +60,18 @@ def record_jito_stage(runtime, operation, code, message):
         signature = str(operation.get("signature") or "")
         tx_ref = f" Tx {signature[:10]}…" if signature else ""
         safe_message = safe_failure_reason(message)
-        record_event(runtime, uid, f"jito-operation:{operation_id}", code,
+        stage = re.sub(r"[^a-z0-9_-]", "_", str(code).lower())[:64] or "unknown"
+        inserted = record_event(runtime, uid, f"jito-operation:{operation_id}:{stage}", stage,
                      f"{safe_message} Elapsed {elapsed}s since reservation.{tx_ref}")
+        if inserted is False:
+            return
+        operation_ref = re.sub(r"[^A-Za-z0-9_-]", "_", str(operation_id))[:8] or "unknown"
+        try:
+            runtime.log(
+                f"Solana Jito diagnostic stage={stage} operation={operation_ref} "
+                f"elapsed={elapsed}s detail={safe_message}")
+        except Exception:
+            pass
     except Exception:
         # Telemetry must never alter the outcome of a financial operation.
         return
@@ -98,6 +110,7 @@ _STANDALONE_CREDENTIAL = re.compile(
     r"(?i)^(?:secret|token|api[_-]?key|password|credential)[_:= -][a-z0-9._~+/-]{4,}$")
 _URL = re.compile(r"(?i)\b(?:https?://|www\.)\S+")
 _BEARER = re.compile(r"(?i)\bbearer\s+\S+")
+_OPAQUE_DATA = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9_+/=-]{48,}(?![A-Za-z0-9])")
 
 
 def safe_failure_reason(value):
@@ -108,7 +121,26 @@ def safe_failure_reason(value):
     text = _BEARER.sub("Bearer [redacted]", text)
     text = _SECRET_ASSIGNMENT.sub(r"\1\2[redacted]", text)
     text = _URL.sub("[URL redacted]", text)
+    text = _OPAQUE_DATA.sub("[opaque data redacted]", text)
     return text[:300]
+
+
+def safe_provider_error(value):
+    """Extract only a bounded provider error code/message, never the raw payload."""
+    if not isinstance(value, dict):
+        return safe_failure_reason(value)
+    parts = []
+    code = value.get("code")
+    if isinstance(code, int) and not isinstance(code, bool):
+        parts.append(f"code {code}")
+    elif isinstance(code, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", code):
+        parts.append(f"code {code}")
+    message = value.get("message")
+    if isinstance(message, str):
+        safe_message = safe_failure_reason(message)
+        if safe_message:
+            parts.append(safe_message)
+    return ": ".join(parts)[:300]
 
 
 def report(runtime, uid):

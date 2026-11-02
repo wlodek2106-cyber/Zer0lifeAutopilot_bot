@@ -79,6 +79,8 @@ class ActivityTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_jito_stage_is_account_scoped_idempotent_and_includes_elapsed_time(self):
         signature = str(Signature.new_unique())
+        runtime_logs = []
+        self.runtime.log = runtime_logs.append
         operation = {
             "id": "jito-op-fixture", "uid": 101, "kind": "BUY",
             "metadata": json.dumps({"execution_route": "jito_bundle_only"}),
@@ -89,11 +91,40 @@ class ActivityTests(unittest.IsolatedAsyncioTestCase):
             "Jito acknowledgement is missing; the outcome is unknown.")
         activity_log.record_jito_stage(self.runtime, operation, "jito_submission_unknown",
             "Duplicate observation must not create another event.")
+        activity_log.record_jito_stage(self.runtime, operation, "jito_signature_status_error",
+            "RPC failed: Authorization: Bearer test-secret https://rpc.example/path?api_key=private")
 
         matching = [entry for entry in self.entries() if entry.get("code") == "jito_submission_unknown"]
         self.assertEqual(len(matching), 1)
         self.assertIn("Elapsed 4s since reservation", matching[0]["message"])
         self.assertIn(signature[:10], matching[0]["message"])
+        stages = [entry for entry in self.entries() if entry.get("code", "").startswith("jito_")]
+        self.assertEqual({entry["code"] for entry in stages},
+            {"jito_submission_unknown", "jito_signature_status_error"})
+        self.assertEqual(len([entry for entry in self.entries(202)
+            if entry.get("code", "").startswith("jito_")]), 0)
+        combined = json.dumps(stages + runtime_logs)
+        self.assertNotIn("test-secret", combined)
+        self.assertNotIn("private", combined)
+        self.assertNotIn("https://", combined)
+        self.assertNotIn(signature, combined)
+        self.assertTrue(any("Solana Jito diagnostic stage=jito_submission_unknown" in item
+            for item in runtime_logs))
+
+    async def test_safe_provider_error_keeps_only_code_and_redacted_message(self):
+        detail = activity_log.safe_provider_error({
+            "code": -32005,
+            "message": "block engine rejected: Bearer super-secret https://jito.example/send "
+                       + "A" * 120,
+            "data": {"signed_wire": "must-not-be-recorded"},
+        })
+
+        self.assertIn("code -32005", detail)
+        self.assertIn("block engine rejected", detail)
+        self.assertNotIn("super-secret", detail)
+        self.assertNotIn("https://", detail)
+        self.assertNotIn("A" * 120, detail)
+        self.assertNotIn("must-not-be-recorded", detail)
 
     def open_position(self, uid=101):
         buy = self.ledger.reserve(uid, "close-test-" + str(uuid.uuid4()), "BUY", USDC,

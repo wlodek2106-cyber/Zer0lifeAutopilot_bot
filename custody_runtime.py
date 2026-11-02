@@ -2392,7 +2392,15 @@ class CustodyRuntime(WalletRuntime):
         for row in self.ledger.pending():
             if row["state"] == "RESERVED":
                 continue
-            statuses = await self.rpc(session, "getSignatureStatuses", [[row["signature"]], {"searchTransactionHistory": True}])
+            try:
+                statuses = await self.rpc(session, "getSignatureStatuses",
+                    [[row["signature"]], {"searchTransactionHistory": True}])
+            except Exception as exc:
+                detail = activity_log.safe_failure_reason(str(exc)) or type(exc).__name__
+                activity_log.record_jito_stage(self, row, "jito_signature_status_error",
+                    "Solana signature status query failed (" + detail +
+                    "); the reservation remains locked. Do not resend.")
+                raise
             status = statuses["value"][0]
             if status is None:
                 activity_log.record_jito_stage(self, row, "jito_signature_not_seen",
@@ -2423,19 +2431,31 @@ class CustodyRuntime(WalletRuntime):
                             activity_log.record_jito_stage(self, row, "jito_absent_expired",
                                 "Independent Solana history verified the signature absent and "
                                 "the blockhash expired; the reservation was released safely.")
-                        except (WalletError, LedgerError, asyncio.TimeoutError, aiohttp.ClientError):
+                        except (WalletError, LedgerError, asyncio.TimeoutError, aiohttp.ClientError) as exc:
                             # Missing proof is not a failed transaction. Retain its lock.
-                            pass
+                            detail = activity_log.safe_failure_reason(str(exc)) or type(exc).__name__
+                            activity_log.record_jito_stage(self, row,
+                                "jito_expiry_proof_inconclusive",
+                                "Independent Solana expiry verification was inconclusive (" +
+                                detail + "); funds remain reserved. Do not resend.")
                 continue
             confirmation = status.get("confirmationStatus")
             if confirmation in ("processed", "confirmed", "finalized"):
+                slot = status.get("slot")
+                slot_note = f" at slot {slot}" if isinstance(slot, int) and slot >= 0 else ""
                 activity_log.record_jito_stage(self, row, "jito_chain_" + confirmation,
-                    f"Solana reports the swap signature at {confirmation} commitment.")
+                    f"Solana reports the swap signature at {confirmation} commitment{slot_note}; "
+                    f"transaction error present: {status.get('err') is not None}.")
             if status.get("err") is not None:
                 # Failed transactions still pay a fee. Fetch it, charge only operator treasury.
                 tx = await self.rpc(session, "getTransaction", [row["signature"], {
                     "encoding": "jsonParsed", "commitment": "finalized", "maxSupportedTransactionVersion": 0}])
                 if status.get("confirmationStatus") != "finalized" or not tx:
+                    chain_error = activity_log.safe_provider_error(status.get("err"))
+                    activity_log.record_jito_stage(self, row, "jito_chain_error_pending_finality",
+                        "Solana reports an execution error but finality is not established (" +
+                        (chain_error or "error details unavailable") +
+                        "); funds remain reserved until final confirmation.")
                     continue
                 fee = int(tx["meta"]["fee"])
                 if fee > row["fee_cap"]:
@@ -2946,15 +2966,34 @@ class CustodyRuntime(WalletRuntime):
             "method": "sendTransaction",
             "params": [wire, {"encoding": "base64"}],
         }
-        async with session.post(
-                JITO_BUNDLE_SEND_URL, json=payload,
-                timeout=aiohttp.ClientTimeout(total=8)) as response:
-            if response.status != 200:
-                raise WalletError("Jito private submission is unavailable.")
-            answer = await response.json()
-        if (not isinstance(answer, dict) or answer.get("error")
-                or answer.get("result") != expected_signature):
-            raise WalletError("Jito did not confirm the swap submission.")
+        try:
+            async with session.post(
+                    JITO_BUNDLE_SEND_URL, json=payload,
+                    timeout=aiohttp.ClientTimeout(total=8)) as response:
+                if response.status != 200:
+                    raise WalletError(
+                        f"Jito private submission returned HTTP {response.status}.")
+                try:
+                    answer = await response.json()
+                except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, UnicodeError) as exc:
+                    raise WalletError(
+                        "Jito returned invalid JSON-RPC data (" +
+                        type(exc).__name__ + ").") from None
+        except WalletError:
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            raise WalletError(
+                "Jito private request failed (" + type(exc).__name__ + ").") from None
+        if not isinstance(answer, dict):
+            raise WalletError("Jito returned a non-object JSON-RPC response.")
+        if answer.get("error") is not None:
+            detail = activity_log.safe_provider_error(answer["error"])
+            raise WalletError("Jito JSON-RPC rejected the submission" +
+                (": " + detail if detail else "; provider supplied no safe error detail.") + ".")
+        if answer.get("result") != expected_signature:
+            if isinstance(answer.get("result"), str) and answer["result"]:
+                raise WalletError("Jito acknowledgement signature did not match the signed transaction.")
+            raise WalletError("Jito response did not include an acknowledgement signature.")
         return answer["result"]
 
     def result(self, row):

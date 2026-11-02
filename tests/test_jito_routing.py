@@ -194,6 +194,31 @@ class JitoRoutingTests(unittest.IsolatedAsyncioTestCase):
                 await CustodyRuntime.send_via_jito(
                     object.__new__(CustodyRuntime), session, "signed-base64", expected)
 
+    async def test_jito_submission_errors_are_specific_without_logging_raw_response_or_wire(self):
+        expected = str(Keypair().pubkey())
+        responses = (
+            (FakeResponse(status=503, payload={"error": "private response body"}), "HTTP 503"),
+            (FakeResponse(payload={"jsonrpc": "2.0", "error": {
+                "code": -32005,
+                "message": "block engine rejected; Bearer top-secret https://jito.example/send",
+                "data": {"signed_wire": "signed-base64"}}}), "code -32005"),
+            (FakeResponse(payload={"jsonrpc": "2.0", "result": str(Keypair().pubkey())}),
+             "signature did not match"),
+        )
+
+        for response, expected_detail in responses:
+            with self.subTest(expected_detail=expected_detail):
+                with self.assertRaises(WalletError) as caught:
+                    await CustodyRuntime.send_via_jito(
+                        object.__new__(CustodyRuntime), FakeSession(response),
+                        "signed-base64", expected)
+                message = str(caught.exception)
+                self.assertIn(expected_detail, message)
+                self.assertNotIn("top-secret", message)
+                self.assertNotIn("https://", message)
+                self.assertNotIn("signed-base64", message)
+                self.assertNotIn("private response body", message)
+
     async def test_swap_refresh_changes_only_hash_and_keeps_a_valid_signature(self):
         signer = Keypair()
         old_hash, new_hash = Hash.new_unique(), Hash.new_unique()

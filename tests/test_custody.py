@@ -1571,6 +1571,62 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.ledger.audit())
         self.assertNotIn("sendTransaction", [c.args[1] for c in self.service.rpc.call_args_list])
 
+    async def test_signature_query_failure_is_logged_and_keeps_buy_locked(self):
+        buy, signature = self.pending_buy()
+        with self.ledger.db() as db:
+            metadata = json.loads(db.execute(
+                "SELECT metadata FROM custody_operations WHERE id=?", (buy["id"],)).fetchone()[0])
+            metadata["execution_route"] = "jito_bundle_only"
+            db.execute("UPDATE custody_operations SET metadata=? WHERE id=?",
+                       (json.dumps(metadata), buy["id"]))
+        before = self.ledger.balance(101, USDC)
+        self.service.rpc = AsyncMock(side_effect=[
+            legacy.GENESIS,
+            legacy.WalletError("RPC unavailable: Bearer test-secret https://rpc.example/status"),
+        ])
+
+        with self.assertRaises(legacy.WalletError):
+            await self.service.reconcile(None)
+
+        self.assertEqual(self.ledger.operation(buy["id"])["state"], "SUBMITTED")
+        self.assertEqual(self.ledger.balance(101, USDC), before)
+        report = activity_log.report(self.service, 101)
+        event = next(item for item in report["entries"]
+                     if item.get("code") == "jito_signature_status_error")
+        self.assertIn("RPC unavailable", event["message"])
+        self.assertNotIn("test-secret", event["message"])
+        self.assertNotIn("https://", event["message"])
+        self.assertEqual(self.service.rpc.await_args_list[1].args[1], "getSignatureStatuses")
+
+    async def test_inconclusive_expiry_proof_is_logged_without_releasing_reservation(self):
+        buy, signature = self.pending_buy()
+        with self.ledger.db() as db:
+            metadata = json.loads(db.execute(
+                "SELECT metadata FROM custody_operations WHERE id=?", (buy["id"],)).fetchone()[0])
+            metadata["execution_route"] = "jito_bundle_only"
+            db.execute("UPDATE custody_operations SET metadata=? WHERE id=?",
+                       (json.dumps(metadata), buy["id"]))
+            db.execute("UPDATE custody_operations SET created_at=created_at-300 WHERE id=?",
+                       (buy["id"],))
+        balance = self.ledger.balance(101, USDC)
+        self.service.rpc = AsyncMock(side_effect=lambda _session, method, _params=None:
+            legacy.GENESIS if method == "getGenesisHash" else {"value": [None]})
+
+        with patch.object(runtime, "prove_retirement", AsyncMock(
+                side_effect=legacy.WalletError(
+                    "Recovery proof unavailable: token=hidden https://rpc.example/proof"))) as proof:
+            await self.service.reconcile(None)
+
+        proof.assert_awaited_once()
+        self.assertEqual(self.ledger.operation(buy["id"])["state"], "SUBMITTED")
+        self.assertEqual(self.ledger.balance(101, USDC), balance)
+        event = next(item for item in activity_log.report(self.service, 101)["entries"]
+                     if item.get("code") == "jito_expiry_proof_inconclusive")
+        self.assertIn("Recovery proof unavailable", event["message"])
+        self.assertNotIn("hidden", event["message"])
+        self.assertNotIn("https://", event["message"])
+        self.assertEqual(len(self.ledger.pending()), 1)
+
     async def test_worker_recovers_expired_sell_without_resend_and_keeps_close_queue(self):
         sell, signature, position_id = self.pending_sell()
         with self.ledger.db() as db:
