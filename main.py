@@ -2940,7 +2940,10 @@ RAW_HTML = r"""<!DOCTYPE html>
             #app #tab-trading #trading-activity-panel { grid-column: 2; }
         }
         @media (max-width: 767px) {
-            #app #tab-trading { padding-bottom: 28px; }
+            #app #tab-trading {
+                padding-bottom: calc(150px + env(safe-area-inset-bottom, 0px));
+                scroll-padding-bottom: calc(150px + env(safe-area-inset-bottom, 0px));
+            }
             #app #tab-trading::before { inset: 0; background-size: 34px 34px; }
             #app #tab-trading .page-heading { padding-bottom: 10px; }
             #app #tab-trading .page-heading h1 { font-size: 29px; }
