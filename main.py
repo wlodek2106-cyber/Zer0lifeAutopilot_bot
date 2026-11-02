@@ -4818,9 +4818,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["Could not prepare the image. You can still copy the caption.","Не удалось подготовить изображение. Вы всё ещё можете скопировать подпись.","Не вдалося підготувати зображення. Ви все ще можете скопіювати текст."],
             ["ZER0LIFE · AI TRADER","ZER0LIFE · AI TRADER","ZER0LIFE · AI TRADER"],
             ["Finalized trade","Подтверждённая закрытая сделка","Підтверджена закрита угода"],
-            ["Realized profit","Реализованная прибыль","Реалізований прибуток"],
-            ["After partner commission; separately paid network fees and Jito tips are excluded.","После партнёрской комиссии; отдельно оплаченные сетевые комиссии и чаевые Jito не включены.","Після партнерської комісії; окремо сплачені мережеві комісії та чайові Jito не включені."],
-            ["Past performance does not guarantee future results.","Прошлые результаты не гарантируют прибыль в будущем.","Минулі результати не гарантують прибутку в майбутньому."]
+            ["Realized profit","Реализованная прибыль","Реалізований прибуток"]
         ];
         const UI_COPY = {
             ru:Object.fromEntries([...UI_COPY_ROWS,...UI_COPY_ROWS_EXTRA].map(([english,russian])=>[english,russian])),
@@ -7121,12 +7119,6 @@ RAW_HTML = r"""<!DOCTYPE html>
                 })+'%',78,640);
             }
             ctx.fillStyle='rgba(201,250,114,.8)';ctx.fillRect(78,744,924,2);
-            ctx.fillStyle='#c7d4c6';ctx.font='500 25px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
-            let y=drawShareWrappedText(ctx,localizeUiText(
-                'After partner commission; separately paid network fees and Jito tips are excluded.'
-            ),78,810,900,38,3);
-            y+=28;ctx.fillStyle='rgba(198,211,197,.67)';ctx.font='500 22px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
-            drawShareWrappedText(ctx,localizeUiText('Past performance does not guarantee future results.'),78,y,900,34,2);
             canvas.setAttribute('aria-label',localizeUiText('Share card preview')+': '+snapshot.symbol+', +'
                 +tradeShareAmount(snapshot.profit,snapshot.currency)+' '+snapshot.currency);
             return true;
@@ -7145,9 +7137,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             state.caption=[
                 'ZER0LIFE AI Trader',
                 localizeUiText('Finalized trade')+': '+state.snapshot.symbol,
-                localizeUiText('Realized profit')+': '+amount+pct,
-                localizeUiText('After partner commission; separately paid network fees and Jito tips are excluded.'),
-                localizeUiText('Past performance does not guarantee future results.')
+                localizeUiText('Realized profit')+': '+amount+pct
             ].join('\n');
             const caption=document.getElementById('trade-share-caption');
             if(caption)caption.value=state.caption;

@@ -17,6 +17,8 @@ class MenuBrowserTests(unittest.TestCase):
         page = next(ast.literal_eval(node.value) for node in source.body
                     if isinstance(node, ast.Assign) and any(
                         isinstance(target, ast.Name) and target.id == "RAW_HTML" for target in node.targets))
+        self.assertNotIn("After partner commission; separately paid network fees and Jito tips are excluded.", page)
+        self.assertNotIn("Past performance does not guarantee future results.", page)
         rows_start = page.index("const UI_COPY_ROWS = [")
         rows_end = page.index("const UI_COPY = {", rows_start)
         rows_source = page[rows_start:rows_end]
@@ -199,6 +201,9 @@ class MenuBrowserTests(unittest.TestCase):
                     'share review dialog fits the mobile viewport');
                 assert(tradeCaption.includes('TST')&&tradeCaption.includes('+0.123456 USDC'),
                     'share caption includes the ticker and exact realized USDC result');
+                assert(!tradeCaption.includes('After partner commission')
+                    &&!tradeCaption.includes('Past performance'),
+                    'share caption omits the two removed disclaimer lines');
                 assert(!tradeCaption.includes('BUY_PRIVATE_TX_SIGNATURE')&&!tradeCaption.includes('SELL_PRIVATE_TX_SIGNATURE'),
                     'share caption excludes transaction signatures');
                 assert(!tradeCaption.includes('FIXTURE_PRIVATE_WALLET_ADDRESS')
