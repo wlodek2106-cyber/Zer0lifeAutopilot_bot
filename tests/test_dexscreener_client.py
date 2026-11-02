@@ -84,7 +84,7 @@ class DexScreenerClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_429_from_core_prices_is_shared_with_scanner_and_status(self):
         bad = Session(Response(429))
         self.assertEqual(await self.main_prices_function()(bad), {})
-        self.assertGreaterEqual(self.discovery.cooldown_remaining(), 299)
+        self.assertGreaterEqual(self.discovery.cooldown_remaining(), 59)
         status = self.discovery.status_report()
         self.assertTrue(status["entry_paused"])
         self.assertIn("Shared market-data requests", status["message"])
@@ -201,9 +201,9 @@ class DexScreenerClientTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(client.ProviderLimited):
             async with client.request(Session(Response(429)), "/tokens/v1/solana/mint"):
                 pass
-        self.assertEqual(state.cooldown_remaining(), 300)
+        self.assertEqual(state.cooldown_remaining(), 60)
 
-        now[0] = 1301
+        now[0] = 1061
         good = Session()
         for _ in range(client.HEALTHY_RESPONSES_TO_RESET_BACKOFF - 1):
             async with client.request(good, "/tokens/v1/solana/mint"):
@@ -214,9 +214,9 @@ class DexScreenerClientTests(unittest.IsolatedAsyncioTestCase):
             async with client.request(Session(Response(429)), "/tokens/v1/solana/mint"):
                 pass
         self.assertEqual(state.rate_limit_failures, 2)
-        self.assertEqual(state.cooldown_remaining(), 600)
+        self.assertEqual(state.cooldown_remaining(), 120)
 
-        now[0] = 1902
+        now[0] = 1182
         for _ in range(client.HEALTHY_RESPONSES_TO_RESET_BACKOFF):
             async with client.request(good, "/tokens/v1/solana/mint"):
                 pass

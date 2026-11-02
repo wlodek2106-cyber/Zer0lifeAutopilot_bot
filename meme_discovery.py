@@ -25,6 +25,7 @@ SHORTLIST_ROTATION_SECONDS = 15 * 60
 # Discovery hints only. Every result remains subject to the same market and
 # on-chain checks below; a matching ticker is not treated as token identity.
 TARGETED_SEARCH_TERMS = ("FARTCOIN", "PONKE", "GIGA", "GOAT", "MOTHER", "MYRO", "SLERF")
+DISCOVERY_HINT_CACHE_TTL_SECONDS = 600
 
 
 def number(value):
@@ -158,7 +159,7 @@ class MemeDiscovery:
         if self.cooldown_remaining():
             raise dexscreener.ProviderLimited(self.cooldown_remaining())
         cached = self.hint_cache.get(path) if hint else None
-        if cached and 0 <= now - cached[0] < 300:
+        if cached and 0 <= now - cached[0] < DISCOVERY_HINT_CACHE_TTL_SECONDS:
             return cached[1]
         async with dexscreener.request(session, path, priority=priority,
                 headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},

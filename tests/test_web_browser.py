@@ -103,7 +103,16 @@ class WebBrowserTests(unittest.TestCase):
             const pending='An unresolved BUY operation is still being checked. Its funds remain locked; do not start another transaction. Investors stayed OFF.';
             assert(localizeUiText(pending)==='Купівля ще перевіряється. Кошти залишаються заблокованими; не запускайте іншу транзакцію. AI-криптоінвестори залишається вимкненим.',
               'pending operation warning is localized in Ukrainian');
+            assert(localizeUiText('Market-data rate limit. Retry in 282 seconds. No mode was enabled and no trade was submitted.')
+              ==='Обмеження запитів ринкових даних. Повтор через 282 с. Режим не ввімкнено, угоду не було надіслано.',
+              'rate-limit toggle alert is fully translated in Ukrainian');
+            assert(localizeUiText('DexScreener rate limit (HTTP 429); shared market-data requests paused for 292 seconds. No trade was sent.')
+              ==='Обмеження DexScreener (HTTP 429); спільні запити ринкових даних призупинено на 292 с. Угоду не було надіслано.',
+              'market data 429 alert is fully translated in Ukrainian');
             currentUiLanguage='ru';
+            assert(localizeUiText('Market-data rate limit. Retry in 282 seconds. No mode was enabled and no trade was submitted.')
+              ==='Ограничение запросов рыночных данных. Повтор через 282 с. Режим не включён, сделка не отправлялась.',
+              'rate-limit toggle alert is fully translated in Russian');
             assert(localizeUiText(pending)==='Покупка всё ещё проверяется. Средства остаются заблокированы; не запускайте другую транзакцию. AI-криптоинвесторы остаётся выключенным.',
               'pending operation warning is localized in Russian');
             currentUiLanguage='uk';

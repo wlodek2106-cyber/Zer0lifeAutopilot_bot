@@ -98,6 +98,9 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.get.call_count, 1)
         with patch.object(dexscreener.scheduler(), "clock", return_value=1301):
             await discovery.fetch(session, "/token-profiles/latest/v1")
+        self.assertEqual(session.get.call_count, 1)
+        with patch.object(dexscreener.scheduler(), "clock", return_value=1601):
+            await discovery.fetch(session, "/token-profiles/latest/v1")
             await discovery.fetch(session, "/tokens/v1/solana/" + MINT)
             await discovery.fetch(session, "/tokens/v1/solana/" + MINT)
         self.assertEqual(session.get.call_count, 4)

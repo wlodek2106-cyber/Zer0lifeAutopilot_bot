@@ -3377,7 +3377,11 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["Candidate scan unavailable","Сканирование кандидатов недоступно","Сканування кандидатів недоступне"],
             [". New sniper entries paused; automatic retry scheduled.",". Новые входы Sniper приостановлены; автоматическая повторная попытка запланирована.",". Нові входи Sniper призупинено; автоматичну повторну спробу заплановано."],
             ["DexScreener rate limit (HTTP 429). Shared market-data requests are paused; automatic retry after at least ","Ограничение DexScreener (HTTP 429). Общие запросы рыночных данных приостановлены; автоматическая повторная попытка не ранее чем через ","Обмеження DexScreener (HTTP 429). Спільні запити ринкових даних призупинено; автоматичну повторну спробу буде виконано не раніше ніж через "],
+            ["DexScreener rate limit (HTTP 429); shared market-data requests paused for ","Ограничение DexScreener (HTTP 429); общие запросы рыночных данных приостановлены на ","Обмеження DexScreener (HTTP 429); спільні запити ринкових даних призупинено на "],
             ["Market-data rate limit: retry available in ","Ограничение запросов рыночных данных: повторная попытка будет доступна через ","Обмеження запитів ринкових даних: повторна спроба буде доступна через "],
+            ["Market-data rate limit. Retry in ","Ограничение запросов рыночных данных. Повтор через ","Обмеження запитів ринкових даних. Повтор через "],
+            [" seconds. No trade was sent."," с. Сделка не отправлялась."," с. Угоду не було надіслано."],
+            [" seconds. No mode was enabled and no trade was submitted."," с. Режим не включён, сделка не отправлялась."," с. Режим не ввімкнено, угоду не було надіслано."],
             ["Market-data provider cooldown: ","Пауза поставщика рыночных данных: ","Пауза постачальника ринкових даних: "],
             ["No verified shortlist yet.","Пока нет проверенного списка кандидатов.","Перевіреного списку кандидатів ще немає."],
             ["Market discovery · DexScreener + charts","Поиск рынка · DexScreener и графики","Пошук ринку · DexScreener і графіки"],
@@ -6335,7 +6339,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     document.getElementById('discovery-status').textContent=discovery.entry_paused?discovery.message:
                         discovery.checked_at?(discovery.eligible||0)+' screened · '+(discovery.scanned||0)+' scanned · refreshed '+new Date(discovery.checked_at*1000).toLocaleTimeString(uiLocale()):discovery.message||'Candidate scan pending.';
                     if(discovery.entry_paused&&discovery.checked_at)document.getElementById('discovery-status').textContent+=' Last scan: '+new Date(discovery.checked_at*1000).toLocaleTimeString(uiLocale())+' · '+(discovery.eligible||0)+' previously screened (not current eligibility).';
-                    if(discovery.retry_after_seconds)document.getElementById('discovery-status').textContent+=' Provider cooldown: '+discovery.retry_after_seconds+' seconds.';
+                    if(discovery.retry_after_seconds)document.getElementById('discovery-status').textContent+=' '+localizeUiText('Provider cooldown: ')+discovery.retry_after_seconds+localizeUiText(' seconds.');
                     if(discovery.whale_prioritized)document.getElementById('discovery-status').textContent+=' · whale mints screened: '+discovery.whale_prioritized+' ('+(discovery.whale_candidates||0)+' eligible)';
                     document.getElementById('candidate-list').textContent=(ai.sniper_assets||[]).map(code=>{
                         const row=(discovery.candidates||[]).find(item=>item.code===code);
