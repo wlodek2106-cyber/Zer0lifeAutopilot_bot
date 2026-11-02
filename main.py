@@ -2341,6 +2341,293 @@ RAW_HTML = r"""<!DOCTYPE html>
             #app #tab-exchange > .exchange-flow, #app #tab-exchange > .exchange-quote-panel,
             #app #tab-exchange > .exchange-safety { max-width:900px; }
         }
+        /* Overview / Human × AI cockpit: dimensional graphite, signal-cyan, and a warm human trace. */
+        #app #tab-terminal {
+            --overview-edge: rgba(103, 211, 228, .2);
+            --overview-ink: #edf5f7;
+            --overview-muted: #a7b9c0;
+            background:
+                radial-gradient(ellipse at 84% 2%, rgba(42, 174, 200, .13), transparent 30%),
+                radial-gradient(ellipse at 7% 44%, rgba(188, 105, 88, .07), transparent 32%),
+                linear-gradient(145deg, rgba(8, 13, 19, .28), rgba(7, 10, 15, .12));
+        }
+        #app #tab-terminal .page-heading {
+            position: relative;
+            padding: 2px 0 11px;
+            border-bottom: 1px solid rgba(112, 195, 211, .17);
+            isolation: isolate;
+        }
+        #app #tab-terminal .page-heading::after {
+            content: "";
+            position: absolute;
+            z-index: -1;
+            top: -30px;
+            right: 2%;
+            width: 118px;
+            height: 118px;
+            border: 1px solid rgba(119, 222, 232, .23);
+            border-radius: 50%;
+            pointer-events: none;
+            opacity: .68;
+            background:
+                radial-gradient(circle at 36% 38%, rgba(233, 165, 135, .18) 0 2px, transparent 3px),
+                radial-gradient(circle at 67% 62%, rgba(100, 224, 235, .22) 0 2px, transparent 3px),
+                conic-gradient(from 38deg, transparent 0 20%, rgba(102, 220, 232, .42) 22% 23%, transparent 26% 61%, rgba(218, 148, 125, .4) 64% 65%, transparent 69%),
+                radial-gradient(circle, transparent 49%, rgba(92, 204, 222, .1) 50%, transparent 67%);
+            box-shadow: inset 0 0 28px rgba(69, 190, 211, .07), 0 0 25px rgba(50, 171, 198, .06);
+            animation: overview-synthesis-drift 34s linear infinite;
+        }
+        #app #tab-terminal .page-heading h1 {
+            font-size: clamp(29px, 4vw, 40px);
+            line-height: 1.05;
+            letter-spacing: -.055em;
+        }
+        #app #tab-terminal #btn-ai-crypto-investors {
+            min-height: 47px;
+            border: 1px solid rgba(135, 231, 239, .78);
+            border-radius: 13px;
+            color: #07171c;
+            background: linear-gradient(180deg, #b7f3f0 0%, #72d1d9 48%, #4bb0c1 100%);
+            box-shadow: 0 7px 0 rgba(26, 71, 81, .85), 0 12px 26px rgba(57, 185, 203, .15), inset 0 1px 0 rgba(255,255,255,.78);
+            font-weight: 850;
+            letter-spacing: .015em;
+            transform: translateY(-2px);
+        }
+        #app #tab-terminal .account-summary {
+            padding: 17px 19px;
+            border-color: rgba(105, 204, 218, .32) !important;
+            border-radius: 18px;
+            background:
+                radial-gradient(ellipse at 100% 20%, rgba(59, 176, 197, .14), transparent 42%),
+                linear-gradient(145deg, rgba(23, 37, 45, .98), rgba(11, 18, 25, .99) 65%) !important;
+            box-shadow: 0 12px 26px rgba(0,0,0,.3), inset 0 1px 0 rgba(223,250,255,.12), inset 0 -3px 0 rgba(0,0,0,.25);
+        }
+        #app #tab-terminal .account-summary > div:first-child { color: #a6e9ed !important; letter-spacing: .01em; }
+        #app #tab-terminal .account-summary #wallet-runtime-status { color: #becbd0 !important; line-height: 1.55; }
+        #app #tab-terminal .control-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: stretch;
+        }
+        #app #tab-terminal .btn-ctl {
+            min-height: 46px;
+            border-radius: 13px;
+            box-shadow: 0 5px 0 rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.11);
+            font-weight: 800;
+            letter-spacing: .01em;
+        }
+        #app #tab-terminal #btn-toggle { flex: 1 1 220px; }
+        #app #tab-terminal #btn-refresh-top { flex: 0 0 auto; min-width: 118px; }
+        #app #tab-terminal .btn-sell-all {
+            min-height: 46px;
+            border: 1px solid rgba(219, 139, 122, .48);
+            border-radius: 13px;
+            color: #f1c9bf;
+            background: linear-gradient(180deg, rgba(83, 45, 45, .96), rgba(40, 26, 31, .99));
+            box-shadow: 0 5px 0 rgba(15, 10, 9, .58), inset 0 1px 0 rgba(255,255,255,.1);
+            font-weight: 800;
+        }
+        #app #tab-terminal .overview-funds {
+            padding: 18px;
+            border-color: rgba(99, 194, 211, .28) !important;
+            background:
+                radial-gradient(ellipse at 86% 0%, rgba(53, 164, 190, .13), transparent 43%),
+                linear-gradient(145deg, #192a32 0%, #101b23 55%, #0d151c 100%) !important;
+            box-shadow: 0 16px 32px rgba(0,0,0,.34), inset 0 1px 0 rgba(225,250,255,.12), inset 0 -3px 0 rgba(0,0,0,.3);
+        }
+        #app #tab-terminal .overview-funds > div:first-child { color: #a5e6ec !important; }
+        #app #tab-terminal .overview-funds .grid-stats { gap: 10px; }
+        #app #tab-terminal .overview-funds .stat-box {
+            padding: 13px 14px;
+            border: 1px solid rgba(116, 197, 210, .14);
+            border-radius: 13px;
+            background: linear-gradient(150deg, rgba(7, 13, 20, .78), rgba(24, 40, 48, .67));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.045), 0 5px 12px rgba(0,0,0,.13);
+        }
+        #app #tab-terminal .overview-funds .stat-label { color: #aebfc2; letter-spacing: .055em; }
+        #app #tab-terminal .overview-funds .stat-val {
+            margin-top: 6px;
+            color: #eff8f8 !important;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: -.025em;
+        }
+        #app #tab-terminal .overview-funds #port-withdrawable { color: #9ce5e8 !important; }
+        #app #tab-terminal .overview-funds > div:last-child {
+            min-height: 42px;
+            margin-top: 11px !important;
+            padding: 9px 13px !important;
+            border: 1px solid rgba(115, 190, 207, .13);
+            background: rgba(5, 11, 17, .78) !important;
+        }
+        #app #tab-terminal .overview-funds #port-pnl { font-variant-numeric: tabular-nums; }
+        #app #tab-terminal #meme-sniper-card,
+        #app #tab-terminal #core-strategy-card,
+        #app #tab-terminal #activity-log-card {
+            padding: 19px;
+            border-color: var(--overview-edge) !important;
+            background:
+                radial-gradient(ellipse at 95% 0%, rgba(57, 166, 190, .075), transparent 38%),
+                linear-gradient(150deg, rgba(21, 33, 42, .99), rgba(10, 17, 24, .99) 75%) !important;
+            box-shadow: 0 13px 27px rgba(0,0,0,.3), inset 0 1px 0 rgba(225,248,255,.08), inset 0 -2px 0 rgba(0,0,0,.34);
+        }
+        #app #tab-terminal #meme-sniper-card > div:first-child > div:first-child > div:first-child,
+        #app #tab-terminal #core-strategy-card > div:first-child > div:first-child > div:first-child { color: var(--overview-ink) !important; }
+        #app #tab-terminal .section-note { color: var(--overview-muted); line-height: 1.55; }
+        #app #tab-terminal .grid-stats { gap: 9px; }
+        #app #tab-terminal .stat-box {
+            min-width: 0;
+            padding: 11px 12px;
+            border: 1px solid rgba(106, 184, 201, .15);
+            border-radius: 12px;
+            background: linear-gradient(145deg, rgba(6, 12, 18, .78), rgba(18, 31, 39, .78));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.045);
+        }
+        #app #tab-terminal .stat-label { color: #a8b9bf; }
+        #app #tab-terminal .stat-val { color: #e6f0f2; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+        #app #tab-terminal #discovery-status,
+        #app #tab-terminal #entry-cost-check {
+            padding: 10px 12px;
+            border-left: 2px solid rgba(116, 212, 222, .63);
+            border-radius: 0 9px 9px 0;
+            background: rgba(47, 130, 148, .11);
+        }
+        #app #tab-terminal #scan-candidates {
+            min-height: 44px;
+            border: 1px solid rgba(105, 204, 219, .49);
+            border-radius: 12px;
+            color: #e2f6f6;
+            background: linear-gradient(180deg, rgba(37, 86, 98, .97), rgba(20, 46, 56, .99));
+            box-shadow: 0 5px 0 rgba(8, 15, 10, .62), inset 0 1px 0 rgba(255,255,255,.12);
+            font-weight: 800;
+        }
+        #app #tab-terminal details { border-color: rgba(104,179,197,.16); }
+        #app #tab-terminal summary { color: #d5e7e9; }
+        #app #tab-terminal #activity-log-card > div:first-child { color: #b8dadd !important; letter-spacing: .1em; }
+        #app #tab-terminal .log-console {
+            border-color: rgba(104, 179, 197, .16);
+            border-radius: 12px;
+            background: rgba(4, 9, 15, .82);
+        }
+        #app #tab-terminal button:focus-visible,
+        #app #tab-terminal summary:focus-visible,
+        #nav .nav-btn:focus-visible {
+            outline: 2px solid #9be9ee;
+            outline-offset: 3px;
+        }
+        #nav.bottom-nav {
+            background: linear-gradient(180deg, rgba(14, 23, 30, .99), rgba(8, 14, 20, .995));
+            border-color: rgba(105, 183, 199, .19);
+            -webkit-backdrop-filter: blur(18px);
+            backdrop-filter: blur(18px);
+        }
+        #nav .nav-btn { transition: transform .18s ease, background-color .18s ease, color .18s ease; }
+        #nav .nav-btn.active { box-shadow: inset 0 1px 0 rgba(255,255,255,.2), 0 5px 15px rgba(71,171,191,.12); }
+        #app #tab-terminal::after {
+            content: "";
+            position: absolute;
+            z-index: 0;
+            top: 0;
+            left: -28%;
+            width: 156%;
+            height: 42%;
+            min-height: 220px;
+            pointer-events: none;
+            opacity: .42;
+            background:
+                linear-gradient(112deg, transparent 41%, rgba(87, 203, 220, .035) 48%, rgba(122, 224, 231, .075) 50%, rgba(212, 145, 125, .035) 52%, transparent 59%);
+            transform: translate3d(-11%, 0, 0);
+            animation: overview-ambient-drift 30s ease-in-out infinite alternate;
+        }
+        #app #tab-terminal .account-summary,
+        #app #tab-terminal .overview-funds,
+        #app #tab-terminal #meme-sniper-card,
+        #app #tab-terminal #core-strategy-card,
+        #app #tab-terminal #activity-log-card {
+            transition: transform .24s cubic-bezier(.2,.75,.25,1), box-shadow .24s ease;
+        }
+        #app #tab-terminal button:not(:disabled) {
+            transition: transform .16s ease, box-shadow .16s ease, filter .16s ease;
+        }
+        #app #tab-terminal button:not(:disabled):focus-visible {
+            transform: translateY(-1px);
+            filter: brightness(1.06);
+        }
+        #app #tab-terminal .account-summary:focus-within,
+        #app #tab-terminal .overview-funds:focus-within,
+        #app #tab-terminal #meme-sniper-card:focus-within,
+        #app #tab-terminal #core-strategy-card:focus-within,
+        #app #tab-terminal #activity-log-card:focus-within {
+            transform: translateY(-2px);
+            box-shadow: 0 18px 34px rgba(0,0,0,.34), inset 0 1px 0 rgba(225,248,255,.09), inset 0 -2px 0 rgba(0,0,0,.34);
+        }
+        @media (hover: hover) and (pointer: fine) {
+            #app #tab-terminal .account-summary:hover,
+            #app #tab-terminal .overview-funds:hover,
+            #app #tab-terminal #meme-sniper-card:hover,
+            #app #tab-terminal #core-strategy-card:hover,
+            #app #tab-terminal #activity-log-card:hover {
+                transform: translateY(-3px);
+                box-shadow: 0 20px 38px rgba(0,0,0,.38), inset 0 1px 0 rgba(225,248,255,.1), inset 0 -2px 0 rgba(0,0,0,.34);
+            }
+            #app #tab-terminal button:not(:disabled):hover {
+                transform: translateY(-2px);
+                filter: brightness(1.08);
+            }
+            #app #tab-terminal button:not(:disabled):active {
+                transform: translateY(1px);
+                filter: brightness(.98);
+            }
+        }
+        @media (max-width: 767px) {
+            #app #tab-terminal::after { display: none; }
+            #app #tab-terminal .account-summary,
+            #app #tab-terminal .overview-funds,
+            #app #tab-terminal #meme-sniper-card,
+            #app #tab-terminal #core-strategy-card,
+            #app #tab-terminal #activity-log-card { transition-duration: .16s; }
+        }
+        @keyframes overview-synthesis-drift {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        @keyframes overview-ambient-drift {
+            from { transform: translate3d(-11%, 0, 0); }
+            to { transform: translate3d(11%, 0, 0); }
+        }
+        @media (min-width: 1024px) {
+            #app #tab-terminal.active { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+            #app #tab-terminal .page-heading,
+            #app #tab-terminal #btn-ai-crypto-investors,
+            #app #tab-terminal .account-summary,
+            #app #tab-terminal .overview-funds,
+            #app #tab-terminal .control-bar,
+            #app #tab-terminal .btn-sell-all,
+            #app #tab-terminal #activity-log-card { grid-column: 1 / -1; }
+            #app #tab-terminal .control-bar { max-width: 680px; }
+        }
+        @media (max-width: 767px) {
+            #app #tab-terminal .page-heading { padding-bottom: 9px; }
+            #app #tab-terminal .account-summary { padding: 15px 16px; }
+            #app #tab-terminal .overview-funds,
+            #app #tab-terminal #meme-sniper-card,
+            #app #tab-terminal #core-strategy-card,
+            #app #tab-terminal #activity-log-card { padding: 15px; }
+            #app #tab-terminal .overview-funds .grid-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+        @media (max-width: 380px) {
+            #app #tab-terminal .overview-funds .grid-stats,
+            #app #tab-terminal #meme-sniper-card .grid-stats { grid-template-columns: 1fr; }
+            #app #tab-terminal .control-bar { gap: 8px; }
+            #app #tab-terminal #btn-toggle { flex-basis: 100%; }
+            #app #tab-terminal #btn-refresh-top { flex: 1 1 100%; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            #app #tab-terminal *, #nav .nav-btn {
+                transition-duration: .01ms !important;
+                animation: none !important;
+            }
+        }
     </style>
 </head>
 <body>
