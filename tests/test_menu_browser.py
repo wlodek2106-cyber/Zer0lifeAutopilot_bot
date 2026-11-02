@@ -91,7 +91,37 @@ class MenuBrowserTests(unittest.TestCase):
         fixture = {
             "success": True, "username": "fixture", "user_balance": 34.037005,
             "sol_balance": .164009149, "withdrawable": 34.037005, "wallet_history": [],
-            "trades": [], "logs": [], "trading_active": False, "is_admin": True,
+            "trades": [
+                {
+                    "status": "CLOSED", "closed_at": 1793600000, "funding_currency": "USDC",
+                    "profit_units": .123456, "profit_usdc": .123456, "profit_pct": 2.5,
+                    "token_symbol": "TST", "symbol": "TST", "buy_price": 1.0, "sell_price": 1.025,
+                    "amount_tokens": 10.0, "timestamp": 1793590000, "position_id": "fixture-profit",
+                    "wallet_address": "FIXTURE_PRIVATE_WALLET_ADDRESS",
+                    "token_mint": "FIXTURE_TOKEN_MINT_ADDRESS",
+                    "buy_tx": "BUY_PRIVATE_TX_SIGNATURE_12345678901234567890",
+                    "sell_tx": "SELL_PRIVATE_TX_SIGNATURE_09876543210987654321",
+                },
+                {
+                    "status": "CLOSED", "closed_at": 1793600001, "funding_currency": "USDC",
+                    "profit_units": -.5, "profit_usdc": -.5, "profit_pct": -1.0,
+                    "token_symbol": "LOSS", "symbol": "LOSS", "buy_price": 1.0, "sell_price": .99,
+                    "amount_tokens": 10.0, "timestamp": 1793590001, "position_id": "fixture-loss",
+                },
+                {
+                    "status": "OPEN", "closed_at": None, "funding_currency": "USDC",
+                    "profit_units": 1.0, "profit_usdc": 1.0, "profit_pct": 1.0,
+                    "token_symbol": "OPEN", "symbol": "OPEN", "buy_price": 1.0, "sell_price": 1.0,
+                    "amount_tokens": 10.0, "timestamp": 1793590002, "position_id": "fixture-open",
+                },
+                {
+                    "status": "CLOSED", "closed_at": None, "funding_currency": "USDC",
+                    "profit_units": .2, "profit_usdc": .2, "profit_pct": .5,
+                    "token_symbol": "NO_TIME", "symbol": "NO_TIME", "buy_price": 1.0, "sell_price": 1.01,
+                    "amount_tokens": 10.0, "timestamp": 1793590003, "position_id": "fixture-no-time",
+                },
+            ],
+            "logs": [], "trading_active": False, "is_admin": True,
             "trading_admitted": True,
             "wallet_status": {"wallet_configured": True, "persistent_storage": True, "finance_allowed": True},
             "trading_settings": {"order_usdc": 1, "max_positions": 5, "assets": ["SOL", "JUP"]},
@@ -136,6 +166,12 @@ class MenuBrowserTests(unittest.TestCase):
             try {
                 proceedToTerminal(); await refresh();
                 const assert=(condition,message)=>{if(!condition)failures.push(message);};
+                window.nativeShares=[];
+                Object.defineProperty(navigator,'canShare',{configurable:true,
+                    value:data=>Array.isArray(data.files)&&data.files.length===1});
+                Object.defineProperty(navigator,'share',{configurable:true,value:async data=>{
+                    window.nativeShares.push({text:data.text,files:(data.files||[]).map(file=>file.name)});
+                }});
                 assert(document.querySelectorAll('.nav-btn').length===6,'six navigation items including Exchange');
                 const exchangeNav=Array.from(document.querySelectorAll('.nav-btn')).find(button=>button.textContent.includes('Exchange'));
                 assert(!!exchangeNav,'Exchange is a distinct navigation destination');
@@ -151,6 +187,45 @@ class MenuBrowserTests(unittest.TestCase):
                 assert(exchangePanel.querySelector('#exchange-quote-button'),'read-only quote control is present');
                 assert(!exchangePanel.querySelector('form'),'there is no transfer form');
                 assert(!exchangePanel.querySelector('[data-transfer-submit]'),'there is no transfer submission control');
+                gotoTab('stats',null);
+                const shareButtons=document.querySelectorAll('.share-profitable-trade');
+                assert(shareButtons.length===1,'only a finalized profitable closed trade has a sharing button');
+                shareButtons[0]?.click();
+                const shareDialog=document.getElementById('trade-share-dialog');
+                const tradeCaption=document.getElementById('trade-share-caption').value;
+                assert(shareDialog.open,'sharing opens a review dialog');
+                const shareRect=shareDialog.getBoundingClientRect();
+                assert(shareRect.left>=0&&shareRect.right<=innerWidth&&shareRect.top>=0&&shareRect.bottom<=innerHeight,
+                    'share review dialog fits the mobile viewport');
+                assert(tradeCaption.includes('TST')&&tradeCaption.includes('+0.123456 USDC'),
+                    'share caption includes the ticker and exact realized USDC result');
+                assert(!tradeCaption.includes('BUY_PRIVATE_TX_SIGNATURE')&&!tradeCaption.includes('SELL_PRIVATE_TX_SIGNATURE'),
+                    'share caption excludes transaction signatures');
+                assert(!tradeCaption.includes('FIXTURE_PRIVATE_WALLET_ADDRESS')
+                    &&!tradeCaption.includes('FIXTURE_TOKEN_MINT_ADDRESS'),'share caption excludes wallet and token addresses');
+                assert(document.getElementById('trade-share-canvas').width===1080
+                    &&document.getElementById('trade-share-canvas').height===1350,'share card uses a portrait social image');
+                const shareSubmit=document.getElementById('trade-share-submit');
+                assert(shareSubmit.disabled,'sharing requires the user to review and confirm the card');
+                const shareConsent=document.getElementById('trade-share-confirmation');
+                shareConsent.checked=true;shareConsent.dispatchEvent(new Event('change',{bubbles:true}));
+                for(let i=0;i<80&&shareSubmit.disabled;i++)await new Promise(resolve=>setTimeout(resolve,25));
+                assert(!shareSubmit.disabled,'confirmation enables sharing after the card is prepared: '+JSON.stringify({
+                    status:document.getElementById('trade-share-status').textContent,
+                    ready:tradeShareState?.ready,imageReady:tradeShareState?.imageReady,
+                    confirmed:shareConsent.checked
+                }));
+                shareSubmit.click();await new Promise(resolve=>setTimeout(resolve,20));
+                assert(window.nativeShares.length===1,'share action uses the device share menu once');
+                assert(window.nativeShares[0]?.files?.length===1
+                    &&window.nativeShares[0].files[0].endsWith('.png'),'device share menu receives the card image');
+                assert(!window.nativeShares[0]?.text?.includes('BUY_PRIVATE_TX_SIGNATURE')
+                    &&!window.nativeShares[0]?.text?.includes('SELL_PRIVATE_TX_SIGNATURE')
+                    &&!window.nativeShares[0]?.text?.includes('FIXTURE_PRIVATE_WALLET_ADDRESS')
+                    &&!window.nativeShares[0]?.text?.includes('FIXTURE_TOKEN_MINT_ADDRESS'),
+                    'native share payload excludes transaction and wallet identifiers');
+                closeTradeShareDialog();
+                gotoTab('terminal',document.querySelectorAll('.nav-btn')[0]);
                  assert(document.getElementById('exchange-dir-solana-base').getAttribute('aria-pressed')==='true','Solana to Base is the initial direction');
                  assert(document.getElementById('exchange-dir-base-solana').getAttribute('aria-pressed')==='false','reverse direction starts unselected');
                  setExchangeDirection('base-to-solana');
@@ -174,6 +249,11 @@ class MenuBrowserTests(unittest.TestCase):
                   applyUiLanguage('ru');
                  assert(document.documentElement.lang==='ru','Russian language sets the document language');
                   assert(uiLocale()==='ru-RU','Russian dates and numbers use the Russian locale');
+                   gotoTab('stats',null);
+                   document.querySelector('.share-profitable-trade')?.click();
+                   assert(document.getElementById('trade-share-caption').value.includes('Реализованная прибыль'),
+                       'manual share caption follows the Russian account language');
+                   closeTradeShareDialog();gotoTab('terminal',document.querySelectorAll('.nav-btn')[0]);
                  assert(exchangeNav.textContent.includes('Обмен'),'navigation is translated to Russian');
                   assert(document.getElementById('ui-language-select').value==='ru','selector follows active language');
                   assert(localizeUiText('Token to Base')==='Token на Base','short words translate without corrupting part of a token name');
@@ -198,6 +278,11 @@ class MenuBrowserTests(unittest.TestCase):
                  applyUiLanguage('uk');
                  assert(document.documentElement.lang==='uk','Ukrainian language sets document language');
                   assert(uiLocale()==='uk-UA','Ukrainian dates and numbers use the Ukrainian locale');
+                   gotoTab('stats',null);
+                   document.querySelector('.share-profitable-trade')?.click();
+                   assert(document.getElementById('trade-share-caption').value.includes('Реалізований прибуток'),
+                       'manual share caption follows the Ukrainian account language');
+                   closeTradeShareDialog();gotoTab('terminal',document.querySelectorAll('.nav-btn')[0]);
                    const ukTransferError=localizeUiText('The Solana transaction failed safe validation [USDC_TRANSFER_COUNT_2]; nothing was sent.');
                    assert(ukTransferError==='Транзакція Solana не пройшла безпечну перевірку [USDC_TRANSFER_COUNT_2]; нічого не надіслано.',
                        'Solana validation errors are also translated into Ukrainian');
@@ -254,7 +339,8 @@ class MenuBrowserTests(unittest.TestCase):
                 assert(strategyText.includes('verified OTC Token-2022 mint'),'Token-2022 exception explained');
                 assert(strategyText.includes('up to 200 Solana mints, verifies up to 40'),'expanded scan bounds are visible');
                 assert(Array.from(document.querySelectorAll('summary')).some(el=>el.textContent==='Market discovery · DexScreener + charts'),'replacement market source is visible');
-                assert(document.getElementById('meme-sniper-card').querySelectorAll('p.section-note').length===3,'compact sniper card');
+                 const sniperNoteCount=document.getElementById('meme-sniper-card').querySelectorAll('p.section-note:not(#sniper-pnl)').length;
+                 assert(sniperNoteCount===3,'compact sniper card has 3 explanatory notes, found '+sniperNoteCount);
                 fixture.ai_status={configured:true,paid_ai_enabled:false,signal_engine:'rules-v1',
                     model:'gpt-4.1',interval_seconds:90,
                     last_analyzed_at:1791925101,sniper_assets:[],
@@ -388,7 +474,7 @@ class MenuBrowserTests(unittest.TestCase):
             completed = subprocess.run([
                 shutil.which("chromium"), "--headless", "--no-sandbox", "--disable-gpu",
                 "--disable-dev-shm-usage", "--window-size=390,844",
-                "--virtual-time-budget=4000", "--dump-dom", path.as_uri()
+                "--virtual-time-budget=8000", "--dump-dom", path.as_uri()
             ], capture_output=True, text=True, timeout=30)
         result = re.search(r'<pre id="browser-test-result">(.*?)</pre>', completed.stdout, re.S)
         self.assertIsNotNone(result, completed.stderr[-1500:])

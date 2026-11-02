@@ -1032,6 +1032,58 @@ RAW_HTML = r"""<!DOCTYPE html>
         .support-dialog .support-status { min-height:1.5em; margin:10px 0 0; color:#a9bac0; }
         .support-dialog .support-status[data-state="error"] { color:#ffaaa9; }
         .support-dialog .support-status[data-state="success"] { color:#7de0b2; }
+        #trade-share-dialog {
+            width:min(520px,calc(100vw - 24px)); max-width:calc(100vw - 24px);
+            max-height:calc(100dvh - 24px); overflow-y:auto; padding:0;
+            border:1px solid #36503a; border-radius:22px; background:#08100b; color:#edf5ed;
+            box-shadow:0 24px 80px rgba(0,0,0,.72);
+        }
+        #trade-share-dialog::backdrop { background:rgba(0,0,0,.78); backdrop-filter:blur(8px); }
+        .share-profitable-trade { display:block; width:100%; min-height:42px; margin-top:8px; }
+        .trade-share-content { display:grid; gap:12px; padding:clamp(14px,4vw,22px); }
+        .trade-share-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
+        .trade-share-head h2 { margin:2px 0 0; font-size:20px; }
+        .trade-share-kicker { margin:0; color:#c5f576; font-size:10px; font-weight:800; letter-spacing:.16em; }
+        .trade-share-close {
+            flex:0 0 40px; width:40px; height:40px; border:1px solid #35483a; border-radius:12px;
+            background:#121c14; color:#edf5ed; font-size:22px; cursor:pointer;
+        }
+        #trade-share-canvas {
+            display:block; width:min(100%,330px); height:auto; margin:0 auto; aspect-ratio:4/5;
+            border:1px solid #324531; border-radius:16px; background:#08100b;
+            box-shadow:0 12px 34px rgba(0,0,0,.38);
+        }
+        .trade-share-note {
+            margin:0; padding:11px 12px; border:1px solid #2d4131; border-radius:12px;
+            background:rgba(14,25,16,.88); color:#d3dfd3; font-size:13px; line-height:1.5;
+        }
+        .trade-share-targets { margin:0; color:#9eb0a0; font-size:12px; line-height:1.5; }
+        .trade-share-confirm {
+            display:flex; align-items:flex-start; gap:10px; padding:10px 0;
+            color:#e7eee6; font-size:13px; line-height:1.45;
+        }
+        .trade-share-confirm input { flex:0 0 auto; width:18px; height:18px; margin:1px 0 0; accent-color:#b9ed56; }
+        .trade-share-caption-label { margin:0 0 -7px; color:#b7c6b9; font-size:12px; font-weight:700; }
+        #trade-share-caption {
+            display:block; width:100%; min-height:98px; resize:vertical; padding:11px;
+            border:1px solid #344437; border-radius:12px; background:#050a06; color:#e8f1e7;
+            font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+        }
+        .trade-share-actions { display:grid; grid-template-columns:1.3fr 1fr 1fr; gap:8px; }
+        .trade-share-actions button {
+            min-height:44px; padding:9px 10px; border:1px solid #36483a; border-radius:12px;
+            background:#111a13; color:#e8f1e7; font-size:12px; font-weight:750; cursor:pointer;
+        }
+        .trade-share-actions #trade-share-submit {
+            border-color:#b2e747; background:linear-gradient(120deg,#d2ff68,#92d92c);
+            color:#10170a; font-size:13px;
+        }
+        .trade-share-actions button:disabled { opacity:.42; cursor:not-allowed; }
+        #trade-share-status { min-height:1.4em; margin:0; color:#aebdaf; font-size:12px; line-height:1.45; }
+        @media (max-width:420px) {
+            .trade-share-actions { grid-template-columns:1fr 1fr; }
+            .trade-share-actions #trade-share-submit { grid-column:1 / -1; }
+        }
         .card, .deposit-modal {
             color: var(--ink); background: var(--surface-raised) !important;
             border: 1px solid var(--line) !important; border-radius: 20px;
@@ -3109,6 +3161,33 @@ RAW_HTML = r"""<!DOCTYPE html>
             <p id="support-status" class="support-status" role="status" aria-live="polite"></p>
         </section>
     </div>
+    <dialog id="trade-share-dialog" aria-modal="true" aria-labelledby="trade-share-title">
+        <div class="trade-share-content">
+            <div class="trade-share-head">
+                <div>
+                    <p class="trade-share-kicker">ZER0LIFE · AI TRADER</p>
+                    <h2 id="trade-share-title">Share a completed trade</h2>
+                </div>
+                <button class="trade-share-close" type="button" aria-label="Close share dialog" onclick="closeTradeShareDialog()">×</button>
+            </div>
+            <canvas id="trade-share-canvas" width="1080" height="1350" aria-label="Share card preview"></canvas>
+            <p class="trade-share-note">Only the token symbol and finalized realized result are shared. No wallet address or transaction ID is included.</p>
+            <p class="trade-share-targets">Instagram · Telegram · Facebook · X (Twitter)<br>The app never posts automatically. You choose the destination in the device share menu.</p>
+            <label class="trade-share-confirm" for="trade-share-confirmation">
+                <input id="trade-share-confirmation" type="checkbox">
+                <span>I reviewed this card and confirm sharing.</span>
+            </label>
+            <label class="trade-share-caption-label" for="trade-share-caption">Caption</label>
+            <textarea id="trade-share-caption" readonly></textarea>
+            <div class="trade-share-actions">
+                <button id="trade-share-submit" type="button" disabled>Open device share menu</button>
+                <button id="trade-share-copy" type="button" disabled>Copy caption</button>
+                <button id="trade-share-download" type="button" disabled>Download card</button>
+                <button id="trade-share-cancel" type="button" onclick="closeTradeShareDialog()">Cancel</button>
+            </div>
+            <p id="trade-share-status" role="status" aria-live="polite"></p>
+        </div>
+    </dialog>
     <div id="app" data-ui-version="console-ai-v1" style="display: none;">
         <div id="tab-terminal" class="tab-panel active">
             <header class="page-heading"><div><p class="eyebrow">AI Trader · Personal account</p><h1>Overview</h1></div></header>
@@ -4715,13 +4794,40 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["AI decisions & risk checks","Решения ИИ и проверки рисков","Рішення ШІ та перевірки ризиків"],
             ["Outcome history & chart levels","История результатов и уровни графика","Історія результатів і рівні графіка"],
             ["Candidates are screened before entry; not every candidate is traded.","Кандидаты проходят проверку перед входом; покупается не каждый.","Кандидати проходять перевірку перед входом; купується не кожен."],
-            ["Candidate screening details","Как проверяются кандидаты","Як перевіряються кандидати"]
+            ["Candidate screening details","Как проверяются кандидаты","Як перевіряються кандидати"],
+            ["Share profit","Поделиться прибылью","Поділитися прибутком"],
+            ["Share a completed trade","Поделиться завершённой сделкой","Поділитися завершеною угодою"],
+            ["Only the token symbol and finalized realized result are shared. No wallet address or transaction ID is included.","Будут переданы только тикер токена и подтверждённый итог сделки. Адрес кошелька и ID транзакции не включаются.","Буде передано лише тикер токена та підтверджений результат угоди. Адреса гаманця та ID транзакції не додаються."],
+            ["Instagram · Telegram · Facebook · X (Twitter)","Instagram · Telegram · Facebook · X (Twitter)","Instagram · Telegram · Facebook · X (Twitter)"],
+            ["The app never posts automatically. You choose the destination in the device share menu.","Приложение ничего не публикует автоматически. Вы сами выбираете площадку в меню отправки устройства.","Застосунок нічого не публікує автоматично. Ви самі обираєте платформу в меню поширення пристрою."],
+            ["I reviewed this card and confirm sharing.","Я проверил карточку и подтверждаю отправку.","Я переглянув картку й підтверджую поширення."],
+            ["Open device share menu","Открыть меню отправки","Відкрити меню поширення"],
+            ["Copy caption","Скопировать подпись","Скопіювати текст"],
+            ["Download card","Скачать карточку","Завантажити картку"],
+            ["Caption","Подпись","Текст"],
+            ["Cancel","Отмена","Скасувати"],
+            ["Share card preview","Предпросмотр карточки сделки","Попередній перегляд картки угоди"],
+            ["Close share dialog","Закрыть окно отправки","Закрити вікно поширення"],
+            ["Preparing card…","Подготовка карточки…","Підготовка картки…"],
+            ["Share menu closed. The app cannot verify that the post was published.","Меню отправки закрыто. Приложение не может проверить, была ли публикация размещена.","Меню поширення закрито. Застосунок не може перевірити, чи було опубліковано допис."],
+            ["Sharing canceled; nothing was posted automatically.","Отправка отменена; приложение ничего не публиковало автоматически.","Поширення скасовано; застосунок нічого не публікував автоматично."],
+            ["Sharing is unavailable here. Download the card and copy the caption to post manually.","Отправка здесь недоступна. Скачайте карточку и скопируйте подпись, чтобы опубликовать вручную.","Поширення тут недоступне. Завантажте картку й скопіюйте текст, щоб опублікувати вручну."],
+            ["Caption copied.","Подпись скопирована.","Текст скопійовано."],
+            ["Card download started.","Загрузка карточки началась.","Завантаження картки розпочалося."],
+            ["Could not copy automatically. Select the caption and copy it manually.","Не удалось скопировать автоматически. Выделите подпись и скопируйте её вручную.","Не вдалося скопіювати автоматично. Виділіть текст і скопіюйте його вручну."],
+            ["Could not prepare the image. You can still copy the caption.","Не удалось подготовить изображение. Вы всё ещё можете скопировать подпись.","Не вдалося підготувати зображення. Ви все ще можете скопіювати текст."],
+            ["ZER0LIFE · AI TRADER","ZER0LIFE · AI TRADER","ZER0LIFE · AI TRADER"],
+            ["Finalized trade","Подтверждённая закрытая сделка","Підтверджена закрита угода"],
+            ["Realized profit","Реализованная прибыль","Реалізований прибуток"],
+            ["After partner commission; separately paid network fees and Jito tips are excluded.","После партнёрской комиссии; отдельно оплаченные сетевые комиссии и чаевые Jito не включены.","Після партнерської комісії; окремо сплачені мережеві комісії та чайові Jito не включені."],
+            ["Past performance does not guarantee future results.","Прошлые результаты не гарантируют прибыль в будущем.","Минулі результати не гарантують прибутку в майбутньому."]
         ];
         const UI_COPY = {
             ru:Object.fromEntries([...UI_COPY_ROWS,...UI_COPY_ROWS_EXTRA].map(([english,russian])=>[english,russian])),
             uk:Object.fromEntries([...UI_COPY_ROWS,...UI_COPY_ROWS_EXTRA].map(([english,,ukrainian])=>[english,ukrainian]))
         };
         let currentUiLanguage='en';
+        let tradeShareState=null;
         let exchangeQuoteDirection='solana-to-base',exchangeQuoteBusy=false;
         function uiLocale(){
             return currentUiLanguage==='uk'?'uk-UA':currentUiLanguage==='ru'?'ru-RU':undefined;
@@ -4786,6 +4892,8 @@ RAW_HTML = r"""<!DOCTYPE html>
             translateUiTree();
             if(latestBasePaperData)renderBasePaper(latestBasePaperData);
             setExchangeDirection(exchangeQuoteDirection);
+            if(tradeShareState?.snapshot&&document.getElementById('trade-share-dialog')?.open)
+                renderTradeSharePreview(tradeShareState);
         }
         async function saveUiLanguage(){
             const select=document.getElementById('ui-language-select'),status=document.getElementById('ui-language-status');
@@ -6933,6 +7041,253 @@ RAW_HTML = r"""<!DOCTYPE html>
             }
         }
 
+        function canShareProfitTrade(trade) {
+            const profit=Number(trade?.profit_units);
+            const closedAt=trade?.closed_at;
+            const hasValidCloseTime=typeof closedAt==='number'
+                ?Number.isFinite(closedAt)&&closedAt>0
+                :typeof closedAt==='string'&&Number.isFinite(Date.parse(closedAt));
+            return trade?.status==='CLOSED'
+                && hasValidCloseTime
+                && ['USDC','SOL'].includes(trade.funding_currency)
+                && Number.isFinite(profit)&&profit>0;
+        }
+        function safeTradeShareSymbol(trade) {
+            const raw=String(trade?.token_symbol||trade?.symbol||'').trim();
+            if(!raw||/^0x[a-f\d]{40}$/i.test(raw)||/^[1-9A-HJ-NP-Za-km-z]{32,}$/.test(raw))return 'TOKEN';
+            return raw.replace(/[^A-Za-z0-9._-]/g,'').slice(0,16)||'TOKEN';
+        }
+        function tradeShareAmount(value,currency) {
+            const options=currency==='SOL'
+                ?{minimumFractionDigits:4,maximumFractionDigits:9}
+                :{minimumFractionDigits:2,maximumFractionDigits:6};
+            return Number(value).toLocaleString(uiLocale(),options);
+        }
+        function updateTradeShareActions() {
+            const confirmed=!!document.getElementById('trade-share-confirmation')?.checked;
+            const ready=!!tradeShareState?.ready;
+            const imageReady=!!tradeShareState?.imageReady;
+            const submit=document.getElementById('trade-share-submit');
+            const copy=document.getElementById('trade-share-copy');
+            const download=document.getElementById('trade-share-download');
+            if(submit)submit.disabled=!confirmed||!ready;
+            if(copy)copy.disabled=!confirmed||!ready;
+            if(download)download.disabled=!confirmed||!imageReady;
+        }
+        function drawShareWrappedText(ctx,text,x,y,maxWidth,lineHeight,maxLines=3) {
+            const words=String(text).split(/\s+/);let line='',lines=0;
+            for(const word of words){
+                const next=line?line+' '+word:word;
+                if(line&&ctx.measureText(next).width>maxWidth){
+                    ctx.fillText(line,x,y+lines*lineHeight);lines++;line=word;
+                    if(lines>=maxLines)return y+lines*lineHeight;
+                }else line=next;
+            }
+            if(line&&lines<maxLines){ctx.fillText(line,x,y+lines*lineHeight);lines++;}
+            return y+lines*lineHeight;
+        }
+        function drawTradeShareCard(state) {
+            const canvas=document.getElementById('trade-share-canvas');
+            const ctx=canvas?.getContext('2d');
+            if(!canvas||!ctx)return false;
+            const {snapshot}=state;
+            const w=canvas.width,h=canvas.height;
+            const background=ctx.createLinearGradient(0,0,w,h);
+            background.addColorStop(0,'#101b12');background.addColorStop(.55,'#07100b');background.addColorStop(1,'#050907');
+            ctx.fillStyle=background;ctx.fillRect(0,0,w,h);
+            const glow=ctx.createRadialGradient(900,180,20,900,180,520);
+            glow.addColorStop(0,'rgba(192,255,82,.22)');glow.addColorStop(1,'rgba(192,255,82,0)');
+            ctx.fillStyle=glow;ctx.fillRect(0,0,w,h);
+            ctx.strokeStyle='rgba(191,235,116,.36)';ctx.lineWidth=2;ctx.strokeRect(36,36,w-72,h-72);
+            ctx.fillStyle='#c9fa72';ctx.font='800 28px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
+            ctx.textBaseline='top';ctx.fillText('ZER0LIFE · AI TRADER',78,92);
+            ctx.fillStyle='rgba(222,240,221,.62)';ctx.font='700 22px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
+            ctx.fillText(localizeUiText('Finalized trade').toUpperCase(),78,210);
+            ctx.fillStyle='#f0f7ee';ctx.font='800 88px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
+            ctx.fillText(snapshot.symbol,78,280);
+            ctx.fillStyle='rgba(212,228,211,.76)';ctx.font='700 22px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
+            ctx.fillText(localizeUiText('Realized profit').toUpperCase(),78,470);
+            const amount='+'+tradeShareAmount(snapshot.profit,snapshot.currency)+' '+snapshot.currency;
+            let amountSize=76;
+            ctx.font=`800 ${amountSize}px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif`;
+            while(ctx.measureText(amount).width>920&&amountSize>42){
+                amountSize-=4;ctx.font=`800 ${amountSize}px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif`;
+            }
+            ctx.fillStyle='#c9fa72';ctx.fillText(amount,78,530);
+            if(Number.isFinite(snapshot.profitPct)){
+                ctx.fillStyle='#d2e9d0';ctx.font='650 32px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
+                ctx.fillText((snapshot.profitPct>0?'+':'')+snapshot.profitPct.toLocaleString(uiLocale(),{
+                    minimumFractionDigits:2,maximumFractionDigits:2
+                })+'%',78,640);
+            }
+            ctx.fillStyle='rgba(201,250,114,.8)';ctx.fillRect(78,744,924,2);
+            ctx.fillStyle='#c7d4c6';ctx.font='500 25px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
+            let y=drawShareWrappedText(ctx,localizeUiText(
+                'After partner commission; separately paid network fees and Jito tips are excluded.'
+            ),78,810,900,38,3);
+            y+=28;ctx.fillStyle='rgba(198,211,197,.67)';ctx.font='500 22px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
+            drawShareWrappedText(ctx,localizeUiText('Past performance does not guarantee future results.'),78,y,900,34,2);
+            canvas.setAttribute('aria-label',localizeUiText('Share card preview')+': '+snapshot.symbol+', +'
+                +tradeShareAmount(snapshot.profit,snapshot.currency)+' '+snapshot.currency);
+            return true;
+        }
+        async function renderTradeSharePreview(state=tradeShareState) {
+            if(!state||state!==tradeShareState)return;
+            state.renderRevision=(state.renderRevision||0)+1;
+            const revision=state.renderRevision;
+            state.ready=false;state.imageReady=drawTradeShareCard(state);state.file=null;state.blob=null;
+            const amount='+'+tradeShareAmount(state.snapshot.profit,state.snapshot.currency)+' '+state.snapshot.currency;
+            const pct=Number.isFinite(state.snapshot.profitPct)
+                ?' · '+(state.snapshot.profitPct>0?'+':'')+state.snapshot.profitPct.toLocaleString(uiLocale(),{
+                    minimumFractionDigits:2,maximumFractionDigits:2
+                })+'%'
+                :'';
+            state.caption=[
+                'ZER0LIFE AI Trader',
+                localizeUiText('Finalized trade')+': '+state.snapshot.symbol,
+                localizeUiText('Realized profit')+': '+amount+pct,
+                localizeUiText('After partner commission; separately paid network fees and Jito tips are excluded.'),
+                localizeUiText('Past performance does not guarantee future results.')
+            ].join('\n');
+            const caption=document.getElementById('trade-share-caption');
+            if(caption)caption.value=state.caption;
+            const status=document.getElementById('trade-share-status');
+            if(status)status.textContent=localizeUiText('Preparing card…');
+            updateTradeShareActions();
+            const canvas=document.getElementById('trade-share-canvas');
+            if(state.imageReady&&canvas&&typeof canvas.toBlob==='function'){
+                try{
+                    const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
+                    if(state!==tradeShareState||revision!==state.renderRevision)return;
+                    state.blob=blob;
+                    if(blob&&typeof File==='function'){
+                        state.file=new File([blob],'zer0life-'+state.snapshot.symbol.toLowerCase()+'-trade.png',{type:'image/png'});
+                    }
+                    state.ready=true;
+                    if(!blob&&status)status.textContent=localizeUiText('Could not prepare the image. You can still copy the caption.');
+                }catch(_error){
+                    if(state!==tradeShareState||revision!==state.renderRevision)return;
+                    state.ready=true;
+                    if(status)status.textContent=localizeUiText('Could not prepare the image. You can still copy the caption.');
+                }
+            }else{
+                state.ready=true;
+                if(status)status.textContent=localizeUiText(state.imageReady
+                    ?'Sharing is unavailable here. Download the card and copy the caption to post manually.'
+                    :'Could not prepare the image. You can still copy the caption.');
+            }
+            updateTradeShareActions();
+        }
+        function openTradeShareDialog(trade,trigger) {
+            if(!canShareProfitTrade(trade))return;
+            const dialog=document.getElementById('trade-share-dialog');
+            const checkbox=document.getElementById('trade-share-confirmation');
+            const status=document.getElementById('trade-share-status');
+            if(!dialog||!checkbox)return;
+            const profit=Number(trade.profit_units);
+            const percent=Number(trade.profit_pct);
+            tradeShareState={
+                snapshot:{
+                    symbol:safeTradeShareSymbol(trade),
+                    profit,
+                    currency:trade.funding_currency,
+                    profitPct:Number.isFinite(percent)?percent:null
+                },
+                trigger,
+                ready:false,
+                imageReady:false,
+                file:null,
+                blob:null
+            };
+            checkbox.checked=false;
+            if(status)status.textContent='';
+            updateTradeShareActions();
+            if(!dialog.open)dialog.showModal();
+            renderTradeSharePreview(tradeShareState);
+            checkbox.focus({preventScroll:true});
+        }
+        function closeTradeShareDialog() {
+            const dialog=document.getElementById('trade-share-dialog');
+            if(dialog?.open)dialog.close();
+        }
+        function sharePreparedTrade() {
+            const state=tradeShareState;
+            if(!state||!state.ready||!document.getElementById('trade-share-confirmation')?.checked)return;
+            const status=document.getElementById('trade-share-status');
+            if(typeof navigator.share!=='function'){
+                if(status)status.textContent=localizeUiText(
+                    'Sharing is unavailable here. Download the card and copy the caption to post manually.'
+                );
+                return;
+            }
+            const data={title:'ZER0LIFE AI Trader · '+localizeUiText('Finalized trade'),text:state.caption};
+            if(state.file&&typeof navigator.canShare==='function'){
+                try{if(navigator.canShare({files:[state.file]}))data.files=[state.file];}catch(_error){}
+            }
+            try{
+                Promise.resolve(navigator.share(data)).then(()=>{
+                    if(status)status.textContent=localizeUiText(
+                        'Share menu closed. The app cannot verify that the post was published.'
+                    );
+                }).catch(error=>{
+                    if(!status)return;
+                    status.textContent=error?.name==='AbortError'
+                        ?localizeUiText('Sharing canceled; nothing was posted automatically.')
+                        :localizeUiText('Sharing is unavailable here. Download the card and copy the caption to post manually.');
+                });
+            }catch(_error){
+                if(status)status.textContent=localizeUiText(
+                    'Sharing is unavailable here. Download the card and copy the caption to post manually.'
+                );
+            }
+        }
+        async function copyTradeShareCaption() {
+            const state=tradeShareState;
+            if(!state||!state.ready||!document.getElementById('trade-share-confirmation')?.checked)return;
+            const caption=document.getElementById('trade-share-caption');
+            const status=document.getElementById('trade-share-status');
+            try{
+                if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(state.caption);
+                else{
+                    caption?.select();
+                    if(!document.execCommand('copy'))throw new Error('copy unavailable');
+                }
+                if(status)status.textContent=localizeUiText('Caption copied.');
+            }catch(_error){
+                caption?.focus();caption?.select();
+                if(status)status.textContent=localizeUiText('Could not copy automatically. Select the caption and copy it manually.');
+            }
+        }
+        function downloadTradeShareCard() {
+            const state=tradeShareState;
+            if(!state||!state.imageReady||!document.getElementById('trade-share-confirmation')?.checked)return;
+            const canvas=document.getElementById('trade-share-canvas');
+            const status=document.getElementById('trade-share-status');
+            try{
+                const anchor=document.createElement('a');
+                anchor.href=canvas.toDataURL('image/png');
+                anchor.download='zer0life-'+state.snapshot.symbol.toLowerCase()+'-trade.png';
+                anchor.click();
+                if(status)status.textContent=localizeUiText('Card download started.');
+            }catch(_error){
+                if(status)status.textContent=localizeUiText('Could not prepare the image. You can still copy the caption.');
+            }
+        }
+        document.getElementById('trade-share-confirmation')?.addEventListener('change',updateTradeShareActions);
+        document.getElementById('trade-share-submit')?.addEventListener('click',sharePreparedTrade);
+        document.getElementById('trade-share-copy')?.addEventListener('click',copyTradeShareCaption);
+        document.getElementById('trade-share-download')?.addEventListener('click',downloadTradeShareCard);
+        document.getElementById('trade-share-dialog')?.addEventListener('close',()=>{
+            const trigger=tradeShareState?.trigger;
+            tradeShareState=null;
+            const caption=document.getElementById('trade-share-caption');
+            const status=document.getElementById('trade-share-status');
+            if(caption)caption.value='';
+            if(status)status.textContent='';
+            updateTradeShareActions();
+            if(trigger?.isConnected)trigger.focus();
+        });
+
         async function refresh() {
             try {
                 const l = await apiFetch('/api/logs').then(r => r.json()).catch(() => ({success:false}));
@@ -7193,11 +7548,12 @@ RAW_HTML = r"""<!DOCTYPE html>
                     }
 
                     if (s.trades && s.trades.length > 0) {
-                        document.getElementById('history-box').innerHTML = s.trades.map(t => {
+                        document.getElementById('history-box').innerHTML = s.trades.map((t,tradeIndex) => {
                             const isClosed = t.status === 'CLOSED';
                             const isOpen = t.status === 'OPEN';
                             const isPending = !isClosed && !isOpen;
                             const pnlColor = Number(t.profit_units??t.profit_usdc) >= 0 ? '#4ade80' : '#f87171';
+                            const shareProfitEligible = canShareProfitTrade(t);
 
                             return `
                                 <div class="order-card">
@@ -7220,6 +7576,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                                             ${isClosed ? (Number(t.profit_units??t.profit_usdc).toFixed(t.funding_currency==='SOL'?9:2)+' '+(t.funding_currency||'USDC')+' ('+t.profit_pct.toFixed(2)+'%)') : isPending ? 'Sale awaiting confirmation' : 'Open position'}
                                         </div>
                                     </div>
+                                    ${shareProfitEligible ? `<button type="button" class="btn-green-main share-profitable-trade" data-trade-index="${tradeIndex}">Share profit</button>` : ''}
                                     <div class="order-tx-row">
                                         ${t.buy_tx ? '<a class="tx-link" href="https://solscan.io/tx/' + t.buy_tx + '" target="_blank">↗ Buy transaction</a>' : ''}
                                         ${t.sell_tx ? '<a class="tx-link" style="color: #4ade80;" href="https://solscan.io/tx/' + t.sell_tx + '" target="_blank">↗ Sell transaction</a>' : ''}
@@ -7231,6 +7588,10 @@ RAW_HTML = r"""<!DOCTYPE html>
                                 </div>
                             `;
                         }).join('');
+                        document.getElementById('history-box').querySelectorAll('.share-profitable-trade').forEach(button => {
+                            const trade=s.trades[Number(button.dataset.tradeIndex)];
+                            button.addEventListener('click',()=>openTradeShareDialog(trade,button));
+                        });
                         document.getElementById('history-box').querySelectorAll('.position-close').forEach(button => {
                             const position=s.trades.find(trade=>trade.position_id===button.dataset.positionId);
                             button.addEventListener('click',()=>closePosition(position,button));
