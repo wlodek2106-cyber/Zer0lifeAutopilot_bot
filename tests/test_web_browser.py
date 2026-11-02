@@ -100,6 +100,13 @@ class WebBrowserTests(unittest.TestCase):
             const expired='Candidate checks expired (valid for 30 minutes). The displayed scan counts are historical. Refresh candidates before new buys.';
             assert(localizeUiText(expired)==='Перевірка кандидатів застаріла (діє 30 хвилин). Показані кількості сканувань стосуються попередніх перевірок. Оновіть кандидатів перед новими купівлями.',
               'expired scan warning is fully translated into Ukrainian');
+            const pending='An unresolved BUY operation is still being checked. Its funds remain locked; do not start another transaction. Investors stayed OFF.';
+            assert(localizeUiText(pending)==='Купівля ще перевіряється. Кошти залишаються заблокованими; не запускайте іншу транзакцію. AI-криптоінвестори залишається вимкненим.',
+              'pending operation warning is localized in Ukrainian');
+            currentUiLanguage='ru';
+            assert(localizeUiText(pending)==='Покупка всё ещё проверяется. Средства остаются заблокированы; не запускайте другую транзакцию. AI-криптоинвесторы остаётся выключенным.',
+              'pending operation warning is localized in Russian');
+            currentUiLanguage='uk';
             const nativeTimeout=window.setTimeout;
             window.setTimeout=(callback)=>nativeTimeout(callback,0);
             window.refresh=async()=>{};

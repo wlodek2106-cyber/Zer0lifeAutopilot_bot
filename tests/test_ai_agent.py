@@ -140,6 +140,25 @@ class AILedgerTests(unittest.TestCase):
 
 
 class AIControllerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_investor_enable_reconciles_pending_operation_before_blocking(self):
+        operation = self.service.ledger.reserve(
+            101, "investor-pending-check", "BUY", USDC, 1_000_000,
+            {"output_asset": self.mint, "symbol": "WIF", "decimals": 6})
+        signature = str(Signature.new_unique())
+        self.service.ledger.prepared(operation["id"], signature, "signed-wire")
+        self.service.ledger.submitted(operation["id"], True)
+        self.service.reconcile = AsyncMock()
+
+        with patch.object(self.service, "uid", return_value=101), \
+                patch.object(self.service, "admit_trading"), \
+                patch("ai_decisions.configuration", return_value={"configured": True}):
+            with self.assertRaisesRegex(WalletError, "unresolved BUY operation"):
+                await self.service.toggle_investor(object(), None)
+
+        self.service.reconcile.assert_awaited_once_with(None)
+        self.assertFalse(self.service.ledger.settings(101)["investor_trading"])
+        self.assertEqual(self.service.ledger.balance(101, USDC), 19_000_000)
+
     async def test_empty_shortlist_requests_refresh_without_enabling_mode_or_trading(self):
         self.service.ledger.settings(101, sniper_enabled=False)
         self.service.discovery.fail("network timeout")

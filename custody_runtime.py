@@ -2296,7 +2296,7 @@ class CustodyRuntime(WalletRuntime):
                 raise WalletError("Recovery check was interrupted; no record was changed.", 503) from None
             evidence = {**evidence, "outcome": "PROVEN_ABSENT_AND_EXPIRED",
                         "ledger_release": True, "transaction_sent": False}
-            # The ledger atomically pauses both modes and queues an alert on recovery.
+            # The ledger atomically pauses all automated entry modes and queues an alert.
             try:
                 self.ledger.fail(row["id"], network_proven=True, fee=0,
                     failure_reason="Recovery verified that the transaction was absent and expired.",
@@ -3605,9 +3605,17 @@ class CustodyRuntime(WalletRuntime):
                 self.web_access.trading_request(request)
             if not ai_decisions.configuration()["configured"]:
                 raise WalletError("AI Crypto Investors cannot start: AI service is not configured.", 503)
-            if self.pending():
-                raise WalletError("Wait for the pending wallet operation before enabling Investors.", 409)
+            # Reconcile first so a transaction already finalized or proven absent
+            # and expired does not leave the enable action blocked on stale state.
             await self.reconcile(session)
+            pending = self.pending()
+            if pending:
+                operation = pending[0]
+                kind = operation.get("kind", "wallet")
+                raise WalletError(
+                    f"An unresolved {kind} operation is still being checked. "
+                    "Its funds remain locked; do not start another transaction. "
+                    "Investors stayed OFF.", 409)
             await self.solvent(session)
             if not getattr(self, "discovery", None):
                 raise WalletError("Verified Solana candidate discovery is unavailable; Investors stayed OFF.", 503)
@@ -3984,11 +3992,11 @@ class CustodyRuntime(WalletRuntime):
                     symbol = "SOL" if asset == SOL else "USDC" if asset == USDC else asset
                     restored = f"Purchase reservation released: {amount} {symbol}."
                     mode_note = (
-                        "Core and Sniper settings were left unchanged.\n"
-                        "This BUY will not be retried; any later order requires a fresh AI analysis.\n")
+                        "Core, Meme Sniper and AI Crypto Investors were switched OFF.\n"
+                        "This BUY will not be retried. Review the failure before manually re-enabling trading.\n")
                 else:
                     mode_note = (
-                        "Core: OFF. Sniper: OFF.\n"
+                        "Core, Meme Sniper and AI Crypto Investors: OFF.\n"
                         "This transaction was not retried. Enable a mode manually to resume.\n")
                 text = (
                     "AI Trader: a pending operation was safely recovered.\n"
