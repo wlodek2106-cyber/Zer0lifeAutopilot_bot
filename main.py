@@ -2628,6 +2628,347 @@ RAW_HTML = r"""<!DOCTYPE html>
                 animation: none !important;
             }
         }
+        /* Trading command deck — scoped surface treatment; all trading logic remains unchanged. */
+        #app #tab-trading {
+            --trade-ink: #edf3e8;
+            --trade-muted: #a9b8aa;
+            --trade-line: rgba(179, 220, 173, .17);
+            --trade-lime: #c7f36b;
+            --trade-mint: #76e5b2;
+            --trade-warn: #e69aab;
+            position: relative;
+            isolation: isolate;
+            background:
+                radial-gradient(ellipse at 88% 0%, rgba(80, 151, 91, .11), transparent 38%),
+                radial-gradient(ellipse at 4% 42%, rgba(70, 116, 130, .08), transparent 35%);
+            color: var(--trade-ink);
+        }
+        #app #tab-trading::before {
+            content: "";
+            position: fixed;
+            z-index: -1;
+            inset: 0 0 0 226px;
+            pointer-events: none;
+            opacity: .17;
+            background-image: linear-gradient(rgba(181, 220, 171, .05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(181, 220, 171, .05) 1px, transparent 1px);
+            background-size: 42px 42px;
+            mask-image: linear-gradient(110deg, transparent 4%, #000 70%);
+        }
+        #app #tab-trading .page-heading {
+            position: relative;
+            padding-bottom: 13px;
+            border-bottom: 1px solid var(--trade-line);
+        }
+        #app #tab-trading .page-heading::after {
+            content: "";
+            position: absolute;
+            bottom: -1px;
+            left: 0;
+            width: 76px;
+            height: 2px;
+            background: linear-gradient(90deg, var(--trade-lime), transparent);
+        }
+        #app #tab-trading .page-heading .eyebrow {
+            color: var(--trade-mint);
+            font: 700 10px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+            letter-spacing: .16em;
+            text-transform: uppercase;
+        }
+        #app #tab-trading .page-heading h1 {
+            color: #f0f5e9;
+            letter-spacing: -.045em;
+            text-shadow: 0 2px 18px rgba(184, 238, 110, .10);
+        }
+        #app #tab-trading #trading-controls { min-width: 0; }
+        #app #tab-trading .control-bar {
+            width: 100%;
+            max-width: none;
+            min-height: 58px;
+            margin: 0;
+            padding: 8px;
+            gap: 10px;
+            border: 1px solid rgba(230, 154, 171, .24);
+            border-radius: 17px;
+            background: linear-gradient(105deg, rgba(77, 34, 48, .78), rgba(27, 24, 30, .92) 63%, rgba(21, 31, 28, .9));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 8px 0 rgba(22, 16, 24, .72), 0 17px 32px rgba(0,0,0,.2);
+        }
+        #app #tab-trading .control-bar .btn-toggle-off {
+            min-height: 40px;
+            flex: 1 1 auto;
+            justify-content: center;
+            border: 1px solid rgba(235, 151, 171, .5) !important;
+            border-radius: 10px;
+            color: #f3dce1 !important;
+            background: linear-gradient(180deg, rgba(113, 48, 67, .9), rgba(67, 32, 45, .95)) !important;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 3px 0 rgba(43, 19, 29, .9) !important;
+        }
+        #app #tab-trading .control-bar .btn-toggle-off #toggle-dot { color: #f2a5b6; }
+        #app #tab-trading .control-bar .btn-toggle-on {
+            min-height: 40px;
+            flex: 1 1 auto;
+            justify-content: center;
+            border: 1px solid rgba(118, 229, 178, .48) !important;
+            border-radius: 10px;
+            color: #d8f2e4 !important;
+            background: linear-gradient(180deg, rgba(35, 96, 70, .92), rgba(20, 57, 43, .96)) !important;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 3px 0 rgba(11, 35, 25, .92) !important;
+        }
+        #app #tab-trading .control-bar .btn-toggle-on #toggle-dot { color: #8af0bf; }
+        #app #tab-trading .control-bar .btn-refresh {
+            min-height: 40px;
+            flex: 0 0 auto;
+            border: 1px solid rgba(181, 220, 173, .24);
+            border-radius: 10px;
+            color: #d8e8d1;
+            background: linear-gradient(180deg, #344438, #202c25);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 3px 0 #141d18;
+        }
+        #app #tab-trading .card,
+        #app #tab-trading details#trading-activity-panel {
+            position: relative;
+            min-width: 0;
+            overflow: hidden;
+            border: 1px solid var(--trade-line) !important;
+            border-radius: 18px;
+            background:
+                linear-gradient(145deg, rgba(30, 39, 34, .96), rgba(14, 20, 18, .98) 65%),
+                #111714 !important;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.075), inset 0 -15px 28px rgba(0,0,0,.2),
+                0 5px 0 rgba(6, 11, 9, .78), 0 15px 30px rgba(0,0,0,.24);
+        }
+        #app #tab-trading .card::before,
+        #app #tab-trading details#trading-activity-panel::before {
+            content: "";
+            position: absolute;
+            z-index: 0;
+            inset: 0 10% auto;
+            height: 1px;
+            pointer-events: none;
+            background: linear-gradient(90deg, transparent, rgba(205, 239, 190, .42), transparent);
+        }
+        #app #tab-trading .card > *,
+        #app #tab-trading details#trading-activity-panel > * { position: relative; }
+        #app #tab-trading #trading-ai-activity {
+            padding: clamp(17px, 2.2vw, 25px);
+            border-color: rgba(147, 202, 151, .26) !important;
+            background:
+                radial-gradient(ellipse at 94% 0%, rgba(109, 178, 103, .13), transparent 34%),
+                linear-gradient(145deg, rgba(28, 39, 34, .98), rgba(13, 19, 18, .98) 72%) !important;
+        }
+        #app #tab-trading #trading-ai-activity h3 {
+            margin-bottom: 16px;
+            color: #eaf3e3;
+            font-size: 16px;
+            letter-spacing: -.015em;
+        }
+        #app #tab-trading .status-output,
+        #app #tab-trading .section-note {
+            color: var(--trade-muted);
+            overflow-wrap: anywhere;
+            line-height: 1.58;
+        }
+        #app #tab-trading #ai-status,
+        #app #tab-trading #ai-decisions,
+        #app #tab-trading #ai-risk-review,
+        #app #tab-trading #ai-chart-zones,
+        #app #tab-trading #execution-policy-result {
+            padding: 10px 12px;
+            border: 1px solid rgba(176, 203, 176, .13);
+            border-left: 2px solid rgba(199, 243, 107, .52);
+            border-radius: 9px;
+            background: rgba(5, 11, 9, .34);
+            color: #d5e3d3;
+            font-size: 12px;
+            line-height: 1.6;
+        }
+        #app #tab-trading #ai-latency,
+        #app #tab-trading #ai-learning { padding: 0 2px; font-size: 11px; }
+        #app #tab-trading #ai-risk-review { border-left-color: rgba(230, 154, 171, .62); }
+        #app #tab-trading #trading-ai-activity details {
+            margin-top: 14px;
+            border-color: rgba(182, 215, 179, .18);
+            background: rgba(7, 12, 10, .46);
+        }
+        #app #tab-trading #trading-ai-activity details p { max-width: 100ch; }
+        #app #tab-trading #trading-ai-activity details p:last-child { color: #b3c1b5; }
+        #app #tab-trading #trading-strategy,
+        #app #tab-trading #trading-sniper { min-width: 0; }
+        #app #tab-trading #core-strategy-card,
+        #app #tab-trading #meme-sniper-card {
+            height: 100%;
+            padding: clamp(16px, 1.8vw, 21px);
+        }
+        #app #tab-trading #core-strategy-card > div:first-child,
+        #app #tab-trading #meme-sniper-card > div:first-child { gap: 12px; }
+        #app #tab-trading #core-strategy-card > div:first-child > div:first-child > div:first-child,
+        #app #tab-trading #meme-sniper-card > div:first-child > div:first-child > div:first-child {
+            color: #edf5e9 !important;
+            letter-spacing: -.02em;
+        }
+        #app #tab-trading #user-bal-small {
+            flex: 0 0 auto;
+            padding: 8px 10px;
+            border: 1px solid rgba(118, 229, 178, .25);
+            border-radius: 9px;
+            color: #a8f0c9 !important;
+            background: rgba(41, 106, 77, .16);
+            font-size: 13px !important;
+            font-variant-numeric: tabular-nums;
+        }
+        #app #tab-trading .grid-stats {
+            gap: 8px;
+            margin-top: 15px;
+        }
+        #app #tab-trading .stat-box {
+            min-width: 0;
+            padding: 11px 12px;
+            border: 1px solid rgba(179, 220, 173, .14);
+            border-radius: 11px;
+            background: linear-gradient(145deg, rgba(29, 42, 35, .88), rgba(12, 19, 16, .9));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.045), 0 3px 0 rgba(5, 10, 8, .48);
+        }
+        #app #tab-trading .stat-label {
+            color: #9cad9e;
+            font-size: 10px;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+        }
+        #app #tab-trading .stat-val {
+            margin-top: 5px;
+            color: #eff6e9;
+            font-size: clamp(13px, 1.25vw, 17px);
+            line-height: 1.25;
+            font-variant-numeric: tabular-nums;
+            overflow-wrap: anywhere;
+        }
+        #app #tab-trading #strategy-assets,
+        #app #tab-trading #sniper-position-cap,
+        #app #tab-trading #entry-cost-check,
+        #app #tab-trading #sniper-pnl { color: #b1c0b2 !important; }
+        #app #tab-trading #core-strategy-card > p,
+        #app #tab-trading #meme-sniper-card > p { font-size: 11px; }
+        #app #tab-trading .trading-readiness-card {
+            padding: 16px;
+            border-color: rgba(222, 190, 112, .22) !important;
+            background: linear-gradient(145deg, rgba(49, 42, 28, .78), rgba(20, 21, 17, .96)) !important;
+        }
+        #app #tab-trading .trading-readiness-card #trading-readiness {
+            margin-top: 12px;
+            padding: 12px 13px;
+            border: 1px solid rgba(222, 190, 112, .2);
+            border-radius: 10px;
+            color: #e7ddbf;
+            background: rgba(11, 12, 9, .4);
+            line-height: 1.55;
+        }
+        #app #tab-trading details#trading-activity-panel {
+            min-width: 0;
+            padding: 0;
+            border-color: rgba(177, 202, 178, .2);
+        }
+        #app #tab-trading details#trading-activity-panel > summary {
+            min-height: 54px;
+            padding: 17px 20px;
+            color: #e2eddf;
+            font-size: 12px;
+            font-weight: 750;
+            letter-spacing: .035em;
+            cursor: pointer;
+        }
+        #app #tab-trading details#trading-activity-panel[open] > summary {
+            border-bottom: 1px solid var(--trade-line);
+            background: rgba(121, 163, 120, .06);
+        }
+        #app #tab-trading #trading-activity { padding: 14px; }
+        #app #tab-trading #trading-activity #activity-log-card {
+            padding: 13px;
+            border-radius: 12px;
+            background: rgba(7, 13, 10, .76) !important;
+            box-shadow: none;
+        }
+        #app #tab-trading #activity-log-card > div:first-child {
+            color: #c8d9c7 !important;
+            letter-spacing: .12em;
+        }
+        #app #tab-trading .log-console {
+            max-height: min(42vh, 420px);
+            overflow: auto;
+            padding: 12px 13px;
+            border: 1px solid rgba(166, 198, 166, .13);
+            border-radius: 10px;
+            background: #080e0b;
+            color: #bac9ba;
+            font: 11px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace;
+            overflow-wrap: anywhere;
+            scrollbar-color: rgba(199, 243, 107, .32) rgba(7, 12, 9, .7);
+            scrollbar-width: thin;
+        }
+        #app #tab-trading button,
+        #app #tab-trading summary { -webkit-tap-highlight-color: transparent; }
+        #app #tab-trading :is(button, summary, a, input, select, textarea):focus-visible {
+            outline: 2px solid var(--trade-lime) !important;
+            outline-offset: 3px;
+            box-shadow: 0 0 0 4px rgba(199, 243, 107, .14);
+        }
+        #app #tab-trading button:not(:disabled) { transition: transform .16s ease, filter .16s ease; }
+        #app #tab-trading button:not(:disabled):hover { filter: brightness(1.08); }
+        #app #tab-trading button:not(:disabled):active { transform: translateY(2px); }
+        #app #tab-trading button:disabled { cursor: not-allowed; filter: saturate(.68); }
+        @media (hover: hover) and (prefers-reduced-motion: no-preference) {
+            #app #tab-trading .card,
+            #app #tab-trading details#trading-activity-panel {
+                transform-style: preserve-3d;
+                transition: transform .22s ease, box-shadow .22s ease, border-color .22s ease;
+            }
+            #app #tab-trading .card:hover,
+            #app #tab-trading details#trading-activity-panel:hover {
+                transform: perspective(1200px) translateY(-2px) rotateX(.25deg);
+                border-color: rgba(199, 243, 107, .3) !important;
+                box-shadow: inset 0 1px 0 rgba(255,255,255,.09), 0 7px 0 rgba(6, 11, 9, .78),
+                    0 20px 34px rgba(0,0,0,.29);
+            }
+        }
+        @media (min-width: 768px) {
+            #app #tab-trading #trading-strategy,
+            #app #tab-trading #trading-sniper,
+            #app #tab-trading .trading-readiness-card,
+            #app #tab-trading #trading-activity-panel { min-width: 0; }
+            #app #tab-trading #trading-strategy,
+            #app #tab-trading .trading-readiness-card { grid-column: 1; }
+            #app #tab-trading #trading-sniper,
+            #app #tab-trading #trading-activity-panel { grid-column: 2; }
+        }
+        @media (max-width: 767px) {
+            #app #tab-trading { padding-bottom: 28px; }
+            #app #tab-trading::before { inset: 0; background-size: 34px 34px; }
+            #app #tab-trading .page-heading { padding-bottom: 10px; }
+            #app #tab-trading .page-heading h1 { font-size: 29px; }
+            #app #tab-trading .control-bar { padding: 7px; gap: 8px; }
+            #app #tab-trading #trading-ai-activity,
+            #app #tab-trading #core-strategy-card,
+            #app #tab-trading #meme-sniper-card { padding: 15px; }
+            #app #tab-trading .stat-box { padding: 9px; }
+            #app #tab-trading .stat-val { font-size: 14px; }
+            #app #tab-trading details#trading-activity-panel > summary { padding: 15px; }
+            #app #tab-trading #trading-activity { padding: 10px; }
+        }
+        @media (max-width: 380px) {
+            #app #tab-trading .control-bar { flex-wrap: wrap; }
+            #app #tab-trading .control-bar .btn-toggle-off,
+            #app #tab-trading .control-bar .btn-refresh { flex: 1 1 100%; }
+            #app #tab-trading .grid-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            #app #tab-trading #user-bal-small { max-width: 100%; font-size: 11px !important; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            #app #tab-trading *,
+            #app #tab-trading *::before,
+            #app #tab-trading *::after {
+                scroll-behavior: auto !important;
+                animation: none !important;
+                transition-duration: .01ms !important;
+            }
+        }
     </style>
 </head>
 <body>
