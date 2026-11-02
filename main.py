@@ -3354,6 +3354,25 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["Available SOL","Доступно SOL","Доступно SOL"],["Order size","Размер ордера","Розмір ордера"],
             ["Scan candidates","Сканировать кандидатов","Сканувати кандидатів"],
             ["Candidate shortlist","Список кандидатов","Список кандидатів"],
+            ["Candidate checks expired (valid for 30 minutes). The displayed scan counts are historical. Refresh candidates before new buys.","Проверка кандидатов устарела (срок действия — 30 минут). Показанные количества сканирований относятся к прошлым проверкам. Обновите кандидатов перед новыми покупками.","Перевірка кандидатів застаріла (діє 30 хвилин). Показані кількості сканувань стосуються попередніх перевірок. Оновіть кандидатів перед новими купівлями."],
+            ["Candidate scan is running. No trade is submitted.","Идёт проверка кандидатов. Сделки не отправляются.","Триває перевірка кандидатів. Угоди не надсилаються."],
+            ["Candidate scan is still running. Investors remain OFF; no trade was sent. Check again shortly.","Проверка кандидатов ещё выполняется. Автоторговля AI Crypto Investors остаётся выключенной; сделка не отправлялась. Проверьте ещё раз немного позже.","Перевірка кандидатів ще триває. Автоторгівля AI Crypto Investors залишається вимкненою; угоду не було надіслано. Перевірте ще раз трохи пізніше."],
+            ["A fresh candidate scan has started. Investors remain OFF; wait for it to finish, then tap ON again.","Запущена новая проверка кандидатов. Автоторговля AI Crypto Investors остаётся выключенной. Дождитесь завершения проверки и нажмите «Включить» ещё раз.","Розпочато нову перевірку кандидатів. Автоторгівля AI Crypto Investors залишається вимкненою. Дочекайтеся завершення перевірки й натисніть «Увімкнути» ще раз."],
+            ["A candidate scan is already running. Investors remain OFF; wait for it to finish, then try again.","Проверка кандидатов уже выполняется. Автоторговля AI Crypto Investors остаётся выключенной. Дождитесь завершения и попробуйте снова.","Перевірка кандидатів уже триває. Автоторгівля AI Crypto Investors залишається вимкненою. Дочекайтеся завершення й спробуйте знову."],
+            ["A fresh candidate scan could not start. Investors remain OFF.","Не удалось запустить новую проверку кандидатов. Автоторговля AI Crypto Investors остаётся выключенной.","Не вдалося розпочати нову перевірку кандидатів. Автоторгівля AI Crypto Investors залишається вимкненою."],
+            ["No trade was sent.","Сделка не отправлялась.","Угоду не було надіслано."],
+            ["No mode was enabled and no trade was submitted.","Режим не включён, сделка не отправлялась.","Режим не ввімкнено, угоду не було надіслано."],
+            ["Sniper remains OFF; wait for the scan to finish, then try again.","Снайпер остаётся выключенным. Дождитесь завершения сканирования и попробуйте снова.","Снайпер залишається вимкненим. Дочекайтеся завершення сканування й спробуйте знову."],
+            ["Candidate checks are current. The next scan is scheduled in ","Проверка кандидатов актуальна. Следующее сканирование запланировано через ","Перевірка кандидатів актуальна. Наступне сканування заплановано через "],
+            ["The next scan is scheduled in ","Следующее сканирование запланировано через ","Наступне сканування заплановано через "],
+            ["No extra provider request or trade was submitted.","Дополнительный запрос к поставщику не отправлялся, сделка не совершалась.","Додатковий запит до постачальника не надсилався, угоду не було здійснено."],
+            ["Candidate checks are unavailable.","Проверка кандидатов недоступна.","Перевірка кандидатів недоступна."],
+            ["No candidates currently pass the verified shortlist. Previous scan counts do not guarantee current eligibility.","Сейчас ни один кандидат не прошёл проверку. Количество кандидатов в прошлых сканированиях не подтверждает их текущую пригодность.","Наразі жоден кандидат не пройшов перевірку. Кількість кандидатів у попередніх скануваннях не підтверджує їхню поточну придатність."],
+            ["Candidate scan unavailable","Сканирование кандидатов недоступно","Сканування кандидатів недоступне"],
+            [". New sniper entries paused; automatic retry scheduled.",". Новые входы Sniper приостановлены; автоматическая повторная попытка запланирована.",". Нові входи Sniper призупинено; автоматичну повторну спробу заплановано."],
+            ["DexScreener rate limit (HTTP 429). Shared market-data requests are paused; automatic retry after at least ","Ограничение DexScreener (HTTP 429). Общие запросы рыночных данных приостановлены; автоматическая повторная попытка не ранее чем через ","Обмеження DexScreener (HTTP 429). Спільні запити ринкових даних призупинено; автоматичну повторну спробу буде виконано не раніше ніж через "],
+            ["Market-data rate limit: retry available in ","Ограничение запросов рыночных данных: повторная попытка будет доступна через ","Обмеження запитів ринкових даних: повторна спроба буде доступна через "],
+            ["Market-data provider cooldown: ","Пауза поставщика рыночных данных: ","Пауза постачальника ринкових даних: "],
             ["No verified shortlist yet.","Пока нет проверенного списка кандидатов.","Перевіреного списку кандидатів ще немає."],
             ["Market discovery · DexScreener + charts","Поиск рынка · DexScreener и графики","Пошук ринку · DexScreener і графіки"],
             ["Core strategy · USDC","Стратегия Core · USDC","Стратегія Core · USDC"],
@@ -4108,7 +4127,11 @@ RAW_HTML = r"""<!DOCTYPE html>
                 if(!response.ok||!result.success)throw new Error(result.message);
                 await refresh();
             } catch(e) {
-                alert(e.message);
+                const message=String(e.message||'Could not change AI Crypto Investors mode.');
+                alert(message);
+                if(/candidate checks|candidate scan/i.test(message))
+                    await scanCandidates({waitForCompletion:true});
+                else await refresh();
             } finally {
                 button.disabled=false;
             }
@@ -4280,16 +4303,32 @@ RAW_HTML = r"""<!DOCTYPE html>
             }).join('\n');
         }
         let withdrawSending = false;
-        async function scanCandidates() {
+        async function scanCandidates({waitForCompletion=false}={}) {
             const button=document.getElementById('scan-candidates');
-            button.disabled=true;
+            const status=document.getElementById('discovery-status');
+            if(button)button.disabled=true;
             try {
-                const response=await apiFetch('/api/meme_scan',{method:'POST'});
-                const data=await response.json();
-                if(!response.ok||!data.success)throw new Error(data.message||'Scan unavailable.');
-                document.getElementById('discovery-status').textContent=data.message;
-            }catch(e){document.getElementById('discovery-status').textContent=e.message||'Scan unavailable.';}
-            finally{button.disabled=false;}
+                const readStatus=async()=>{
+                    const response=await apiFetch('/api/meme_scan',{method:'POST'});
+                    const data=await response.json();
+                    if(!response.ok||!data.success)throw new Error(data.message||'Scan unavailable.');
+                    return data;
+                };
+                const deadline=Date.now()+110000;
+                let data=await readStatus();
+                while(waitForCompletion&&data.scan_running&&Date.now()<deadline){
+                    status.textContent=localizeUiText(data.message||'Candidate scan is running. No trade is submitted.');
+                    await new Promise(resolve=>setTimeout(resolve,5000));
+                    data=await readStatus();
+                }
+                if(data.scan_running){
+                    status.textContent=localizeUiText('Candidate scan is still running. Investors remain OFF; no trade was sent. Check again shortly.');
+                    return;
+                }
+                status.textContent=localizeUiText(data.message||'Scan unavailable.');
+                await refresh();
+            }catch(e){status.textContent=localizeUiText(e.message||'Scan unavailable.');}
+            finally{if(button)button.disabled=false;}
         }
 
         let activeSolanaPayInvoice = null;
@@ -5978,8 +6017,16 @@ RAW_HTML = r"""<!DOCTYPE html>
             if(!sniperActive&&!confirm('Start autonomous AI sniper with your SOL? You can lose money. Order size is set in Settings.'))return;
             try {
                 const response=await apiFetch('/api/toggle_sniper',{method:'POST'});
-                const result=await response.json();if(!result.success)alert(result.message);await refresh();
-            }catch(e){alert('Sniper mode unchanged: no server response.');}
+                const result=await response.json();
+                if(!response.ok||!result.success)throw new Error(result.message||'Sniper mode unchanged.');
+                await refresh();
+            }catch(e){
+                const message=String(e.message||'Sniper mode unchanged: no server response.');
+                alert(message);
+                if(/candidate checks|candidate scan/i.test(message))
+                    await scanCandidates({waitForCompletion:true});
+                else await refresh();
+            }
         }
 
         function updateToggleUI(isActive) {

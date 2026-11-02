@@ -371,16 +371,33 @@ class CustodyRuntime(WalletRuntime):
         self.admit(self.uid(request))
         cooldown = self.discovery.cooldown_remaining()
         self.poll_discovery()
+        task = self.discovery_task
+        scan_running = bool(task and not task.done())
         if cooldown:
             return web.json_response({"success": True, "message":
                 f"Market-data rate limit: retry available in {cooldown} seconds. No trade is submitted.",
+                "scan_state": "cooldown", "scan_running": False,
                 "discovery": self.discovery.status_report()})
-        return web.json_response({"success": True, "message":
-            "Candidate scan running. Refresh shortly. No trade is submitted." if self.discovery_task else
-            f"Candidate scan follows the shared schedule; next refresh in "
-            f"{max(0, int(self.discovery_due-time.time()))} seconds. "
-            "No extra provider request or trade was submitted.",
-                                  "discovery": self.discovery.status_report()})
+        report = self.discovery.status_report()
+        if scan_running:
+            message = "Candidate scan is running. No trade is submitted."
+            state = "running"
+        else:
+            retry = max(0, int(self.discovery_due-time.time()))
+            if report.get("entry_paused"):
+                message = report.get("message") or "Candidate scan is unavailable."
+                if retry:
+                    message += f" The next scan is scheduled in {retry} seconds."
+                    message += " No additional provider request or trade was submitted."
+                state = "scheduled" if retry else "unavailable"
+            else:
+                message = (f"Candidate checks are current. The next scan is scheduled in {retry} seconds. "
+                           "No extra provider request or trade was submitted.")
+                state = "current"
+        return web.json_response({
+            "success": True, "message": message, "scan_state": state,
+            "scan_running": scan_running, "discovery": report,
+        })
 
     async def current_prices(self, session, extra_symbols=()):
         prices = await self.prices_fn(session)
@@ -3598,12 +3615,23 @@ class CustodyRuntime(WalletRuntime):
             candidates = self.discovery.candidates()
             if status.get("entry_paused") or not candidates:
                 retry = int(status.get("retry_after_seconds") or 0)
-                if not retry:
+                if retry:
+                    message = (status.get("message") or "Candidate checks are unavailable.") + \
+                        f" Market-data provider cooldown: {retry} seconds."
+                elif self.discovery_task and not self.discovery_task.done():
+                    message = (status.get("message") or "Candidate checks are unavailable.") + \
+                        " A candidate scan is already running. Investors remain OFF; wait for it to finish, then try again."
+                else:
                     self.discovery_due = 0
                     self.poll_discovery()
-                message = status.get("message") or "No verified candidates are available."
+                    if self.discovery_task and not self.discovery_task.done():
+                        message = (status.get("message") or "Candidate checks are unavailable.") + \
+                            " A fresh candidate scan has started. Investors remain OFF; wait for it to finish, then tap ON again."
+                    else:
+                        message = (status.get("message") or "Candidate checks are unavailable.") + \
+                            " A fresh candidate scan could not start. Investors remain OFF."
                 raise WalletError(
-                    message + " Refresh was requested if available. Investors stayed OFF; no trade was sent.",
+                    message + " No trade was sent.",
                     409)
             budget = self.ledger.investor_budget_summary(uid)
             usable = any(
@@ -3693,11 +3721,18 @@ class CustodyRuntime(WalletRuntime):
                         raise WalletError(
                             f"Market-data rate limit. Retry in {cooldown} seconds. "
                             "No mode was enabled and no trade was submitted.", 409)
-                    self.discovery_due = 0
-                    self.poll_discovery()
-                    raise WalletError(status["message"] +
-                        " A candidate refresh has been requested; retry after it completes. "
-                        "No mode was enabled and no trade was submitted.", 409)
+                    if self.discovery_task and not self.discovery_task.done():
+                        message = "A candidate scan is already running."
+                    else:
+                        self.discovery_due = 0
+                        self.poll_discovery()
+                        message = ("A fresh candidate scan has started." if
+                                   self.discovery_task and not self.discovery_task.done() else
+                                   "A fresh candidate scan could not start.")
+                    raise WalletError((status.get("message") or "Candidate checks are unavailable.") +
+                        " " + message +
+                        " Sniper remains OFF; wait for the scan to finish, then try again. "
+                        "No trade was submitted.", 409)
                 if settings["sniper_order_raw"] > self.ledger.balance(uid, SOL) and not any(
                         p["funding_asset"] == SOL for p in self.ledger.positions(uid, "OPEN")):
                     raise WalletError("Недостаточно ваших SOL для снайпера.", 409)

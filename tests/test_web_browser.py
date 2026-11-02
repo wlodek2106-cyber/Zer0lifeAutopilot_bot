@@ -72,6 +72,46 @@ class WebBrowserTests(unittest.TestCase):
               'Base source transaction opens the Base explorer');
         """)
 
+    def test_candidate_refresh_waits_for_completion_and_uses_selected_language(self):
+        page=self.telegram_page("""<script>
+        window.Telegram={WebApp:{initData:'fixture',initDataUnsafe:{user:{id:101}},expand(){},ready(){}}};
+        let scanPolls=0;
+        window.fetch=async(url)=>{
+          if(String(url).includes('/api/toggle_investor')){
+            return new Response(JSON.stringify({success:false,message:
+              'Candidate checks expired (valid for 30 minutes). The displayed scan counts are historical. Refresh candidates before new buys. A fresh candidate scan has started. Investors remain OFF; wait for it to finish, then tap ON again. No trade was sent.'}),
+              {status:409,headers:{'Content-Type':'application/json'}});
+          }
+          if(String(url).includes('/api/meme_scan')){
+            scanPolls++;
+            const payload=scanPolls===1
+              ?{success:true,scan_state:'running',scan_running:true,message:'Candidate scan is running. No trade is submitted.'}
+              :{success:true,scan_state:'current',scan_running:false,
+                message:'Candidate checks are current. The next scan is scheduled in 0 seconds. No extra provider request or trade was submitted.',
+                discovery:{entry_paused:false}};
+            return new Response(JSON.stringify(payload),{headers:{'Content-Type':'application/json'}});
+          }
+          return new Response(JSON.stringify({success:true}),{headers:{'Content-Type':'application/json'}});
+        };
+        window.alert=()=>{};window.confirm=()=>true;
+        </script>""")
+        browser.AccountBrowserTests().run_page(page,"""
+            currentUiLanguage='uk';
+            const expired='Candidate checks expired (valid for 30 minutes). The displayed scan counts are historical. Refresh candidates before new buys.';
+            assert(localizeUiText(expired)==='Перевірка кандидатів застаріла (діє 30 хвилин). Показані кількості сканувань стосуються попередніх перевірок. Оновіть кандидатів перед новими купівлями.',
+              'expired scan warning is fully translated into Ukrainian');
+            const nativeTimeout=window.setTimeout;
+            window.setTimeout=(callback)=>nativeTimeout(callback,0);
+            window.refresh=async()=>{};
+            await toggleInvestorTrading();
+            window.setTimeout=nativeTimeout;
+            assert(scanPolls===2,'enabling Investors follows the started scan until it completes');
+            assert(document.getElementById('discovery-status').textContent.includes('актуальна'),
+              'latest scan status replaces the historical warning');
+            assert(!document.getElementById('scan-candidates').disabled,'refresh button is re-enabled');
+            assert(!investorActive,'a candidate refresh does not turn real trading on');
+        """)
+
     def test_standalone_signed_out_click_opens_touchable_login_and_no_payments(self):
         page=self.page("""<script>
         window.PublicKeyCredential=function(){};
