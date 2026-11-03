@@ -1938,6 +1938,40 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
         #app .base-paper-scan:active:not(:disabled) { transform: translateY(2px); box-shadow: inset 0 1px 0 rgba(255,255,255,.3), 0 2px 0 #003aab !important; }
         #app .base-paper-status { min-height: 15px; margin: 9px 2px 0; color: #a9bbd4; font-size: 10px; line-height: 1.4; }
+        #app .base-live-readiness {
+            margin: 10px 0 14px;
+            padding: 13px;
+            border: 1px solid rgba(176, 75, 75, .34);
+            border-radius: 15px;
+            background: linear-gradient(145deg, rgba(36,22,28,.94), rgba(13,15,21,.98));
+        }
+        #app .base-live-readiness-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+        #app .base-live-readiness-head h2 { margin: 0; color: #f0f4fb; font-size: 15px; }
+        #app .base-live-off-badge {
+            flex: 0 0 auto;
+            padding: 6px 9px;
+            border: 1px solid rgba(244, 126, 126, .36);
+            border-radius: 999px;
+            color: #ffb0b0;
+            background: rgba(104, 30, 39, .32);
+            font: 800 8px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+            letter-spacing: .06em;
+        }
+        #app .base-live-readiness-note { margin: 8px 0; color: #c4cedd; font-size: 10px; line-height: 1.45; }
+        #app .base-live-checks { margin: 7px 0 0; padding-left: 18px; color: #aab8cb; font-size: 10px; line-height: 1.65; overflow-wrap: anywhere; }
+        #app .base-live-address { display: block; margin-top: 7px; color: #dbe6f7; font: 10px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+        #app .base-live-check-button { min-height: 40px; padding: 8px 12px; border-radius: 11px; }
+        #app .base-live-summary { margin-top: 7px; color: #f0b0b0; font-size: 10px; line-height: 1.5; }
+        #app .base-live-controls { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; margin-top: 10px; align-items: end; }
+        #app .base-live-budget { min-width: 0; color: #a9b9d0; font-size: 9px; font-weight: 700; }
+        #app .base-live-budget input { width: 100%; min-height: 40px; margin-top: 4px; padding: 9px 11px; color: #f1f5f9; border: 1px solid rgba(135,159,190,.3); border-radius: 11px; background: rgba(3,8,13,.72); font: 700 14px ui-monospace,monospace; }
+        #app .base-live-save, #app .base-live-toggle { min-height: 40px; padding: 8px 12px; border-radius: 11px; white-space: nowrap; }
+        #app .base-live-toggle { grid-column: 1 / -1; width: 100%; color: #ffc5c5 !important; border-color: rgba(244,114,114,.4) !important; background: rgba(83,25,32,.62) !important; }
+        #app .base-live-toggle.is-on { color: #faffdf !important; border-color: rgba(170,238,57,.65) !important; background: linear-gradient(145deg,#a7df32,#58a815) !important; }
+        #app .base-live-toggle:disabled, #app .base-live-save:disabled { opacity: .5; }
+        #app .base-live-fold { margin-top: 9px; padding: 10px; border: 1px solid rgba(135,159,190,.16); border-radius: 11px; background: rgba(2,7,11,.36); }
+        #app .base-live-fold summary { color: #c6d7f1; font-size: 10px; font-weight: 700; }
+        #app .base-live-items { max-height: 180px; overflow: auto; margin-top: 8px; color: #aab8cb; font: 10px/1.5 ui-monospace,monospace; white-space: pre-line; overflow-wrap: anywhere; }
         #app .base-paper-details { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; margin-top: 9px; }
         #app .base-paper-fold {
             min-width: 0;
@@ -3706,6 +3740,61 @@ RAW_HTML = r"""<!DOCTYPE html>
             <header class="page-heading">
                 <div><p class="eyebrow">AI Trader · Independent strategy</p><h1>AI Crypto Investors</h1></div>
             </header>
+            <section id="base-live-readiness-panel" class="card base-live-readiness" aria-label="Base live trading readiness" style="display:none">
+                <div class="base-live-readiness-head">
+                    <h2>Base real trading</h2>
+                    <span class="base-live-off-badge">LIVE TRADING · OFF</span>
+                </div>
+                <p class="base-live-readiness-note">
+                    This checks the separate trading wallet. Real trades remain off until all checks pass and you enable them.
+                </p>
+                <span id="base-live-wallet-address" class="base-live-address"></span>
+                <div class="base-paper-metrics">
+                    <div class="base-paper-metric">
+                        <span>WALLET USDC</span>
+                        <strong id="base-live-usdc">—</strong>
+                        <small>Separate trading wallet</small>
+                    </div>
+                    <div class="base-paper-metric">
+                        <span>GAS RESERVE</span>
+                        <strong id="base-live-eth">—</strong>
+                        <small>Native ETH on Base</small>
+                    </div>
+                    <div class="base-paper-metric">
+                        <span>NETWORK</span>
+                        <strong id="base-live-network">Not checked</strong>
+                        <small>Expected chain ID 8453</small>
+                    </div>
+                </div>
+                <div class="base-live-summary" id="base-live-summary" role="status" aria-live="polite">
+                    Base live trading is off.
+                </div>
+                <div class="base-live-controls">
+                    <label class="base-live-budget" for="base-live-budget-input">
+                        Live budget · USDC
+                        <input id="base-live-budget-input" type="number" min="0" max="10000" step="0.01" value="0" inputmode="decimal">
+                    </label>
+                    <button id="base-live-save-budget" class="btn-copy base-live-save" type="button" onclick="saveBaseLiveBudget()">Save cap</button>
+                    <button id="base-live-toggle" class="btn-copy base-live-toggle" type="button" onclick="toggleBaseLive()" disabled>
+                        Live trading · OFF
+                    </button>
+                </div>
+                <details class="base-live-fold">
+                    <summary>Open real positions <span id="base-live-position-count">0</span></summary>
+                    <div id="base-live-positions" class="base-live-items">No open Base positions.</div>
+                </details>
+                <details class="base-live-fold">
+                    <summary>Recent Base transactions</summary>
+                    <div id="base-live-operations" class="base-live-items">No Base transactions.</div>
+                </details>
+                <details class="base-paper-fold">
+                    <summary>Setup checks</summary>
+                    <ul id="base-live-checks" class="base-live-checks"></ul>
+                </details>
+                <button id="base-live-check-button" class="btn-copy base-live-check-button" type="button" onclick="checkBaseLiveReadiness()">
+                    Check separate wallet
+                </button>
+            </section>
             <section id="base-paper-panel" class="card base-paper-card" aria-label="Base network paper simulation" style="display:none">
                 <div class="base-paper-head">
                     <div class="base-network-identity">
@@ -3948,6 +4037,9 @@ RAW_HTML = r"""<!DOCTYPE html>
         function renderInvestorDashboard(stats) {
             const basePanel=document.getElementById('base-paper-panel');
             if(basePanel)basePanel.style.display=stats.is_admin?'':'none';
+            const baseLivePanel=document.getElementById('base-live-readiness-panel');
+            if(baseLivePanel)baseLivePanel.style.display=stats.is_admin?'':'none';
+            if(stats.is_admin&&!baseLiveReadinessLoaded)checkBaseLiveReadiness();
             const investorTrades=(stats.trades||[]).filter(trade=>trade.strategy==='investor');
             const open=investorTrades.filter(trade=>trade.status==='OPEN'||trade.status==='RESERVED');
             const closed=investorTrades.filter(trade=>trade.status==='CLOSED')
@@ -4016,6 +4108,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 :'No AI Crypto Investors sales recorded.';
         }
         let basePaperLoading=false,basePaperBusy=false,latestBasePaperData=null;
+        let baseLiveReadinessBusy=false,baseLiveReadinessLoaded=false;
         function basePaperMoney(value){
             const parsed=Number(value);
             const locale=uiLocale();
@@ -4137,8 +4230,193 @@ RAW_HTML = r"""<!DOCTYPE html>
                 document.getElementById('base-paper-status').textContent=localizeBasePaperText(error.message||'Base paper scan failed; no simulated action was recorded.');
             }finally{basePaperBusy=false;button.disabled=false;}
         }
+        function renderBaseLive(data){
+            document.getElementById('base-live-wallet-address').textContent=data.wallet_address||'';
+            document.getElementById('base-live-usdc').textContent=
+                data.usdc_balance==null?'—':Number(data.usdc_balance).toLocaleString(uiLocale(),{minimumFractionDigits:2,maximumFractionDigits:6})+' USDC';
+            document.getElementById('base-live-eth').textContent=
+                data.eth_balance==null?'—':Number(data.eth_balance).toLocaleString(uiLocale(),{minimumFractionDigits:6,maximumFractionDigits:8})+' ETH';
+            document.getElementById('base-live-network').textContent=
+                data.chain_id==null?localizeUiText('Not checked'):('8453'===String(data.chain_id)?'Base · 8453':'Wrong · '+String(data.chain_id));
+            const budget=document.getElementById('base-live-budget-input');
+            if(budget&&document.activeElement!==budget)budget.value=Number(data.budget_usdc||0).toFixed(2);
+            const enabled=Boolean(data.enabled);
+            const badge=document.querySelector('#base-live-readiness-panel .base-live-off-badge');
+            const toggle=document.getElementById('base-live-toggle');
+            if(badge)badge.textContent=localizeUiText(enabled?'LIVE TRADING · ON':'LIVE TRADING · OFF');
+            if(toggle){
+                toggle.textContent=localizeUiText(enabled?'Disable Base trading':'Enable Base trading');
+                toggle.classList.toggle('is-on',enabled);
+                toggle.disabled=!enabled&&!data.can_trade;
+            }
+            const status=data.status&&data.status.state&&!['OFF','READY'].includes(data.status.state)
+                ?data.status.message:data.message;
+            document.getElementById('base-live-summary').textContent=localizeUiText(status||'Base live trading is off.');
+            document.getElementById('base-live-checks').textContent=(data.checks||[])
+                .map(check=>(check.ok?'✓ ':'× ')+localizeUiText(check.name))
+                .join('\n');
+            const positions=Array.isArray(data.open_positions)?data.open_positions:[];
+            document.getElementById('base-live-position-count').textContent=String(positions.length);
+            document.getElementById('base-live-positions').textContent=positions.length
+                ?positions.map(position=>`${position.symbol} · tranche ${position.entry_step} · entry ${Number(position.entry_price_usdc).toPrecision(6)} USDC · ${((Number(position.cost_usdc_raw)||0)/1e6).toFixed(2)} USDC`).join('\n')
+                :localizeUiText('No open Base positions.');
+            const operations=Array.isArray(data.recent_operations)?data.recent_operations:[];
+            const history=document.getElementById('base-live-operations');
+            history.replaceChildren();
+            if(!operations.length){
+                history.textContent=localizeUiText('No Base transactions.');
+            }else{
+                for(const operation of operations){
+                    const row=document.createElement('div');
+                    row.className='base-live-operation';
+                    const label=document.createElement('span');
+                    label.textContent=`${operation.kind} · ${operation.state}`;
+                    row.appendChild(label);
+                    if(/^0x[0-9a-fA-F]{64}$/.test(operation.tx_hash||'')){
+                        const link=document.createElement('a');
+                        link.href='https://basescan.org/tx/'+operation.tx_hash;
+                        link.target='_blank';
+                        link.rel='noopener noreferrer';
+                        link.textContent=operation.tx_hash.slice(0,10)+'…';
+                        row.appendChild(link);
+                    }
+                    history.appendChild(row);
+                }
+            }
+        }
+        async function checkBaseLiveReadiness(){
+            if(baseLiveReadinessBusy||!window.latestAccountStats?.is_admin)return;
+            const button=document.getElementById('base-live-check-button');
+            baseLiveReadinessBusy=true;
+            if(button)button.disabled=true;
+            try{
+                const response=await apiFetch('/api/base-live/readiness',{cache:'no-store'});
+                const data=await response.json();
+                if(!response.ok||!data.success)throw Error(data.message||'Base wallet check failed.');
+                renderBaseLive(data);
+            }catch(error){
+                document.getElementById('base-live-summary').textContent=
+                    localizeUiText(error.message||'Base wallet check failed; no transaction was sent.');
+            }finally{
+                baseLiveReadinessBusy=false;
+                baseLiveReadinessLoaded=true;
+                if(button)button.disabled=false;
+            }
+        }
+        async function saveBaseLiveBudget(){
+            if(baseLiveReadinessBusy||!window.latestAccountStats?.is_admin)return;
+            const button=document.getElementById('base-live-save-budget');
+            const amount=Number(document.getElementById('base-live-budget-input').value);
+            if(!Number.isFinite(amount)||amount<0||amount>10000){
+                document.getElementById('base-live-summary').textContent=localizeUiText('Enter a budget from $0 to $10,000.');
+                return;
+            }
+            baseLiveReadinessBusy=true;
+            if(button)button.disabled=true;
+            try{
+                const response=await apiFetch('/api/base-live/budget',{method:'POST',
+                    headers:{'Content-Type':'application/json'},body:JSON.stringify({budget_usdc:amount})});
+                const data=await response.json();
+                if(!response.ok||!data.success)throw Error(data.message||'Could not save Base live cap.');
+                renderBaseLive(data);
+            }catch(error){
+                document.getElementById('base-live-summary').textContent=localizeUiText(error.message||'Could not save Base live cap.');
+            }finally{
+                baseLiveReadinessBusy=false;
+                if(button)button.disabled=false;
+            }
+        }
+        async function toggleBaseLive(){
+            if(baseLiveReadinessBusy||!window.latestAccountStats?.is_admin)return;
+            const toggle=document.getElementById('base-live-toggle');
+            const enabling=!toggle.classList.contains('is-on');
+            if(enabling&&!window.confirm(localizeUiText('This starts Base trades with real money. Confirm only after reviewing the wallet, cap, and risks.')))return;
+            baseLiveReadinessBusy=true;
+            toggle.disabled=true;
+            try{
+                const response=await apiFetch('/api/base-live/toggle',{method:'POST',
+                    headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:enabling,confirm:enabling})});
+                const data=await response.json();
+                if(!response.ok||!data.success)throw Error(data.message||'Could not change Base live mode.');
+                renderBaseLive(data);
+            }catch(error){
+                document.getElementById('base-live-summary').textContent=localizeUiText(error.message||'Could not change Base live mode.');
+            }finally{
+                baseLiveReadinessBusy=false;
+                await checkBaseLiveReadiness();
+            }
+        }
         const UI_COPY_ROWS = [
             ["Interface language","Язык интерфейса","Мова інтерфейсу"],
+            ["Base real trading","Реальная торговля Base","Реальна торгівля Base"],
+            ["Base live trading readiness","Готовность к реальной торговле Base","Готовність до реальної торгівлі Base"],
+            ["LIVE TRADING · OFF","РЕАЛЬНАЯ ТОРГОВЛЯ · ВЫКЛ","РЕАЛЬНА ТОРГІВЛЯ · ВИМК"],
+            ["LIVE TRADING · ON","РЕАЛЬНАЯ ТОРГОВЛЯ · ВКЛ","РЕАЛЬНА ТОРГІВЛЯ · УВІМК"],
+            ["Live budget · USDC","Лимит реальной торговли · USDC","Ліміт реальної торгівлі · USDC"],
+            ["Live trading · OFF","Реальная торговля · ВЫКЛ","Реальна торгівля · ВИМК"],
+            ["Enable Base trading","Включить торговлю Base","Увімкнути торгівлю Base"],
+            ["Disable Base trading","Выключить торговлю Base","Вимкнути торгівлю Base"],
+            ["This starts Base trades with real money. Confirm only after reviewing the wallet, cap, and risks.","Это запустит сделки Base на реальные деньги. Подтверждай только после проверки кошелька, лимита и рисков.","Це запустить угоди Base за реальні кошти. Підтверджуй лише після перевірки гаманця, ліміту та ризиків."],
+            ["Enter a budget from $0 to $10,000.","Введите лимит от $0 до $10 000.","Введіть ліміт від $0 до $10 000."],
+            ["Could not save Base live cap.","Не удалось сохранить лимит Base.","Не вдалося зберегти ліміт Base."],
+            ["Could not change Base live mode.","Не удалось изменить режим Base.","Не вдалося змінити режим Base."],
+            ["Base live trading is off.","Реальная торговля Base выключена.","Реальна торгівля Base вимкнена."],
+            ["No open Base positions.","Нет открытых позиций Base.","Немає відкритих позицій Base."],
+            ["No Base transactions.","Операций Base пока нет.","Операцій Base ще немає."],
+            ["Open real positions","Открытые реальные позиции","Відкриті реальні позиції"],
+            ["Recent Base transactions","Последние операции Base","Останні операції Base"],
+            ["This checks the separate trading wallet. Real trades remain off until all checks pass and you enable them.","Здесь проверяется отдельный торговый кошелёк. Реальная торговля останется выключенной, пока не пройдут все проверки и ты её не включишь.","Тут перевіряється окремий торговий гаманець. Реальна торгівля залишатиметься вимкненою, доки не пройдуть усі перевірки й ти її не ввімкнеш."],
+            ["Separate trading wallet","Отдельный торговый кошелёк","Окремий торговий гаманець"],
+            ["WALLET USDC","USDC НА КОШЕЛЬКЕ","USDC У ГАМАНЦІ"],
+            ["GAS RESERVE","РЕЗЕРВ ETH НА ГАЗ","РЕЗЕРВ ETH НА КОМІСІЇ"],
+            ["NETWORK","СЕТЬ","МЕРЕЖА"],
+            ["Native ETH on Base","Нативный ETH в Base","Нативний ETH у Base"],
+            ["Expected chain ID 8453","Ожидаемый ID сети 8453","Очікуваний ID мережі 8453"],
+            ["Not checked","Не проверено","Не перевірено"],
+            ["No trade can be sent from this panel.","Эта панель не отправляет сделки.","Ця панель не надсилає угоди."],
+            ["Setup checks","Проверки настройки","Перевірки налаштування"],
+            ["Check separate wallet","Проверить отдельный кошелёк","Перевірити окремий гаманець"],
+            ["Dedicated wallet address","Адрес отдельного кошелька","Адреса окремого гаманця"],
+            ["Wallet separate from bridge","Кошелёк отдельно от моста","Гаманець окремий від мосту"],
+            ["Wallet signer matches","Ключ соответствует адресу","Ключ відповідає адресі"],
+            ["Base HTTPS RPC","HTTPS RPC Base","HTTPS RPC Base"],
+            ["Live executor and recovery","Исполнитель и восстановление транзакций","Виконавець і відновлення транзакцій"],
+            ["Persistent Base operation storage","Постоянное хранилище операций Base","Постійне сховище операцій Base"],
+            ["Base operation storage is not persistent; trading is paused.","Хранилище операций Base не постоянное; торговля приостановлена.","Сховище операцій Base не є постійним; торгівлю призупинено."],
+            ["Base operation storage is not persistent; no transaction was signed or sent.","Хранилище операций Base не постоянное; транзакция не подписана и не отправлена.","Сховище операцій Base не є постійним; транзакцію не підписано й не надіслано."],
+            ["Base mainnet (8453)","Base mainnet (8453)","Base mainnet (8453)"],
+            ["USDC balance","Баланс USDC","Баланс USDC"],
+            ["USDC plus open positions cover cap","USDC и открытые позиции покрывают лимит","USDC і відкриті позиції покривають ліміт"],
+            ["Dedicated wallet is an EOA","Отдельный кошелёк — обычный адрес","Окремий гаманець — звичайна адреса"],
+            ["ETH gas reserve","Резерв ETH на комиссии","Резерв ETH на комісії"],
+            ["Base live executor is ready; set a cap and explicitly enable real trading.","Исполнитель Base готов. Укажи лимит и отдельно включи реальную торговлю.","Виконавець Base готовий. Вкажи ліміт і окремо увімкни реальну торгівлю."],
+            ["Base live trading is off; resolve every failed wallet, network, funding, or kill-switch check. No transaction can be sent.","Реальная торговля Base выключена. Исправь проблемы с кошельком, сетью, балансом или серверным переключателем. Сделки не отправляются.","Реальна торгівля Base вимкнена. Виправ проблеми з гаманцем, мережею, балансом або серверним перемикачем. Угоди не надсилаються."],
+            ["Fund the Base trading wallet or lower its cap to cover the budget.","Пополните торговый кошелёк Base или уменьшите лимит.","Поповни торговий гаманець Base або зменш ліміт."],
+            ["Use $0 to pause or at least $15 for 15 equal tranches.","Укажи $0 для паузы или не менее $15 для 15 равных частей.","Вкажи $0 для паузи або не менше $15 для 15 рівних частин."],
+            ["Resolve the pending Base operation before changing its cap.","Сначала разреши незавершённую операцию Base, затем меняй лимит.","Спочатку заверши невирішену операцію Base, потім змінюй ліміт."],
+            ["A non-zero cap cannot be lower than the open Base position cost.","Ненулевой лимит не может быть ниже стоимости открытых позиций Base.","Ненульовий ліміт не може бути нижчим за вартість відкритих позицій Base."],
+            ["Set a Base live budget of at least $15.","Установи лимит реальной торговли Base не менее $15.","Встанови ліміт реальної торгівлі Base не менше $15."],
+            ["The Base live budget has no free entry tranche.","В лимите Base не осталось свободной части для входа.","У ліміті Base не залишилося вільної частини для входу."],
+            ["The separate Base wallet has insufficient USDC for the next tranche.","В отдельном кошельке Base не хватает USDC для следующей части.","В окремому гаманці Base бракує USDC для наступної частини."],
+            ["Base market scan is unavailable; no entry was submitted.","Сканирование рынка Base недоступно; вход не отправлен.","Сканування ринку Base недоступне; вхід не надіслано."],
+            ["Base market scan returned invalid data.","Сканирование рынка Base вернуло некорректные данные.","Сканування ринку Base повернуло некоректні дані."],
+            ["No Base candidate passed every entry check.","Ни один кандидат Base не прошёл все проверки входа.","Жоден кандидат Base не пройшов усі перевірки входу."],
+            ["Base exit quote is unavailable; position remains open.","Котировка выхода Base недоступна; позиция остаётся открытой.","Котирування виходу Base недоступне; позиція залишається відкритою."],
+            ["A Base exit quote is unavailable; no new entry will be opened.","Котировка выхода Base недоступна; новые позиции не открываются.","Котирування виходу Base недоступне; нові позиції не відкриваються."],
+            ["A Base position needs manual review.","Позицию Base нужно проверить вручную.","Позицію Base потрібно перевірити вручну."],
+            ["The exact Base allowance is being revoked.","Точное разрешение Base отзывается.","Точний дозвіл Base відкликається."],
+            ["Base live trading was turned off.","Реальная торговля Base выключена.","Реальну торгівлю Base вимкнено."],
+            ["Base live trading is locked: wallet, funding, executor, or server activation is not ready.","Реальная торговля Base заблокирована: кошелёк, баланс, исполнитель или серверное включение не готовы.","Реальну торгівлю Base заблоковано: гаманець, баланс, виконавець або серверне ввімкнення не готові."],
+            ["Base live mode is off; no new buy can be queued.","Режим Base выключен; новая покупка не будет создана.","Режим Base вимкнено; нову купівлю не буде створено."],
+            ["The Base buy exceeds the remaining live budget.","Покупка Base превышает оставшийся лимит.","Купівля Base перевищує залишок ліміту."],
+            ["Base buy was skipped because the saved cap no longer covers it.","Покупка Base отменена: сохранённого лимита больше недостаточно.","Купівлю Base пропущено: збереженого ліміту більше недостатньо."],
+            ["Base buy was skipped because the saved cap no longer covers it; the exact allowance is being revoked.","Покупка Base отменена: лимита не хватает, точное разрешение отзывается.","Купівлю Base пропущено: ліміту недостатньо, точний дозвіл відкликається."],
+            ["Base live preflight failed; no new transaction was sent.","Предварительная проверка Base не пройдена; новая транзакция не отправлена.","Попередню перевірку Base не пройдено; нову транзакцію не надіслано."],
+            ["Base worker paused after an internal error; no transaction was retried.","Исполнитель Base приостановлен после внутренней ошибки; повторной отправки не было.","Виконавець Base призупинено після внутрішньої помилки; повторного надсилання не було."],
+            ["Base entry validation failed; no swap was submitted.","Проверка входа Base не пройдена; обмен не отправлен.","Перевірку входу Base не пройдено; обмін не надіслано."],
+            ["The separate Base wallet needs more ETH for gas and reserve.","В отдельном кошельке Base нужно больше ETH на комиссии и резерв.","В окремому гаманці Base потрібно більше ETH на комісії та резерв."],
+            ["Base BUY finalized:","Покупка Base подтверждена:","Купівлю Base підтверджено:"],
+            ["Base SELL finalized:","Продажа Base подтверждена:","Продаж Base підтверджено:"],
             ["English is the default. Your choice is saved to your account and follows you across devices.","По умолчанию выбран английский. Выбор сохраняется в аккаунте и действует на всех устройствах.","За замовчуванням вибрано англійську. Вибір зберігається в обліковому записі й діє на всіх пристроях."],
             ["Choose a language","Выберите язык","Виберіть мову"],["Save language","Сохранить язык","Зберегти мову"],
             ["Saving language preference…","Сохраняем язык…","Зберігаємо мову…"],
@@ -8075,6 +8353,9 @@ async def main():
     app.router.add_get('/api/base-paper', wallet_handler(runtime.base_paper_report))
     app.router.add_post('/api/base-paper/budget', wallet_handler(runtime.save_base_paper_budget))
     app.router.add_post('/api/base-paper/scan', wallet_handler(runtime.scan_base_paper))
+    app.router.add_get('/api/base-live/readiness', wallet_handler(runtime.base_live_readiness_report))
+    app.router.add_post('/api/base-live/budget', wallet_handler(runtime.save_base_live_budget))
+    app.router.add_post('/api/base-live/toggle', wallet_handler(runtime.toggle_base_live))
     app.router.add_post('/api/exchange/quote', wallet_handler(runtime.exchange_quote))
     app.router.add_post('/api/exchange/submit', wallet_handler(runtime.exchange_submit))
     app.router.add_post('/api/exchange/approve', wallet_handler(runtime.exchange_approve))

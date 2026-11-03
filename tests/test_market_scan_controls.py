@@ -13,6 +13,7 @@ class ManualScanCooldownTests(unittest.IsolatedAsyncioTestCase):
         service.admit = lambda uid: None
         service.discovery = SimpleNamespace(
             cooldown_remaining=lambda: 0,
+            scan_cooldown_remaining=lambda: 0,
             status_report=lambda: {"retry_after_seconds": 0},
         )
         service.discovery_started = time.time() - 300
@@ -39,6 +40,7 @@ class ManualScanCooldownTests(unittest.IsolatedAsyncioTestCase):
         service.admit = lambda uid: None
         service.discovery = SimpleNamespace(
             cooldown_remaining=lambda: 0,
+            scan_cooldown_remaining=lambda: 0,
             status_report=lambda: {"entry_paused": True, "message": "Candidate checks expired."},
         )
         service.discovery_due = time.time() + 240

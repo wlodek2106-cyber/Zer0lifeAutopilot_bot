@@ -25,7 +25,7 @@ from solders.transaction import Transaction, VersionedTransaction
 
 from wallet_runtime import (
     WalletRuntime, WalletError, amount_raw, associated, TOKEN, TOKEN_2022,
-    ATA, SYSTEM, MEMO, GENESIS,
+    ATA, SYSTEM, MEMO, GENESIS, durable,
 )
 from custody_ledger import (
     CustodyLedger, LedgerError, USDC, SOL, FEE_CAP, available, position_account,
@@ -47,6 +47,8 @@ from meme_discovery import MemeDiscovery
 from whale_stream import HeliusWhaleStream
 from spl_token_support import validate_mint_account, token_account_data
 from base_paper import BasePaperEngine, BasePaperError
+from base_live_trading import BaseLiveReadiness
+from base_live_engine import BaseLiveEngine, BaseLiveEngineError
 from bridge_quotes import BridgeQuoteError
 from cross_chain_bridge import (
     BridgeError, CrossChainBridge, BASE_CHAIN_ID, BASE_USDC_ADDRESS,
@@ -214,6 +216,13 @@ class CustodyRuntime(WalletRuntime):
         self.legacy_runtime = WalletRuntime(*args, **kwargs)
         self.ledger = CustodyLedger(self.db_file)
         self.base_paper = BasePaperEngine(self.ledger.path, self.owner_id)
+        self.base_live_readiness = BaseLiveReadiness(
+            persistent_storage_check=lambda: durable(self.db_file)
+        )
+        self.base_live_engine = BaseLiveEngine(
+            self.ledger.path, self.owner_id, readiness=self.base_live_readiness,
+            paper_engine=self.base_paper,
+        )
         self.cross_chain_bridge = CrossChainBridge(
             self.ledger.path, self.ledger, self.wallet, solana_rpc=self.rpc)
         self.ledger.user(self.owner_id)
@@ -1102,6 +1111,39 @@ class CustodyRuntime(WalletRuntime):
     async def scan_base_paper(self, request, session):
         uid = self._require_base_paper_owner(request)
         return web.json_response(await self.base_paper.scan(session, uid))
+
+    async def base_live_readiness_report(self, request, session):
+        uid = self._require_base_paper_owner(request)
+        readiness = await self.base_live_readiness.report(session)
+        report = self.base_live_engine.report(uid, readiness)
+        if self.base_live_engine.status(uid)["state"] not in {"OFF", "READY"}:
+            report["message"] = self.base_live_engine.status(uid)["message"]
+        return web.json_response(report)
+
+    async def save_base_live_budget(self, request, session):
+        uid = self._require_base_paper_owner(request)
+        body = await request.json()
+        if not isinstance(body, dict) or set(body) != {"budget_usdc"}:
+            raise WalletError("Specify only the Base live USDC budget.", 400)
+        try:
+            self.base_live_engine.save_budget(uid, body["budget_usdc"])
+        except BaseLiveEngineError as exc:
+            raise WalletError(str(exc), exc.status) from None
+        readiness = await self.base_live_readiness.report(session)
+        return web.json_response(self.base_live_engine.report(uid, readiness))
+
+    async def toggle_base_live(self, request, session):
+        uid = self._require_base_paper_owner(request)
+        body = await request.json()
+        if not isinstance(body, dict) or set(body) != {"enabled", "confirm"}:
+            raise WalletError("Specify Base live mode and real-money confirmation.", 400)
+        try:
+            report = await self.base_live_engine.toggle(
+                uid, body["enabled"], session, confirm=body["confirm"]
+            )
+        except BaseLiveEngineError as exc:
+            raise WalletError(str(exc), exc.status) from None
+        return web.json_response(report)
 
     async def exchange_quote(self, request, session):
         uid = self.uid(request)
@@ -4533,6 +4575,9 @@ class CustodyRuntime(WalletRuntime):
 
     async def worker(self):
         # Settings are paused on restart. Explicit close queues run before market scans.
+        base_live_task = getattr(self, "base_live_task", None)
+        if base_live_task is None or base_live_task.done():
+            self.base_live_task = asyncio.create_task(self.base_live_engine.worker())
         while True:
             # Clearing before the pass is safe: a completed analysis is persisted,
             # so this pass will read it. An analysis finishing during the pass
