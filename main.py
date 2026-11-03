@@ -4235,7 +4235,9 @@ RAW_HTML = r"""<!DOCTYPE html>
             if(toggle){
                 toggle.textContent=localizeUiText(enabled?'Disable Base trading':'Enable Base trading');
                 toggle.classList.toggle('is-on',enabled);
-                toggle.disabled=!enabled&&!data.can_trade;
+                // Keep the control reachable when checks fail so a tap can show
+                // the exact blocker instead of looking like a dead button.
+                toggle.disabled=false;
             }
             const status=data.status&&data.status.state&&!['OFF','READY'].includes(data.status.state)
                 ?data.status.message:data.message;
@@ -4275,20 +4277,25 @@ RAW_HTML = r"""<!DOCTYPE html>
         async function checkBaseLiveReadiness(){
             if(baseLiveReadinessBusy||!window.latestAccountStats?.is_admin)return;
             const button=document.getElementById('base-live-check-button');
+            const toggle=document.getElementById('base-live-toggle');
             baseLiveReadinessBusy=true;
             if(button)button.disabled=true;
+            if(toggle)toggle.disabled=true;
             try{
                 const response=await apiFetch('/api/base-live/readiness',{cache:'no-store'});
                 const data=await response.json();
                 if(!response.ok||!data.success)throw Error(data.message||'Base wallet check failed.');
                 renderBaseLive(data);
+                return data;
             }catch(error){
                 document.getElementById('base-live-summary').textContent=
                     localizeUiText(error.message||'Base wallet check failed; no transaction was sent.');
+                return null;
             }finally{
                 baseLiveReadinessBusy=false;
                 baseLiveReadinessLoaded=true;
                 if(button)button.disabled=false;
+                if(toggle)toggle.disabled=false;
             }
         }
         async function saveBaseLiveBudget(){
@@ -4318,9 +4325,19 @@ RAW_HTML = r"""<!DOCTYPE html>
             if(baseLiveReadinessBusy||!window.latestAccountStats?.is_admin)return;
             const toggle=document.getElementById('base-live-toggle');
             const enabling=!toggle.classList.contains('is-on');
-            if(enabling&&!window.confirm(localizeUiText('This starts Base trades with real money. Confirm only after reviewing the wallet, cap, and risks.')))return;
+            if(enabling){
+                const readiness=await checkBaseLiveReadiness();
+                if(!readiness)return;
+                if(!readiness.can_trade){
+                    document.getElementById('base-live-summary').textContent=
+                        localizeUiText('Base live trading is not ready. See the failed setup checks below. No order was sent.');
+                    return;
+                }
+                if(!window.confirm(localizeUiText('This starts Base trades with real money. Confirm only after reviewing the wallet, cap, and risks.')))return;
+            }
             baseLiveReadinessBusy=true;
             toggle.disabled=true;
+            let actionError='';
             try{
                 const response=await apiFetch('/api/base-live/toggle',{method:'POST',
                     headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:enabling,confirm:enabling})});
@@ -4328,10 +4345,20 @@ RAW_HTML = r"""<!DOCTYPE html>
                 if(!response.ok||!data.success)throw Error(data.message||'Could not change Base live mode.');
                 renderBaseLive(data);
             }catch(error){
-                document.getElementById('base-live-summary').textContent=localizeUiText(error.message||'Could not change Base live mode.');
+                actionError=error.message||'Could not change Base live mode.';
             }finally{
                 baseLiveReadinessBusy=false;
-                await checkBaseLiveReadiness();
+                if(actionError){
+                    const refreshed=await checkBaseLiveReadiness();
+                    document.getElementById('base-live-summary').textContent=
+                        localizeUiText(actionError);
+                    if(refreshed&&!refreshed.enabled){
+                        document.getElementById('base-live-summary').textContent+=' '+
+                            localizeUiText('Base remains OFF. Check the setup results before trying again.');
+                    }
+                }else{
+                    toggle.disabled=false;
+                }
             }
         }
         const UI_COPY_ROWS = [
@@ -4349,6 +4376,8 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["Could not save Base live cap.","Не удалось сохранить лимит Base.","Не вдалося зберегти ліміт Base."],
             ["Could not change Base live mode.","Не удалось изменить режим Base.","Не вдалося змінити режим Base."],
             ["Base live trading is off.","Реальная торговля Base выключена.","Реальна торгівля Base вимкнена."],
+            ["Base live trading is not ready. See the failed setup checks below. No order was sent.","Реальная торговля Base пока не готова. Смотри проверки настройки ниже. Сделка не отправлена.","Реальна торгівля Base ще не готова. Переглянь перевірки налаштування нижче. Угоду не надіслано."],
+            ["Base remains OFF. Check the setup results before trying again.","Торговля Base остаётся выключенной. Проверь результаты настройки перед новой попыткой.","Торгівля Base залишається вимкненою. Перевір результати налаштування перед новою спробою."],
             ["No open Base positions.","Нет открытых позиций Base.","Немає відкритих позицій Base."],
             ["No Base transactions.","Операций Base пока нет.","Операцій Base ще немає."],
             ["Open real positions","Открытые реальные позиции","Відкриті реальні позиції"],

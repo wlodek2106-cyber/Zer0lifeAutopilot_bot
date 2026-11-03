@@ -138,6 +138,46 @@ class WebBrowserTests(unittest.TestCase):
             assert(!investorActive,'a candidate refresh does not turn real trading on');
         """)
 
+    def test_base_toggle_is_clickable_and_shows_failed_readiness_checks(self):
+        page=self.telegram_page("""<script>
+        window.Telegram={WebApp:{initData:'fixture',initDataUnsafe:{user:{id:101}},expand(){},ready(){}}};
+        window.readinessChecks=0;window.togglePosts=0;window.confirmCalls=0;
+        window.fetch=async(url)=>{
+          if(String(url).includes('/api/base-live/readiness')){
+            window.readinessChecks++;
+            return new Response(JSON.stringify({success:true,enabled:false,can_trade:false,
+              message:'Base live trading is off; resolve every failed readiness check.',
+              checks:[{name:'Wallet signer matches',ok:false},{name:'ETH gas reserve',ok:true}]}),
+              {headers:{'Content-Type':'application/json'}});
+          }
+          if(String(url).includes('/api/base-live/toggle')){
+            window.togglePosts++;
+            return new Response(JSON.stringify({success:true}),{headers:{'Content-Type':'application/json'}});
+          }
+          return new Response(JSON.stringify({success:true}),{headers:{'Content-Type':'application/json'}});
+        };
+        window.confirm=()=>{window.confirmCalls++;return true};
+        </script>""")
+        browser.AccountBrowserTests().run_page(page,"""
+            window.latestAccountStats={is_admin:true};
+            currentUiLanguage='uk';
+            const button=document.getElementById('base-live-toggle');
+            renderBaseLive({success:true,enabled:false,can_trade:false,budget_usdc:50,
+              checks:[{name:'Wallet signer matches',ok:false}]});
+            assert(!button.disabled,'Base toggle stays clickable when readiness is blocked');
+            await toggleBaseLive();
+            assert(window.readinessChecks===1,'tap refreshes Base readiness');
+            assert(window.togglePosts===0,'blocked readiness never posts an enable request');
+            assert(window.confirmCalls===0,'real-money confirmation is not requested before readiness passes');
+            assert(document.getElementById('base-live-summary').textContent.includes(
+              'Реальна торгівля Base ще не готова'),
+              'the card explains that setup checks block activation');
+            assert(document.getElementById('base-live-checks').textContent.includes(
+              'Ключ відповідає адресі'),
+              'the failed wallet-signer check is visible');
+            assert(!button.disabled,'the user can retry after fixing the failed check');
+        """)
+
     def test_sniper_scan_conflict_is_inline_and_button_returns(self):
         page=self.telegram_page("""<script>
         window.Telegram={WebApp:{initData:'fixture',initDataUnsafe:{user:{id:101}},expand(){},ready(){}}};
