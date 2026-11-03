@@ -24,6 +24,7 @@ from custody_ledger import (
 from custody_runtime import CustodyRuntime, GENESIS
 from cross_chain_bridge import (
     BASE_CHAIN_ID,
+    BASE_LIFI_ROUTER,
     BASE_USDC_ASSET,
     BASE_USDC_ADDRESS,
     SOLANA_CHAIN_ID,
@@ -116,11 +117,11 @@ def base_route():
         },
         "estimate": {
             "fromAmount": "5000000", "toAmount": "4980000",
-            "toAmountMin": "4950000", "approvalAddress": "0x" + "b" * 40,
+            "toAmountMin": "4950000", "approvalAddress": BASE_LIFI_ROUTER,
         },
         "transactionRequest": {
             "chainId": BASE_CHAIN_ID, "from": BASE_WALLET,
-            "to": "0x" + "b" * 40, "data": "0x1234",
+            "to": BASE_LIFI_ROUTER, "data": "0x1234",
             "value": "0x0", "gasLimit": "0x5208",
         },
     }
@@ -486,7 +487,7 @@ class LiveBridgePrimitiveTests(unittest.TestCase):
         self.assertEqual(tx["nonce"], 7)
         self.assertEqual(tx["data"][:10], "0x095ea7b3")
         self.assertEqual(tx["data"][-64:], format(5_000_000, "064x"))
-        self.assertEqual(tx["data"][34:74].lower(), ("b" * 40).lower())
+        self.assertEqual(tx["data"][34:74].lower(), BASE_LIFI_ROUTER[2:].lower())
         self.assertEqual(tx["value"], 0)
 
     def test_base_route_must_match_both_wallets_chains_assets_and_spender(self):
@@ -499,6 +500,55 @@ class LiveBridgePrimitiveTests(unittest.TestCase):
         }
         self.assertIs(normalize_quote(route, expected), route)
         route["action"]["toAddress"] = "0x" + "c" * 40
+        with self.assertRaises(BridgeError):
+            normalize_quote(route, expected)
+
+    def test_base_polymer_route_uses_allowlisted_lifi_router(self):
+        route = base_route()
+        route["tool"] = "polymerStandard"
+        expected = {
+            "from_chain": BASE_CHAIN_ID, "to_chain": SOLANA_CHAIN_ID,
+            "amount_raw": 5_000_000, "from_address": BASE_WALLET,
+            "to_address": SOLANA_WALLET, "from_token": BASE_USDC_ADDRESS,
+            "to_token": SOLANA_USDC,
+        }
+        self.assertIs(normalize_quote(route, expected), route)
+
+    def test_base_quote_rejects_unknown_provider_or_router(self):
+        expected = {
+            "from_chain": BASE_CHAIN_ID, "to_chain": SOLANA_CHAIN_ID,
+            "amount_raw": 5_000_000, "from_address": BASE_WALLET,
+            "to_address": SOLANA_WALLET, "from_token": BASE_USDC_ADDRESS,
+            "to_token": SOLANA_USDC,
+        }
+        route = base_route()
+        route["tool"] = "unapprovedProvider"
+        with self.assertRaises(BridgeError):
+            normalize_quote(route, expected)
+
+        route = base_route()
+        route["estimate"]["approvalAddress"] = "0x" + "c" * 40
+        route["transactionRequest"]["to"] = "0x" + "c" * 40
+        with self.assertRaises(BridgeError):
+            normalize_quote(route, expected)
+
+    def test_solana_destination_address_comparison_is_case_sensitive(self):
+        route = base_route()
+        destination = "FAe4sisG95oZ42w7buUn5qEE4TAnfTTFPiguZUHmhiF"
+        route["action"]["toAddress"] = destination
+        expected = {
+            "from_chain": BASE_CHAIN_ID, "to_chain": SOLANA_CHAIN_ID,
+            "amount_raw": 5_000_000, "from_address": BASE_WALLET,
+            "to_address": destination, "from_token": BASE_USDC_ADDRESS,
+            "to_token": SOLANA_USDC,
+        }
+        self.assertIs(normalize_quote(route, expected), route)
+        route["action"]["toAddress"] = destination.swapcase()
+        with self.assertRaises(BridgeError):
+            normalize_quote(route, expected)
+
+        route = base_route()
+        route["action"]["toToken"]["address"] = SOLANA_USDC.swapcase()
         with self.assertRaises(BridgeError):
             normalize_quote(route, expected)
 

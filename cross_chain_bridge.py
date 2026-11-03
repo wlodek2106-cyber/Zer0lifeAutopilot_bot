@@ -26,6 +26,10 @@ SOLANA_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 BASE_USDC_ASSET = "BASE_USDC"
 BASE_USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 BASE_USDC = BASE_USDC_ADDRESS.lower()
+# Base-to-Solana quotes may use either supported LI.FI adapter, but only this
+# Base router may receive the exact USDC approval and bridge transaction.
+BASE_LIFI_ROUTER = "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE"
+BASE_LIFI_TOOLS = frozenset({"lifiIntents", "polymerStandard"})
 LIFI_API = "https://li.quest/v1"
 QUOTE_TTL_SECONDS = 45
 MAX_QUOTE_AMOUNT_RAW = 10_000_000_000
@@ -338,6 +342,26 @@ def normalize_quote(payload, expected, lookup_table_accounts=None,
                     existing_associated_token_owners=None):
     try:
         action, estimate, tx = payload["action"], payload["estimate"], payload["transactionRequest"]
+        from_address_matches = (
+            str(action["fromAddress"]).lower() == expected["from_address"].lower()
+            if expected["from_chain"] == BASE_CHAIN_ID
+            else str(action["fromAddress"]) == expected["from_address"]
+        )
+        to_address_matches = (
+            str(action["toAddress"]).lower() == expected["to_address"].lower()
+            if expected["to_chain"] == BASE_CHAIN_ID
+            else str(action["toAddress"]) == expected["to_address"]
+        )
+        from_token_matches = (
+            str(action["fromToken"]["address"]).lower() == expected["from_token"].lower()
+            if expected["from_chain"] == BASE_CHAIN_ID
+            else str(action["fromToken"]["address"]) == expected["from_token"]
+        )
+        to_token_matches = (
+            str(action["toToken"]["address"]).lower() == expected["to_token"].lower()
+            if expected["to_chain"] == BASE_CHAIN_ID
+            else str(action["toToken"]["address"]) == expected["to_token"]
+        )
         if (int(action["fromChainId"]) != expected["from_chain"]
                 or int(action["toChainId"]) != expected["to_chain"]
                 or int(action["fromAmount"]) != expected["amount_raw"]
@@ -346,18 +370,18 @@ def normalize_quote(payload, expected, lookup_table_accounts=None,
                 or int(estimate["toAmount"]) < int(estimate["toAmountMin"])
                 or int(estimate["toAmount"]) > expected["amount_raw"] * 2
                 or int(estimate["toAmountMin"]) > expected["amount_raw"] * 2
-                or str(action["fromAddress"]).lower() != expected["from_address"].lower()
-                or str(action["toAddress"]).lower() != expected["to_address"].lower()
-                or str(action["fromToken"]["address"]).lower() != expected["from_token"].lower()
-                or str(action["toToken"]["address"]).lower() != expected["to_token"].lower()
+                or not from_address_matches or not to_address_matches
+                or not from_token_matches or not to_token_matches
                 or not isinstance(tx, dict)):
             raise ValueError()
         if expected["from_chain"] == BASE_CHAIN_ID:
             spender = str(estimate.get("approvalAddress") or "").lower()
-            if (payload.get("tool") != "lifiIntents"
+            router = BASE_LIFI_ROUTER.lower()
+            if (payload.get("tool") not in BASE_LIFI_TOOLS
                     or int(tx["chainId"]) != BASE_CHAIN_ID
                     or str(tx["from"]).lower() != expected["from_address"].lower()
-                    or str(tx["to"]).lower() != spender
+                    or spender != router
+                    or str(tx["to"]).lower() != router
                     or not re.fullmatch(r"0x[0-9a-fA-F]{40}", str(tx["to"]))
                     or not re.fullmatch(r"0x(?:[0-9a-fA-F]{2})*", str(tx["data"]))
                     or len(tx["data"]) > 32_000
@@ -375,7 +399,7 @@ def normalize_quote(payload, expected, lookup_table_accounts=None,
             payload["_solana_lifi_bridge_details"] = solana_details
         return payload
     except (KeyError, TypeError, ValueError, InvalidOperation):
-        raise BridgeError("The provider quote failed chain, wallet, token, amount, or transaction checks.", 502) from None
+        raise BridgeError("The provider quote failed bridge safety checks; no transfer was sent.", 502) from None
 
 
 class CrossChainBridge:
