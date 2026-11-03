@@ -2418,6 +2418,51 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(method == "sendTransaction" for method, _ in self.calls))
         self.assertTrue(self.ledger.audit())
 
+    async def test_owner_shortfall_check_counts_base_usdc_backing(self):
+        base_asset = runtime.BASE_USDC_ASSET
+        with self.ledger.db() as db:
+            self.ledger.post(db, "test-base-usdc-liability", "test Base liability", [
+                (available(101), base_asset, 5_000_000),
+                ("external", base_asset, -5_000_000),
+            ])
+            self.ledger.post(db, "test-owner-sol-balance", "test owner SOL balance", [
+                (available(101), SOL, 200_000_000),
+                ("external", SOL, -200_000_000),
+            ])
+
+        liabilities = self.ledger.liabilities()
+        self.service.total_backing_balances = AsyncMock(return_value={
+            USDC: {"raw": liabilities.get(USDC, 0), "decimals": 6},
+            SOL: {"raw": liabilities[SOL] - 10_000_000, "decimals": 9},
+        })
+        self.service.cross_chain_bridge.base_wallet = "0x33f94090e47b3bd32f3a24f48cd74b58dfb77f88"
+        self.service.cross_chain_bridge.base_usdc_balance = AsyncMock(return_value=5_000_000)
+
+        check_response = await self.service.admin_balance_check(Request(101), None)
+        check = json.loads(check_response.text)
+        self.assertEqual(check["assets"]["BASE_USDC"]["difference"], "0")
+        self.assertEqual(
+            next(row for row in check["all_assets"] if row["label"] == "BASE_USDC")["shortfall_raw"],
+            "0",
+        )
+
+        body = {
+            "expected_usdc_shortfall_raw": "0",
+            "expected_sol_shortfall_raw": "10000000",
+            "request_id": str(uuid.uuid4()),
+            "confirm": True,
+        }
+        response = await self.service.handle(
+            Request(101, body), self.service.admin_absorb_owner_shortfall
+        )
+        result = json.loads(response.text)
+        self.assertEqual(response.status, 200, response.text)
+        self.assertTrue(result["covered"])
+        self.assertEqual(result["coverage"]["BASE_USDC"]["difference"], "0")
+        self.assertEqual(self.ledger.balance(101, SOL), 190_000_000)
+        self.assertEqual(self.ledger.balance(101, base_asset), 5_000_000)
+        self.assertTrue(self.ledger.audit())
+
     async def test_owner_shortfall_adjustment_requires_exact_preview_and_owner_confirmation(self):
         invoice = self.ledger.invoice(101, USDC, 1_000_000)
         self.ledger.credit_deposit(invoice["id"], str(Signature.new_unique()), USDC, 1_000_000,

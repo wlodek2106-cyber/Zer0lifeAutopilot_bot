@@ -1671,6 +1671,17 @@ class CustodyRuntime(WalletRuntime):
         total[WRAPPED_SOL] = total[SOL]
         return total
 
+    async def owner_coverage_balances(self, session):
+        """Read finalized backing for every asset that the owner adjustment validates."""
+        backing = await self.total_backing_balances(session)
+        base_wallet = getattr(self.cross_chain_bridge, "base_wallet", "")
+        base_usdc_raw = (
+            await self.cross_chain_bridge.base_usdc_balance(session)
+            if base_wallet else 0
+        )
+        backing[BASE_USDC_ASSET] = {"raw": int(base_usdc_raw), "decimals": 6}
+        return backing
+
     async def solvent(self, session):
         if await self.rpc(session, "getGenesisHash") != GENESIS:
             raise WalletError("Операции разрешены только в Solana mainnet.")
@@ -2110,29 +2121,55 @@ class CustodyRuntime(WalletRuntime):
         if self.uid(request) != self.owner_id:
             raise WalletError("Только администратор.", 403)
         self.ledger.audit()
-        backing = await self.total_backing_balances(session)
+        backing = await self.owner_coverage_balances(session)
         hot = await self.balances(session)
         reserve = (await self.balances_for_wallet(session, self.deposit_wallet)
                    if self.split_wallet_enabled else {})
         liabilities = self.ledger.liabilities()
         assets = {}
-        for asset, decimals in ((USDC, 6), (SOL, 9)):
+        asset_decimals = {USDC: 6, SOL: 9, BASE_USDC_ASSET: 6}
+        asset_labels = {USDC: "USDC", SOL: "SOL", BASE_USDC_ASSET: "BASE_USDC"}
+        all_asset_rows = []
+        asset_keys = set(backing) | set(liabilities)
+        for asset in sorted(asset_keys):
+            if asset == WRAPPED_SOL:
+                continue
+            decimals = asset_decimals.get(
+                asset, backing.get(asset, {}).get("decimals")
+            )
             actual = int(backing.get(asset, {}).get("raw", 0))
             owed = int(liabilities.get(asset, 0))
-            owner_available_raw = self.ledger.balance(self.owner_id, asset)
             shortfall_raw = max(0, owed - actual)
-            assets["USDC" if asset == USDC else "SOL"] = {
-                "wallet": display_raw(actual, decimals),
-                "ledger": display_raw(owed, decimals),
-                "difference": display_raw(actual - owed, decimals),
-                "shortfall": display_raw(shortfall_raw, decimals),
+            format_amount = (
+                (lambda raw: display_raw(raw, decimals))
+                if type(decimals) is int else (lambda raw: str(raw) + " raw")
+            )
+            row = {
+                "asset": asset,
+                "label": asset_labels.get(asset, asset),
+                "decimals": decimals,
+                "wallet": format_amount(actual),
+                "wallet_raw": str(actual),
+                "ledger": format_amount(owed),
+                "ledger_raw": str(owed),
+                "difference": format_amount(actual - owed),
+                "difference_raw": str(actual - owed),
+                "shortfall": format_amount(shortfall_raw),
                 "shortfall_raw": str(shortfall_raw),
+            }
+            all_asset_rows.append(row)
+            if asset not in (USDC, SOL, BASE_USDC_ASSET):
+                continue
+            owner_available_raw = self.ledger.balance(self.owner_id, asset)
+            row.update({
                 "hot_wallet": display_raw(int(hot.get(asset, {}).get("raw", 0)), decimals),
                 "reserve_wallet": display_raw(int(reserve.get(asset, {}).get("raw", 0)), decimals),
                 "owner_available": display_raw(owner_available_raw, decimals),
                 "owner_available_raw": str(owner_available_raw),
-            }
+            })
+            assets[asset_labels[asset]] = row
         return web.json_response({"success": True, "assets": assets, "read_only": True,
+            "all_assets": all_asset_rows,
             "split_wallet_enabled": self.split_wallet_enabled,
             "deposit_wallet": self.deposit_wallet,
             "hot_wallet": self.wallet,
@@ -2177,7 +2214,7 @@ class CustodyRuntime(WalletRuntime):
                 raise WalletError("Coverage adjustments are allowed only on Solana mainnet.", 503)
 
             self.ledger.audit()
-            backing = await self.total_backing_balances(session)
+            backing = await self.owner_coverage_balances(session)
             liabilities = self.ledger.liabilities()
             deficits = {
                 asset: max(0, int(liability) - int(backing.get(asset, {}).get("raw", 0)))
@@ -2196,10 +2233,19 @@ class CustodyRuntime(WalletRuntime):
             self.ledger.audit()
             updated_liabilities = self.ledger.liabilities()
             coverage = {}
-            for asset, decimals, label in ((USDC, 6, "USDC"), (SOL, 9, "SOL")):
+            asset_decimals = {USDC: 6, SOL: 9, BASE_USDC_ASSET: 6}
+            asset_labels = {USDC: "USDC", SOL: "SOL", BASE_USDC_ASSET: "BASE_USDC"}
+            for asset in sorted(set(backing) | set(updated_liabilities)):
+                if asset == WRAPPED_SOL:
+                    continue
+                decimals = asset_decimals.get(
+                    asset, backing.get(asset, {}).get("decimals")
+                )
+                if type(decimals) is not int:
+                    continue
                 actual = int(backing.get(asset, {}).get("raw", 0))
                 owed = int(updated_liabilities.get(asset, 0))
-                coverage[label] = {
+                coverage[asset_labels.get(asset, asset)] = {
                     "wallet": display_raw(actual, decimals),
                     "account_balances": display_raw(owed, decimals),
                     "difference": display_raw(actual - owed, decimals),

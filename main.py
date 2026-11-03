@@ -5793,8 +5793,14 @@ RAW_HTML = r"""<!DOCTYPE html>
                     ' · account balances '+usdc.ledger+' · difference '+usdc.difference);
                 custodyLines.push('Combined wallets: SOL '+sol.wallet+
                     ' · account balances '+sol.ledger+' · difference '+sol.difference);
+                const additionalAssets=(result.all_assets||[]).filter(asset=>
+                    asset.label!=='USDC'&&asset.label!=='SOL');
+                additionalAssets.forEach(asset=>custodyLines.push(
+                    asset.label+': wallet '+asset.wallet+' · account balances '+asset.ledger+
+                    ' · difference '+asset.difference));
                 custodyLines.push('Read-only: no ledger or on-chain balance was changed.');
                 box.textContent=custodyLines.join('\n');
+                const otherDeficits=additionalAssets.filter(asset=>String(asset.shortfall_raw)!=='0');
                 const hasShortfall=ownerShortfallPreview.usdc_raw!=='0'||ownerShortfallPreview.sol_raw!=='0';
                 const sufficient=rawAmountAtLeast(ownerShortfallPreview.usdc_available_raw,ownerShortfallPreview.usdc_raw)&&
                     rawAmountAtLeast(ownerShortfallPreview.sol_available_raw,ownerShortfallPreview.sol_raw);
@@ -5802,9 +5808,12 @@ RAW_HTML = r"""<!DOCTYPE html>
                     ? 'Exact proposed reduction: '+ownerShortfallPreview.usdc+' USDC and '+ownerShortfallPreview.sol+
                       ' SOL. Your available balances: '+ownerShortfallPreview.usdc_available+' USDC and '+
                       ownerShortfallPreview.sol_available+' SOL.'+
-                      (sufficient?' Confirm below to continue.':' Your available balance is not enough to cover both shortfalls.')
+                      (otherDeficits.length
+                        ? ' Other asset shortfall blocks this adjustment: '+otherDeficits.map(asset=>
+                            asset.label+' '+asset.shortfall).join(', ')+'.'
+                        : sufficient?' Confirm below to continue.':' Your available balance is not enough to cover both shortfalls.')
                     : 'No wallet shortfall was found. No adjustment is available.';
-                applyButton.disabled=!hasShortfall||!sufficient;
+                applyButton.disabled=!hasShortfall||!sufficient||otherDeficits.length>0;
             } catch(e) { box.textContent=e.message||'Could not read wallet coverage.'; }
         }
         async function applyOwnerShortfall() {
@@ -5833,6 +5842,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 document.getElementById('owner-shortfall-confirm').checked=false;
                 resultBox.textContent=result.message+'\nUSDC difference: '+result.coverage.USDC.difference+
                     ' · SOL difference: '+result.coverage.SOL.difference+
+                    (result.coverage.BASE_USDC?'\nBase USDC difference: '+result.coverage.BASE_USDC.difference:'')+
                     '\nYour remaining balance: '+result.owner_available_usdc+' USDC and '+
                     result.owner_available_sol+' SOL.';
                 ownerShortfallPreview=null;
