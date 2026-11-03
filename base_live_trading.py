@@ -251,7 +251,7 @@ class BaseLiveReadiness:
             {"name": "Live executor and recovery", "ok": env_status["executor_ready"]},
             {"name": "Persistent Base operation storage", "ok": persistent_storage_ready},
         ])
-        if env_status["wallet_configured"] and env_status["rpc_configured"]:
+        if env_status["rpc_configured"]:
             try:
                 chain_raw = await self._rpc(session, "eth_chainId", [])
                 chain_id = _rpc_uint(chain_raw, "network ID")
@@ -259,30 +259,35 @@ class BaseLiveReadiness:
                 result["checks"].append({
                     "name": "Base mainnet (8453)", "ok": chain_id == BASE_CHAIN_ID
                 })
-                if chain_id == BASE_CHAIN_ID:
-                    code_raw, native_raw, usdc_raw = await asyncio.gather(
-                        self._rpc(session, "eth_getCode", [wallet, "latest"]),
-                        self._rpc(session, "eth_getBalance", [wallet, "latest"]),
-                        self._rpc(session, "eth_call", [{
-                            "to": BASE_USDC_ADDRESS,
-                            "data": _call_data(
-                                "balanceOf(address)", ("address",), (wallet,)
-                            ),
-                        }, "latest"]),
-                    )
-                    native_wei = _rpc_uint(native_raw, "ETH balance")
-                    usdc_balance_raw = decode(
-                        ("uint256",), bytes.fromhex(usdc_raw[2:])
-                    )[0]
-                    wallet_is_eoa = isinstance(code_raw, str) and code_raw in ("0x", "0x0")
-                    result["eth_balance"] = native_wei / 10**18
-                    result["usdc_balance"] = int(usdc_balance_raw) / 10**6
-                    result["checks"].extend([
-                        {"name": "Dedicated wallet is an EOA", "ok": wallet_is_eoa},
-                        {"name": "USDC balance", "ok": int(usdc_balance_raw) > 0},
-                        {"name": "ETH gas reserve", "ok": native_wei >= 5 * 10**15},
-                    ])
-                    result["wallet_is_eoa"] = wallet_is_eoa
+            except Exception:
+                result["checks"].append({
+                    "name": "Base mainnet (8453)", "ok": False
+                })
+        if result["chain_id"] == BASE_CHAIN_ID and env_status["wallet_configured"]:
+            try:
+                code_raw, native_raw, usdc_raw = await asyncio.gather(
+                    self._rpc(session, "eth_getCode", [wallet, "latest"]),
+                    self._rpc(session, "eth_getBalance", [wallet, "latest"]),
+                    self._rpc(session, "eth_call", [{
+                        "to": BASE_USDC_ADDRESS,
+                        "data": _call_data(
+                            "balanceOf(address)", ("address",), (wallet,)
+                        ),
+                    }, "latest"]),
+                )
+                native_wei = _rpc_uint(native_raw, "ETH balance")
+                usdc_balance_raw = decode(
+                    ("uint256",), bytes.fromhex(usdc_raw[2:])
+                )[0]
+                wallet_is_eoa = isinstance(code_raw, str) and code_raw in ("0x", "0x0")
+                result["eth_balance"] = native_wei / 10**18
+                result["usdc_balance"] = int(usdc_balance_raw) / 10**6
+                result["checks"].extend([
+                    {"name": "Dedicated wallet is an EOA", "ok": wallet_is_eoa},
+                    {"name": "USDC balance", "ok": int(usdc_balance_raw) > 0},
+                    {"name": "ETH gas reserve", "ok": native_wei >= 5 * 10**15},
+                ])
+                result["wallet_is_eoa"] = wallet_is_eoa
             except Exception:
                 result["checks"].append({
                     "name": "Base RPC wallet check", "ok": False
@@ -306,6 +311,12 @@ class BaseLiveReadiness:
         result["can_trade"] = result["ready"]
         if result["ready"]:
             result["message"] = "Base live executor is ready; set a cap and explicitly enable real trading."
+        elif (result["chain_id"] == BASE_CHAIN_ID
+                and not env_status["wallet_configured"]):
+            result["message"] = (
+                "Base Mainnet is verified. Configure a separate trading wallet "
+                "and matching signer; live trading remains off."
+            )
         elif env_status["executor_ready"]:
             result["message"] = "Base live trading is off; resolve every failed wallet, network, funding, or kill-switch check. No transaction can be sent."
         return result

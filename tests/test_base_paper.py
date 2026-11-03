@@ -234,6 +234,7 @@ class BasePaperUiTests(unittest.TestCase):
         match = re.search(r'<section id="base-paper-panel"[^>]*>(.*?)</section>', raw_html, re.S)
         self.assertIsNotNone(match)
         panel = match.group(0)
+        self.assertRegex(panel, r"\bhidden\b")
         solana_section = raw_html.index(
             '<section class="card solana-investor-card" aria-label="Solana network AI Crypto Investors">')
         self.assertLess(raw_html.index('<section id="base-paper-panel"'), solana_section)

@@ -3795,7 +3795,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                     Check separate wallet
                 </button>
             </section>
-            <section id="base-paper-panel" class="card base-paper-card" aria-label="Base network paper simulation" style="display:none">
+            <section id="base-paper-panel" class="card base-paper-card" aria-label="Base network paper simulation" hidden style="display:none">
                 <div class="base-paper-head">
                     <div class="base-network-identity">
                         <span class="base-network-mark" aria-hidden="true"><span>B</span></span>
@@ -4036,7 +4036,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
         function renderInvestorDashboard(stats) {
             const basePanel=document.getElementById('base-paper-panel');
-            if(basePanel)basePanel.style.display=stats.is_admin?'':'none';
+            if(basePanel){basePanel.hidden=true;basePanel.style.display='none';}
             const baseLivePanel=document.getElementById('base-live-readiness-panel');
             if(baseLivePanel)baseLivePanel.style.display=stats.is_admin?'':'none';
             if(stats.is_admin&&!baseLiveReadinessLoaded)checkBaseLiveReadiness();
@@ -4391,6 +4391,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["ETH gas reserve","Резерв ETH на комиссии","Резерв ETH на комісії"],
             ["Base live executor is ready; set a cap and explicitly enable real trading.","Исполнитель Base готов. Укажи лимит и отдельно включи реальную торговлю.","Виконавець Base готовий. Вкажи ліміт і окремо увімкни реальну торгівлю."],
             ["Base live trading is off; resolve every failed wallet, network, funding, or kill-switch check. No transaction can be sent.","Реальная торговля Base выключена. Исправь проблемы с кошельком, сетью, балансом или серверным переключателем. Сделки не отправляются.","Реальна торгівля Base вимкнена. Виправ проблеми з гаманцем, мережею, балансом або серверним перемикачем. Угоди не надсилаються."],
+            ["Base Mainnet is verified. Configure a separate trading wallet and matching signer; live trading remains off.","Сеть Base Mainnet проверена. Настрой отдельный торговый кошелёк и соответствующий ключ; реальная торговля остаётся выключенной.","Мережу Base Mainnet перевірено. Налаштуй окремий торговий гаманець і відповідний ключ; реальна торгівля залишається вимкненою."],
             ["Fund the Base trading wallet or lower its cap to cover the budget.","Пополните торговый кошелёк Base или уменьшите лимит.","Поповни торговий гаманець Base або зменш ліміт."],
             ["Use $0 to pause or at least $15 for 15 equal tranches.","Укажи $0 для паузы или не менее $15 для 15 равных частей.","Вкажи $0 для паузи або не менше $15 для 15 рівних частин."],
             ["Resolve the pending Base operation before changing its cap.","Сначала разреши незавершённую операцию Base, затем меняй лимит.","Спочатку заверши невирішену операцію Base, потім змінюй ліміт."],
@@ -6358,7 +6359,6 @@ RAW_HTML = r"""<!DOCTYPE html>
             const target = document.getElementById('tab-' + id);
             if (target) target.classList.add('active');
             if (btn) btn.classList.add('active');
-            if(id==='ai-crypto-investors')loadBasePaper();
             if(id==='tariffs'&&!window.ZRL_WEB){
                 document.getElementById('telegram-tariff-view').hidden=false;
                 refreshTelegramTariffs();

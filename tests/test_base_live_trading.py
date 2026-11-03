@@ -132,6 +132,31 @@ class BaseLiveReadinessTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("no transaction can be sent", report["message"].lower())
         self.assertFalse(report["persistent_storage_ready"])
 
+    async def test_checks_base_network_even_without_trading_wallet(self):
+        readiness = base.BaseLiveReadiness(
+            {"BASE_RPC_URL": "https://base-rpc.example"},
+            persistent_storage_check=lambda: True,
+        )
+
+        async def fake_rpc(_session, method, _params):
+            self.assertEqual(method, "eth_chainId")
+            return "0x2105"
+
+        with patch.object(readiness, "_rpc", side_effect=fake_rpc):
+            report = await readiness.report(None)
+
+        self.assertEqual(report["chain_id"], base.BASE_CHAIN_ID)
+        self.assertIn(
+            {"name": "Base mainnet (8453)", "ok": True},
+            report["checks"],
+        )
+        self.assertFalse(report["wallet_configured"])
+        self.assertFalse(report["can_trade"])
+        self.assertIsNone(report["usdc_balance"])
+        self.assertIsNone(report["eth_balance"])
+        self.assertIn("Base Mainnet is verified", report["message"])
+        self.assertIn("matching signer", report["message"])
+
     async def test_live_mode_requires_persistent_operation_storage(self):
         account = Account.create()
         env = {
