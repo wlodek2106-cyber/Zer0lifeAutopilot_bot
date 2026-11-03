@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from contextlib import contextmanager
 from unittest.mock import patch
 
 from eth_account import Account
@@ -60,6 +61,44 @@ class BaseLiveEngineStateTests(unittest.IsolatedAsyncioTestCase):
                 self.engine._env_wallet()
             with patch.dict(os.environ, {"BASE_SHARED_WALLET_TRADING_ENABLED": "true"}):
                 self.assertEqual(self.engine._env_wallet(), account.address.lower())
+
+    async def test_enabling_base_mode_uses_one_database_connection_at_a_time(self):
+        class ReadyBase:
+            async def report(self, _session):
+                return {
+                    "ready": True,
+                    "usdc_balance": 100.0,
+                    "eth_balance": 0.01,
+                    "chain_id": 8453,
+                    "executor_ready": True,
+                    "checks": [],
+                    "message": "Base executor is ready.",
+                }
+
+        self.engine.readiness = ReadyBase()
+        self.engine.save_budget(77, 50)
+        original_db = self.engine.db
+        active_connections = 0
+
+        @contextmanager
+        def reject_nested_db():
+            nonlocal active_connections
+            if active_connections:
+                raise AssertionError("BaseLiveEngine opened a nested SQLite transaction.")
+            active_connections += 1
+            try:
+                with original_db() as connection:
+                    yield connection
+            finally:
+                active_connections -= 1
+
+        with patch.dict(os.environ, {"BASE_LIVE_TRADING_ENABLED": "true"}, clear=False), \
+                patch.object(self.engine, "db", side_effect=reject_nested_db):
+            report = await self.engine.toggle(77, True, object(), confirm=True)
+
+        self.assertTrue(report["enabled"])
+        self.assertEqual(report["status"]["state"], "ON")
+        self.assertEqual(self.engine.settings(77)["enabled"], 1)
 
     def test_only_one_pending_transaction_is_allowed(self):
         self.engine._record_operation(

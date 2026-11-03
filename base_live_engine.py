@@ -400,11 +400,16 @@ class BaseLiveEngine:
         if type(enabled) is not bool:
             raise BaseLiveEngineError("Specify whether Base live trading should be enabled.", 400)
         if not enabled:
+            now = int(time.time())
             with self.db() as db:
                 self._ensure_settings(db, uid)
                 db.execute("UPDATE base_live_settings SET enabled=0,updated_at=? WHERE uid=?",
-                           (int(time.time()), int(uid)))
-            self.set_status(uid, "OFF", "Base live trading was turned off.")
+                           (now, int(uid)))
+                db.execute("""INSERT INTO base_live_status(uid,state,message,checked_at)
+                    VALUES(?,'OFF','Base live trading was turned off.',?)
+                    ON CONFLICT(uid) DO UPDATE SET state='OFF',
+                    message='Base live trading was turned off.',checked_at=excluded.checked_at""",
+                    (int(uid), now))
             return await self.report(uid, await self.readiness.report(session))
         if confirm is not True:
             raise BaseLiveEngineError("Confirm that Base orders use real money.", 400)
@@ -414,13 +419,17 @@ class BaseLiveEngine:
             raise BaseLiveEngineError(
                 "Base live trading is locked: wallet, funding, executor, or server activation is not ready."
             )
+        report = self.report(uid, readiness)
         with self.db() as db:
             settings = self._ensure_settings(db, uid)
             if settings["budget_usdc_raw"] <= 0:
                 raise BaseLiveEngineError("Set a non-zero Base live budget before enabling.")
+            open_cost_raw = int(db.execute("""SELECT COALESCE(SUM(cost_usdc_raw),0) AS amount
+                FROM base_live_positions WHERE uid=? AND state IN ('OPEN','REVIEW')""",
+                (int(uid),)).fetchone()["amount"] or 0)
             if (not isinstance(readiness.get("usdc_balance"), (int, float))
                     or float(readiness["usdc_balance"])
-                    + self._open_cost_raw(uid) / 10**BASE_USDC_DECIMALS
+                    + open_cost_raw / 10**BASE_USDC_DECIMALS
                     < int(settings["budget_usdc_raw"]) / 10**BASE_USDC_DECIMALS):
                 raise BaseLiveEngineError("Fund the Base trading wallet or lower its cap to cover the budget.")
             if (not isinstance(readiness.get("eth_balance"), (int, float))
@@ -431,10 +440,22 @@ class BaseLiveEngine:
                 (int(uid),)).fetchone()["n"]
             if pending:
                 raise BaseLiveEngineError("Resolve the pending Base operation before enabling.")
+            now = int(time.time())
             db.execute("UPDATE base_live_settings SET enabled=1,updated_at=? WHERE uid=?",
-                       (int(time.time()), int(uid)))
-        self.set_status(uid, "ON", "Base live trading is enabled.")
-        return await self.report(uid, readiness)
+                       (now, int(uid)))
+            db.execute("""INSERT INTO base_live_status(uid,state,message,checked_at)
+                VALUES(?,'ON','Base live trading is enabled.',?)
+                ON CONFLICT(uid) DO UPDATE SET state='ON',
+                message='Base live trading is enabled.',checked_at=excluded.checked_at""",
+                (int(uid), now))
+        report["enabled"] = True
+        report["status"] = {
+            "uid": int(uid),
+            "state": "ON",
+            "message": "Base live trading is enabled.",
+            "checked_at": now,
+        }
+        return report
 
     def _env_wallet(self):
         wallet = normalize_address(os.getenv("BASE_TRADING_WALLET_ADDRESS", ""))

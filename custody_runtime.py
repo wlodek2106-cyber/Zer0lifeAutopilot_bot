@@ -1081,7 +1081,19 @@ class CustodyRuntime(WalletRuntime):
         except (ValueError, KeyError, TypeError, json.JSONDecodeError):
             return web.json_response({"success": False, "message": "Неверный запрос или неполный ответ провайдера."}, status=400)
         except Exception as exc:
-            self.log("Custody: " + type(exc).__name__)
+            action_name = getattr(action, "__name__", "unknown")
+            error_name = getattr(exc, "sqlite_errorname", type(exc).__name__)
+            self.log(f"Custody {action_name}: {error_name}")
+            if action_name in {
+                "base_live_readiness_report", "save_base_live_budget", "toggle_base_live",
+            }:
+                return web.json_response({
+                    "success": False,
+                    "message": (
+                        "Base status could not be updated. Refresh Base status before retrying; "
+                        "this control request does not submit a swap."
+                    ),
+                }, status=503)
             return web.json_response({"success": False, "message": "Результат неизвестен. Проверьте свою историю, не повторяйте перевод."}, status=503)
 
     def pending(self):
