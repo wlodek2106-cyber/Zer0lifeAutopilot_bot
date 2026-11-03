@@ -2351,63 +2351,47 @@ RAW_HTML = r"""<!DOCTYPE html>
             #app .partner-table, #app .partner-invite { max-width: 900px; }
             #app .sig-input, #app textarea { max-width: 100%; }
         }
-        /* Exchange: a deliberately informational bridge surface until the route is configured. */
+        /* Exchange: compact per-account bridge form with explicit per-transfer confirmation. */
         #app #tab-exchange { max-width: 900px; }
         .exchange-hero {
-            position: relative; overflow: hidden; min-height: 210px; padding: 22px;
-            border: 1px solid rgba(195, 231, 156, .2); border-radius: 24px;
-            background:
-                radial-gradient(ellipse at 76% 40%, rgba(159, 206, 139, .12), transparent 34%),
-                linear-gradient(145deg, #17221d 0%, #111b1b 55%, #111925 100%);
-            box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 22px 55px rgba(0,0,0,.18);
-        }
-        .exchange-hero::after {
-            content:""; position:absolute; inset:0; pointer-events:none; opacity:.13;
-            background-image: radial-gradient(rgba(219,239,203,.55) .6px,transparent .7px);
-            background-size: 13px 13px; mask-image: linear-gradient(90deg,transparent 12%,#000 100%);
+            position:relative; overflow:hidden; padding:20px;
+            border:1px solid rgba(205,218,232,.12); border-radius:24px;
+            background:radial-gradient(ellipse at 100% 0,rgba(176,133,255,.1),transparent 36%),
+                linear-gradient(150deg,#101114 0%,#08090b 62%,#11120e 100%);
+            box-shadow:inset 0 1px 0 rgba(255,255,255,.05),0 24px 55px rgba(0,0,0,.25);
         }
         .exchange-heading { position:relative; z-index:2; display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
         .exchange-heading h1 { margin:0; color:#f0f3e8; font-size:clamp(26px,6vw,34px); letter-spacing:-.045em; }
-        .exchange-kicker { margin:0 0 7px; color:#a9bc8e; font:700 10px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.16em; }
-        .exchange-status { flex:none; border:1px solid rgba(239,190,111,.35); border-radius:99px; padding:7px 10px; color:#efc77e; background:rgba(63,45,22,.35); font:700 9px/1 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.08em; }
-        .exchange-lede { position:relative; z-index:2; max-width:500px; margin:9px 0 0; color:#a8b6a9; font-size:13px; line-height:1.55; }
+        .exchange-kicker { margin:0 0 7px; color:#a7b6c6; font:700 10px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.16em; }
+        .exchange-status { flex:none; border:1px solid rgba(239,190,111,.35); border-radius:99px; padding:7px 10px; color:#efc77e; background:rgba(63,45,22,.35); font:700 9px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.06em; text-align:center; }
         .exchange-direction { position:relative; z-index:2; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:16px 0 0; }
-        .exchange-direction button { min-height:44px; border:1px solid rgba(190,218,179,.2); border-radius:12px; color:#aebcae; background:linear-gradient(145deg,rgba(18,28,24,.92),rgba(14,22,25,.92)); font-size:11px; font-weight:750; cursor:pointer; }
-        .exchange-direction button[aria-pressed="true"] { border-color:rgba(185,230,151,.56); color:#e8f8d7; background:linear-gradient(145deg,rgba(73,105,54,.58),rgba(30,54,46,.9)); box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 5px 20px rgba(120,177,87,.1); }
+        .exchange-direction button { min-height:42px; border:1px solid rgba(190,205,222,.16); border-radius:13px; color:#aeb8c6; background:rgba(24,26,31,.85); font-size:11px; font-weight:750; cursor:pointer; }
+        .exchange-direction button[aria-pressed="true"] { border-color:rgba(196,238,142,.55); color:#eff8e4; background:linear-gradient(145deg,rgba(61,79,47,.62),rgba(26,32,26,.95)); box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 5px 20px rgba(120,177,87,.1); }
         .exchange-direction button:focus-visible { outline:2px solid #c5ee9a; outline-offset:2px; }
-        .bridge-stage { position:relative; height:224px; margin:4px auto 0; max-width:460px; perspective:800px; }
-        .bridge-track { position:absolute; left:14%; right:14%; top:52%; height:1px; background:linear-gradient(90deg,rgba(114,214,171,.08),#8bd8ae 48%,rgba(119,177,217,.2)); transform:rotateX(62deg); box-shadow:0 0 18px rgba(144,221,177,.24); }
-        .bridge-node { position:absolute; top:50%; width:118px; height:112px; transform-style:preserve-3d; }
-        .bridge-node--sol { left:6%; transform:translateY(-50%) rotateX(58deg) rotateZ(-25deg); }
-        .bridge-node--base { right:6%; transform:translateY(-50%) rotateX(58deg) rotateZ(25deg); }
-        .bridge-stage--reverse .bridge-node--sol { left:auto; right:6%; }
-        .bridge-stage--reverse .bridge-node--base { right:auto; left:6%; }
-        .bridge-disc { position:absolute; inset:12px 8px 18px; border-radius:22px; background:linear-gradient(145deg,#314538,#19281f); border:1px solid rgba(180,224,174,.48); box-shadow:0 20px 0 -5px #152019,0 22px 0 -4px rgba(142,191,147,.38),0 34px 28px rgba(0,0,0,.38),inset 0 1px 0 rgba(255,255,255,.2); }
-        .bridge-node--base .bridge-disc { background:linear-gradient(145deg,#30485a,#1b2a35); border-color:rgba(144,194,224,.5); box-shadow:0 20px 0 -5px #17232c,0 22px 0 -4px rgba(137,176,203,.38),0 34px 28px rgba(0,0,0,.38),inset 0 1px 0 rgba(255,255,255,.2); }
-        .bridge-token { position:absolute; z-index:2; inset:26px 0 auto; color:#e4f0dc; text-align:center; font:800 14px/1 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.06em; transform:translateZ(26px); }
-        .bridge-node--base .bridge-token { color:#dceaf1; }
-        .bridge-chain { position:absolute; z-index:2; inset:auto 0 3px; color:#a3b1a1; text-align:center; font:700 8px/1 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.14em; transform:translateZ(28px); }
-        .bridge-center { position:absolute; z-index:3; left:50%; top:50%; display:grid; place-items:center; width:40px; height:40px; border:1px solid rgba(179,224,185,.42); border-radius:50%; color:#c9efb8; background:#1a2922; box-shadow:0 0 0 7px rgba(198,230,180,.04),0 8px 24px rgba(0,0,0,.4); transform:translate(-50%,-50%); font:600 18px/1 ui-monospace,monospace; }
-        .bridge-annotation { position:absolute; left:50%; bottom:4px; transform:translateX(-50%); color:#7f9185; white-space:nowrap; font:600 8px/1 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.13em; }
-        .exchange-callout { display:grid; grid-template-columns:22px 1fr; gap:12px; align-items:start; padding:16px; border:1px solid rgba(228,181,106,.27); border-radius:17px; background:linear-gradient(135deg,rgba(69,50,25,.42),rgba(38,33,25,.32)); }
-        .exchange-callout-mark { display:grid; place-items:center; width:21px; height:21px; border:1px solid rgba(230,185,112,.65); border-radius:50%; color:#e9c37f; font:700 12px/1 ui-monospace,monospace; }
-        .exchange-callout strong { display:block; color:#f0d49e; font-size:12px; }
-        .exchange-callout p { margin:5px 0 0; color:#bdad8e; font-size:11px; line-height:1.55; }
-        .exchange-flow { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin:14px 0; }
-        .exchange-step { min-width:0; padding:15px 13px; border:1px solid rgba(190,218,179,.14); border-radius:16px; background:linear-gradient(145deg,rgba(24,35,29,.9),rgba(16,24,25,.86)); }
-        .exchange-step-index { color:#9fbc82; font:700 9px/1 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.15em; }
-        .exchange-step h2 { margin:9px 0 5px; color:#e6eddf; font-size:13px; letter-spacing:-.02em; }
-        .exchange-step p { margin:0; color:#9fae9e; font-size:11px; line-height:1.55; }
-        .exchange-quote-panel { padding:18px; border:1px solid rgba(158,190,211,.18); border-radius:20px; background:linear-gradient(145deg,rgba(20,31,38,.92),rgba(16,24,29,.82)); }
+        .exchange-quote-panel { padding:14px; border:1px solid rgba(190,205,222,.15); border-radius:22px; background:linear-gradient(155deg,rgba(20,21,25,.97),rgba(10,11,13,.97)); box-shadow:0 20px 50px rgba(0,0,0,.24); }
         .exchange-destination { display:flex; flex-wrap:wrap; align-items:center; gap:7px; margin:14px 0; color:#91a59e; font:700 9px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.08em; }
         .exchange-destination span { padding:8px 10px; border:1px solid rgba(183,216,189,.17); border-radius:9px; background:rgba(9,16,15,.45); }
         .exchange-disabled { width:100%; min-height:48px; margin-top:15px; border:1px solid #39443b; border-radius:13px; color:#a8b0a5; background:linear-gradient(180deg,#30382f,#252d26); font-size:12px; font-weight:750; cursor:not-allowed; opacity:.78; }
         .exchange-disabled-note { margin:8px 0 0; color:#a0a99e; text-align:center; font-size:10px; line-height:1.5; }
-        .exchange-quote-form { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:end; margin-top:18px; }
+        .exchange-swap-card { padding:15px 15px 12px; border:1px solid rgba(201,210,223,.11); border-radius:19px; background:linear-gradient(145deg,#151619,#0e0f11); }
+        .exchange-swap-label { display:block; margin-bottom:11px; color:#aeb3bd; font-size:12px; font-weight:700; }
+        .exchange-swap-main { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:11px; }
+        .exchange-quote-input { width:100%; min-width:0; min-height:50px; padding:0; border:0; color:#f3f4f7; background:transparent; font:700 clamp(28px,8vw,38px)/1 ui-monospace,SFMono-Regular,Menlo,monospace; }
+        .exchange-quote-input:focus-visible { outline:2px solid #c5ee9a; outline-offset:3px; border-radius:5px; }
+        .exchange-swap-output { min-width:0; overflow:hidden; color:#f3f4f7; font:700 clamp(28px,8vw,38px)/1 ui-monospace,SFMono-Regular,Menlo,monospace; text-overflow:ellipsis; }
+        .exchange-token-pill { display:inline-flex; align-items:center; gap:7px; min-height:38px; padding:0 12px; border:1px solid rgba(194,203,219,.1); border-radius:999px; color:#f3f4f7; background:#202125; font-size:13px; font-weight:800; white-space:nowrap; }
+        .exchange-token-mark { display:grid; place-items:center; width:21px; height:21px; border-radius:50%; color:#10110d; background:linear-gradient(145deg,#e4ff9b,#a2de45); font-size:10px; font-weight:900; }
+        .exchange-swap-meta { display:flex; justify-content:space-between; gap:8px; margin-top:9px; color:#8f949e; font-size:10px; }
+        .exchange-swap-divider { position:relative; z-index:2; display:grid; place-items:center; height:20px; margin:-2px 0; color:#f2eafa; }
+        .exchange-swap-divider span { display:grid; place-items:center; width:34px; height:34px; border:3px solid #101114; border-radius:50%; background:#a98bff; box-shadow:0 5px 18px rgba(169,139,255,.24); font-size:16px; font-weight:900; }
+        .exchange-percentages { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin:15px 0 11px; }
+        .exchange-percentages button { min-height:40px; border:1px solid rgba(195,204,220,.1); border-radius:999px; color:#d8dbe2; background:#1b1c20; font-size:12px; font-weight:750; cursor:pointer; }
+        .exchange-percentages button:disabled { cursor:not-allowed; opacity:.45; }
+        .exchange-percentages button:not(:disabled):active { transform:scale(.98); background:#2a2c31; }
+        .exchange-quote-form { display:grid; grid-template-columns:minmax(0,1fr); gap:10px; align-items:end; margin-top:12px; }
         .exchange-quote-field label { display:block; margin-bottom:7px; color:#a8b6a9; font-size:11px; font-weight:700; }
-        .exchange-quote-input { width:100%; min-height:48px; padding:0 13px; border:1px solid rgba(190,218,179,.22); border-radius:12px; color:#f0f3e8; background:#0c1412; font:700 15px ui-monospace,SFMono-Regular,Menlo,monospace; }
         .exchange-quote-input:focus-visible { outline:2px solid #c5ee9a; outline-offset:2px; }
-        .exchange-quote-button { min-height:48px; padding:0 18px; border:1px solid rgba(198,238,154,.6); border-radius:12px; color:#10170d; background:linear-gradient(135deg,#d9ff8d,#8ed21b); font-size:12px; font-weight:850; cursor:pointer; }
+        .exchange-quote-button { width:100%; min-height:49px; padding:0 18px; border:1px solid rgba(198,238,154,.6); border-radius:14px; color:#10170d; background:linear-gradient(135deg,#dcff99,#91d522); box-shadow:0 8px 20px rgba(145,213,34,.14); font-size:13px; font-weight:850; cursor:pointer; }
         .exchange-quote-button:disabled { cursor:wait; opacity:.6; }
         .exchange-quote-status { min-height:20px; margin:9px 0 0; color:#b8c4b5; font-size:11px; line-height:1.5; }
         .exchange-transfer-proof { display:grid; gap:7px; margin-top:8px; color:#a4b1a2; font-size:10px; line-height:1.5; }
@@ -2420,25 +2404,24 @@ RAW_HTML = r"""<!DOCTYPE html>
         .exchange-quote-fees { margin:12px 0 0; padding:0; list-style:none; color:#aebaae; font-size:11px; line-height:1.55; }
         .exchange-quote-fees li { padding:5px 0; border-bottom:1px solid rgba(190,218,179,.08); }
         .exchange-quote-footnote { margin:10px 0 0; color:#a4b1a2; font-size:10px; line-height:1.55; }
-        .exchange-safety { margin-top:12px; padding:14px 15px; border-left:2px solid #d9a863; border-radius:0 12px 12px 0; background:rgba(55,42,24,.28); color:#c5b28f; font-size:11px; line-height:1.6; }
+        .exchange-cost-details { margin-top:12px; border-top:1px solid rgba(190,205,222,.1); padding-top:10px; }
+        .exchange-cost-details summary { color:#cbd1dc; font-size:11px; font-weight:750; cursor:pointer; }
+        .exchange-fee-total { margin:7px 0 0; color:#aeb7c3; font-size:10px; }
+        .exchange-fee-total strong { color:#eaf0f4; }
+        .exchange-safety { margin-top:11px; color:#9299a2; font-size:10px; line-height:1.5; }
+        .exchange-confirm-note { margin:10px 0 0; color:#aab3bf; font-size:10px; line-height:1.5; }
         @media (max-width: 430px) {
             #nav .nav-btn { padding-right:1px; padding-left:1px; font-size:9px; }
             #nav .nav-btn span { font-size:16px; }
-            .exchange-hero { padding:18px 16px 12px; }
-            .exchange-flow { grid-template-columns:1fr; gap:8px; }
-            .exchange-step { display:grid; grid-template-columns:32px 1fr; column-gap:8px; padding:12px; }
-            .exchange-step-index { grid-row:span 2; padding-top:3px; }
-            .exchange-step h2 { margin:0 0 4px; }
-            .exchange-step p { grid-column:2; }
-            .exchange-quote-form { grid-template-columns:1fr; }
+            .exchange-hero { padding:17px 14px 12px; }
+            .exchange-quote-panel { padding:11px; }
+            .exchange-swap-card { padding:14px 12px 11px; }
             .exchange-quote-button { width:100%; }
-            .bridge-stage { height:194px; }
-            .bridge-node { width:102px; height:98px; }
         }
         @media (min-width: 1024px) {
             #app #tab-exchange.active { display:block; }
             #app #tab-exchange > .exchange-hero, #app #tab-exchange > .exchange-callout,
-            #app #tab-exchange > .exchange-flow, #app #tab-exchange > .exchange-quote-panel,
+        #app #tab-exchange > .exchange-flow, #app #tab-exchange > .exchange-quote-panel,
             #app #tab-exchange > .exchange-safety { max-width:900px; }
         }
         /* Overview / Human × AI cockpit: dimensional graphite, signal-cyan, and a warm human trace. */
@@ -3363,64 +3346,69 @@ RAW_HTML = r"""<!DOCTYPE html>
 
         <div id="tab-exchange" class="tab-panel" aria-labelledby="exchange-title">
             <header class="page-heading"><div><p class="eyebrow">Cross-chain · Personal ledger</p><h1 id="exchange-title">Exchange</h1></div></header>
-            <section class="exchange-hero" aria-label="USDC route estimates for Solana and Base">
+            <section class="exchange-hero" aria-label="USDC exchange between Solana and Base">
                 <div class="exchange-heading">
-                    <div><p class="exchange-kicker">USDC · READ-ONLY ROUTE QUOTE</p><h1 id="exchange-direction-title">Solana → Base</h1></div>
-                    <span class="exchange-status" id="exchange-status">QUOTE FIRST · MANUAL CONFIRM</span>
+                    <div><p class="exchange-kicker">USDC · SOLANA ↔ BASE</p><h1 id="exchange-direction-title">Solana → Base</h1></div>
+                    <span class="exchange-status" id="exchange-status">QUOTE · CONFIRM TO EXCHANGE</span>
                 </div>
-                <p class="exchange-lede">Request a LI.FI estimate first. Nothing moves automatically; a separate confirmation is required for every live transfer.</p>
                 <div class="exchange-direction" role="group" aria-label="Choose quote direction">
                     <button id="exchange-dir-solana-base" type="button" aria-pressed="true" onclick="setExchangeDirection('solana-to-base')">Solana → Base</button>
                     <button id="exchange-dir-base-solana" type="button" aria-pressed="false" onclick="setExchangeDirection('base-to-solana')">Base → Solana</button>
                 </div>
-                <div class="bridge-stage" id="exchange-bridge-stage" aria-hidden="true">
-                    <div class="bridge-track"></div>
-                    <div class="bridge-node bridge-node--sol"><div class="bridge-disc"></div><span class="bridge-token">USDC</span><span class="bridge-chain">SOLANA</span></div>
-                    <div class="bridge-center" id="exchange-arrow">→</div>
-                    <div class="bridge-node bridge-node--base"><div class="bridge-disc"></div><span class="bridge-token">USDC</span><span class="bridge-chain">BASE</span></div>
-                    <div class="bridge-annotation">YOUR BALANCES · MANUAL CONFIRMATION</div>
-                </div>
-            </section>
-            <div class="exchange-callout" role="status" aria-live="polite" style="margin-top:14px">
-                <span class="exchange-callout-mark" aria-hidden="true">!</span>
-                <div><strong>Quote first · no automatic sending</strong><p>A quote does not reserve or move funds. If live sending is configured, each transfer still requires your separate confirmation.</p></div>
-            </div>
-            <section class="exchange-flow" aria-label="Read-only quote details">
-                <article class="exchange-step"><span class="exchange-step-index">01 / SOURCE</span><h2 id="exchange-source-title">Use your Solana USDC</h2><p id="exchange-source-copy">Get a quote for your available Solana USDC. Nothing moves until you confirm a live transfer.</p></article>
-                <article class="exchange-step"><span class="exchange-step-index">02 / REVIEW</span><h2>Review quote and costs</h2><p>Check estimated output, minimum receive amount, provider fees and network costs. Confirm each real transaction separately.</p></article>
-                <article class="exchange-step"><span class="exchange-step-index">03 / SETTLE</span><h2 id="exchange-destination-title">Credit Base after finality</h2><p id="exchange-destination-copy">Your Base balance is credited only after the destination transfer is finalized and verified.</p></article>
             </section>
             <section class="exchange-quote-panel" aria-label="Quote request">
-                <div class="exchange-destination" aria-label="Quote route"><span id="exchange-path-source">YOUR SOLANA USDC</span><span aria-hidden="true">→</span><span>PROVIDER ESTIMATE</span><span aria-hidden="true">→</span><span id="exchange-path-destination">BASE USDC ESTIMATE</span></div>
-                <div class="exchange-quote-form">
-                    <div class="exchange-quote-field">
-                        <label for="exchange-amount">Amount (USDC)</label>
+                <div class="exchange-swap-card">
+                    <label class="exchange-swap-label" for="exchange-amount">You pay</label>
+                    <div class="exchange-swap-main">
                         <input id="exchange-amount" class="exchange-quote-input" type="number" inputmode="decimal"
-                            min="0.000001" max="10000" step="0.000001" value="10" autocomplete="off">
+                            min="0.000001" max="1000000" step="0.000001" value="10" autocomplete="off"
+                            oninput="clearExchangeQuote()">
+                        <span class="exchange-token-pill"><span class="exchange-token-mark">U</span>USDC</span>
                     </div>
+                    <div class="exchange-swap-meta"><span id="exchange-source-chain">Solana · USDC</span><span id="exchange-source-available">Available: —</span></div>
+                </div>
+                <div class="exchange-swap-divider" aria-hidden="true"><span>⇅</span></div>
+                <div class="exchange-swap-card">
+                    <span class="exchange-swap-label">You receive · estimate</span>
+                    <div class="exchange-swap-main">
+                        <strong id="exchange-preview-out" class="exchange-swap-output">—</strong>
+                        <span class="exchange-token-pill"><span class="exchange-token-mark">U</span>USDC</span>
+                    </div>
+                    <div class="exchange-swap-meta"><span id="exchange-destination-chain">Base · account balance</span><span>After finality</span></div>
+                </div>
+                <div class="exchange-percentages" role="group" aria-label="Choose a percentage of available balance">
+                    <button type="button" data-exchange-percent="25" onclick="setExchangePercent(25)" disabled>25%</button>
+                    <button type="button" data-exchange-percent="50" onclick="setExchangePercent(50)" disabled>50%</button>
+                    <button type="button" data-exchange-percent="100" onclick="setExchangePercent(100)" disabled>100%</button>
+                </div>
+                <div class="exchange-quote-form">
                     <button id="exchange-quote-button" class="exchange-quote-button" type="button" onclick="requestExchangeQuote()">Get quote</button>
                 </div>
                 <p id="exchange-quote-status" class="exchange-quote-status" role="status" aria-live="polite"></p>
-                <button type="button" class="exchange-quote-button" onclick="refreshExchangeTransfers()">Check transfer status</button>
+                <button type="button" class="btn-secondary" onclick="refreshExchangeTransfers()">Check transfer status</button>
                 <div id="exchange-transfer-proof" class="exchange-transfer-proof" aria-live="polite" hidden></div>
                 <section id="exchange-quote-result" class="exchange-quote-result" aria-label="Read-only quote result" hidden>
                     <div class="exchange-quote-grid">
                         <div class="exchange-quote-value"><span>Send amount</span><strong id="exchange-quote-in">—</strong></div>
-                        <div class="exchange-quote-value"><span>Estimated receive</span><strong id="exchange-quote-out">—</strong></div>
                         <div class="exchange-quote-value"><span>Minimum receive</span><strong id="exchange-quote-min">—</strong></div>
-                        <div class="exchange-quote-value"><span>Available source balance</span><strong id="exchange-quote-balance">—</strong></div>
                     </div>
                     <p class="exchange-quote-footnote"><span id="exchange-quote-provider"></span> · <span id="exchange-quote-expiry"></span></p>
-                    <h3 class="exchange-quote-cost-title">Estimated costs</h3>
-                    <ul id="exchange-quote-fees" class="exchange-quote-fees"></ul>
-                    <p id="exchange-quote-warning" class="exchange-quote-footnote"></p>
-                    <p id="exchange-quote-route-details" class="exchange-quote-footnote"></p>
-                    <p class="exchange-quote-footnote">A quote never sends funds. Each approval or transfer requires your separate confirmation.</p>
+                    <p class="exchange-fee-total">Estimated costs: <strong id="exchange-quote-total-fees">—</strong></p>
+                    <details class="exchange-cost-details">
+                        <summary>Fee breakdown</summary>
+                        <ul id="exchange-quote-fees" class="exchange-quote-fees"></ul>
+                    </details>
+                    <details class="exchange-cost-details">
+                        <summary>Route details</summary>
+                        <p id="exchange-quote-warning" class="exchange-quote-footnote"></p>
+                        <p id="exchange-quote-route-details" class="exchange-quote-footnote"></p>
+                    </details>
+                    <p class="exchange-confirm-note">Review the estimate and minimum receive. Press “Exchange” to confirm this transaction; the bot handles routing and status checks.</p>
                     <div id="exchange-live-actions"></div>
                 </section>
                 <p class="exchange-disabled-note">Unresolved transfers stay reserved. Never submit an unresolved transfer again.</p>
             </section>
-            <aside class="exchange-safety"><strong>Manual confirmation</strong> Estimates can expire or change. Review the minimum receive amount and costs before confirming.</aside>
+            <aside class="exchange-safety">Each transfer is confirmed separately. Your account is credited only after the destination transaction is verified as final.</aside>
         </div>
 
         <div id="tab-deposit" class="tab-panel">
@@ -4646,6 +4634,21 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["Review Base estimate","Проверьте оценку для Base","Перевірте оцінку для Base"],
             ["Review Solana estimate","Проверьте оценку для Solana","Перевірте оцінку для Solana"],
             ["Compare the provider's estimate and minimum receive amount. No transfer is available yet.","Сравните оценку провайдера и минимальную сумму получения. Перевод пока недоступен.","Порівняйте оцінку провайдера та мінімальну суму отримання. Переказ поки недоступний."],
+            ["You pay","Вы отправляете","Ви надсилаєте"],
+            ["You receive · estimate","Вы получите · оценка","Ви отримаєте · оцінка"],
+            ["Available: ","Доступно: ","Доступно: "],
+            ["Solana · account balance","Solana · баланс аккаунта","Solana · баланс рахунку"],
+            ["Base · account balance","Base · баланс аккаунта","Base · баланс рахунку"],
+            ["After finality","После подтверждения сети","Після підтвердження мережі"],
+            ["Fee breakdown","Комиссии","Комісії"],["Route details","Маршрут","Маршрут"],
+            ["Estimated costs:","Расчётные расходы:","Орієнтовні витрати:"],
+            ["Review the estimate and minimum receive. Press “Exchange” to confirm this transaction; the bot handles routing and status checks.","Проверьте котировку и минимум получения. Нажатие «Обменять» подтверждает перевод; бот сам выполнит маршрут и проверит статус.","Перевірте котирування та мінімум отримання. Натискання «Обміняти» підтверджує переказ; бот сам виконає маршрут і перевірить статус."],
+            ["Each transfer is confirmed separately. Your account is credited only after the destination transaction is verified as final.","Каждый перевод подтверждается отдельно. Баланс аккаунта пополняется только после проверки окончательного подтверждения в сети получателя.","Кожен переказ підтверджується окремо. Баланс облікового запису зараховується лише після перевірки остаточного підтвердження в мережі отримувача."],
+            ["The button confirms this transfer. The bot signs, sends, and tracks it automatically.","Нажатие подтверждает этот перевод. Бот сам подписывает и отправляет транзакцию, затем отслеживает её.","Натискання підтверджує цей переказ. Бот сам підписує й надсилає транзакцію, а потім відстежує її."],
+            ["Available balance unavailable.","Баланс недоступен.","Баланс недоступний."],
+            ["Exchange","Обменять","Обміняти"],
+            ["QUOTE · CONFIRM TO EXCHANGE","КОТИРОВКА · ПОДТВЕРДИТЕ ОБМЕН","КОТИРУВАННЯ · ПІДТВЕРДЬТЕ ОБМІН"],
+            ["LIVE · PRESS TO EXCHANGE","РЕАЛЬНЫЙ ОБМЕН · НАЖМИТЕ ДЛЯ ЗАПУСКА","РЕАЛЬНИЙ ОБМІН · НАТИСНІТЬ ДЛЯ ЗАПУСКУ"],
             ["Amount (USDC)","Сумма (USDC)","Сума (USDC)"],["Get quote","Запросить котировку","Запросити котирування"],
             ["Send amount","Отправить","Надіслати"],["Estimated receive","Ожидается получить","Очікується отримати"],
             ["Minimum receive","Минимум к получению","Мінімум до отримання"],
@@ -5105,7 +5108,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         };
         let currentUiLanguage='en';
         let tradeShareState=null;
-        let exchangeQuoteDirection='solana-to-base',exchangeQuoteBusy=false;
+        let exchangeQuoteDirection='solana-to-base',exchangeQuoteBusy=false,exchangeSourceAvailable=0;
         function uiLocale(){
             return currentUiLanguage==='uk'?'uk-UA':currentUiLanguage==='ru'?'ru-RU':undefined;
         }
@@ -6364,6 +6367,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 refreshTelegramTariffs();
             }
             if(id==='wallet')refreshMonthlyTradingFee(true);
+            if(id==='exchange')refreshExchangeBalances();
         }
 
         function clearExchangeQuote(){
@@ -6371,14 +6375,9 @@ RAW_HTML = r"""<!DOCTYPE html>
             const status=document.getElementById('exchange-quote-status');
             if(result)result.hidden=true;
             if(status)status.textContent='';
+            document.getElementById('exchange-preview-out').textContent='—';
             document.getElementById('exchange-status').textContent=
-                localizeUiText('QUOTE FIRST · MANUAL CONFIRM');
-            const callout=document.querySelector('#tab-exchange .exchange-callout');
-            if(callout){
-                callout.querySelector('strong').textContent=localizeUiText('Quote first · no automatic sending');
-                callout.querySelector('p').textContent=localizeUiText(
-                    'A quote does not reserve or move funds. If live sending is configured, each transfer still requires your separate confirmation.');
-            }
+                localizeUiText('QUOTE · CONFIRM TO EXCHANGE');
         }
         function setExchangeDirection(direction) {
             exchangeQuoteDirection=direction==='base-to-solana'?'base-to-solana':'solana-to-base';
@@ -6389,26 +6388,51 @@ RAW_HTML = r"""<!DOCTYPE html>
             document.getElementById('exchange-direction-title').textContent = source + ' → ' + destination;
             document.getElementById('exchange-dir-solana-base').setAttribute('aria-pressed', String(!reverse));
             document.getElementById('exchange-dir-base-solana').setAttribute('aria-pressed', String(reverse));
-            document.getElementById('exchange-bridge-stage').classList.toggle('bridge-stage--reverse', reverse);
-            document.getElementById('exchange-arrow').textContent = reverse ? '←' : '→';
-            document.getElementById('exchange-source-title').textContent =
-                localizeUiText('Use your ' + source + ' USDC');
-            document.getElementById('exchange-source-copy').textContent =
-                localizeUiText('Get a read-only quote for your ' + source + ' USDC. No funds are reserved or moved.');
-            document.getElementById('exchange-destination-title').textContent =
-                localizeUiText('Review ' + destination + ' estimate');
-            document.getElementById('exchange-destination-copy').textContent =
-                localizeUiText("Compare the provider's estimate and minimum receive amount. No transfer is available yet.");
-            document.getElementById('exchange-path-source').textContent =
-                localizeUiText('YOUR ' + source.toUpperCase() + ' USDC');
-            document.getElementById('exchange-path-destination').textContent =
-                localizeUiText(destination.toUpperCase() + ' USDC ESTIMATE');
+            document.getElementById('exchange-source-chain').textContent=source+' · USDC';
+            document.getElementById('exchange-destination-chain').textContent=
+                localizeUiText(destination+' · account balance');
+            refreshExchangeBalances();
         }
 
-        function exchangeQuoteAmount(value){
+        function exchangeQuoteNumber(value){
             const amount=Number(value);
             if(!Number.isFinite(amount))return '—';
-            return amount.toLocaleString(uiLocale(),{minimumFractionDigits:2,maximumFractionDigits:6})+' USDC';
+            return amount.toLocaleString(uiLocale(),{minimumFractionDigits:2,maximumFractionDigits:6});
+        }
+        function exchangeQuoteAmount(value){
+            const formatted=exchangeQuoteNumber(value);
+            return formatted==='—'?formatted:formatted+' USDC';
+        }
+        function updateExchangePercentButtons(){
+            document.querySelectorAll('[data-exchange-percent]').forEach(button=>{
+                button.disabled=!Number.isFinite(exchangeSourceAvailable)||exchangeSourceAvailable<0.000001;
+            });
+        }
+        function setExchangePercent(percent){
+            if(!Number.isFinite(exchangeSourceAvailable)||exchangeSourceAvailable<=0)return;
+            const raw=Math.floor(exchangeSourceAvailable*1_000_000*Number(percent)/100);
+            if(raw<1)return;
+            document.getElementById('exchange-amount').value=(raw/1_000_000).toFixed(6);
+            clearExchangeQuote();
+        }
+        async function refreshExchangeBalances(){
+            const balanceNode=document.getElementById('exchange-source-available');
+            if(!balanceNode)return;
+            try{
+                const response=await apiFetch('/api/exchange/balances',{cache:'no-store'});
+                const data=await response.json();
+                if(!response.ok||data.success!==true)throw Error(data.message||'Balance unavailable.');
+                const raw=Number(exchangeQuoteDirection==='base-to-solana'
+                    ?data.base_usdc:data.solana_usdc);
+                if(!Number.isFinite(raw)||raw<0)throw Error('Balance unavailable.');
+                exchangeSourceAvailable=raw;
+                balanceNode.textContent=localizeUiText('Available: ')+exchangeQuoteAmount(raw);
+                updateExchangePercentButtons();
+            }catch(_error){
+                exchangeSourceAvailable=0;
+                balanceNode.textContent=localizeUiText('Available balance unavailable.');
+                updateExchangePercentButtons();
+            }
         }
         function renderExchangeQuote(quote){
             if(!quote||quote.quote_only!==true||quote.transfer_enabled!==false
@@ -6416,19 +6440,14 @@ RAW_HTML = r"""<!DOCTYPE html>
                 throw Error('Could not get a quote. No transaction was sent.');
             const live=quote.live_submission_enabled===true&&quote.sufficient_source_balance!==false;
             document.getElementById('exchange-status').textContent=localizeUiText(
-                live?'LIVE · MANUAL CONFIRMATION':'QUOTE ONLY · SEND OFF');
-            const callout=document.querySelector('#tab-exchange .exchange-callout');
-            if(callout){
-                callout.querySelector('strong').textContent=localizeUiText(
-                    live?'Live bridge · no automatic sending':'Quote only · live sending is not configured');
-                callout.querySelector('p').textContent=localizeUiText(
-                    live?'A quote does not move funds. The bot sends only after you confirm this exact transfer.':
-                        'A quote does not reserve or move funds. Live sending is not configured.');
-            }
+                live?'LIVE · PRESS TO EXCHANGE':'QUOTE ONLY · SEND OFF');
             document.getElementById('exchange-quote-in').textContent=exchangeQuoteAmount(quote.amount_in);
-            document.getElementById('exchange-quote-out').textContent=exchangeQuoteAmount(quote.amount_out);
+            document.getElementById('exchange-preview-out').textContent=exchangeQuoteNumber(quote.amount_out);
             document.getElementById('exchange-quote-min').textContent=exchangeQuoteAmount(quote.amount_out_min);
-            document.getElementById('exchange-quote-balance').textContent=exchangeQuoteAmount(quote.source_available);
+            exchangeSourceAvailable=Number(quote.source_available)||0;
+            document.getElementById('exchange-source-available').textContent=
+                localizeUiText('Available: ')+exchangeQuoteAmount(exchangeSourceAvailable);
+            updateExchangePercentButtons();
             document.getElementById('exchange-quote-provider').textContent=
                 localizeUiText('Quote provider')+': '+String(quote.provider||'LI.FI').slice(0,48);
             const expires=new Date(Number(quote.expires_at)*1000);
@@ -6438,6 +6457,12 @@ RAW_HTML = r"""<!DOCTYPE html>
             const list=document.getElementById('exchange-quote-fees');
             list.replaceChildren();
             const fees=Array.isArray(quote.provider_fees)?quote.provider_fees:[];
+            const totalFees=fees.reduce((sum,fee)=>{
+                const amount=Number(fee?.amount_usd);
+                return sum+(Number.isFinite(amount)&&amount>0?amount:0);
+            },0);
+            document.getElementById('exchange-quote-total-fees').textContent=
+                '$'+totalFees.toFixed(4)+' USD';
             if(!fees.length){
                 const item=document.createElement('li');
                 item.textContent=localizeUiText('No fee breakdown was returned.');
@@ -6482,12 +6507,12 @@ RAW_HTML = r"""<!DOCTYPE html>
                     action.textContent=localizeUiText('Approve exact USDC amount');
                     action.onclick=()=>confirmExchangeApproval(quote,action);
                 }else{
-                    action.textContent=localizeUiText('Confirm and send bridge transfer');
+                    action.textContent=localizeUiText('Exchange');
                     action.onclick=()=>confirmExchangeTransfer(quote,action);
                 }
                 actions.appendChild(action);
                 document.getElementById('exchange-quote-status').textContent=
-                    localizeUiText('Live transfer · your confirmation required. After you confirm, the bot signs, sends, and tracks this transaction.');
+                    localizeUiText('The button confirms this transfer. The bot signs, sends, and tracks it automatically.');
             }else{
                 document.getElementById('exchange-quote-status').textContent=
                     localizeUiText('Quote only. Live submission is not configured.');
@@ -6495,17 +6520,6 @@ RAW_HTML = r"""<!DOCTYPE html>
             document.getElementById('exchange-quote-result').hidden=false;
         }
         async function confirmExchangeTransfer(quote,button){
-            let confirmation=localizeUiText('Send')+' '+quote.amount_in+' USDC '+
-                localizeUiText('to')+' '+quote.destination_chain+' '+
-                localizeUiText('for at least')+' '+Number(quote.amount_out_min).toFixed(6)+
-                ' '+localizeUiText('USDC? This is a real transaction. Review the displayed fees.');
-            if(quote.direction==='solana-to-base'){
-                confirmation+='\n\n'+localizeUiText('LI.FI temporary Solana deposit')+': '+
-                    String(quote.provider_solana_deposit_address||'—')+'\n'+
-                    localizeUiText('Destination wallet')+': '+String(quote.destination_address||'—')+'\n'+
-                    localizeUiText('LI.FI receives USDC at a temporary Solana address, then routes it to the displayed Base wallet. The Solana transaction does not prove LI.FI will complete delivery. Confirm only if you accept this provider risk.');
-            }
-            if(!window.confirm(confirmation))return;
             button.disabled=true;
             button.textContent=localizeUiText('Submitting…');
             try{
@@ -6627,6 +6641,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                             :latest.received_raw==null?'destination pending':
                                 (Number(latest.received_raw)/1e6).toFixed(6)+' USDC credited')
                     :approval?'Base approval · '+approval.state:'No bridge transfers yet.';
+                await refreshExchangeBalances();
             }catch(error){
                 renderExchangeTransferProof(null);
                 status.textContent=(error.message||'Status unavailable.')+' Do not retry an unresolved transfer.';
@@ -8357,6 +8372,7 @@ async def main():
     app.router.add_post('/api/base-live/budget', wallet_handler(runtime.save_base_live_budget))
     app.router.add_post('/api/base-live/toggle', wallet_handler(runtime.toggle_base_live))
     app.router.add_post('/api/exchange/quote', wallet_handler(runtime.exchange_quote))
+    app.router.add_get('/api/exchange/balances', wallet_handler(runtime.exchange_balances))
     app.router.add_post('/api/exchange/submit', wallet_handler(runtime.exchange_submit))
     app.router.add_post('/api/exchange/approve', wallet_handler(runtime.exchange_approve))
     app.router.add_get('/api/exchange/transfers', wallet_handler(runtime.exchange_transfers))

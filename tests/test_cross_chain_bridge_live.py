@@ -24,6 +24,7 @@ from custody_ledger import (
 from custody_runtime import CustodyRuntime, GENESIS
 from cross_chain_bridge import (
     BASE_CHAIN_ID,
+    BASE_USDC_ASSET,
     BASE_USDC_ADDRESS,
     SOLANA_CHAIN_ID,
     SOLANA_ASSOCIATED_TOKEN_PROGRAM,
@@ -45,6 +46,7 @@ from cross_chain_bridge import (
 from spl_token_support import TOKEN_PROGRAM_ID
 
 BASE_WALLET = "0x4574D50bB68D0A65F10b62655338A1C8b4315040"
+SHARED_BASE_WALLET = "0x33f94090e47b3BD32f3a24f48Cd74b58DFb77F88"
 SOLANA_WALLET = "11111111111111111111111111111111"
 TEST_KEY = "0x" + "0" * 63 + "1"
 
@@ -702,7 +704,7 @@ class LiveBridgePrimitiveTests(unittest.TestCase):
             "tool": "near",
             "action": {
                 "fromChainId": SOLANA_CHAIN_ID, "toChainId": BASE_CHAIN_ID,
-                "fromAmount": "5000000", "fromAddress": wallet, "toAddress": BASE_WALLET,
+                "fromAmount": "5000000", "fromAddress": wallet, "toAddress": SHARED_BASE_WALLET,
                 "fromToken": {"address": SOLANA_USDC},
                 "toToken": {"address": BASE_USDC_ADDRESS},
             },
@@ -716,7 +718,7 @@ class LiveBridgePrimitiveTests(unittest.TestCase):
         }
         expected = {
             "from_chain": SOLANA_CHAIN_ID, "to_chain": BASE_CHAIN_ID,
-            "amount_raw": 5_000_000, "from_address": wallet, "to_address": BASE_WALLET,
+            "amount_raw": 5_000_000, "from_address": wallet, "to_address": SHARED_BASE_WALLET,
             "from_token": SOLANA_USDC, "to_token": BASE_USDC_ADDRESS,
         }
         route = normalize_quote(payload, expected)
@@ -725,19 +727,77 @@ class LiveBridgePrimitiveTests(unittest.TestCase):
         self.assertEqual(route["_solana_lifi_bridge_details"]["deposit_token_account"], recipients[1])
 
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {
-            "BASE_HOT_WALLET_ADDRESS": BASE_WALLET,
+            "BASE_HOT_WALLET_ADDRESS": SHARED_BASE_WALLET,
             "LIFI_API_KEY": "test-only-key",
         }):
             path = os.path.join(tmp, "ledger.sqlite")
             bridge = CrossChainBridge(path, EmptyLedger(path, balance=10_000_000), wallet)
+            session = FakeSession(payload)
             quote = __import__("asyncio").run(
-                bridge.quote(FakeSession(payload), 77, "solana-to-base", "5"))
+                bridge.quote(session, 77, "solana-to-base", "5"))
+            other_account_quote = __import__("asyncio").run(
+                bridge.quote(session, 88, "solana-to-base", "5"))
             self.assertTrue(quote["quote_only"])
             self.assertFalse(quote["transfer_enabled"])
-            self.assertEqual(quote["destination_address"].lower(), BASE_WALLET.lower())
+            self.assertEqual(quote["destination_address"].lower(), SHARED_BASE_WALLET.lower())
+            self.assertEqual(other_account_quote["destination_address"].lower(),
+                             SHARED_BASE_WALLET.lower())
+            self.assertEqual(session.calls[0][1]["params"]["toAddress"].lower(),
+                             SHARED_BASE_WALLET.lower())
             self.assertEqual(quote["provider_solana_deposit_address"], owners[0])
             self.assertEqual(quote["provider_solana_deposit_token_account"], recipients[1])
             self.assertEqual(quote["solana_provider_fee_usdc"], "0.0125")
+
+    def test_finalized_bridge_output_credits_only_the_requesting_uid(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {
+            "BASE_HOT_WALLET_ADDRESS": SHARED_BASE_WALLET,
+            "LIFI_API_KEY": "test-only-key",
+        }):
+            path = os.path.join(tmp, "ledger.sqlite")
+            ledger = CustodyLedger(path)
+            ledger.user(77, "requesting-user")
+            ledger.user(88, "other-user")
+            with ledger.db() as db:
+                ledger.post(db, "seed-shared-bridge", "test-only source backing", [
+                    ("external", SOLANA_USDC, -5_000_000),
+                    (available(77), SOLANA_USDC, 5_000_000),
+                ])
+            bridge = CrossChainBridge(path, ledger, SOLANA_WALLET)
+            quote_id, now = str(uuid.uuid4()), int(time.time())
+            route = {"estimate": {"toAmountMin": "4950000"}}
+            with ledger.db() as db:
+                db.execute("""INSERT INTO custody_bridge_quotes
+                    (id,uid,direction,amount_raw,route_json,created_at,expires_at,state)
+                    VALUES(?,?,?,?,?,?,?,'QUOTED')""",
+                    (quote_id, 77, "solana-to-base", 5_000_000,
+                     json.dumps(route), now, now + 45))
+            transfer = bridge.reserve_transfer(77, quote_id)
+            signer = Keypair()
+            message = MessageV0.try_compile(signer.pubkey(), [], [], Hash.default())
+            signed = VersionedTransaction.populate(message, [Signature.default()])
+            source_signature = str(signed.signatures[0])
+            bridge.save_signed_transfer(
+                77, transfer["id"], source_signature,
+                base64.b64encode(bytes(signed)).decode("ascii"))
+            bridge.mark_transfer_submitted(77, transfer["id"], True)
+
+            settled = bridge.settle_transfer(
+                77, transfer["id"], 4_950_000, "0x" + "a" * 64,
+                verified_finality=True, verified_recipient=True, verified_token=True)
+
+            self.assertEqual(settled["state"], "COMPLETED")
+            self.assertEqual(ledger.balance(77, BASE_USDC_ASSET), 4_950_000)
+            self.assertEqual(ledger.balance(88, BASE_USDC_ASSET), 0)
+            self.assertEqual(ledger.balance(77, SOLANA_USDC), 0)
+            runtime = CustodyRuntime.__new__(CustodyRuntime)
+            runtime.accounts = None
+            runtime.ledger = ledger
+            runtime.uid = Mock(return_value=77)
+            own_response = asyncio.run(runtime.exchange_balances(None, None))
+            self.assertEqual(json.loads(own_response.text)["base_usdc"], "4.95")
+            runtime.uid = Mock(return_value=88)
+            other_response = asyncio.run(runtime.exchange_balances(None, None))
+            self.assertEqual(json.loads(other_response.text)["base_usdc"], "0")
 
     def test_bridge_lock_blocks_new_wallet_operations(self):
         with tempfile.TemporaryDirectory() as tmp:

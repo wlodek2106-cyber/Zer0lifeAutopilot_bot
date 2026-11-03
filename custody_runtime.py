@@ -1156,6 +1156,18 @@ class CustodyRuntime(WalletRuntime):
             quote["requires_approval"] = True
         return web.json_response({"success": True, "quote": quote})
 
+    async def exchange_balances(self, request, session):
+        uid = self.uid(request)
+        if self.accounts:
+            self.accounts.require(uid)
+        solana_raw = int(self.ledger.balance(uid, SOLANA_USDC))
+        base_raw = int(self.ledger.balance(uid, BASE_USDC_ASSET))
+        return web.json_response({
+            "success": True,
+            "solana_usdc": str(Decimal(solana_raw) / Decimal(1_000_000)),
+            "base_usdc": str(Decimal(base_raw) / Decimal(1_000_000)),
+        })
+
     def _bridge_live_enabled(self, direction="base-to-solana"):
         if os.getenv("BRIDGE_LIVE_SUBMISSION_ENABLED", "").lower() != "true":
             return False
