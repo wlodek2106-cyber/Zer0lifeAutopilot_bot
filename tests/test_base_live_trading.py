@@ -47,16 +47,32 @@ class BaseV3EncodingTests(unittest.TestCase):
         self.assertTrue(result["executor_ready"])
         self.assertFalse(result["ready"])
 
-    def test_dedicated_wallet_must_differ_from_bridge_wallet(self):
-        result = base.live_environment_status({
+    def test_shared_wallet_requires_explicit_enable_and_matching_signer(self):
+        account = Account.create()
+        env = {
             "BASE_LIVE_TRADING_ENABLED": "true",
             "BASE_TRADING_RPC_URL": "https://base-rpc.example",
-            "BASE_TRADING_WALLET_ADDRESS": WALLET,
-            "BASE_HOT_WALLET_ADDRESS": WALLET.upper().replace("0X", "0x"),
-            "BASE_TRADING_PRIVATE_KEY": "not-a-private-key",
-        })
-        self.assertFalse(result["wallet_separate_from_bridge"])
-        self.assertFalse(result["ready"])
+            "BASE_TRADING_WALLET_ADDRESS": account.address,
+            "BASE_HOT_WALLET_ADDRESS": account.address,
+            "BASE_TRADING_PRIVATE_KEY": account.key.hex(),
+        }
+        blocked = base.live_environment_status(env)
+        self.assertFalse(blocked["wallet_separate_from_bridge"])
+        self.assertFalse(blocked["wallet_role_accepted"])
+        self.assertFalse(blocked["ready"])
+
+        env["BASE_SHARED_WALLET_TRADING_ENABLED"] = "true"
+        approved = base.live_environment_status(env)
+        self.assertTrue(approved["shared_wallet_trading_enabled"])
+        self.assertTrue(approved["wallet_role_accepted"])
+        self.assertTrue(approved["signer_matches_wallet"])
+        self.assertTrue(approved["ready"])
+
+        env["BASE_TRADING_PRIVATE_KEY"] = Account.create().key.hex()
+        mismatch = base.live_environment_status(env)
+        self.assertTrue(mismatch["wallet_role_accepted"])
+        self.assertFalse(mismatch["signer_matches_wallet"])
+        self.assertFalse(mismatch["ready"])
 
     def test_swap_calldata_uses_exact_amount_minimum_and_wallet_recipient(self):
         data = base.encode_exact_input_single(

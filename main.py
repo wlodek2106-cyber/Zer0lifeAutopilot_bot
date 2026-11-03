@@ -3734,14 +3734,14 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <span class="base-live-off-badge">LIVE TRADING · OFF</span>
                 </div>
                 <p class="base-live-readiness-note">
-                    This checks the separate trading wallet. Real trades remain off until all checks pass and you enable them.
+                    This checks the Base trading wallet. Real trades remain off until all checks pass and you enable them.
                 </p>
                 <span id="base-live-wallet-address" class="base-live-address"></span>
                 <div class="base-paper-metrics">
                     <div class="base-paper-metric">
                         <span>WALLET USDC</span>
                         <strong id="base-live-usdc">—</strong>
-                        <small>Separate trading wallet</small>
+                        <small>Base trading wallet</small>
                     </div>
                     <div class="base-paper-metric">
                         <span>GAS RESERVE</span>
@@ -4353,8 +4353,8 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["No Base transactions.","Операций Base пока нет.","Операцій Base ще немає."],
             ["Open real positions","Открытые реальные позиции","Відкриті реальні позиції"],
             ["Recent Base transactions","Последние операции Base","Останні операції Base"],
-            ["This checks the separate trading wallet. Real trades remain off until all checks pass and you enable them.","Здесь проверяется отдельный торговый кошелёк. Реальная торговля останется выключенной, пока не пройдут все проверки и ты её не включишь.","Тут перевіряється окремий торговий гаманець. Реальна торгівля залишатиметься вимкненою, доки не пройдуть усі перевірки й ти її не ввімкнеш."],
-            ["Separate trading wallet","Отдельный торговый кошелёк","Окремий торговий гаманець"],
+            ["This checks the Base trading wallet. Real trades remain off until all checks pass and you enable them.","Здесь проверяется торговый кошелёк Base. Реальная торговля останется выключенной, пока не пройдут все проверки и ты её не включишь.","Тут перевіряється торговий гаманець Base. Реальна торгівля залишатиметься вимкненою, доки не пройдуть усі перевірки й ти її не ввімкнеш."],
+            ["Base trading wallet","Торговый кошелёк Base","Торговий гаманець Base"],
             ["WALLET USDC","USDC НА КОШЕЛЬКЕ","USDC У ГАМАНЦІ"],
             ["GAS RESERVE","РЕЗЕРВ ETH НА ГАЗ","РЕЗЕРВ ETH НА КОМІСІЇ"],
             ["NETWORK","СЕТЬ","МЕРЕЖА"],
@@ -4364,8 +4364,8 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["No trade can be sent from this panel.","Эта панель не отправляет сделки.","Ця панель не надсилає угоди."],
             ["Setup checks","Проверки настройки","Перевірки налаштування"],
             ["Check separate wallet","Проверить отдельный кошелёк","Перевірити окремий гаманець"],
-            ["Dedicated wallet address","Адрес отдельного кошелька","Адреса окремого гаманця"],
-            ["Wallet separate from bridge","Кошелёк отдельно от моста","Гаманець окремий від мосту"],
+            ["Base trading wallet address","Адрес торгового кошелька Base","Адреса торгового гаманця Base"],
+            ["Wallet role approved","Роль кошелька разрешена","Роль гаманця дозволена"],
             ["Wallet signer matches","Ключ соответствует адресу","Ключ відповідає адресі"],
             ["Base HTTPS RPC","HTTPS RPC Base","HTTPS RPC Base"],
             ["Live executor and recovery","Исполнитель и восстановление транзакций","Виконавець і відновлення транзакцій"],
@@ -4375,18 +4375,18 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["Base mainnet (8453)","Base mainnet (8453)","Base mainnet (8453)"],
             ["USDC balance","Баланс USDC","Баланс USDC"],
             ["USDC plus open positions cover cap","USDC и открытые позиции покрывают лимит","USDC і відкриті позиції покривають ліміт"],
-            ["Dedicated wallet is an EOA","Отдельный кошелёк — обычный адрес","Окремий гаманець — звичайна адреса"],
+            ["Base wallet is a standard address","Кошелёк Base — обычный адрес","Гаманець Base — звичайна адреса"],
             ["ETH gas reserve","Резерв ETH на комиссии","Резерв ETH на комісії"],
             ["Base live executor is ready; set a cap and explicitly enable real trading.","Исполнитель Base готов. Укажи лимит и отдельно включи реальную торговлю.","Виконавець Base готовий. Вкажи ліміт і окремо увімкни реальну торгівлю."],
             ["Base live trading is off; resolve every failed wallet, network, funding, or kill-switch check. No transaction can be sent.","Реальная торговля Base выключена. Исправь проблемы с кошельком, сетью, балансом или серверным переключателем. Сделки не отправляются.","Реальна торгівля Base вимкнена. Виправ проблеми з гаманцем, мережею, балансом або серверним перемикачем. Угоди не надсилаються."],
-            ["Base Mainnet is verified. Configure a separate trading wallet and matching signer; live trading remains off.","Сеть Base Mainnet проверена. Настрой отдельный торговый кошелёк и соответствующий ключ; реальная торговля остаётся выключенной.","Мережу Base Mainnet перевірено. Налаштуй окремий торговий гаманець і відповідний ключ; реальна торгівля залишається вимкненою."],
+            ["Base Mainnet is verified. Configure the Base trading wallet and matching signer; live trading remains off.","Сеть Base Mainnet проверена. Настрой торговый кошелёк Base и соответствующий ключ; реальная торговля остаётся выключенной.","Мережу Base Mainnet перевірено. Налаштуй торговий гаманець Base і відповідний ключ; реальна торгівля залишається вимкненою."],
             ["Fund the Base trading wallet or lower its cap to cover the budget.","Пополните торговый кошелёк Base или уменьшите лимит.","Поповни торговий гаманець Base або зменш ліміт."],
             ["Use $0 to pause or at least $15 for 15 equal tranches.","Укажи $0 для паузы или не менее $15 для 15 равных частей.","Вкажи $0 для паузи або не менше $15 для 15 рівних частин."],
             ["Resolve the pending Base operation before changing its cap.","Сначала разреши незавершённую операцию Base, затем меняй лимит.","Спочатку заверши невирішену операцію Base, потім змінюй ліміт."],
             ["A non-zero cap cannot be lower than the open Base position cost.","Ненулевой лимит не может быть ниже стоимости открытых позиций Base.","Ненульовий ліміт не може бути нижчим за вартість відкритих позицій Base."],
             ["Set a Base live budget of at least $15.","Установи лимит реальной торговли Base не менее $15.","Встанови ліміт реальної торгівлі Base не менше $15."],
             ["The Base live budget has no free entry tranche.","В лимите Base не осталось свободной части для входа.","У ліміті Base не залишилося вільної частини для входу."],
-            ["The separate Base wallet has insufficient USDC for the next tranche.","В отдельном кошельке Base не хватает USDC для следующей части.","В окремому гаманці Base бракує USDC для наступної частини."],
+            ["The Base trading wallet has insufficient USDC for the next tranche.","В торговом кошельке Base не хватает USDC для следующей части.","У торговому гаманці Base бракує USDC для наступної частини."],
             ["Base market scan is unavailable; no entry was submitted.","Сканирование рынка Base недоступно; вход не отправлен.","Сканування ринку Base недоступне; вхід не надіслано."],
             ["Base market scan returned invalid data.","Сканирование рынка Base вернуло некорректные данные.","Сканування ринку Base повернуло некоректні дані."],
             ["No Base candidate passed every entry check.","Ни один кандидат Base не прошёл все проверки входа.","Жоден кандидат Base не пройшов усі перевірки входу."],
@@ -4403,7 +4403,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["Base live preflight failed; no new transaction was sent.","Предварительная проверка Base не пройдена; новая транзакция не отправлена.","Попередню перевірку Base не пройдено; нову транзакцію не надіслано."],
             ["Base worker paused after an internal error; no transaction was retried.","Исполнитель Base приостановлен после внутренней ошибки; повторной отправки не было.","Виконавець Base призупинено після внутрішньої помилки; повторного надсилання не було."],
             ["Base entry validation failed; no swap was submitted.","Проверка входа Base не пройдена; обмен не отправлен.","Перевірку входу Base не пройдено; обмін не надіслано."],
-            ["The separate Base wallet needs more ETH for gas and reserve.","В отдельном кошельке Base нужно больше ETH на комиссии и резерв.","В окремому гаманці Base потрібно більше ETH на комісії та резерв."],
+            ["The Base trading wallet needs more ETH for gas and reserve.","В торговом кошельке Base нужно больше ETH на комиссии и резерв.","Торговому гаманцю Base потрібно більше ETH на комісії та резерв."],
             ["Base BUY finalized:","Покупка Base подтверждена:","Купівлю Base підтверджено:"],
             ["Base SELL finalized:","Продажа Base подтверждена:","Продаж Base підтверджено:"],
             ["English is the default. Your choice is saved to your account and follows you across devices.","По умолчанию выбран английский. Выбор сохраняется в аккаунте и действует на всех устройствах.","За замовчуванням вибрано англійську. Вибір зберігається в обліковому записі й діє на всіх пристроях."],

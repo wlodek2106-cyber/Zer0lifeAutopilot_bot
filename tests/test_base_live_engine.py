@@ -47,6 +47,20 @@ class BaseLiveEngineStateTests(unittest.IsolatedAsyncioTestCase):
         self.engine.pause_on_restart()
         self.assertEqual(self.engine.settings(77)["enabled"], 0)
 
+    def test_shared_wallet_signer_requires_server_opt_in(self):
+        account = Account.create()
+        env = {
+            "BASE_TRADING_WALLET_ADDRESS": account.address,
+            "BASE_TRADING_PRIVATE_KEY": account.key.hex(),
+            "BASE_HOT_WALLET_ADDRESS": account.address,
+            "BASE_SHARED_WALLET_TRADING_ENABLED": "false",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            with self.assertRaises(BaseLiveEngineError):
+                self.engine._env_wallet()
+            with patch.dict(os.environ, {"BASE_SHARED_WALLET_TRADING_ENABLED": "true"}):
+                self.assertEqual(self.engine._env_wallet(), account.address.lower())
+
     def test_only_one_pending_transaction_is_allowed(self):
         self.engine._record_operation(
             77, "SELL", TOKEN, "position-1",
@@ -70,10 +84,11 @@ class BaseLiveEngineStateTests(unittest.IsolatedAsyncioTestCase):
         self.engine.readiness.persistent_storage_check = lambda: True
         env = {
             "BASE_LIVE_TRADING_ENABLED": "true",
+            "BASE_SHARED_WALLET_TRADING_ENABLED": "true",
             "BASE_TRADING_RPC_URL": "https://base-rpc.invalid",
             "BASE_TRADING_WALLET_ADDRESS": account.address,
             "BASE_TRADING_PRIVATE_KEY": account.key.hex(),
-            "BASE_HOT_WALLET_ADDRESS": "0x3333333333333333333333333333333333333333",
+            "BASE_HOT_WALLET_ADDRESS": account.address,
         }
         calls = []
 

@@ -170,6 +170,11 @@ def live_environment_status(environ=None):
     wallet_separate = bool(
         wallet_valid and bridge_wallet_valid and wallet.lower() != bridge_wallet.lower()
     )
+    shared_wallet_enabled = bool(
+        env.get("BASE_SHARED_WALLET_TRADING_ENABLED", "").lower() == "true"
+        and wallet_valid and bridge_wallet_valid and wallet.lower() == bridge_wallet.lower()
+    )
+    wallet_role_accepted = wallet_separate or shared_wallet_enabled
     signer_matches = False
     if wallet_valid and key:
         try:
@@ -187,11 +192,13 @@ def live_environment_status(environ=None):
         "rpc_configured": rpc_configured,
         "wallet_configured": wallet_valid,
         "wallet_separate_from_bridge": wallet_separate,
+        "shared_wallet_trading_enabled": shared_wallet_enabled,
+        "wallet_role_accepted": wallet_role_accepted,
         "signer_matches_wallet": signer_matches,
         "executor_ready": executor_ready,
         "ready": bool(
             env.get("BASE_LIVE_TRADING_ENABLED", "").lower() == "true"
-            and rpc_configured and wallet_valid and wallet_separate
+            and rpc_configured and wallet_valid and wallet_role_accepted
             and signer_matches and executor_ready
         ),
     }
@@ -244,8 +251,8 @@ class BaseLiveReadiness:
             "message": "Base live trading is off; no transaction can be sent until all checks pass.",
         }
         result["checks"].extend([
-            {"name": "Dedicated wallet address", "ok": env_status["wallet_configured"]},
-            {"name": "Wallet separate from bridge", "ok": env_status["wallet_separate_from_bridge"]},
+            {"name": "Base trading wallet address", "ok": env_status["wallet_configured"]},
+            {"name": "Wallet role approved", "ok": env_status["wallet_role_accepted"]},
             {"name": "Wallet signer matches", "ok": env_status["signer_matches_wallet"]},
             {"name": "Base HTTPS RPC", "ok": env_status["rpc_configured"]},
             {"name": "Live executor and recovery", "ok": env_status["executor_ready"]},
@@ -283,7 +290,7 @@ class BaseLiveReadiness:
                 result["eth_balance"] = native_wei / 10**18
                 result["usdc_balance"] = int(usdc_balance_raw) / 10**6
                 result["checks"].extend([
-                    {"name": "Dedicated wallet is an EOA", "ok": wallet_is_eoa},
+                    {"name": "Base wallet is a standard address", "ok": wallet_is_eoa},
                     {"name": "USDC balance", "ok": int(usdc_balance_raw) > 0},
                     {"name": "ETH gas reserve", "ok": native_wei >= 5 * 10**15},
                 ])
@@ -300,7 +307,7 @@ class BaseLiveReadiness:
             env_status["kill_switch_enabled"]
             and env_status["rpc_configured"]
             and env_status["wallet_configured"]
-            and env_status["wallet_separate_from_bridge"]
+            and env_status["wallet_role_accepted"]
             and env_status["signer_matches_wallet"]
             and env_status["executor_ready"]
             and persistent_storage_ready
@@ -314,7 +321,7 @@ class BaseLiveReadiness:
         elif (result["chain_id"] == BASE_CHAIN_ID
                 and not env_status["wallet_configured"]):
             result["message"] = (
-                "Base Mainnet is verified. Configure a separate trading wallet "
+                "Base Mainnet is verified. Configure the Base trading wallet "
                 "and matching signer; live trading remains off."
             )
         elif env_status["executor_ready"]:

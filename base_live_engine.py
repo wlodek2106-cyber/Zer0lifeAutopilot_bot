@@ -425,7 +425,7 @@ class BaseLiveEngine:
                 raise BaseLiveEngineError("Fund the Base trading wallet or lower its cap to cover the budget.")
             if (not isinstance(readiness.get("eth_balance"), (int, float))
                     or float(readiness["eth_balance"]) < MIN_BASE_GAS_RESERVE_WEI / 10**18):
-                raise BaseLiveEngineError("The separate Base wallet needs at least 0.005 ETH for gas reserve.")
+                raise BaseLiveEngineError("The Base trading wallet needs at least 0.005 ETH for gas reserve.")
             pending = db.execute("""SELECT COUNT(*) AS n FROM base_live_operations
                 WHERE uid=? AND state IN ('PREPARED','SIGNING','SUBMITTED','UNKNOWN','NEEDS_REVIEW')""",
                 (int(uid),)).fetchone()["n"]
@@ -440,10 +440,14 @@ class BaseLiveEngine:
         wallet = normalize_address(os.getenv("BASE_TRADING_WALLET_ADDRESS", ""))
         signer = base_signer_address(os.getenv("BASE_TRADING_PRIVATE_KEY", ""))
         if signer != wallet:
-            raise BaseLiveEngineError("The dedicated Base signer does not match its wallet.", 503)
+            raise BaseLiveEngineError("The Base trading signer does not match its wallet.", 503)
         bridge = os.getenv("BASE_HOT_WALLET_ADDRESS", "").strip().lower()
-        if bridge and bridge == wallet:
-            raise BaseLiveEngineError("The Base trading wallet must be separate from the bridge wallet.", 503)
+        shared_allowed = os.getenv(
+            "BASE_SHARED_WALLET_TRADING_ENABLED", ""
+        ).lower() == "true"
+        if bridge and bridge == wallet and not shared_allowed:
+            raise BaseLiveEngineError(
+                "Shared Base trading requires explicit server authorization.", 503)
         return wallet
 
     async def _rpc(self, session, method, params):
@@ -605,9 +609,9 @@ class BaseLiveEngine:
             )
         env_status = live_environment_status()
         if not env_status["wallet_configured"] or not env_status["signer_matches_wallet"]:
-            raise BaseLiveEngineError("The dedicated Base wallet signer is not configured.", 503)
-        if not env_status["wallet_separate_from_bridge"]:
-            raise BaseLiveEngineError("The Base trading wallet is not verified as separate.", 503)
+            raise BaseLiveEngineError("The Base trading wallet signer is not configured.", 503)
+        if not env_status["wallet_role_accepted"]:
+            raise BaseLiveEngineError("The Base wallet role is not approved for trading.", 503)
         wallet = self._env_wallet()
         with self.db() as db:
             row = db.execute("SELECT * FROM base_live_operations WHERE id=?",
@@ -644,7 +648,7 @@ class BaseLiveEngine:
             raise BaseLiveEngineError("Base gas estimate exceeds the per-transaction safety cap.")
         native_balance = await self._rpc_int(session, "eth_getBalance", [wallet, "latest"])
         if native_balance < MIN_BASE_GAS_RESERVE_WEI + estimated_fee:
-            raise BaseLiveEngineError("The separate Base wallet needs more ETH for gas and reserve.")
+            raise BaseLiveEngineError("The Base trading wallet needs more ETH for gas and reserve.")
         transaction = {
             "chainId": BASE_CHAIN_ID,
             "nonce": nonce,
@@ -1292,7 +1296,7 @@ class BaseLiveEngine:
         wallet = self._env_wallet()
         usdc_balance = await self._balance_of(session, BASE_USDC_ADDRESS, wallet)
         if usdc_balance < tranche_raw:
-            self.set_status(uid, "PAUSED", "The separate Base wallet has insufficient USDC for the next tranche.")
+            self.set_status(uid, "PAUSED", "The Base trading wallet has insufficient USDC for the next tranche.")
             return False
         try:
             candidates = await self.paper_engine.discover(session)
