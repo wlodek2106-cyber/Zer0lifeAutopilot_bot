@@ -475,9 +475,18 @@ class InvestorPolicyTests(unittest.TestCase):
         self.assertTrue(policy.investor_entry_signal("TOKEN", context, 101).allowed)
         self.assertFalse(policy.investor_entry_signal(
             "TOKEN", context, 99, previous_entry=100).allowed)
-        context["TOKEN"]["change_m5_pct"] = 3.1
+        context["TOKEN"]["change_m5_pct"] = 5.1
         self.assertEqual(policy.investor_entry_signal("TOKEN", context, 101).code,
                          "investor_extension")
+        context["TOKEN"]["change_m5_pct"] = 5
+        self.assertTrue(policy.investor_entry_signal("TOKEN", context, 101).allowed)
+        context["TOKEN"]["change_h1_pct"] = 20.1
+        self.assertEqual(policy.investor_entry_signal("TOKEN", context, 101).code,
+                         "investor_extension")
+        context["TOKEN"]["change_h1_pct"] = 2
+        context["TOKEN"]["change_h6_pct"] = -10.1
+        self.assertEqual(policy.investor_entry_signal("TOKEN", context, 101).code,
+                         "investor_drawdown")
 
     def test_investor_buy_must_use_exact_server_tranche_and_reserved_pool(self):
         settings = {

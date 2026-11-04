@@ -27,11 +27,11 @@ BASE_NETWORK = "base"
 BASE_USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 BASE_WETH = "0x4200000000000000000000000000000000000006"
 BASE_QUOTES = {BASE_USDC: "USDC", BASE_WETH: "WETH"}
-MIN_LIQUIDITY_USD = 10_000
-MIN_VOLUME_24H_USD = 100_000
-MIN_TXNS_24H = 200
-MIN_POOL_AGE_SECONDS = 24 * 60 * 60
-MAX_CHART_CANDIDATES = 4
+MIN_LIQUIDITY_USD = 5_000
+MIN_VOLUME_24H_USD = 25_000
+MIN_TXNS_24H = 100
+MIN_POOL_AGE_SECONDS = 6 * 60 * 60
+MAX_CHART_CANDIDATES = 8
 MAX_SLOTS = 5
 TRANCHES_PER_SLOT = 3
 REENTRY_COOLDOWN_SECONDS = 24 * 60 * 60
@@ -174,7 +174,7 @@ def pool_candidate(pool, included, *, now=None):
     if activity < MIN_TXNS_24H:
         reasons.append(f"24h transactions are below {MIN_TXNS_24H}.")
     if not created_at or age_seconds < MIN_POOL_AGE_SECONDS:
-        reasons.append("Pool is newer than 24h or creation time is unavailable.")
+        reasons.append("Pool is newer than 6h or creation time is unavailable.")
     if not metrics_present:
         reasons.append("Fresh 5m/1h price-change data is unavailable.")
 

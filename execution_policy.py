@@ -9,7 +9,7 @@ from custody_ledger import USDC, SOL
 from entry_costs import MAX_COST_BPS, MAX_PRICE_IMPACT_PCT, MAX_QUOTE_AGE_SECONDS, assess_entry
 from wallet_runtime import WalletError
 
-VERSION = "independent-execution-v11-investor-ladder"
+VERSION = "independent-execution-v12-investor-entry-range"
 MAX_POSITIONS = MappingProxyType({"main": 5, "sniper": 5})
 INVESTOR_MAX_SLOTS = 5
 INVESTOR_TRANCHES = 3
@@ -200,11 +200,11 @@ def investor_entry_signal(symbol, context, current_price, previous_entry=None):
     m5, h1 = metrics.get("change_m5_pct"), metrics.get("change_h1_pct")
     if not (bounded_pct(m5) and bounded_pct(h1)) or m5 <= 0 or h1 <= 0:
         return deny("investor_trend", "Investor entry blocked: 5-minute and 1-hour changes must be positive.")
-    if m5 > 3 or h1 > 10:
+    if m5 > 5 or h1 > 20:
         return deny("investor_extension", "Investor entry blocked: the token is overextended.")
     h6 = metrics.get("change_h6_pct")
-    if bounded_pct(h6) and h6 < -5:
-        return deny("investor_drawdown", "Investor entry blocked: the 6-hour decline exceeds 5%.")
+    if bounded_pct(h6) and h6 < -10:
+        return deny("investor_drawdown", "Investor entry blocked: the 6-hour decline exceeds 10%.")
     if previous_entry is not None:
         if not positive(current_price) or not positive(previous_entry) or current_price <= previous_entry:
             return deny("investor_scale_in", "Investor add-on blocked: price has not risen above the prior tranche.")

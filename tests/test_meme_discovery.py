@@ -12,7 +12,8 @@ from solders.pubkey import Pubkey
 from custody_ledger import CustodyLedger
 from meme_discovery import (
     MAX_DISCOVERED_MINTS, MAX_VERIFIED_CANDIDATES, AI_SHORTLIST_SIZE,
-    MemeDiscovery, TARGETED_SEARCH_TERMS, TOKEN, TOKEN_2022, pool_metrics,
+    INVESTOR_AI_SHORTLIST_SIZE, MemeDiscovery, TARGETED_SEARCH_TERMS,
+    SHORTLIST_ROTATION_SECONDS, TOKEN, TOKEN_2022, pool_metrics,
 )
 
 MINT = str(Pubkey.from_bytes(hashlib.sha256(b"first-candidate").digest()))
@@ -246,6 +247,34 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(len(self.discovery.candidates()),8)
         self.assertTrue(self.ledger.audit())
 
+    async def test_investor_uses_relaxed_market_thresholds_without_relaxing_sniper(self):
+        relaxed_pool = pool(
+            MINT,
+            liquidity={"usd": 5_000},
+            volume={"h24": 25_000},
+            txns={"h24": {"buys": 50, "sells": 50}},
+            pairCreatedAt=int((time.time() - 7 * 3600) * 1000),
+        )
+
+        async def fetch(session, path):
+            if path.startswith("/tokens/"):
+                return [relaxed_pool]
+            return [{"chainId": "solana", "tokenAddress": MINT}]
+
+        self.discovery.fetch = AsyncMock(side_effect=fetch)
+        self.discovery.rpc = AsyncMock(return_value={"value": [mint_account()]})
+
+        report = await self.discovery.scan(None)
+        code = report["candidates"][0]["code"]
+
+        self.assertEqual(report["eligible"], 0)
+        self.assertEqual(report["investor_eligible"], 1)
+        self.assertFalse(self.discovery.entry_allowed(code))
+        self.assertTrue(self.discovery.entry_allowed(code, strategy="investor"))
+        self.assertEqual(self.discovery.candidates(), [])
+        self.assertEqual(len(self.discovery.candidates(strategy="investor")), 1)
+        self.assertTrue(self.discovery.status_report(strategy="investor")["entry_paused"] is False)
+
     async def test_expanded_scan_checks_up_to_200_mints_and_40_on_chain(self):
         self.assertEqual(MAX_DISCOVERED_MINTS, 200)
         self.assertEqual(MAX_VERIFIED_CANDIDATES, 40)
@@ -335,6 +364,34 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
                                                      (rotation + 1) * AI_SHORTLIST_SIZE)])
             batches.extend(batch)
         self.assertEqual(len({row["code"] for row in batches}), 40)
+
+    def test_investor_shortlist_includes_sniper_slice_and_adds_eight_candidates(self):
+        now = 1_800_000
+        with self.ledger.db() as db:
+            for index in range(40):
+                code = f"M_{index}"
+                mint = str(Pubkey.from_bytes(hashlib.sha256(code.encode()).digest()))
+                metrics = {
+                    "code": code,
+                    "score": 100 - index,
+                    "eligible": True,
+                    "investor_eligible": True,
+                }
+                db.execute("INSERT INTO custody_meme_assets VALUES(?,?,?,?,?)",
+                           (code, mint, 6, json.dumps(metrics), now - 30))
+        self.discovery.blocked = False
+
+        for rotation in range(5):
+            scan_time = now + rotation * SHORTLIST_ROTATION_SECONDS
+            with self.ledger.db() as db:
+                db.execute("UPDATE custody_meme_assets SET checked_at=?",
+                           (scan_time - 30,))
+            sniper = self.discovery.candidates(now=scan_time)
+            investor = self.discovery.candidates(now=scan_time, strategy="investor")
+            self.assertEqual(len(sniper), AI_SHORTLIST_SIZE)
+            self.assertEqual(len(investor), INVESTOR_AI_SHORTLIST_SIZE)
+            self.assertEqual([row["code"] for row in investor[:AI_SHORTLIST_SIZE]],
+                             [row["code"] for row in sniper])
 
     async def test_authorities_token2022_invalid_or_uninitialized_mints_excluded(self):
         for bad in (mint_account(mintAuthority=MINT),mint_account(freezeAuthority=MINT),
@@ -465,6 +522,20 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
             "24h trades 15 below 200",
             "pool age 1.0h below 24h",
         ])
+
+    def test_investor_thresholds_are_lower_but_keep_all_market_data_checks(self):
+        row = pool(
+            liquidity={"usd": 5_000},
+            volume={"h24": 25_000},
+            txns={"h24": {"buys": 50, "sells": 50}},
+            pairCreatedAt=int((time.time() - 6 * 3600) * 1000),
+        )
+        sniper = pool_metrics(row)
+        investor = pool_metrics(row, strategy="investor")
+        self.assertFalse(sniper["eligible"])
+        self.assertTrue(investor["eligible"])
+        self.assertFalse(pool_metrics(pool(
+            liquidity={"usd": 4_999}), strategy="investor")["eligible"])
 
     async def test_scan_reports_specific_reasons_for_rejected_whale_mint(self):
         self.discovery.queue_whale_mint(MINT)

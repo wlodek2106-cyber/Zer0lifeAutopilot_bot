@@ -17,7 +17,10 @@ def _entry_check(mode, symbol, contexts, prices, screened_symbols):
     if not execution_policy.positive(prices.get(symbol)):
         return execution_policy.deny(
             "rule_price", "HOLD: no fresh numeric price is available.")
-    if mode in ("sniper", "investor") and symbol not in screened_symbols:
+    allowed_symbols = (screened_symbols.get(mode, set())
+                       if isinstance(screened_symbols, dict)
+                       else screened_symbols)
+    if mode in ("sniper", "investor") and symbol not in allowed_symbols:
         return execution_policy.deny(
             "rule_screen", "HOLD: token is not on the current verified shortlist.")
     chart = contexts["main"] if mode == "main" else contexts["sniper"]

@@ -23,8 +23,13 @@ MIN_LIQUIDITY_USD = 10_000
 MAX_DISCOVERED_MINTS = 200
 MAX_VERIFIED_CANDIDATES = 40
 AI_SHORTLIST_SIZE = 8
+INVESTOR_MIN_LIQUIDITY_USD = 5_000
+INVESTOR_MIN_VOLUME_24H_USD = 25_000
+INVESTOR_MIN_TXNS_24H = 100
+INVESTOR_MIN_POOL_AGE_HOURS = 6
+INVESTOR_AI_SHORTLIST_SIZE = 16
 SHORTLIST_ROTATION_SECONDS = 15 * 60
-MAX_GECKO_PRICE_LOOKUPS = 12
+MAX_GECKO_PRICE_LOOKUPS = INVESTOR_AI_SHORTLIST_SIZE
 # Discovery hints only. Every result remains subject to the same market and
 # on-chain checks below; a matching ticker is not treated as token identity.
 TARGETED_SEARCH_TERMS = ("FARTCOIN", "PONKE", "GIGA", "GOAT", "MOTHER", "MYRO", "SLERF")
@@ -46,8 +51,20 @@ def valid_mint(value):
         return False
 
 
-def pool_metrics(pair, now=None):
+def pool_metrics(pair, now=None, *, strategy="sniper"):
     now = time.time() if now is None else now
+    if strategy not in ("sniper", "investor"):
+        raise ValueError("Unknown Solana candidate strategy.")
+    if strategy == "investor":
+        min_liquidity = INVESTOR_MIN_LIQUIDITY_USD
+        min_volume = INVESTOR_MIN_VOLUME_24H_USD
+        min_trades = INVESTOR_MIN_TXNS_24H
+        min_age_hours = INVESTOR_MIN_POOL_AGE_HOURS
+    else:
+        min_liquidity = MIN_LIQUIDITY_USD
+        min_volume = 100_000
+        min_trades = 200
+        min_age_hours = 24
     if not isinstance(pair, dict):
         return None
     if not isinstance(pair.get("baseToken"), dict) or any(
@@ -75,16 +92,16 @@ def pool_metrics(pair, now=None):
         reasons.append("DEX is not approved")
     if price <= 0:
         reasons.append("price unavailable")
-    if liquid < MIN_LIQUIDITY_USD:
-        reasons.append(f"liquidity ${liquid:,.0f} below ${MIN_LIQUIDITY_USD:,.0f}")
-    if vol < 100000:
-        reasons.append(f"24h volume ${vol:,.0f} below $100,000")
-    if activity < 200:
-        reasons.append(f"24h trades {activity:,.0f} below 200")
+    if liquid < min_liquidity:
+        reasons.append(f"liquidity ${liquid:,.0f} below ${min_liquidity:,.0f}")
+    if vol < min_volume:
+        reasons.append(f"24h volume ${vol:,.0f} below ${min_volume:,.0f}")
+    if activity < min_trades:
+        reasons.append(f"24h trades {activity:,.0f} below {min_trades}")
     if number(pair.get("pairCreatedAt")) <= 0:
         reasons.append("pool creation time unavailable")
-    elif age < 24:
-        reasons.append(f"pool age {age:.1f}h below 24h")
+    elif age < min_age_hours:
+        reasons.append(f"pool age {age:.1f}h below {min_age_hours}h")
     if not changes_present:
         reasons.append("5m/1h price-change data unavailable")
     else:
@@ -370,26 +387,50 @@ class MemeDiscovery:
             if not mints:
                 raise ValueError("Sources returned no Solana candidates.")
             best = {}
+            strict_best = {}
             rejected_pools = {}
             for pair in pairs:
-                item = pool_metrics(pair)
-                if not item or item["mint"] not in mints:
+                strict_item = pool_metrics(pair, strategy="sniper")
+                investor_item = pool_metrics(pair, strategy="investor")
+                if (not strict_item or not investor_item
+                        or investor_item["mint"] not in mints):
                     continue
-                if item["eligible"]:
-                    if item["liquidity_usd"] > best.get(item["mint"], {}).get("liquidity_usd", 0):
-                        best[item["mint"]] = item
+                mint = investor_item["mint"]
+                if strict_item["eligible"]:
+                    previous_strict = strict_best.get(mint)
+                    if (previous_strict is None
+                            or strict_item["score"] > previous_strict["score"]):
+                        strict_best[mint] = strict_item
+                if investor_item["eligible"]:
+                    previous_best = best.get(mint)
+                    if (previous_best is None
+                            or investor_item["score"] > previous_best["score"]):
+                        best[mint] = investor_item
                 else:
-                    previous = rejected_pools.get(item["mint"])
-                    approved_dex = item["dex"] in DEXES
+                    previous = rejected_pools.get(mint)
+                    approved_dex = strict_item["dex"] in DEXES
                     previous_approved_dex = previous and previous["dex"] in DEXES
                     if (previous is None or (approved_dex and not previous_approved_dex)
                             or (approved_dex == previous_approved_dex
-                                and (len(item["rejection_reasons"]) < len(previous["rejection_reasons"])
-                                     or (len(item["rejection_reasons"]) == len(previous["rejection_reasons"])
-                                         and item["score"] > previous["score"])))):
-                        rejected_pools[item["mint"]] = item
-            ranked = sorted(best.values(), key=lambda item: item["score"], reverse=True)[
-                :MAX_VERIFIED_CANDIDATES]
+                                and (len(strict_item["rejection_reasons"]) < len(previous["rejection_reasons"])
+                                     or (len(strict_item["rejection_reasons"]) == len(previous["rejection_reasons"])
+                                         and strict_item["score"] > previous["score"])))):
+                        rejected_pools[mint] = strict_item
+            strict_ranked = sorted(
+                strict_best.values(), key=lambda item: item["score"], reverse=True
+            )[:MAX_VERIFIED_CANDIDATES]
+            investor_ranked = sorted(
+                best.values(), key=lambda item: item["score"], reverse=True
+            )[:MAX_VERIFIED_CANDIDATES]
+            ranked_by_mint = {
+                item["mint"]: {**item, "eligible": True, "investor_eligible": True}
+                for item in strict_ranked
+            }
+            for item in investor_ranked:
+                ranked_by_mint.setdefault(
+                    item["mint"],
+                    {**item, "eligible": False, "investor_eligible": True})
+            ranked = list(ranked_by_mint.values())
             accepted = []
             mint_rejections = {}
             for item in sorted(best.values(), key=lambda row: row["score"], reverse=True)[
@@ -423,13 +464,19 @@ class MemeDiscovery:
                     if code in self.seeds and decimals != self.seeds[code]["decimals"]:
                         mint_rejections[item["mint"]] = ["mint decimals do not match the saved asset identity"]
                         continue
-                    accepted.append({**item, "code": code, "decimals": decimals,
-                                     "token_program": program})
+                    accepted.append({
+                        **item, "eligible": item["mint"] in ranked_by_mint
+                            and ranked_by_mint[item["mint"]]["eligible"],
+                        "investor_eligible": True, "code": code,
+                        "decimals": decimals, "token_program": program,
+                    })
             now = int(time.time())
             with self.ledger.db() as db:
                 # Retain old registry identities for open positions and cached decisions.
                 for row in db.execute("SELECT code,metrics FROM custody_meme_assets").fetchall():
-                    metrics = json.loads(row["metrics"]); metrics["eligible"] = False
+                    metrics = json.loads(row["metrics"])
+                    metrics["eligible"] = False
+                    metrics["investor_eligible"] = False
                     db.execute("UPDATE custody_meme_assets SET metrics=? WHERE code=?", (json.dumps(metrics), row["code"]))
                 for item in accepted:
                     existing_mint = db.execute(
@@ -473,7 +520,10 @@ class MemeDiscovery:
                        "Bounded Solana candidate sample, not every project or a profit forecast. "
                        "Whale signals are leads only; all candidates still pass the existing screen.")
             self.report = {"source": source, "provider": provider, "fallback": fallback, "complete": False,
-                "checked_at": now, "scanned": len(mints), "eligible": len(accepted), "source_failures": failures,
+                "checked_at": now, "scanned": len(mints),
+                "eligible": sum(bool(item.get("eligible")) for item in accepted),
+                "investor_eligible": sum(bool(item.get("investor_eligible")) for item in accepted),
+                "source_failures": failures,
                 "whale_prioritized": len([mint for mint in whale_mints if mint in mints]),
                 "whale_candidates": sum(1 for item in accepted if item["mint"] in whale_mints),
                 "whale_rejections": whale_rejections,
@@ -482,26 +532,55 @@ class MemeDiscovery:
             self.blocked = False
             return self.report
 
-    def candidates(self, now=None):
+    def candidates(self, now=None, *, strategy="sniper"):
+        if strategy not in ("sniper", "investor"):
+            raise ValueError("Unknown Solana candidate strategy.")
         if self.blocked:
             return []
         now = time.time() if now is None else now
+        eligibility_key = "investor_eligible" if strategy == "investor" else "eligible"
         rows = [json.loads(row["metrics"]) for row in self.assets()
-                if 0 <= now-row["checked_at"] < 1800 and json.loads(row["metrics"]).get("eligible")]
+                if 0 <= now-row["checked_at"] < 1800
+                and json.loads(row["metrics"]).get(eligibility_key)]
         ranked = sorted(rows, key=lambda row: row["score"], reverse=True)[:MAX_VERIFIED_CANDIDATES]
-        if len(ranked) <= AI_SHORTLIST_SIZE:
+        shortlist_size = (INVESTOR_AI_SHORTLIST_SIZE if strategy == "investor"
+                          else AI_SHORTLIST_SIZE)
+        if len(ranked) <= shortlist_size:
             return ranked
-        # Keep each AI shortlist stable for one analysis interval, then rotate through
-        # all on-chain-verified candidates rather than showing only the top eight.
-        start = (int(now // SHORTLIST_ROTATION_SECONDS) * AI_SHORTLIST_SIZE) % len(ranked)
-        return [ranked[(start + offset) % len(ranked)] for offset in range(AI_SHORTLIST_SIZE)]
+        # Keep the established Sniper rotation unchanged. Investor gets that same
+        # eight-candidate slice plus eight additional candidates from its broader set.
+        rotation = int(now // SHORTLIST_ROTATION_SECONDS)
+        if strategy == "investor":
+            strict_rows = [json.loads(row["metrics"]) for row in self.assets()
+                           if 0 <= now-row["checked_at"] < 1800
+                           and json.loads(row["metrics"]).get("eligible")]
+            strict_ranked = sorted(
+                strict_rows, key=lambda row: row["score"], reverse=True
+            )[:MAX_VERIFIED_CANDIDATES]
+            if strict_ranked:
+                start = (rotation * AI_SHORTLIST_SIZE) % len(strict_ranked)
+                core_slice = [
+                    strict_ranked[(start + offset) % len(strict_ranked)]
+                    for offset in range(min(AI_SHORTLIST_SIZE, len(strict_ranked)))
+                ]
+            else:
+                core_slice = []
+            core_codes = {row["code"] for row in core_slice}
+            extras = [row for row in ranked if row["code"] not in core_codes]
+            return core_slice + extras[:shortlist_size - len(core_slice)]
+        start = (rotation * AI_SHORTLIST_SIZE) % len(ranked)
+        return [ranked[(start + offset) % len(ranked)] for offset in range(shortlist_size)]
 
-    def status_report(self, now=None):
+    def status_report(self, now=None, *, strategy="sniper"):
         """Current admission state, not the historical scan counter."""
+        if strategy not in ("sniper", "investor"):
+            raise ValueError("Unknown Solana candidate strategy.")
         now = time.time() if now is None else now
-        current = self.candidates(now)
+        current = self.candidates(now, strategy=strategy)
         report = {**self.report, "current_shortlist_count": len(current),
                   "retry_after_seconds": self.cooldown_remaining()}
+        if strategy == "investor":
+            report["eligible"] = report.get("investor_eligible", 0)
         checked = report.get("checked_at")
         if report["retry_after_seconds"]:
             provider = ("GeckoTerminal" if self.active_provider == "geckoterminal"
@@ -558,7 +637,8 @@ class MemeDiscovery:
 
     async def _gecko_prices(self, session, held=(), candidate_codes=None):
         held = list(dict.fromkeys(held))
-        eligible_codes = ({row["code"] for row in self.candidates()}
+        eligible_codes = ({row["code"] for strategy in ("sniper", "investor")
+                           for row in self.candidates(strategy=strategy)}
                           if candidate_codes is None else set(candidate_codes))
         wanted = eligible_codes | set(held)
         assets = [row for row in self.assets() if row["code"] in wanted]
@@ -584,10 +664,13 @@ class MemeDiscovery:
         def add_pool_rows(pool_payload):
             for pair in gecko_pools_to_pairs(pool_payload):
                 item = pool_metrics(pair)
+                investor_item = pool_metrics(pair, strategy="investor")
                 if (item and item["dex"] in DEXES and item["price"] > 0
                         and item["mint"] in {row["mint"] for row in ordered}
                         and item["liquidity_usd"] > metrics_by_mint.get(
                             item["mint"], {}).get("liquidity_usd", -1)):
+                    item["investor_eligible"] = bool(
+                        investor_item and investor_item["eligible"])
                     metrics_by_mint[item["mint"]] = item
 
         add_pool_rows(payload)
@@ -617,14 +700,22 @@ class MemeDiscovery:
                     old = json.loads(asset["metrics"])
                 except (TypeError, ValueError):
                     old = {}
-                old.update({key: value for key, value in item.items() if key != "eligible"})
+                old.update({key: value for key, value in item.items()
+                            if key not in ("eligible", "investor_eligible")})
                 old["eligible"] = bool(old.get("eligible")) and item["eligible"]
+                old["investor_eligible"] = (
+                    bool(old.get("investor_eligible"))
+                    and item["investor_eligible"])
                 db.execute("UPDATE custody_meme_assets SET metrics=? WHERE code=?",
                            (json.dumps(old), asset["code"]))
         return prices
 
     async def prices(self, session, held=()):
-        candidate_codes = {row["code"] for row in self.candidates()}
+        candidate_codes = {
+            row["code"]
+            for strategy in ("sniper", "investor")
+            for row in self.candidates(strategy=strategy)
+        }
         if (self.active_provider == "geckoterminal"
                 or dexscreener.cooldown_remaining()):
             if self.active_provider != "geckoterminal":
@@ -633,15 +724,18 @@ class MemeDiscovery:
                 self.report = {**self.report, "message":
                     "DexScreener is rate-limited. Fresh GeckoTerminal screening is required before new entries."}
             return await self._gecko_prices(session, held, candidate_codes=candidate_codes)
-        wanted = {row["code"] for row in self.candidates()} | set(held)
+        wanted = candidate_codes | set(held)
         assets = [row for row in self.assets() if row["code"] in wanted]
         prices = {}
         by_mint = {row["mint"]: row for row in assets}
         best = {}
         for pair in await self.pairs(session, list(by_mint), priority=dexscreener.PRICE):
             item = pool_metrics(pair)
+            investor_item = pool_metrics(pair, strategy="investor")
             if item and item["price"] > 0 and item["mint"] in by_mint:
                 if item["liquidity_usd"] > best.get(item["mint"], {}).get("liquidity_usd", -1):
+                    item["investor_eligible"] = bool(
+                        investor_item and investor_item["eligible"])
                     best[item["mint"]] = item
         with self.ledger.db() as db:
             for mint, item in best.items():
@@ -649,14 +743,22 @@ class MemeDiscovery:
                 prices[asset["code"]] = item["price"]
                 old = json.loads(asset["metrics"])
                 # Price refresh cannot admit a new candidate; a full scan is required.
-                old.update({key: value for key, value in item.items() if key not in ("eligible",)})
+                old.update({key: value for key, value in item.items()
+                            if key not in ("eligible", "investor_eligible")})
                 old["eligible"] = bool(old.get("eligible")) and item["eligible"]
+                old["investor_eligible"] = (
+                    bool(old.get("investor_eligible"))
+                    and item["investor_eligible"])
                 db.execute("UPDATE custody_meme_assets SET metrics=? WHERE code=?", (json.dumps(old), asset["code"]))
         return prices
 
-    def entry_allowed(self, code):
+    def entry_allowed(self, code, *, strategy="sniper"):
+        if strategy not in ("sniper", "investor"):
+            raise ValueError("Unknown Solana candidate strategy.")
         if self.blocked or self.cooldown_remaining():
             return False
         now = time.time()
+        eligibility_key = "investor_eligible" if strategy == "investor" else "eligible"
         return any(row["code"] == code and 0 <= now - row["checked_at"] < 1800
-                   and json.loads(row["metrics"]).get("eligible") for row in self.assets())
+                   and json.loads(row["metrics"]).get(eligibility_key)
+                   for row in self.assets())

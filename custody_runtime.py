@@ -665,6 +665,8 @@ class CustodyRuntime(WalletRuntime):
     def ai_universes(self, whale_symbols=None):
         discovery = getattr(self, "discovery", None)
         candidates = discovery.candidates() if discovery else []
+        investor_candidates = (discovery.candidates(strategy="investor")
+                               if discovery else [])
         current_codes = {row["code"] for row in candidates}
         preferred = [symbol for symbol in whale_symbols or ()
                      if symbol in current_codes or discovery and discovery.entry_allowed(symbol)]
@@ -684,7 +686,7 @@ class CustodyRuntime(WalletRuntime):
                 if position.get("strategy") == "investor"
             })
             universes["investor"] = list(dict.fromkeys(
-                [row["code"] for row in candidates] + held_investor))[:40]
+                [row["code"] for row in investor_candidates] + held_investor))[:40]
         return universes
 
     async def ai_snapshot(self, session, prices, whale_symbols=None):
@@ -700,7 +702,8 @@ class CustodyRuntime(WalletRuntime):
             latest = self.ledger.ai_latest(trigger=trigger)
             if latest:
                 record = json.loads(latest["decisions"])
-                if record.get("signal_engine") == rule_signals.ENGINE_ID:
+                if (record.get("signal_engine") == rule_signals.ENGINE_ID
+                        and record.get("execution_policy_version") == execution_policy.VERSION):
                     if time.time() - latest["created_at"] < min_interval:
                         ai_decisions.validate_decisions(
                             record["decisions"],
@@ -716,6 +719,7 @@ class CustodyRuntime(WalletRuntime):
             screening_rows = {}
             if getattr(self, "discovery", None):
                 for row in [*self.discovery.candidates(),
+                            *self.discovery.candidates(strategy="investor"),
                             *(self.discovery.report.get("candidates", []) or [])]:
                     if isinstance(row, dict) and row.get("code") in (
                             set(universes["sniper"]) | set(universes.get("investor", []))):
@@ -764,10 +768,16 @@ class CustodyRuntime(WalletRuntime):
             aid = str(uuid.uuid4())
             analyst_started = time.monotonic()
             screened_symbols = {
-                symbol for symbol in (
-                    universes["sniper"] + universes.get("investor", []))
-                if getattr(self, "discovery", None)
-                and self.discovery.entry_allowed(symbol)
+                "sniper": {
+                    symbol for symbol in universes["sniper"]
+                    if getattr(self, "discovery", None)
+                    and self.discovery.entry_allowed(symbol)
+                },
+                "investor": {
+                    symbol for symbol in universes.get("investor", [])
+                    if getattr(self, "discovery", None)
+                    and self.discovery.entry_allowed(symbol, strategy="investor")
+                },
             }
             fresh_prices = {symbol: values[-1] for symbol, values in market.items()
                             if values}
@@ -791,6 +801,7 @@ class CustodyRuntime(WalletRuntime):
             record = {"decisions": decisions, "universes": universes, "prices": {s: h[-1] for s, h in market.items()},
                       "samples": {s: len(h) for s, h in market.items()},
                       "signal_engine": rule_signals.ENGINE_ID,
+                      "execution_policy_version": execution_policy.VERSION,
                       "main_market_context": ai_decisions.sanitize_main_context(main_context, universes["main"]),
                       "sniper_market_context": ai_decisions.sanitize_main_context(
                           sniper_context, universes["sniper"]),
@@ -3783,8 +3794,8 @@ class CustodyRuntime(WalletRuntime):
             await self.solvent(session)
             if not getattr(self, "discovery", None):
                 raise WalletError("Verified Solana candidate discovery is unavailable; Investors stayed OFF.", 503)
-            status = self.discovery.status_report()
-            candidates = self.discovery.candidates()
+            status = self.discovery.status_report(strategy="investor")
+            candidates = self.discovery.candidates(strategy="investor")
             if status.get("entry_paused") or not candidates:
                 retry = int(status.get("retry_after_seconds") or 0)
                 if retry:
@@ -4847,7 +4858,8 @@ class CustodyRuntime(WalletRuntime):
             return
         discovery = getattr(self, "discovery", None)
         if (not isinstance(symbol, str) or symbol not in universes[mode]
-                or not discovery or not discovery.entry_allowed(symbol)):
+                or not discovery
+                or not discovery.entry_allowed(symbol, strategy="investor")):
             note("investor_candidate", "Investor BUY blocked: token is not on the fresh verified shortlist.")
             return
         if symbol not in self.watchlist:

@@ -101,6 +101,21 @@ class BasePoolFilteringTests(unittest.TestCase):
         self.assertFalse(any("price-change data is unavailable" in reason
                              for reason in candidate["rejection_reasons"]))
 
+    def test_relaxed_base_market_floors_are_exact_and_preserve_fresh_metrics(self):
+        pool, included = gecko_pool()
+        pool["attributes"].update({
+            "reserve_in_usd": "5000",
+            "volume_usd": {"h24": "25000"},
+            "transactions": {"h24": {"buys": 50, "sells": 50}},
+            "pool_created_at": "2026-10-27T17:00:00Z",
+        })
+        candidate = base_paper.pool_candidate(
+            pool, included, now=1_798_000_000)
+        self.assertTrue(candidate["rejection_reasons"] == [])
+        self.assertEqual(candidate["liquidity_usd"], 5_000)
+        self.assertEqual(candidate["volume_24h_usd"], 25_000)
+        self.assertEqual(candidate["transactions_24h"], 100)
+
 
 class BasePaperLedgerTests(unittest.TestCase):
     def setUp(self):
