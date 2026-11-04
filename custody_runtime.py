@@ -2903,7 +2903,10 @@ class CustodyRuntime(WalletRuntime):
                     "jito_submission_acknowledged",
                     "Jito accepted the private bundle with a "
                     f"{info.get('jito_tip_lamports', 0)} lamport tip "
-                    f"({info.get('jito_tip_source', 'unknown source')}); "
+                    f"({info.get('jito_tip_source', 'unknown source')}; "
+                    f"raw p95 {info.get('jito_tip_p95_lamports', 'unavailable')} lamports; "
+                    f"limit applied={info.get('jito_tip_limit_applied', False)}; "
+                    f"at max={info.get('jito_tip_at_max', False)}); "
                     "acceptance is not proof of Solana inclusion.",
                     bundle_id=bundle_id)
             else:
@@ -2950,7 +2953,13 @@ class CustodyRuntime(WalletRuntime):
         now = time.monotonic()
         cached = getattr(self, "_jito_tip_cache", None)
         if cached and now < cached["expires_at"]:
-            return {"lamports": cached["lamports"], "source": "recent_95th_percentile"}
+            return {
+                "lamports": cached["lamports"],
+                "source": "recent_95th_percentile",
+                "raw_p95_lamports": cached["raw_p95_lamports"],
+                "tip_limit_applied": cached["tip_limit_applied"],
+                "at_tip_limit": cached["at_tip_limit"],
+            }
         lock = getattr(self, "_jito_tip_lock", None)
         if lock is None:
             lock = asyncio.Lock()
@@ -2959,7 +2968,13 @@ class CustodyRuntime(WalletRuntime):
             now = time.monotonic()
             cached = getattr(self, "_jito_tip_cache", None)
             if cached and now < cached["expires_at"]:
-                return {"lamports": cached["lamports"], "source": "recent_95th_percentile"}
+                return {
+                    "lamports": cached["lamports"],
+                    "source": "recent_95th_percentile",
+                    "raw_p95_lamports": cached["raw_p95_lamports"],
+                    "tip_limit_applied": cached["tip_limit_applied"],
+                    "at_tip_limit": cached["at_tip_limit"],
+                }
             try:
                 async with session.get(
                         JITO_TIP_FLOOR_URL,
@@ -2985,24 +3000,40 @@ class CustodyRuntime(WalletRuntime):
                     raise ValueError("invalid tip-floor percentile")
                 p95_lamports = int(
                     (p95_sol * Decimal(1_000_000_000)).to_integral_value(rounding=ROUND_CEILING))
+                tip_limit_applied = p95_lamports > JITO_TIP_MAX_LAMPORTS
                 tip = min(JITO_TIP_MAX_LAMPORTS,
                           max(JITO_TIP_MIN_LAMPORTS, p95_lamports))
             except WalletError:
                 if allow_max_fallback:
                     return {"lamports": JITO_TIP_MAX_LAMPORTS,
-                            "source": "approved_max_exit_fallback"}
+                            "source": "approved_max_exit_fallback",
+                            "raw_p95_lamports": None,
+                            "tip_limit_applied": False,
+                            "at_tip_limit": True}
                 raise
             except Exception:
                 if allow_max_fallback:
                     return {"lamports": JITO_TIP_MAX_LAMPORTS,
-                            "source": "approved_max_exit_fallback"}
+                            "source": "approved_max_exit_fallback",
+                            "raw_p95_lamports": None,
+                            "tip_limit_applied": False,
+                            "at_tip_limit": True}
                 raise WalletError(
                     "Fresh Jito tip data is invalid or unavailable; no swap was sent.") from None
             self._jito_tip_cache = {
                 "lamports": tip,
+                "raw_p95_lamports": p95_lamports,
+                "tip_limit_applied": tip_limit_applied,
+                "at_tip_limit": tip == JITO_TIP_MAX_LAMPORTS,
                 "expires_at": now + JITO_TIP_CACHE_SECONDS,
             }
-            return {"lamports": tip, "source": "recent_95th_percentile"}
+            return {
+                "lamports": tip,
+                "source": "recent_95th_percentile",
+                "raw_p95_lamports": p95_lamports,
+                "tip_limit_applied": tip_limit_applied,
+                "at_tip_limit": tip == JITO_TIP_MAX_LAMPORTS,
+            }
 
     async def get_jito_tip_account(self, session):
         now = time.monotonic()
@@ -3596,7 +3627,10 @@ class CustodyRuntime(WalletRuntime):
         metadata = {**metadata, "execution_policy_version": execution_policy.VERSION,
                     "execution_route": "jito_bundle_only",
                     "jito_tip_lamports": tip_lamports,
-                    "jito_tip_source": tip_quote["source"]}
+                    "jito_tip_source": tip_quote["source"],
+                    "jito_tip_p95_lamports": tip_quote.get("raw_p95_lamports"),
+                    "jito_tip_limit_applied": tip_quote.get("tip_limit_applied", False),
+                    "jito_tip_at_max": tip_quote.get("at_tip_limit", False)}
         row = self.ledger.reserve(uid, str(uuid.uuid4()), kind, asset, raw, metadata, position_id=position_id)
         try:
             if await self.rpc(session, "getGenesisHash") != GENESIS:

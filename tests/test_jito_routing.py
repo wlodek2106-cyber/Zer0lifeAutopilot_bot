@@ -104,20 +104,31 @@ class JitoRoutingTests(unittest.IsolatedAsyncioTestCase):
         }]))
         quote = await CustodyRuntime.get_jito_tip_quote(runtime, session)
         self.assertEqual(quote, {
-            "lamports": 107_739, "source": "recent_95th_percentile"})
+            "lamports": 107_739,
+            "source": "recent_95th_percentile",
+            "raw_p95_lamports": 107_739,
+            "tip_limit_applied": False,
+            "at_tip_limit": False,
+        })
         self.assertEqual(session.calls[0][0], JITO_TIP_FLOOR_URL)
+        cached_quote = await CustodyRuntime.get_jito_tip_quote(runtime, session)
+        self.assertEqual(cached_quote, quote)
+        self.assertEqual(len(session.calls), 1)
 
-        for percentile, expected in (
-            (0.00001, JITO_TIP_MIN_LAMPORTS),
-            (0.0002, JITO_TIP_MAX_LAMPORTS),
+        for percentile, expected, raw_p95, cap_applied, at_limit in (
+            (0.00001, JITO_TIP_MIN_LAMPORTS, 10_000, False, False),
+            (0.0002, JITO_TIP_MAX_LAMPORTS, 200_000, True, True),
         ):
             runtime = object.__new__(CustodyRuntime)
             session = FakeSession(FakeResponse(payload=[{
                 "time": observed,
                 "landed_tips_95th_percentile": percentile,
             }]))
-            self.assertEqual(
-                (await CustodyRuntime.get_jito_tip_quote(runtime, session))["lamports"], expected)
+            quote = await CustodyRuntime.get_jito_tip_quote(runtime, session)
+            self.assertEqual(quote["lamports"], expected)
+            self.assertEqual(quote["raw_p95_lamports"], raw_p95)
+            self.assertEqual(quote["tip_limit_applied"], cap_applied)
+            self.assertEqual(quote["at_tip_limit"], at_limit)
 
     async def test_tip_floor_rejects_stale_stats_without_fallback(self):
         runtime = object.__new__(CustodyRuntime)
@@ -137,6 +148,9 @@ class JitoRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(quote, {
             "lamports": JITO_TIP_MAX_LAMPORTS,
             "source": "approved_max_exit_fallback",
+            "raw_p95_lamports": None,
+            "tip_limit_applied": False,
+            "at_tip_limit": True,
         })
 
     async def test_composed_swap_puts_the_capped_tip_last(self):

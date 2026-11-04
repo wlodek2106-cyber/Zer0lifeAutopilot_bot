@@ -62,14 +62,12 @@ class EnglishTests(unittest.TestCase):
                     and any(isinstance(t, ast.Name) and t.id == "RAW_HTML" for t in node.targets))
         exchange = page.split('<div id="tab-exchange"', 1)[1].split('<div id="tab-deposit"', 1)[0]
         for required in (
-                "Solana → Base", "Base → Solana", "QUOTE FIRST · MANUAL CONFIRM",
-                "Quote first · no automatic sending",
-                "Request a LI.FI estimate first",
-                "A quote never sends funds",
-                "Each approval or transfer requires your separate confirmation",
+                "Solana → Base", "Base → Solana", "QUOTE · CONFIRM TO EXCHANGE",
+                "Review the estimate and minimum receive. Press “Exchange” to confirm this transaction; the bot handles routing and status checks.",
+                "Each transfer is confirmed separately. Your account is credited only after the destination transaction is verified as final.",
                 'id="exchange-quote-button"', 'id="exchange-amount"'):
             self.assertIn(required, exchange)
-        for required in ("window.confirm(confirmation)", "/api/exchange/submit",
+        for required in ("function confirmExchangeTransfer(quote,button)", "/api/exchange/submit",
                          "provider_solana_deposit_address", "destination_address",
                          "The Solana transaction does not prove LI.FI will complete delivery"):
             self.assertIn(required, page)

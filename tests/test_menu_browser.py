@@ -57,8 +57,9 @@ class MenuBrowserTests(unittest.TestCase):
         visible.feed(page)
         ignored_brand_or_placeholder = {
             "English", "Life", "ZER0LIFE · PARTNER DESK", "Zer", "__DEPOSIT_WALLET__",
-            "BASE", "SOLANA", "SOLANA / USDC", "SOLANA · USDC", "USDC", "B",
-            "!", "×", "—", "→", "↗", "↻", "⇄", "⇆", "▤", "◇", "◈", "●", "⚙", "✕",
+            "BASE", "SOLANA", "SOLANA / USDC", "SOLANA · USDC", "Solana · USDC",
+            "USDC · SOLANA ↔ BASE", "USDC", "U", "B",
+            "!", "×", "—", "→", "↗", "↻", "⇄", "⇆", "⇅", "▤", "◇", "◈", "●", "⚙", "✕",
         }
 
         def is_translated(text):
@@ -137,8 +138,10 @@ class MenuBrowserTests(unittest.TestCase):
         }
         stub = """<script>
         window.testErrors=[];
-        window.onerror=(message)=>window.testErrors.push(String(message));
-        window.onunhandledrejection=(event)=>window.testErrors.push(String(event.reason));
+        window.onerror=(message,source,line,column,error)=>window.testErrors.push(
+            (error&&error.stack)||String(message)+' @ '+source+':'+line+':'+column);
+        window.onunhandledrejection=(event)=>window.testErrors.push(
+            (event.reason&&event.reason.stack)||String(event.reason));
         window.Telegram={WebApp:{initData:'fixture',initDataUnsafe:{user:{id:101,username:'fixture'}},expand(){},ready(){}}};
         const fixture=FIXTURE;
         window.feePosts=[];
@@ -180,8 +183,8 @@ class MenuBrowserTests(unittest.TestCase):
                 assert(exchangeNav.getAttribute('onclick').includes("'exchange'"),'Exchange navigation opens its own tab');
                 const exchangePanel=document.getElementById('tab-exchange');
                 assert(!!exchangePanel,'Exchange panel exists');
-                assert(exchangePanel.textContent.includes('Quote first · no automatic sending'),'manual-only state is explicit');
-                assert(exchangePanel.textContent.includes('each transfer still requires your separate confirmation'),'manual confirmation is required');
+                assert(exchangePanel.textContent.includes('QUOTE · CONFIRM TO EXCHANGE'),'quote status is explicit');
+                assert(exchangePanel.textContent.includes('Each transfer is confirmed separately.'),'manual confirmation is required');
                 assert(!exchangePanel.textContent.includes('Separate user balances.'),'irrelevant balance note is omitted');
                 assert(!exchangePanel.textContent.includes("Each user's in-app balances"),'untranslated balance note is omitted');
                 assert(exchangePanel.querySelector('#exchange-quote-route-details'),'route recipient details are displayed');
@@ -216,7 +219,7 @@ class MenuBrowserTests(unittest.TestCase):
                 shareConsent.checked=true;shareConsent.dispatchEvent(new Event('change',{bubbles:true}));
                 for(let i=0;i<80&&shareSubmit.disabled;i++)await new Promise(resolve=>setTimeout(resolve,25));
                 assert(!shareSubmit.disabled,'confirmation enables sharing after the card is prepared: '+JSON.stringify({
-                    status:document.getElementById('trade-share-status').textContent,
+                    status:document.getElementById('trade-share-status')?.textContent||'missing',
                     ready:tradeShareState?.ready,imageReady:tradeShareState?.imageReady,
                     confirmed:shareConsent.checked
                 }));
@@ -235,14 +238,13 @@ class MenuBrowserTests(unittest.TestCase):
                  assert(document.getElementById('exchange-dir-base-solana').getAttribute('aria-pressed')==='false','reverse direction starts unselected');
                  setExchangeDirection('base-to-solana');
                  assert(document.getElementById('exchange-direction-title').textContent==='Base → Solana','reverse route title updates');
-                 assert(document.getElementById('exchange-source-title').textContent==='Use your Base USDC','reverse route source updates');
-                 assert(document.getElementById('exchange-destination-title').textContent==='Review Solana estimate','reverse route destination updates');
-                 assert(document.getElementById('exchange-path-source').textContent==='YOUR BASE USDC','reverse route path source updates');
-                 assert(document.getElementById('exchange-path-destination').textContent==='SOLANA USDC ESTIMATE','reverse route path destination updates');
-                 assert(document.getElementById('exchange-bridge-stage').classList.contains('bridge-stage--reverse'),'3D bridge direction reverses');
+                 assert(document.getElementById('exchange-source-chain').textContent==='Base · USDC','reverse route source updates');
+                 assert(document.getElementById('exchange-destination-chain').textContent==='Solana · account balance','reverse route destination updates');
                  assert(document.getElementById('exchange-dir-base-solana').getAttribute('aria-pressed')==='true','reverse direction is accessible as selected');
                  setExchangeDirection('solana-to-base');
                  assert(document.getElementById('exchange-direction-title').textContent==='Solana → Base','forward route can be restored');
+                 assert(document.getElementById('exchange-source-chain').textContent==='Solana · USDC','forward route source is restored');
+                 assert(document.getElementById('exchange-destination-chain').textContent==='Base · account balance','forward route destination is restored');
                   const basePaperFixture={
                       success:true,budget_usd:100,open_cost_usd:25,free_budget_usd:75,realized_gross_pnl_usd:1.25,
                       scanned_at:1793500000,live_trading:false,

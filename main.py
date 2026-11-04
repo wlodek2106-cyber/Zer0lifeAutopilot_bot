@@ -4665,6 +4665,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             ["Compare the provider's estimate and minimum receive amount. No transfer is available yet.","Сравните оценку провайдера и минимальную сумму получения. Перевод пока недоступен.","Порівняйте оцінку провайдера та мінімальну суму отримання. Переказ поки недоступний."],
             ["You pay","Вы отправляете","Ви надсилаєте"],
             ["You receive · estimate","Вы получите · оценка","Ви отримаєте · оцінка"],
+            ["USDC exchange between Solana and Base","Обмен USDC между Solana и Base","Обмін USDC між Solana та Base"],
             ["Available: ","Доступно: ","Доступно: "],
             ["Solana · account balance","Solana · баланс аккаунта","Solana · баланс рахунку"],
             ["Base · account balance","Base · баланс аккаунта","Base · баланс рахунку"],
