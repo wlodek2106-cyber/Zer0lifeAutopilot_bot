@@ -46,7 +46,7 @@ def record_event(runtime, uid, event_id, code, message):
         return None
 
 
-def record_jito_stage(runtime, operation, code, message):
+def record_jito_stage(runtime, operation, code, message, bundle_id=None):
     """Record one idempotent, account-scoped lifecycle observation for a Jito swap."""
     try:
         if operation.get("kind") not in ("BUY", "SELL"):
@@ -60,6 +60,10 @@ def record_jito_stage(runtime, operation, code, message):
         signature = str(operation.get("signature") or "")
         tx_ref = f" Tx {signature[:10]}…" if signature else ""
         safe_message = safe_failure_reason(message)
+        if (isinstance(bundle_id, str)
+                and re.fullmatch(
+                    r"(?:[1-9A-HJ-NP-Za-km-z]{32,90}|[A-Fa-f0-9]{64})", bundle_id)):
+            safe_message += f" Jito bundle ID: {bundle_id}."
         stage = re.sub(r"[^a-z0-9_-]", "_", str(code).lower())[:64] or "unknown"
         inserted = record_event(runtime, uid, f"jito-operation:{operation_id}:{stage}", stage,
                      f"{safe_message} Elapsed {elapsed}s since reservation.{tx_ref}")

@@ -103,6 +103,37 @@ class LedgerTests(unittest.TestCase):
         self.ledger.prepared(op["id"], str(Signature.new_unique()), "offline-wire")
         self.ledger.finalize(op["id"], spent, fee, received)
 
+    def test_jito_bundle_diagnostics_are_idempotent_and_do_not_change_balances(self):
+        op = self.reserve(
+            kind="BUY", asset=USDC, raw=1_000_000,
+            info={"output_asset": "test-mint", "execution_route": "jito_bundle_only"})
+        signature = str(Signature.new_unique())
+        bundle_id = "2" * 44
+        self.ledger.prepared(op["id"], signature, "offline-wire")
+        before = self.ledger.balance(101, USDC)
+
+        self.assertTrue(self.ledger.record_jito_bundle_id(op["id"], bundle_id))
+        self.assertFalse(self.ledger.record_jito_bundle_id(op["id"], bundle_id))
+        self.assertTrue(self.ledger.record_jito_bundle_status(
+            op["id"], bundle_id, "Pending"))
+        self.assertFalse(self.ledger.record_jito_bundle_status(
+            op["id"], bundle_id, "Pending"))
+        self.assertTrue(self.ledger.record_jito_bundle_status(
+            op["id"], bundle_id, "Landed", 1234))
+
+        saved = self.ledger.operation(op["id"])
+        metadata = json.loads(saved["metadata"])
+        self.assertEqual(saved["state"], "PREPARED")
+        self.assertEqual(saved["signature"], signature)
+        self.assertEqual(metadata["jito_bundle_id"], bundle_id)
+        self.assertEqual(metadata["jito_bundle_status"], "Landed")
+        self.assertEqual(metadata["jito_bundle_landed_slot"], 1234)
+        self.assertEqual(self.ledger.balance(101, USDC), before)
+        with self.assertRaisesRegex(LedgerError, "Invalid Jito bundle status"):
+            self.ledger.record_jito_bundle_status(op["id"], bundle_id, "unknown")
+        with self.assertRaisesRegex(LedgerError, "invalid bundle identifier"):
+            self.ledger.record_jito_bundle_id(op["id"], "not-a-bundle")
+
     def test_existing_operations_gain_failure_detail_column_without_losing_rows(self):
         path = self.tmp.name + "/legacy-ledger.db"
         db = sqlite3.connect(path)

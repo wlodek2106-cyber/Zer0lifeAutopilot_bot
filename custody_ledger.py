@@ -3,6 +3,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import secrets
 import sqlite3
 import time
@@ -20,6 +21,8 @@ MONTHLY_TRADING_FEE_TERMS_VERSION = "monthly-trading-fee-v1"
 ACTIVE = ("RESERVED", "PREPARED", "SUBMITTED", "UNKNOWN")
 PARTNER_LEVEL_BPS = (100, 50, 25)
 REENTRY_COOLDOWN_SECONDS = 24 * 60 * 60
+JITO_BUNDLE_ID_PATTERN = re.compile(
+    r"(?:[1-9A-HJ-NP-Za-km-z]{32,90}|[A-Fa-f0-9]{64})\Z")
 
 
 class LedgerError(Exception):
@@ -1470,6 +1473,57 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
         with self.db() as db:
             db.execute("UPDATE custody_operations SET state=? WHERE id=? AND state='PREPARED'",
                        ("SUBMITTED" if known else "UNKNOWN", oid))
+
+    def record_jito_bundle_id(self, oid, bundle_id):
+        if not isinstance(bundle_id, str) or not JITO_BUNDLE_ID_PATTERN.fullmatch(bundle_id):
+            raise LedgerError("Jito returned an invalid bundle identifier.")
+        with self.db() as db:
+            row = db.execute("SELECT * FROM custody_operations WHERE id=?", (oid,)).fetchone()
+            if (not row or row["kind"] not in ("BUY", "SELL")
+                    or row["state"] != "PREPARED"):
+                raise LedgerError("Jito bundle does not match a prepared swap.")
+            metadata = json.loads(row["metadata"])
+            if metadata.get("execution_route") != "jito_bundle_only":
+                raise LedgerError("Jito bundle is not allowed for this operation.")
+            existing = metadata.get("jito_bundle_id")
+            if existing and existing != bundle_id:
+                raise LedgerError("A different Jito bundle is already recorded.")
+            if existing == bundle_id:
+                return False
+            metadata["jito_bundle_id"] = bundle_id
+            metadata["jito_bundle_submitted_at"] = int(time.time())
+            db.execute("UPDATE custody_operations SET metadata=? WHERE id=? AND state='PREPARED'",
+                       (json.dumps(metadata), oid))
+            return True
+
+    def record_jito_bundle_status(self, oid, bundle_id, status, landed_slot=None):
+        allowed = {"Pending", "Failed", "Landed", "Invalid", "NotFound", "Unavailable"}
+        if (not isinstance(bundle_id, str) or not JITO_BUNDLE_ID_PATTERN.fullmatch(bundle_id)
+                or status not in allowed
+                or (landed_slot is not None and (
+                    type(landed_slot) is not int or landed_slot < 0))):
+            raise LedgerError("Invalid Jito bundle status observation.")
+        with self.db() as db:
+            row = db.execute("SELECT * FROM custody_operations WHERE id=?", (oid,)).fetchone()
+            if (not row or row["kind"] not in ("BUY", "SELL")
+                    or row["state"] not in ("PREPARED", "SUBMITTED", "UNKNOWN")):
+                return False
+            metadata = json.loads(row["metadata"])
+            if (metadata.get("execution_route") != "jito_bundle_only"
+                    or metadata.get("jito_bundle_id") != bundle_id):
+                return False
+            if (metadata.get("jito_bundle_status") == status
+                    and metadata.get("jito_bundle_landed_slot") == landed_slot):
+                return False
+            metadata["jito_bundle_status"] = status
+            if landed_slot is not None:
+                metadata["jito_bundle_landed_slot"] = landed_slot
+            else:
+                metadata.pop("jito_bundle_landed_slot", None)
+            db.execute("""UPDATE custody_operations SET metadata=?
+                WHERE id=? AND state IN ('PREPARED','SUBMITTED','UNKNOWN')""",
+                       (json.dumps(metadata), oid))
+            return True
 
     def fail(self, oid, network_proven=False, fee=0, recovery_audit=None, failure_reason=""):
         with self.db() as db:

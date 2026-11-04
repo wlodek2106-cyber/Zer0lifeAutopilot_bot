@@ -310,9 +310,11 @@ class RuntimePolicyTests(unittest.IsolatedAsyncioTestCase):
         self.service.rpc = AsyncMock(return_value=100)
         self.service.reconcile = AsyncMock()
 
-    def reserved_buy(self):
+    def reserved_buy(self, jito=False):
         info = {"symbol": "SOL", "decimals": 9, "output_asset": SOL,
                 "risk_quote": quote(), "quote_received_at": time.time()}
+        if jito:
+            info.update({"execution_route": "jito_bundle_only", "jito_tip_lamports": 50_000})
         row = self.ledger.reserve(101, "offline-policy-test", "BUY", USDC, 1_000_000, info)
         return row, info
 
@@ -425,13 +427,14 @@ class RuntimePolicyTests(unittest.IsolatedAsyncioTestCase):
                                                         ai_created_at=time.time() - 121))
 
     async def test_valid_reserved_buy_reaches_private_sender_exactly_once(self):
-        row, info = self.reserved_buy()
+        row, info = self.reserved_buy(jito=True)
         tx = VersionedTransaction(
             MessageV0.try_compile(self.signer.pubkey(), [], [], Hash.new_unique()),
             [self.signer])
         signature = str(tx.signatures[0])
         self.service.refresh_swap_blockhash = AsyncMock(return_value=tx)
-        self.service.send_via_jito.return_value = signature
+        bundle_id = "2" * 87
+        self.service.send_via_jito.return_value = bundle_id
         result = await self.service.send_reserved(
             None, tx, row, info)
         self.assertEqual(result["state"], "SUBMITTED")

@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import time
@@ -11,11 +12,13 @@ from solders.instruction import Instruction
 from solders.keypair import Keypair
 from solders.message import MessageV0, to_bytes_versioned
 from solders.pubkey import Pubkey
+from solders.signature import Signature
 from solders.transaction import VersionedTransaction
 
 from custody_runtime import (
     CustodyRuntime,
     JITO_BUNDLE_SEND_URL,
+    JITO_BUNDLE_STATUS_URL,
     JITO_TIP_FLOOR_URL,
     JITO_TIP_MIN_LAMPORTS,
     JITO_TIP_MAX_LAMPORTS,
@@ -170,23 +173,54 @@ class JitoRoutingTests(unittest.IsolatedAsyncioTestCase):
             int.from_bytes(tip_instruction.data[4:12], "little"), JITO_TIP_MIN_LAMPORTS)
 
     async def test_swap_submission_uses_jito_endpoint_and_validates_signature(self):
-        expected = str(Keypair().pubkey())
-        session = FakeSession(FakeResponse(payload={"jsonrpc": "2.0", "result": expected}))
+        expected = str(Signature.new_unique())
+        bundle_id = "2" * 87
+        session = FakeSession(FakeResponse(payload={"jsonrpc": "2.0", "result": bundle_id}))
         runtime = object.__new__(CustodyRuntime)
 
         result = await CustodyRuntime.send_via_jito(runtime, session, "signed-base64", expected)
 
-        self.assertEqual(result, expected)
+        self.assertEqual(result, bundle_id)
         url, request = session.calls[0]
         self.assertEqual(url, JITO_BUNDLE_SEND_URL)
-        self.assertEqual(request["json"]["method"], "sendTransaction")
-        self.assertEqual(request["json"]["params"], ["signed-base64", {"encoding": "base64"}])
+        self.assertEqual(request["json"]["method"], "sendBundle")
+        self.assertEqual(request["json"]["params"], [["signed-base64"], {"encoding": "base64"}])
+
+    async def test_jito_bundle_status_returns_only_matching_valid_observations(self):
+        bundle_id = "0" * 64
+        session = FakeSession(FakeResponse(payload={"jsonrpc": "2.0", "result": {
+            "context": {"slot": 123},
+            "value": [{"bundle_id": bundle_id, "status": "Landed", "landed_slot": 122}],
+        }}))
+
+        result = await CustodyRuntime.get_jito_bundle_status(
+            object.__new__(CustodyRuntime), session, bundle_id)
+
+        self.assertEqual(result, {"status": "Landed", "landed_slot": 122})
+        url, request = session.calls[0]
+        self.assertEqual(url, JITO_BUNDLE_STATUS_URL)
+        self.assertEqual(request["json"]["method"], "getInflightBundleStatuses")
+        self.assertEqual(request["json"]["params"], [[bundle_id]])
+
+        missing = FakeSession(FakeResponse(payload={"jsonrpc": "2.0", "result": {
+            "context": {"slot": 123}, "value": [None],
+        }}))
+        self.assertIsNone(await CustodyRuntime.get_jito_bundle_status(
+            object.__new__(CustodyRuntime), missing, bundle_id))
+
+        mismatched = FakeSession(FakeResponse(payload={"jsonrpc": "2.0", "result": {
+            "context": {"slot": 123},
+            "value": [{"bundle_id": "1" * 64, "status": "Landed", "landed_slot": 122}],
+        }}))
+        with self.assertRaisesRegex(WalletError, "did not match"):
+            await CustodyRuntime.get_jito_bundle_status(
+                object.__new__(CustodyRuntime), mismatched, bundle_id)
 
     async def test_swap_submission_rejects_error_or_wrong_signature(self):
         expected = str(Keypair().pubkey())
         for response in (
             FakeResponse(payload={"jsonrpc": "2.0", "error": {"message": "rejected"}}),
-            FakeResponse(payload={"jsonrpc": "2.0", "result": str(Keypair().pubkey())}),
+            FakeResponse(payload={"jsonrpc": "2.0", "result": "not-a-bundle"}),
             FakeResponse(status=503, payload={"error": "unavailable"}),
         ):
             session = FakeSession(response)
@@ -202,8 +236,8 @@ class JitoRoutingTests(unittest.IsolatedAsyncioTestCase):
                 "code": -32005,
                 "message": "block engine rejected; Bearer top-secret https://jito.example/send",
                 "data": {"signed_wire": "signed-base64"}}}), "code -32005"),
-            (FakeResponse(payload={"jsonrpc": "2.0", "result": str(Keypair().pubkey())}),
-             "signature did not match"),
+            (FakeResponse(payload={"jsonrpc": "2.0", "result": "not-a-bundle"}),
+             "valid bundle identifier"),
         )
 
         for response, expected_detail in responses:
@@ -268,6 +302,7 @@ class JitoRoutingTests(unittest.IsolatedAsyncioTestCase):
         signature = str(tx.signatures[0])
         ledger = SimpleNamespace(
             prepared=Mock(),
+            record_jito_bundle_id=Mock(),
             submitted=Mock(),
             operation=Mock(return_value={"state": "UNKNOWN"}),
         )
@@ -304,9 +339,11 @@ class JitoRoutingTests(unittest.IsolatedAsyncioTestCase):
         signature = str(tx.signatures[0])
         ledger = SimpleNamespace(
             prepared=Mock(),
+            record_jito_bundle_id=Mock(),
             submitted=Mock(),
             operation=Mock(return_value={"state": "SUBMITTED"}),
         )
+        bundle_id = "5" * 44
         runtime = SimpleNamespace(
             safe_simulation=AsyncMock(return_value="signed-base64"),
             authorize_execution_order=Mock(),
@@ -314,7 +351,7 @@ class JitoRoutingTests(unittest.IsolatedAsyncioTestCase):
             refresh_swap_blockhash=AsyncMock(return_value=tx),
             web_access=None,
             ledger=ledger,
-            send_via_jito=AsyncMock(return_value=signature),
+            send_via_jito=AsyncMock(return_value=bundle_id),
             reconcile=AsyncMock(),
         )
         row = {"id": "op-ack", "kind": "BUY", "uid": 101, "asset": SOL, "raw": 1,
@@ -326,11 +363,77 @@ class JitoRoutingTests(unittest.IsolatedAsyncioTestCase):
                 runtime, None, tx, row, {"output_asset": USDC})
 
         self.assertEqual(result, {"state": "SUBMITTED"})
+        ledger.record_jito_bundle_id.assert_called_once_with("op-ack", bundle_id)
         ledger.submitted.assert_called_once_with("op-ack", True)
         record_stage.assert_called_once()
         self.assertEqual(record_stage.call_args.args[2], "jito_submission_acknowledged")
         self.assertIn("not proof of Solana inclusion", record_stage.call_args.args[3])
+        self.assertEqual(record_stage.call_args.kwargs["bundle_id"], bundle_id)
         runtime.reconcile.assert_awaited_once()
+
+    async def test_failed_jito_bundle_is_diagnostic_only_and_keeps_chain_reconciliation(self):
+        bundle_id = "6" * 87
+        row = {
+            "id": "op-failed-bundle",
+            "uid": 101,
+            "kind": "BUY",
+            "state": "SUBMITTED",
+            "signature": str(Signature.new_unique()),
+            "created_at": int(time.time()),
+            "metadata": json.dumps({
+                "execution_route": "jito_bundle_only",
+                "jito_bundle_id": bundle_id,
+                "jito_bundle_submitted_at": int(time.time()),
+            }),
+        }
+        runtime = SimpleNamespace(
+            get_jito_bundle_status=AsyncMock(return_value={
+                "status": "Failed", "landed_slot": None}),
+            ledger=SimpleNamespace(
+                record_jito_bundle_status=Mock(return_value=True),
+                operation=Mock(return_value=row),
+                fail=Mock(),
+            ),
+            _jito_bundle_status_checks={},
+        )
+
+        with patch("custody_runtime.activity_log.record_jito_stage") as record_stage:
+            await CustodyRuntime.reconcile_jito_bundle(runtime, None, row)
+
+        runtime.ledger.record_jito_bundle_status.assert_called_once_with(
+            "op-failed-bundle", bundle_id, "Failed", None)
+        runtime.ledger.fail.assert_not_called()
+        self.assertEqual(record_stage.call_args.args[2], "jito_bundle_failed")
+        self.assertEqual(record_stage.call_args.kwargs["bundle_id"], bundle_id)
+
+    async def test_bundle_status_checks_are_backgrounded_and_deduplicated(self):
+        bundle_id = "7" * 87
+        row = {
+            "id": "op-background-status",
+            "metadata": json.dumps({
+                "execution_route": "jito_bundle_only",
+                "jito_bundle_id": bundle_id,
+            }),
+        }
+        runtime = object.__new__(CustodyRuntime)
+        runtime._jito_bundle_status_tasks = {}
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def wait_for_release(operation):
+            started.set()
+            await release.wait()
+
+        runtime._check_jito_bundle_status = AsyncMock(side_effect=wait_for_release)
+
+        runtime.schedule_jito_bundle_reconcile(row)
+        self.assertEqual(runtime._check_jito_bundle_status.await_count, 0)
+        runtime.schedule_jito_bundle_reconcile(row)
+        await started.wait()
+        self.assertEqual(runtime._check_jito_bundle_status.await_count, 1)
+
+        release.set()
+        await asyncio.gather(*tuple(runtime._jito_bundle_status_tasks.values()))
 
     async def test_non_swap_operations_still_use_configured_rpc(self):
         signature = str(Keypair().pubkey())

@@ -5,6 +5,7 @@ import json
 import math
 import os
 import random
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -57,7 +58,8 @@ from cross_chain_bridge import (
 )
 
 WRAPPED_SOL = "So11111111111111111111111111111111111111112"
-JITO_BUNDLE_SEND_URL = "https://mainnet.block-engine.jito.wtf/api/v1/transactions?bundleOnly=true"
+JITO_BUNDLE_SEND_URL = "https://mainnet.block-engine.jito.wtf/api/v1/bundles"
+JITO_BUNDLE_STATUS_URL = "https://mainnet.block-engine.jito.wtf/api/v1/getInflightBundleStatuses"
 JITO_TIP_ACCOUNTS_URL = "https://mainnet.block-engine.jito.wtf/api/v1/bundles"
 JITO_TIP_FLOOR_URL = "https://bundles.jito.wtf/api/v1/bundles/tip_floor"
 JITO_TIP_MIN_LAMPORTS = 50_000
@@ -263,6 +265,8 @@ class CustodyRuntime(WalletRuntime):
         self.whale_stream_task = None
         self._jito_tip_accounts = []
         self._jito_tip_accounts_expiry = 0
+        self._jito_bundle_status_checks = {}
+        self._jito_bundle_status_tasks = {}
         self._close_retry_after = {}
         self.history_seen = {}
         self.restore_catalog()
@@ -2530,6 +2534,7 @@ class CustodyRuntime(WalletRuntime):
         for row in self.ledger.pending():
             if row["state"] == "RESERVED":
                 continue
+            self.schedule_jito_bundle_reconcile(row)
             try:
                 statuses = await self.rpc(session, "getSignatureStatuses",
                     [[row["signature"]], {"searchTransactionHistory": True}])
@@ -2885,15 +2890,22 @@ class CustodyRuntime(WalletRuntime):
             self.ledger.fail(row["id"], failure_reason=operation_failure_reason(exc))
             raise
         send_started = time.monotonic()
+        jito_bundle_id = None
+        jito_acknowledged = False
         try:
             if row["kind"] in ("BUY", "SELL"):
-                returned = await self.send_via_jito(session, wire, signature)
+                bundle_id = await self.send_via_jito(session, wire, signature)
+                jito_acknowledged = True
+                jito_bundle_id = bundle_id
+                self.ledger.record_jito_bundle_id(row["id"], bundle_id)
+                returned = signature
                 activity_log.record_jito_stage(self, {**row, "signature": signature},
                     "jito_submission_acknowledged",
-                    "Jito acknowledged the private submission with a "
+                    "Jito accepted the private bundle with a "
                     f"{info.get('jito_tip_lamports', 0)} lamport tip "
                     f"({info.get('jito_tip_source', 'unknown source')}); "
-                    "this is not proof of Solana inclusion.")
+                    "acceptance is not proof of Solana inclusion.",
+                    bundle_id=bundle_id)
             else:
                 returned = await self.rpc(session, "sendTransaction", [wire, {
                     "encoding": "base64", "skipPreflight": False,
@@ -2903,10 +2915,17 @@ class CustodyRuntime(WalletRuntime):
             self.ledger.submitted(row["id"], False)
             if row["kind"] in ("BUY", "SELL"):
                 detail = activity_log.safe_failure_reason(str(exc)) or type(exc).__name__
-                activity_log.record_jito_stage(self, {**row, "signature": signature},
-                    "jito_submission_unknown",
-                    "Jito did not return a verified acknowledgement (" + detail +
-                    "); the transaction outcome is unknown. Do not resend.")
+                if jito_acknowledged:
+                    activity_log.record_jito_stage(self, {**row, "signature": signature},
+                        "jito_bundle_tracking_failed",
+                        "Jito accepted the private bundle, but its tracking ID could not be "
+                        "saved (" + detail + "). The transaction outcome is unknown; do not resend.",
+                        bundle_id=jito_bundle_id)
+                else:
+                    activity_log.record_jito_stage(self, {**row, "signature": signature},
+                        "jito_submission_unknown",
+                        "Jito did not return a verified acknowledgement (" + detail +
+                        "); the transaction outcome is unknown. Do not resend.")
             if row["kind"] == "WITHDRAW":
                 self.log("Withdrawal RPC outcome unknown; reserve retained (" + type(exc).__name__ + ").")
         finally:
@@ -3096,12 +3115,12 @@ class CustodyRuntime(WalletRuntime):
             raise WalletError("Could not safely build the swap transaction.") from exc
 
     async def send_via_jito(self, session, wire, expected_signature):
-        """Privately submit a pre-simulated swap; never fall back to public broadcast."""
+        """Privately submit a single-transaction bundle and return its tracking ID."""
         payload = {
             "jsonrpc": "2.0",
             "id": 1,
-            "method": "sendTransaction",
-            "params": [wire, {"encoding": "base64"}],
+            "method": "sendBundle",
+            "params": [[wire], {"encoding": "base64"}],
         }
         try:
             async with session.post(
@@ -3127,11 +3146,163 @@ class CustodyRuntime(WalletRuntime):
             detail = activity_log.safe_provider_error(answer["error"])
             raise WalletError("Jito JSON-RPC rejected the submission" +
                 (": " + detail if detail else "; provider supplied no safe error detail.") + ".")
-        if answer.get("result") != expected_signature:
-            if isinstance(answer.get("result"), str) and answer["result"]:
-                raise WalletError("Jito acknowledgement signature did not match the signed transaction.")
-            raise WalletError("Jito response did not include an acknowledgement signature.")
-        return answer["result"]
+        bundle_id = answer.get("result")
+        if (not isinstance(bundle_id, str)
+                or not re.fullmatch(
+                    r"(?:[1-9A-HJ-NP-Za-km-z]{32,90}|[A-Fa-f0-9]{64})", bundle_id)):
+            raise WalletError("Jito response did not include a valid bundle identifier.")
+        if not expected_signature:
+            raise WalletError("The signed transaction has no signature to track.")
+        return bundle_id
+
+    async def get_jito_bundle_status(self, session, bundle_id):
+        if (not isinstance(bundle_id, str)
+                or not re.fullmatch(
+                    r"(?:[1-9A-HJ-NP-Za-km-z]{32,90}|[A-Fa-f0-9]{64})", bundle_id)):
+            raise WalletError("Stored Jito bundle identifier is invalid.")
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getInflightBundleStatuses",
+            "params": [[bundle_id]],
+        }
+        try:
+            async with session.post(
+                    JITO_BUNDLE_STATUS_URL, json=payload,
+                    timeout=aiohttp.ClientTimeout(total=5)) as response:
+                if response.status != 200:
+                    raise WalletError(
+                        f"Jito bundle status returned HTTP {response.status}.")
+                answer = await response.json()
+        except WalletError:
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, UnicodeError) as exc:
+            raise WalletError(
+                "Jito bundle status request failed (" + type(exc).__name__ + ").") from None
+        if not isinstance(answer, dict):
+            raise WalletError("Jito returned a non-object bundle status response.")
+        if answer.get("error") is not None:
+            detail = activity_log.safe_provider_error(answer["error"])
+            raise WalletError("Jito bundle status lookup failed" +
+                (": " + detail if detail else "; provider supplied no safe error detail.") + ".")
+        result = answer.get("result")
+        if result is None:
+            return None
+        values = result.get("value") if isinstance(result, dict) else None
+        if not isinstance(values, list) or len(values) != 1:
+            raise WalletError("Jito returned an invalid bundle status list.")
+        item = values[0]
+        if item is None:
+            return None
+        if not isinstance(item, dict) or item.get("bundle_id") != bundle_id:
+            raise WalletError("Jito bundle status did not match the submitted bundle.")
+        status = item.get("status")
+        if status not in ("Pending", "Failed", "Landed", "Invalid"):
+            raise WalletError("Jito returned an unknown bundle status.")
+        landed_slot = item.get("landed_slot")
+        if landed_slot is not None and (type(landed_slot) is not int or landed_slot < 0):
+            raise WalletError("Jito returned an invalid landed slot.")
+        return {"status": status, "landed_slot": landed_slot}
+
+    def schedule_jito_bundle_reconcile(self, row):
+        try:
+            info = json.loads(row.get("metadata") or "{}")
+            bundle_id = info.get("jito_bundle_id")
+            if (info.get("execution_route") != "jito_bundle_only"
+                    or not isinstance(bundle_id, str)
+                    or not re.fullmatch(
+                        r"(?:[1-9A-HJ-NP-Za-km-z]{32,90}|[A-Fa-f0-9]{64})", bundle_id)):
+                return
+            tasks = getattr(self, "_jito_bundle_status_tasks", None)
+            if tasks is None:
+                tasks = self._jito_bundle_status_tasks = {}
+            current = tasks.get(bundle_id)
+            if current and not current.done():
+                return
+            task = asyncio.create_task(
+                self._check_jito_bundle_status(dict(row)),
+                name="jito-bundle-status-" + row["id"])
+            tasks[bundle_id] = task
+
+            def clear_task(completed):
+                if tasks.get(bundle_id) is completed:
+                    tasks.pop(bundle_id, None)
+
+            task.add_done_callback(clear_task)
+        except Exception:
+            return
+
+    async def _check_jito_bundle_status(self, row):
+        try:
+            timeout = aiohttp.ClientTimeout(total=5)
+            async with aiohttp.ClientSession(timeout=timeout) as status_session:
+                await self.reconcile_jito_bundle(status_session, row)
+        except Exception:
+            return
+
+    async def reconcile_jito_bundle(self, session, row):
+        info = {}
+        try:
+            info = json.loads(row.get("metadata") or "{}")
+            bundle_id = info.get("jito_bundle_id")
+            if (info.get("execution_route") != "jito_bundle_only"
+                    or not isinstance(bundle_id, str)
+                    or not re.fullmatch(
+                        r"(?:[1-9A-HJ-NP-Za-km-z]{32,90}|[A-Fa-f0-9]{64})", bundle_id)):
+                return
+            previous = info.get("jito_bundle_status")
+            if previous in ("Failed", "Landed", "Invalid", "Unavailable"):
+                return
+            submitted_at = info.get("jito_bundle_submitted_at")
+            if type(submitted_at) is not int:
+                return
+            if time.time() - submitted_at >= 300:
+                status = "Unavailable"
+                landed_slot = None
+            else:
+                checks = getattr(self, "_jito_bundle_status_checks", None)
+                if checks is None:
+                    checks = self._jito_bundle_status_checks = {}
+                now = time.monotonic()
+                if now - checks.get(bundle_id, 0) < SOLANA_PENDING_RECHECK_SECONDS:
+                    return
+                checks[bundle_id] = now
+                if len(checks) > 32:
+                    oldest = min(checks, key=checks.get)
+                    if oldest != bundle_id:
+                        checks.pop(oldest, None)
+                observation = await self.get_jito_bundle_status(session, bundle_id)
+                status = observation["status"] if observation else "NotFound"
+                landed_slot = observation.get("landed_slot") if observation else None
+            changed = self.ledger.record_jito_bundle_status(
+                row["id"], bundle_id, status, landed_slot)
+            if not changed:
+                return
+            current = self.ledger.operation(row["id"]) or row
+            messages = {
+                "Pending": "Jito reports the bundle is pending. The chain check continues; do not resend.",
+                "Failed": "Jito reports the bundle failed in all regions. This is diagnostic only; chain verification still controls funds.",
+                "Landed": "Jito reports the bundle landed. Waiting for Solana finality; balances are not credited yet.",
+                "Invalid": "Jito no longer has recent bundle status. This does not prove chain absence; reconciliation continues.",
+                "NotFound": "Jito has not returned a bundle status yet. This is inconclusive; reconciliation continues.",
+                "Unavailable": "Jito's five-minute status window elapsed. This does not prove chain absence; reconciliation continues.",
+            }
+            if status == "Landed" and landed_slot is not None:
+                messages[status] += f" Reported slot: {landed_slot}."
+            activity_log.record_jito_stage(
+                self, current, "jito_bundle_" + status.lower(),
+                messages[status], bundle_id=bundle_id)
+        except Exception as exc:
+            try:
+                bundle_id = info.get("jito_bundle_id") if isinstance(info, dict) else None
+                activity_log.record_jito_stage(
+                    self, row, "jito_bundle_status_error",
+                    "Jito bundle status could not be checked (" +
+                    (activity_log.safe_failure_reason(str(exc)) or type(exc).__name__) +
+                    "); chain reconciliation continues.",
+                    bundle_id=bundle_id)
+            except Exception:
+                return
 
     def result(self, row):
         state = row["state"]
