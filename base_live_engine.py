@@ -44,6 +44,8 @@ MIN_BASE_GAS_RESERVE_WEI = 5 * 10**15
 MAX_BASE_TX_FEE_WEI = 10**15
 BASE_ENTRY_SLOTS = 5
 BASE_ENTRY_TRANCHES = 3
+BASE_PENDING_RECHECK_SECONDS = 5
+BASE_WORKER_IDLE_SECONDS = 20
 BASE_STOP_LOSS_PCT = 5.0
 BASE_REENTRY_COOLDOWN_SECONDS = 24 * 60 * 60
 BASE_SLIPPAGE_BPS = 100
@@ -315,6 +317,12 @@ class BaseLiveEngine:
                 WHERE uid=? AND state IN ('PREPARED','SIGNING','SUBMITTED','UNKNOWN','NEEDS_REVIEW')
                 ORDER BY created_at LIMIT 1""", (int(uid),)).fetchone()
             return dict(row) if row else None
+
+    def _worker_poll_seconds(self, uid):
+        operation = self.pending_operation(uid)
+        if operation and operation["state"] in {"PREPARED", "SIGNING", "SUBMITTED", "UNKNOWN"}:
+            return BASE_PENDING_RECHECK_SECONDS
+        return BASE_WORKER_IDLE_SECONDS
 
     def set_status(self, uid, state, message, now=None):
         self._require_owner(uid)
@@ -1463,7 +1471,7 @@ class BaseLiveEngine:
                     self.owner_id, "PAUSED",
                     "Base worker paused after an internal error; no transaction was retried."
                 )
-            await asyncio.sleep(20)
+            await asyncio.sleep(self._worker_poll_seconds(self.owner_id))
 
     def _queue_prepared_swap(self, uid, kind, token, position_id, order):
         if kind not in {"BUY", "SELL"}:

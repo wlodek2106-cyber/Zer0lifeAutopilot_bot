@@ -67,6 +67,8 @@ JITO_TIP_MAX_AGE_SECONDS = 120
 JUPITER_PRIORITY_FEE_LAMPORTS = 25_000
 WHALE_AI_COOLDOWN_SECONDS = 60
 MARKET_SCAN_INTERVAL_SECONDS = 300
+SOLANA_EXPIRY_PROOF_RETRY_SECONDS = 5
+SOLANA_PENDING_RECHECK_SECONDS = 5
 WITHDRAWAL_COMMISSION_BPS = 150
 CORE_SYMBOLS = ("SOL", "JUP", "RAY", "PYTH", "JTO", "ORCA", "KMNO", "NOS", "SHDW", "PEPE", "OTC")
 SNIPER_SYMBOLS = ("WIF", "BONK", "BOME", "POPCAT", "MEW", "PENGU", "PEPE", "OTC")
@@ -2544,11 +2546,10 @@ class CustodyRuntime(WalletRuntime):
                     "The reservation remains locked; do not resend.")
                 # A missing signature can be recovered only with independent
                 # rooted-expiry evidence; never resend an unresolved operation.
-                if (row["kind"] in ("BUY", "SELL", "WITHDRAW") and row.get("wire")
-                        and time.time() - row["created_at"] >= 180):
+                if row["kind"] in ("BUY", "SELL", "WITHDRAW") and row.get("wire"):
                     checks = getattr(self, "_expiry_checks", {})
                     last_check = checks.get(row["id"], 0)
-                    if time.monotonic() - last_check >= 60:
+                    if time.monotonic() - last_check >= SOLANA_EXPIRY_PROOF_RETRY_SECONDS:
                         self._expiry_checks = {row["id"]: time.monotonic()}
                         try:
                             async with asyncio.timeout(25):
@@ -4491,6 +4492,13 @@ class CustodyRuntime(WalletRuntime):
             f"next retry is no sooner than {delay} seconds.")
         return delay
 
+    def _has_unresolved_signed_operation(self):
+        return any(row.get("state") in ("PREPARED", "SUBMITTED", "UNKNOWN")
+                   for row in self.ledger.pending())
+
+    def _worker_poll_seconds(self):
+        return SOLANA_PENDING_RECHECK_SECONDS if self._has_unresolved_signed_operation() else 20
+
     async def worker_cycle(self, session):
         if getattr(self, "web_access", None):
             self.web_access.pause_expired()
@@ -4502,6 +4510,10 @@ class CustodyRuntime(WalletRuntime):
         self.ledger.credit_safe_partner_earnings()
         await self.process_due_monthly_trading_fees(session)
         if close_queue_active or manual_close_active:
+            return
+        # Pending signatures already block market execution below. Skip unrelated
+        # scans until their chain outcome is known; reconcile them on the fast lane.
+        if self._has_unresolved_signed_operation():
             return
         users = self.ledger.active_users()
         if not users:
@@ -4679,7 +4691,8 @@ class CustodyRuntime(WalletRuntime):
             else:
                 self.last_error = ""
             try:
-                await asyncio.wait_for(self._worker_wakeup.wait(), timeout=20)
+                await asyncio.wait_for(
+                    self._worker_wakeup.wait(), timeout=self._worker_poll_seconds())
             except asyncio.TimeoutError:
                 pass
 

@@ -1627,6 +1627,42 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("https://", event["message"])
         self.assertEqual(len(self.ledger.pending()), 1)
 
+    async def test_expiry_proof_starts_immediately_and_rechecks_without_unlocking(self):
+        buy, _signature = self.pending_buy()
+        self.ledger.settings(101, enabled=True, sniper_enabled=True, investor_enabled=True)
+        balance = self.ledger.balance(101, USDC)
+        self.service.rpc = AsyncMock(side_effect=lambda _session, method, _params=None:
+            legacy.GENESIS if method == "getGenesisHash" else {"value": [None]})
+
+        with patch.object(runtime, "prove_retirement", AsyncMock(
+                side_effect=legacy.WalletError("The signed blockhash is still valid."))) as proof:
+            self.assertTrue(self.service._has_unresolved_signed_operation())
+            self.assertEqual(self.service._worker_poll_seconds(), 5)
+            await self.service.reconcile(None)
+            proof.assert_awaited_once()
+            self.assertEqual(self.ledger.operation(buy["id"])["state"], "SUBMITTED")
+            self.assertEqual(self.ledger.balance(101, USDC), balance)
+            self.assertTrue(self.ledger.settings(101)["trading"])
+            self.assertTrue(self.ledger.settings(101)["sniper_trading"])
+            self.assertTrue(self.ledger.settings(101)["investor_trading"])
+
+            await self.service.reconcile(None)
+            proof.assert_awaited_once()
+
+            self.service._expiry_checks[buy["id"]] = (
+                time.monotonic() - runtime.SOLANA_EXPIRY_PROOF_RETRY_SECONDS - 1)
+            await self.service.reconcile(None)
+            self.assertEqual(proof.await_count, 2)
+
+        self.assertEqual(self.ledger.operation(buy["id"])["state"], "SUBMITTED")
+        self.assertEqual(self.ledger.balance(101, USDC), balance)
+        self.assertEqual(len(self.ledger.pending()), 1)
+
+        self.ledger.fail(buy["id"], network_proven=True, fee=0,
+                         failure_reason="test expiry recovery")
+        self.assertFalse(self.service._has_unresolved_signed_operation())
+        self.assertEqual(self.service._worker_poll_seconds(), 20)
+
     async def test_worker_recovers_expired_sell_without_resend_and_keeps_close_queue(self):
         sell, signature, position_id = self.pending_sell()
         with self.ledger.db() as db:

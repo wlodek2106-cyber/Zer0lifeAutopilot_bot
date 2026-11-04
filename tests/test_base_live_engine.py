@@ -111,6 +111,16 @@ class BaseLiveEngineStateTests(unittest.IsolatedAsyncioTestCase):
                 {"to": BASE_UNISWAP_V3_SWAP_ROUTER_02, "calldata": "0x12345678"},
             )
 
+    def test_worker_checks_pending_base_transaction_every_five_seconds(self):
+        self.assertEqual(self.engine._worker_poll_seconds(77), 20)
+        operation_id = self.engine._record_operation(
+            77, "SELL", TOKEN, "position-1",
+            {"to": BASE_UNISWAP_V3_SWAP_ROUTER_02, "calldata": "0x12345678"},
+        )
+        self.assertEqual(self.engine._worker_poll_seconds(77), 5)
+        self.engine._update_operation(operation_id, state="NEEDS_REVIEW")
+        self.assertEqual(self.engine._worker_poll_seconds(77), 20)
+
     def test_exit_policy_uses_five_percent_stop_and_existing_profit_ladder(self):
         self.assertEqual(base_live_exit_reason(95, 100, 100, 1), "STOP_LOSS_5_PERCENT")
         self.assertEqual(base_live_exit_reason(103.5, 100, 103.5, 1), "TAKE_PROFIT_STEP_1")
