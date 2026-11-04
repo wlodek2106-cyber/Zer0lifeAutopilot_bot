@@ -938,6 +938,20 @@ class LedgerTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_candidate_discovery_keeps_running_when_all_trading_modes_are_off(self):
+        self.service.reconcile = AsyncMock()
+        self.service.process_close_queues = AsyncMock(return_value=False)
+        self.service.scan_deposits = AsyncMock()
+        self.service.process_due_monthly_trading_fees = AsyncMock()
+        self.service.poll_discovery = Mock()
+        self.service.current_prices = AsyncMock(return_value={})
+
+        with patch.object(self.ledger, "active_users", return_value=[]):
+            await self.service.worker_cycle(None)
+
+        self.service.poll_discovery.assert_called_once_with()
+        self.service.current_prices.assert_not_awaited()
+
     async def test_all_protective_exits_are_checked_before_any_new_entry(self):
         users = [{"uid": uid, "trading": True, "sniper_trading": True,
                   "close_requested": False} for uid in (101, 202)]

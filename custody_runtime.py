@@ -4686,10 +4686,12 @@ class CustodyRuntime(WalletRuntime):
         # scans until their chain outcome is known; reconcile them on the fast lane.
         if self._has_unresolved_signed_operation():
             return
+        # Candidate discovery is informational; keep its five-minute refresh
+        # schedule active even when every trading mode is OFF.
+        self.poll_discovery()
         users = self.ledger.active_users()
         if not users:
             return
-        self.poll_discovery()
         prices = await self.current_prices(session)
         for symbol in self.history:
             if symbol not in prices:
