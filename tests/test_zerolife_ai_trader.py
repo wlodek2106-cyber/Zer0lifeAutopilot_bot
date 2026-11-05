@@ -278,5 +278,20 @@ class TraderFoundationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             load_ohlcv_csv(csv_text, interval_ms=60_000)
 
+    def test_ohlcv_timestamp_must_align_to_utc_interval_anchor(self):
+        from zerolife_ai_trader.market_data import validate_candles
+        candles = [
+            {"timestamp_ms": 30_000, "open": 10, "high": 12,
+             "low": 9, "close": 11, "volume": 100},
+            {"timestamp_ms": 90_000, "open": 11, "high": 13,
+             "low": 10, "close": 12, "volume": 100},
+        ]
+        with self.assertRaises(ValueError):
+            validate_candles(candles, interval_ms=60_000)
+        report = validate_candles(candles, interval_ms=60_000,
+                                   anchor_ms=30_000)
+        self.assertEqual(report["quality"], "complete")
+        self.assertEqual(report["anchor_ms"], 30_000)
+
 if __name__ == "__main__":
     unittest.main()
