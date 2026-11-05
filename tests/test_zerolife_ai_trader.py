@@ -208,5 +208,23 @@ class TraderFoundationTests(unittest.TestCase):
         self.assertGreaterEqual(up["average_win"], 0)
         self.assertLessEqual(down["average_loss"], 0)
 
+    def test_segmented_evaluation_covers_chronological_data(self):
+        from zerolife_ai_trader.backtest import run_segmented_evaluation
+        closes = [100.0 + i * 0.1 for i in range(120)]
+        result = run_segmented_evaluation(closes, segments=3)
+        self.assertEqual(result["segment_count"], 3)
+        self.assertEqual(result["segments"][0]["start_index"], 0)
+        self.assertEqual(result["segments"][-1]["end_index_exclusive"], 120)
+        self.assertEqual(sum(s["bars"] for s in result["segments"]), 120)
+        self.assertTrue(all(s["bars"] >= 31 for s in result["segments"]))
+        self.assertIn("worst_segment_return_pct", result)
+
+    def test_segmented_evaluation_rejects_too_few_bars_and_invalid_segments(self):
+        from zerolife_ai_trader.backtest import run_segmented_evaluation
+        with self.assertRaises(ValueError):
+            run_segmented_evaluation([100.0] * 60, segments=3)
+        with self.assertRaises(ValueError):
+            run_segmented_evaluation([100.0] * 90, segments=True)
+
 if __name__ == "__main__":
     unittest.main()
