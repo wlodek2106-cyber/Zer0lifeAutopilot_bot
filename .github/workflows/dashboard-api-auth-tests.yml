@@ -1,0 +1,30 @@
+name: Dashboard API authorization tests
+
+on:
+  pull_request:
+    paths:
+      - "access_control.py"
+      - "main.py"
+      - "tests/test_admin_api_authorization.py"
+      - ".github/workflows/dashboard-api-auth-tests.yml"
+  push:
+    branches: [dashboard-api-auth-tests]
+    paths:
+      - "access_control.py"
+      - "main.py"
+      - "tests/test_admin_api_authorization.py"
+      - ".github/workflows/dashboard-api-auth-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  authorization-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run authorization unit tests
+        run: python -m unittest discover -s tests -p 'test_admin_api_authorization.py' -v
