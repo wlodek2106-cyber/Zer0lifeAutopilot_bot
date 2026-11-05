@@ -37,6 +37,8 @@ def assess_order(*, equity, cash, price, confidence, open_positions=0,
         return RiskDecision(False, 0.0, "Invalid or non-finite risk input.")
     if equity <= 0 or cash < 0 or price <= 0:
         return RiskDecision(False, 0.0, "Equity, cash, or price is outside safe bounds.")
+    if not 0 <= confidence <= 1:
+        return RiskDecision(False, 0.0, "Signal confidence is outside the valid 0..1 range.")
     if type(open_positions) is not int or open_positions < 0:
         return RiskDecision(False, 0.0, "Invalid open-position count.")
     if open_positions >= limits.max_open_positions:
