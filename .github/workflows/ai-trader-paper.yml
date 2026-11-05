@@ -1,0 +1,27 @@
+name: AI Trader Paper Foundation
+
+on:
+  pull_request:
+    paths:
+      - "zerolife_ai_trader/**"
+      - "tests/test_zerolife_ai_trader*.py"
+      - ".github/workflows/ai-trader-paper.yml"
+  push:
+    branches:
+      - "ai-trader-2027-foundation"
+    paths:
+      - "zerolife_ai_trader/**"
+      - "tests/test_zerolife_ai_trader*.py"
+      - ".github/workflows/ai-trader-paper.yml"
+
+jobs:
+  paper-foundation-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run isolated paper-trading tests
+        run: python -m unittest discover -s tests -p 'test_zerolife_ai_trader*.py' -v
