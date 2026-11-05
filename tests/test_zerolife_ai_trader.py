@@ -226,5 +226,33 @@ class TraderFoundationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             run_segmented_evaluation([100.0] * 90, segments=True)
 
+    def test_ohlcv_validation_accepts_valid_contiguous_candles(self):
+        from zerolife_ai_trader.market_data import validate_candles
+        candles = [
+            {"timestamp_ms": i * 60_000, "open": 10, "high": 12,
+             "low": 9, "close": 11, "volume": 100}
+            for i in range(4)
+        ]
+        result = validate_candles(candles, interval_ms=60_000)
+        self.assertEqual(result["count"], 4)
+        self.assertEqual(result["quality"], "complete")
+        self.assertEqual(result["gap_count"], 0)
+
+    def test_ohlcv_validation_rejects_gaps_and_bad_candle_values(self):
+        from zerolife_ai_trader.market_data import validate_candles
+        candles = [
+            {"timestamp_ms": 0, "open": 10, "high": 12,
+             "low": 9, "close": 11, "volume": 100},
+            {"timestamp_ms": 120_000, "open": 11, "high": 13,
+             "low": 10, "close": 12, "volume": 100},
+        ]
+        with self.assertRaises(ValueError):
+            validate_candles(candles, interval_ms=60_000)
+        report = validate_candles(candles, interval_ms=60_000, reject_gaps=False)
+        self.assertEqual(report["gap_count"], 1)
+        candles[1]["high"] = 8
+        with self.assertRaises(ValueError):
+            validate_candles(candles, interval_ms=60_000, reject_gaps=False)
+
 if __name__ == "__main__":
     unittest.main()
