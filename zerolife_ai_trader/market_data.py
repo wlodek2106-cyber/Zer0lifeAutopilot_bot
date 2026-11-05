@@ -8,11 +8,13 @@ from math import isfinite
 _FIELDS = ("timestamp_ms", "open", "high", "low", "close", "volume")
 
 
-def validate_candles(candles, *, interval_ms, reject_gaps=True):
+def validate_candles(candles, *, interval_ms, reject_gaps=True, anchor_ms=0):
     if type(interval_ms) is not int or interval_ms <= 0:
         raise ValueError("interval_ms must be a positive integer.")
     if type(reject_gaps) is not bool:
         raise ValueError("reject_gaps must be boolean.")
+    if type(anchor_ms) is not int or anchor_ms < 0:
+        raise ValueError("anchor_ms must be a non-negative integer.")
     if not isinstance(candles, (list, tuple)) or not candles:
         raise ValueError("At least one candle is required.")
 
@@ -25,6 +27,8 @@ def validate_candles(candles, *, interval_ms, reject_gaps=True):
         timestamp = candle["timestamp_ms"]
         if type(timestamp) is not int or timestamp < 0:
             raise ValueError(f"Candle {index} has an invalid timestamp.")
+        if timestamp < anchor_ms or (timestamp - anchor_ms) % interval_ms:
+            raise ValueError(f"Candle {index} timestamp is not aligned to the interval anchor.")
         if previous_timestamp is not None:
             delta = timestamp - previous_timestamp
             if delta <= 0:
@@ -59,6 +63,7 @@ def validate_candles(candles, *, interval_ms, reject_gaps=True):
         "candles": normalized,
         "count": len(normalized),
         "interval_ms": interval_ms,
+        "anchor_ms": anchor_ms,
         "gaps": gaps,
         "gap_count": len(gaps),
         "first_timestamp_ms": normalized[0]["timestamp_ms"],
