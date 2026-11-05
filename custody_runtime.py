@@ -1244,6 +1244,25 @@ class CustodyRuntime(WalletRuntime):
             })
         return web.json_response({"success": True, "signals": history})
 
+    async def get_ai_trader_paper_journal(self, request, session):
+        """Return only the authenticated user's immutable paper-fill journal."""
+        from zerolife_ai_trader.paper_store import PaperTradeStore
+        uid = self.uid(request)
+        try:
+            raw_limit = request.query.get("limit", "50")
+            if not raw_limit.isdigit():
+                raise ValueError("History limit must be an integer.")
+            limit = int(raw_limit)
+            store = PaperTradeStore(self.ledger.path)
+            return web.json_response({
+                "success": True,
+                "summary": store.summary(telegram_id=uid),
+                "fills": store.history(telegram_id=uid, limit=limit),
+                "execution": "paper_journal_read_only",
+            })
+        except ValueError as exc:
+            raise WalletError(str(exc), 400)
+
     async def save_ai_trader_settings(self, request, session):
         self._ensure_ai_trader_settings_table()
         try:
