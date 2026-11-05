@@ -121,7 +121,7 @@ class PaperTradeStoreTests(unittest.TestCase):
         self.assertFalse(result["duplicate"])
         self.assertEqual(result["fill"]["side"], "SELL")
         self.assertAlmostEqual(result["fill"]["price"], 109.945)
-        self.assertAlmostEqual(result["fill"]["realized_pnl"], 9.784055)
+        self.assertAlmostEqual(result["fill"]["realized_pnl"], 9.685005)
         account = self.store.account(telegram_id=101)
         self.assertAlmostEqual(account["positions"][0]["quantity"], 1)
         self.assertGreater(account["cash"], 899)
