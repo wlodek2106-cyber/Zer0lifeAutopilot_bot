@@ -1137,6 +1137,8 @@ class CustodyRuntime(WalletRuntime):
                      json.dumps(item["risk"], allow_nan=False)))
                 item["signal_id"] = cursor.lastrowid
         if settings.get("paperAutoExecute") is True and source == "binance_public":
+            from zerolife_ai_trader.configuration import build_risk_limits
+            from zerolife_ai_trader.risk import assess_order
             store = PaperTradeStore(self.ledger.path)
             for item in results:
                 if item["action"] != "PAPER_BUY" or not item["risk"].get("allowed"):
@@ -1149,9 +1151,28 @@ class CustodyRuntime(WalletRuntime):
                     (str(uid) + ":" + item["symbol"] + ":" + str(candle_id)).encode()
                 ).digest()[:8], "big") & 0x7FFFFFFFFFFFFFFF
                 try:
+                    account = store.account(telegram_id=uid)
+                    positions = account["positions"]
+                    cash = account["cash"] if account["cash"] is not None else settings["capital"]
+                    equity = cash + sum(
+                        p["quantity"] * p["average_cost"] for p in positions
+                    )
+                    already_held = any(p["symbol"] == item["symbol"] for p in positions)
+                    risk = assess_order(
+                        equity=equity, cash=cash, price=item["price"],
+                        confidence=item["confidence"],
+                        open_positions=max(0, len(positions) - (1 if already_held else 0)),
+                        daily_pnl=0.0, limits=build_risk_limits(settings),
+                    )
+                    if not risk.allowed:
+                        paper_executions.append({
+                            "symbol": item["symbol"], "executed": False,
+                            "reason": risk.reason,
+                        })
+                        continue
                     result = store.execute_buy(
                         telegram_id=uid, signal_id=stable_id,
-                        symbol=item["symbol"], quantity=item["risk"]["quantity"],
+                        symbol=item["symbol"], quantity=risk.quantity,
                         market_price=item["price"], fee_bps=settings["fee"],
                         slippage_bps=settings["slippage"], starting_cash=settings["capital"],
                     )
