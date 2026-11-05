@@ -30,6 +30,8 @@ class PaperBroker:
             raise ValueError("Invalid paper order.")
         if not isfinite(quantity) or not isfinite(market_price) or quantity <= 0 or market_price <= 0:
             raise ValueError("Quantity and price must be finite and positive.")
+        if type(self.cash) not in (int, float) or not isfinite(self.cash) or self.cash < 0:
+            raise ValueError("Paper cash balance is invalid.")
         fill_price = market_price * (1 + self.slippage_bps / 10000)
         notional = quantity * fill_price
         fee = notional * self.fee_bps / 10000
@@ -39,8 +41,8 @@ class PaperBroker:
             raise ValueError("Existing paper position is invalid.")
         new_position = held + quantity
         if (not all(isfinite(x) for x in (fill_price, notional, fee, total, new_position))
-                or total < 0):
-            raise ValueError("Paper order arithmetic overflowed.")
+                or fill_price <= 0 or notional <= 0 or total <= 0 or new_position <= held):
+            raise ValueError("Paper order arithmetic is outside safe numeric bounds.")
         if total > self.cash:
             raise ValueError("Insufficient paper cash.")
         self.cash -= total
@@ -52,6 +54,8 @@ class PaperBroker:
             raise ValueError("Invalid paper order.")
         if not isfinite(quantity) or not isfinite(market_price) or quantity <= 0 or market_price <= 0:
             raise ValueError("Quantity and price must be finite and positive.")
+        if type(self.cash) not in (int, float) or not isfinite(self.cash) or self.cash < 0:
+            raise ValueError("Paper cash balance is invalid.")
         held = self.positions.get(symbol, 0.0)
         if type(held) not in (int, float) or not isfinite(held) or held <= 0:
             raise ValueError("No paper position is available to sell.")
@@ -61,10 +65,12 @@ class PaperBroker:
         gross = quantity * fill_price
         fee = gross * self.fee_bps / 10000
         cash_after = self.cash + gross - fee
-        if not all(isfinite(x) for x in (fill_price, gross, fee, cash_after)):
-            raise ValueError("Paper order arithmetic overflowed.")
-        self.cash = cash_after
         remaining = held - quantity
+        if (not all(isfinite(x) for x in (fill_price, gross, fee, cash_after, remaining))
+                or fill_price <= 0 or gross <= 0 or cash_after < 0
+                or (quantity < held and remaining <= 0)):
+            raise ValueError("Paper order arithmetic is outside safe numeric bounds.")
+        self.cash = cash_after
         if remaining:
             self.positions[symbol] = remaining
         else:
