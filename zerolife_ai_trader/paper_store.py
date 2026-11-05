@@ -191,6 +191,87 @@ class PaperTradeStore:
                 "quantity": float(quantity), "price": fill_price, "fee": fee,
                 "realized_pnl": 0.0, "cash_after": new_cash}}
 
+    def execute_sell(self, *, telegram_id, signal_id, symbol, quantity,
+                     market_price, fee_bps=10, slippage_bps=5):
+        """Atomically simulate a position-reducing SELL; never contacts an exchange."""
+        if type(telegram_id) is not int or telegram_id <= 0:
+            raise ValueError("Invalid paper account owner.")
+        if type(signal_id) is not int or signal_id <= 0:
+            raise ValueError("Invalid signal identifier.")
+        if not isinstance(symbol, str) or not symbol.strip() or len(symbol) > 32:
+            raise ValueError("Invalid paper trading symbol.")
+        symbol = symbol.strip().upper()
+        self._finite(quantity, "quantity", positive=True)
+        self._finite(market_price, "market_price", positive=True)
+        self._finite(fee_bps, "fee_bps", nonnegative=True)
+        self._finite(slippage_bps, "slippage_bps", nonnegative=True)
+        if fee_bps > 1000 or slippage_bps > 1000:
+            raise ValueError("Paper fee or slippage is outside safe bounds.")
+
+        # A SELL incurs adverse slippage, then fees are deducted from proceeds.
+        fill_price = market_price * (1.0 - slippage_bps / 10000.0)
+        gross = quantity * fill_price
+        fee = gross * fee_bps / 10000.0
+        proceeds = gross - fee
+        if not all(math.isfinite(x) for x in (fill_price, gross, fee, proceeds)) or fill_price <= 0 or proceeds < 0:
+            raise ValueError("Paper execution arithmetic overflow.")
+        fill_id = "paper-sell-" + str(telegram_id) + "-" + str(signal_id)
+
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            prior = db.execute("""SELECT fill_id FROM ai_trader_paper_executions
+                WHERE telegram_id=? AND signal_id=?""", (telegram_id, signal_id)).fetchone()
+            if prior:
+                row = db.execute("SELECT * FROM ai_trader_paper_fills WHERE id=?",
+                                 (prior["fill_id"],)).fetchone()
+                return {"executed": False, "duplicate": True,
+                        "fill": dict(row) if row else None}
+
+            account = db.execute("""SELECT cash FROM ai_trader_paper_accounts
+                WHERE telegram_id=?""", (telegram_id,)).fetchone()
+            if account is None:
+                raise ValueError("No paper account is available to sell.")
+            position = db.execute("""SELECT quantity, average_cost
+                FROM ai_trader_paper_positions WHERE telegram_id=? AND symbol=?""",
+                (telegram_id, symbol)).fetchone()
+            if position is None:
+                raise ValueError("No paper position is available to sell.")
+            held = float(position["quantity"])
+            average_cost = float(position["average_cost"])
+            if quantity > held:
+                raise ValueError("Cannot sell more than the paper position.")
+
+            cash_after = float(account["cash"]) + proceeds
+            remaining = held - quantity
+            realized_pnl = quantity * (fill_price - average_cost) - fee
+            if not all(math.isfinite(x) for x in (cash_after, remaining, realized_pnl)) or cash_after < 0:
+                raise ValueError("Paper account arithmetic overflow.")
+
+            db.execute("""INSERT INTO ai_trader_paper_fills
+                (id, telegram_id, symbol, side, quantity, price, fee,
+                 realized_pnl, cash_after) VALUES (?, ?, ?, 'SELL', ?, ?, ?, ?, ?)""",
+                (fill_id, telegram_id, symbol, float(quantity), fill_price,
+                 fee, realized_pnl, cash_after))
+            db.execute("""UPDATE ai_trader_paper_accounts SET cash=?,
+                updated_at=CURRENT_TIMESTAMP WHERE telegram_id=?""",
+                (cash_after, telegram_id))
+            if remaining <= max(1e-12, held * 1e-12):
+                db.execute("""DELETE FROM ai_trader_paper_positions
+                    WHERE telegram_id=? AND symbol=?""", (telegram_id, symbol))
+                remaining = 0.0
+            else:
+                db.execute("""UPDATE ai_trader_paper_positions SET quantity=?
+                    WHERE telegram_id=? AND symbol=?""",
+                    (remaining, telegram_id, symbol))
+            db.execute("""INSERT INTO ai_trader_paper_executions
+                (telegram_id, signal_id, fill_id) VALUES (?, ?, ?)""",
+                (telegram_id, signal_id, fill_id))
+            return {"executed": True, "duplicate": False, "fill": {
+                "id": fill_id, "symbol": symbol, "side": "SELL",
+                "quantity": float(quantity), "price": fill_price, "fee": fee,
+                "realized_pnl": realized_pnl, "cash_after": cash_after,
+                "remaining_quantity": remaining}}
+
     def account(self, *, telegram_id):
         if type(telegram_id) is not int or telegram_id <= 0:
             raise ValueError("Invalid paper account owner.")
