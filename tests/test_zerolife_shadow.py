@@ -38,5 +38,19 @@ class ShadowAdapterTests(unittest.TestCase):
         self.assertEqual(evaluate_context(context)[0]["action"], "HOLD")
 
 
+    def test_boolean_chart_flags_do_not_pass_integer_gates(self):
+        context = self.valid()
+        context["SOL"]["chart_ready"] = True
+        self.assertEqual(evaluate_context(context)[0]["action"], "HOLD")
+        context = self.valid()
+        context["SOL"]["chart_trend_h1"] = True
+        self.assertEqual(evaluate_context(context)[0]["action"], "HOLD")
+
+    def test_invalid_limits_are_not_silently_replaced(self):
+        from zerolife_ai_trader.risk import RiskLimits
+        result = evaluate_context(self.valid(), limits=RiskLimits(max_order_fraction=2.0))
+        self.assertEqual(result[0]["action"], "HOLD")
+        self.assertFalse(result[0]["risk"]["allowed"])
+
 if __name__ == "__main__":
     unittest.main()
