@@ -115,7 +115,12 @@ class TraderFoundationTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "cash balance"):
                     broker.sell("BTC", 1, 10)
                 self.assertEqual(broker.positions, before_positions)
-                self.assertIs(broker.cash, invalid_cash) if isinstance(invalid_cash, bool) else self.assertEqual(broker.cash, invalid_cash)
+                if isinstance(invalid_cash, bool):
+                    self.assertIs(broker.cash, invalid_cash)
+                elif isinstance(invalid_cash, float) and invalid_cash != invalid_cash:
+                    self.assertTrue(broker.cash != broker.cash)
+                else:
+                    self.assertEqual(broker.cash, invalid_cash)
 
     def test_paper_broker_rejects_boolean_and_blank_orders(self):
         broker = PaperBroker(1000)
