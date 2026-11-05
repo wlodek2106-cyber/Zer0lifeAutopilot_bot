@@ -11,6 +11,7 @@ on:
       - "main.py"
       - "index.html"
       - "static/dashboard.js"
+      - "requirements.txt"
       - "tests/test_admin_overview.py"
       - "tests/test_admin_overview_auth.py"
       - "tests/test_zerolife_ai_trader.py"
@@ -24,6 +25,7 @@ on:
       - "main.py"
       - "index.html"
       - "static/dashboard.js"
+      - "requirements.txt"
       - "tests/test_admin_overview.py"
       - "tests/test_admin_overview_auth.py"
       - "tests/test_zerolife_ai_trader.py"
@@ -41,8 +43,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install custody-ledger test dependency
-        run: python -m pip install aiohttp
+      - name: Install application dependencies needed by custody tests
+        run: python -m pip install -r requirements.txt
       - name: Check dashboard JavaScript syntax
         run: node --check static/dashboard.js
       - name: Run isolated paper, shadow, and custody overview tests
