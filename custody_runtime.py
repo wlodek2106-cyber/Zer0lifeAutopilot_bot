@@ -1,5 +1,6 @@
 """Public multi-user custody routes. All user ownership comes from verified Telegram."""
 import asyncio
+import hashlib
 import base64
 import json
 from zerolife_ai_trader.settings import DEFAULT_SETTINGS, validate_settings
@@ -1108,17 +1109,49 @@ class CustodyRuntime(WalletRuntime):
         except RuntimeError as exc:
             raise WalletError(str(exc), 502)
         self._ensure_ai_trader_signal_table()
+        from zerolife_ai_trader.paper_store import PaperTradeStore
+        paper_executions = []
         with self.ledger.db() as db:
             for item in results:
-                db.execute("""INSERT INTO ai_trader_signal_history
+                cursor = db.execute("""INSERT INTO ai_trader_signal_history
                     (telegram_id, symbol, action, confidence, price, reasons_json, risk_json)
                     VALUES (?, ?, ?, ?, ?, ?, ?)""",
                     (uid, item["symbol"], item["action"], item["confidence"],
                      item["price"], json.dumps(item["reasons"]),
                      json.dumps(item["risk"], allow_nan=False)))
+                item["signal_id"] = cursor.lastrowid
+        if settings.get("paperAutoExecute") is True and source == "binance_public":
+            store = PaperTradeStore(self.ledger.path)
+            for item in results:
+                if item["action"] != "PAPER_BUY" or not item["risk"].get("allowed"):
+                    continue
+                quality = market_quality.get(item["symbol"], {})
+                candle_id = quality.get("last_timestamp_ms")
+                if type(candle_id) is not int or candle_id <= 0:
+                    continue
+                stable_id = int.from_bytes(hashlib.sha256(
+                    (str(uid) + ":" + item["symbol"] + ":" + str(candle_id)).encode()
+                ).digest()[:8], "big") & 0x7FFFFFFFFFFFFFFF
+                try:
+                    result = store.execute_buy(
+                        telegram_id=uid, signal_id=stable_id,
+                        symbol=item["symbol"], quantity=item["risk"]["quantity"],
+                        market_price=item["price"], fee_bps=settings["fee"],
+                        slippage_bps=settings["slippage"], starting_cash=settings["capital"],
+                    )
+                    paper_executions.append({
+                        "symbol": item["symbol"], "executed": result["executed"],
+                        "duplicate": result["duplicate"], "fill": result["fill"],
+                    })
+                except ValueError as exc:
+                    paper_executions.append({
+                        "symbol": item["symbol"], "executed": False, "reason": str(exc),
+                    })
         return web.json_response({"success": True, "signals": results,
                                   "market_data": market_quality,
-                                  "execution": "paper_signal_only"})
+                                  "paper_executions": paper_executions,
+                                  "execution": ("paper_auto" if paper_executions else
+                                                "paper_signal_only")})
 
     async def run_ai_trader_backtest(self, request, session):
         """Run a bounded historical paper backtest; never submits orders."""
@@ -1257,6 +1290,7 @@ class CustodyRuntime(WalletRuntime):
             return web.json_response({
                 "success": True,
                 "summary": store.summary(telegram_id=uid),
+                "account": store.account(telegram_id=uid),
                 "fills": store.history(telegram_id=uid, limit=limit),
                 "execution": "paper_journal_read_only",
             })
