@@ -151,3 +151,50 @@ def run_backtest(closes, *, starting_cash=1000.0, fee_bps=10.0,
         "equity_curve": equity_curve,
         "execution_model": "next_bar_close_with_fee_and_slippage",
     }
+
+
+def run_segmented_evaluation(closes, *, segments=3, **backtest_settings):
+    """Evaluate consecutive, non-overlapping chronological slices independently.
+
+    Each slice starts with fresh paper capital. This is a robustness diagnostic,
+    not model training or a substitute for a properly sourced out-of-sample set.
+    """
+    if type(segments) is not int or segments < 2:
+        raise ValueError("At least two evaluation segments are required.")
+    if not isinstance(closes, (list, tuple)) or len(closes) < segments * 31:
+        raise ValueError("Each evaluation segment must contain at least 31 closes.")
+    if any(type(value) not in (int, float) or not isfinite(value) or value <= 0
+           for value in closes):
+        raise ValueError("Closes must be finite positive numeric values.")
+
+    base, remainder = divmod(len(closes), segments)
+    results = []
+    start = 0
+    for index in range(segments):
+        size = base + (1 if index < remainder else 0)
+        end = start + size
+        result = run_backtest(closes[start:end], **backtest_settings)
+        results.append({
+            "segment": index + 1,
+            "start_index": start,
+            "end_index_exclusive": end,
+            "bars": size,
+            "return_pct": result["return_pct"],
+            "buy_hold_return_pct": result["buy_hold_return_pct"],
+            "excess_return_vs_buy_hold_pct": result["excess_return_vs_buy_hold_pct"],
+            "max_drawdown_pct": result["max_drawdown_pct"],
+            "closed_trades": result["closed_trades"],
+            "fees_paid": result["fees_paid"],
+        })
+        start = end
+
+    returns = [item["return_pct"] for item in results]
+    return {
+        "segments": results,
+        "segment_count": segments,
+        "mean_segment_return_pct": sum(returns) / len(returns),
+        "worst_segment_return_pct": min(returns),
+        "positive_segments": sum(value > 0 for value in returns),
+        "all_segments_positive": all(value > 0 for value in returns),
+        "evaluation_method": "chronological_non_overlapping_segments",
+    }
