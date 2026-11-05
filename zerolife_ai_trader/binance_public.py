@@ -1,6 +1,8 @@
 """Read-only Binance Spot public candle client for research and paper mode."""
 import asyncio
 import aiohttp
+import math
+from datetime import datetime, timezone
 
 from .market_data import validate_candles
 
@@ -54,6 +56,47 @@ async def fetch_public_klines(symbol, interval, *, limit=500, session=None):
         return validate_candles(candles, interval_ms=INTERVALS[interval])
     except asyncio.TimeoutError as exc:
         raise RuntimeError("Binance public market-data request timed out.") from exc
+    finally:
+        if owned_session:
+            await client.close()
+
+
+
+async def fetch_public_price(symbol, *, session=None):
+    """Fetch one validated public Spot price for paper valuation only."""
+    if symbol not in ALLOWED_SYMBOLS:
+        raise ValueError("Unsupported market symbol.")
+    owned_session = session is None
+    client = session or aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=12),
+        headers={"Accept": "application/json", "User-Agent": "Zer0Life-AI-Trader-Research/1.0"},
+    )
+    try:
+        async with client.get(
+            BASE_URL + "/api/v3/ticker/price",
+            params={"symbol": symbol},
+            allow_redirects=False,
+        ) as response:
+            if response.status != 200:
+                raise RuntimeError("Binance public price request failed.")
+            payload = await response.json()
+        if not isinstance(payload, dict) or payload.get("symbol") != symbol:
+            raise ValueError("Binance returned a mismatched price response.")
+        raw_price = payload.get("price")
+        try:
+            price = float(raw_price)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Binance returned an invalid market price.") from exc
+        if not math.isfinite(price) or price <= 0:
+            raise ValueError("Binance returned an invalid market price.")
+        return {
+            "symbol": symbol,
+            "price": price,
+            "source": "binance_spot_public",
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+        }
+    except asyncio.TimeoutError as exc:
+        raise RuntimeError("Binance public price request timed out.") from exc
     finally:
         if owned_session:
             await client.close()
