@@ -8,6 +8,7 @@ A non-invasive, dependency-free research and paper-trading foundation for the ex
 - `risk.py`: independent position-count, confidence, order-size and daily-loss gate.
 - `paper.py`: in-memory paper broker with fee and slippage modelling.
 - `portfolio.py`: validated mark-to-market paper portfolio valuation, PnL, and drawdown metrics.
+- `paper_store.py`: immutable, per-user SQLite journal for simulated fills and fee/realized-PnL summaries.
 - `shadow.py`: read-only adapter for the existing `market_context` output. It mirrors conservative chart-entry checks and produces shadow-only `PAPER_BUY` / `HOLD` recommendations.
 
 ## Per-user configuration
@@ -35,3 +36,9 @@ python -m unittest discover -s tests -p 'test_ai_trader_portfolio.py' -v
 This package is paper-only. It does not import or call custody, wallet, signer, RPC-write, bridge, deposit, withdrawal, or live-execution modules. The shadow adapter accepts data already fetched by the existing market-context layer; it does not make network calls and is not wired into the production trade loop. Existing Solana and Base execution paths remain unchanged.
 
 The signal engine is deterministic rules, not an LLM. No paid AI API is required. Public market-data ingestion, exchange/DEX adapters, persistent paper-ledger integration, and any live execution require separate reviewed changes. Nothing here enables real-money trading or guarantees fills or returns.
+
+Paper fill journal tests:
+
+```bash
+python -m unittest discover -s tests -p 'test_ai_trader_paper_store.py' -v
+```
