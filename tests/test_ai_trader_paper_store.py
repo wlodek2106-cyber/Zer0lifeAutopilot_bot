@@ -68,6 +68,11 @@ class PaperTradeStoreTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.store.record_fill(**(base | change))
 
+    def test_empty_account_is_safe_to_read_before_first_fill(self):
+        account = self.store.account(telegram_id=101)
+        self.assertIsNone(account["cash"])
+        self.assertEqual(account["positions"], [])
+
     def test_execute_buy_persists_account_position_and_fill_once(self):
         first = self.store.execute_buy(
             telegram_id=101, signal_id=44, symbol="SOLUSDC", quantity=2,
