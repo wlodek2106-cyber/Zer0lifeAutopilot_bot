@@ -56,6 +56,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_ai_trader_settings.py' -v
           python -m unittest discover -s tests -p 'test_ai_trader_configuration.py' -v
           python -m unittest discover -s tests -p 'test_ai_trader_signal_engine.py' -v
+          python -m unittest discover -s tests -p 'test_ai_trader_binance_public.py' -v
           python -m unittest discover -s tests -p 'test_zerolife_shadow.py' -v
           python -m unittest discover -s tests -p 'test_admin_overview*.py' -v
           python -m unittest discover -s tests -p 'test_custody.py' -v
