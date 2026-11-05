@@ -15,6 +15,7 @@ on:
       - "tests/test_admin_overview.py"
       - "tests/test_admin_overview_auth.py"
       - "tests/test_zerolife_ai_trader.py"
+      - "tests/test_ai_trader_settings.py"
       - "tests/test_zerolife_shadow.py"
       - ".github/workflows/zerolife-ai-trader.yml"
   pull_request:
@@ -50,6 +51,7 @@ jobs:
       - name: Run isolated paper, shadow, and custody overview tests
         run: |
           python -m unittest discover -s tests -p 'test_zerolife_ai_trader.py' -v
+          python -m unittest discover -s tests -p 'test_ai_trader_settings.py' -v
           python -m unittest discover -s tests -p 'test_zerolife_shadow.py' -v
           python -m unittest discover -s tests -p 'test_admin_overview*.py' -v
           python -m unittest discover -s tests -p 'test_custody.py' -v
