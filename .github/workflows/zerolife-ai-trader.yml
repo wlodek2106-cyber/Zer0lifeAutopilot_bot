@@ -67,6 +67,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_ai_trader_portfolio.py' -v
           python -m unittest discover -s tests -p 'test_ai_trader_paper_store.py' -v
           python -m unittest discover -s tests -p 'test_ai_trader_signal_dispatcher.py' -v
+          python -m unittest discover -s tests -p 'test_ai_trader_paper_bridge.py' -v
           python -m unittest discover -s tests -p 'test_zerolife_shadow.py' -v
           python -m unittest discover -s tests -p 'test_admin_overview*.py' -v
           python -m unittest discover -s tests -p 'test_custody.py' -v
