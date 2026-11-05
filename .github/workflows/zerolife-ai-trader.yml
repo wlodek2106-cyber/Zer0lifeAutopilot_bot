@@ -52,3 +52,9 @@ jobs:
           python -m unittest discover -s tests -p 'test_zerolife_ai_trader.py' -v
           python -m unittest discover -s tests -p 'test_zerolife_shadow.py' -v
           python -m unittest discover -s tests -p 'test_admin_overview*.py' -v
+          python -m unittest discover -s tests -p 'test_custody.py' -v
+          python -m unittest discover -s tests -p 'test_wallet_runtime.py' -v
+          python -m unittest discover -s tests -p 'test_web_access.py' -v
+          python -m unittest discover -s tests -p 'test_account_security.py' -v
+          python -m unittest discover -s tests -p 'test_security_headers.py' -v
+          python -m unittest discover -s tests -p 'test_market_context.py' -v
