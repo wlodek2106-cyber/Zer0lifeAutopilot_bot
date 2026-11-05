@@ -1057,6 +1057,78 @@ class CustodyRuntime(WalletRuntime):
         return web.json_response({"success": True, "settings": settings,
                                   "updated_at": updated_at, "storage": "server"})
 
+    async def evaluate_ai_trader_signals(self, request, session):
+        """Evaluate caller-supplied close series; persist decisions, never place orders."""
+        from zerolife_ai_trader.signal_engine import evaluate_watchlist
+        uid = self.uid(request)
+        self._ensure_ai_trader_settings_table()
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict) or set(payload) != {"price_series"}:
+                raise ValueError("Expected only price_series.")
+            series = payload["price_series"]
+            if not isinstance(series, dict) or not 1 <= len(series) <= 10:
+                raise ValueError("Provide close series for 1 to 10 symbols.")
+            for symbol, closes in series.items():
+                if not isinstance(symbol, str) or len(symbol) > 24:
+                    raise ValueError("Invalid symbol.")
+                if not isinstance(closes, list) or not 30 <= len(closes) <= 5000:
+                    raise ValueError("Each close series must contain 30 to 5000 values.")
+            with self.ledger.db() as db:
+                row = db.execute(
+                    "SELECT settings_json FROM ai_trader_user_settings WHERE telegram_id=?",
+                    (uid,)
+                ).fetchone()
+            settings = validate_settings(json.loads(row["settings_json"])) if row else dict(DEFAULT_SETTINGS)
+            results = evaluate_watchlist(series, settings)
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+            raise WalletError("Invalid signal evaluation request or market data.", 400)
+        self._ensure_ai_trader_signal_table()
+        with self.ledger.db() as db:
+            for item in results:
+                db.execute("""INSERT INTO ai_trader_signal_history
+                    (telegram_id, symbol, action, confidence, price, reasons_json, risk_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (uid, item["symbol"], item["action"], item["confidence"],
+                     item["price"], json.dumps(item["reasons"]),
+                     json.dumps(item["risk"], allow_nan=False)))
+        return web.json_response({"success": True, "signals": results,
+                                  "execution": "paper_signal_only"})
+
+    def _ensure_ai_trader_signal_table(self):
+        with self.ledger.db() as db:
+            db.execute("""CREATE TABLE IF NOT EXISTS ai_trader_signal_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                action TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                price REAL,
+                reasons_json TEXT NOT NULL,
+                risk_json TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )""")
+            db.execute("""CREATE INDEX IF NOT EXISTS idx_ai_trader_signals_user_time
+                ON ai_trader_signal_history(telegram_id, created_at DESC)""")
+
+    async def get_ai_trader_signal_history(self, request, session):
+        self._ensure_ai_trader_signal_table()
+        uid = self.uid(request)
+        with self.ledger.db() as db:
+            rows = db.execute("""SELECT symbol, action, confidence, price,
+                reasons_json, risk_json, created_at FROM ai_trader_signal_history
+                WHERE telegram_id=? ORDER BY id DESC LIMIT 50""", (uid,)).fetchall()
+        history = []
+        for row in rows:
+            history.append({
+                "symbol": row["symbol"], "action": row["action"],
+                "confidence": row["confidence"], "price": row["price"],
+                "reasons": json.loads(row["reasons_json"]),
+                "risk": json.loads(row["risk_json"]),
+                "created_at": row["created_at"],
+            })
+        return web.json_response({"success": True, "signals": history})
+
     async def save_ai_trader_settings(self, request, session):
         self._ensure_ai_trader_settings_table()
         try:
