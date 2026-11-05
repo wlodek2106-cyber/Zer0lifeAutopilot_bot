@@ -2114,6 +2114,10 @@ class CustodyRuntime(WalletRuntime):
             raise WalletError("Только администратор.", 403)
         payload = {"success": True, "legacy_check_error": None, "balance_check_error": None}
         try:
+            payload["overview"] = self.ledger.admin_overview_snapshot(10)
+        except LedgerError:
+            payload["overview"] = {"success": False, "message": "Operator overview temporarily unavailable."}
+        try:
             await self.reconcile(session)
         except Exception as exc:
             payload["legacy_check_error"] = str(exc) if isinstance(exc, WalletError) else "Не удалось проверить старую операцию: " + type(exc).__name__
