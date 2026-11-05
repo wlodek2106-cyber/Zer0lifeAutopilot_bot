@@ -257,9 +257,9 @@ class TraderFoundationTests(unittest.TestCase):
     def test_ohlcv_csv_import_validates_and_normalizes_rows(self):
         from zerolife_ai_trader.csv_data import load_ohlcv_csv
         csv_text = (
-            "timestamp_ms,open,high,low,close,volume\\n"
-            "0,10,12,9,11,100\\n"
-            "60000,11,13,10,12,120\\n"
+            "timestamp_ms,open,high,low,close,volume\n"
+            "0,10,12,9,11,100\n"
+            "60000,11,13,10,12,120\n"
         )
         report = load_ohlcv_csv(csv_text, interval_ms=60_000)
         self.assertEqual(report["count"], 2)
@@ -269,11 +269,11 @@ class TraderFoundationTests(unittest.TestCase):
     def test_ohlcv_csv_import_rejects_bad_schema_and_gaps(self):
         from zerolife_ai_trader.csv_data import load_ohlcv_csv
         with self.assertRaises(ValueError):
-            load_ohlcv_csv("timestamp_ms,close\\n0,10\\n", interval_ms=60_000)
+            load_ohlcv_csv("timestamp_ms,close\n0,10\n", interval_ms=60_000)
         csv_text = (
-            "timestamp_ms,open,high,low,close,volume\\n"
-            "0,10,12,9,11,100\\n"
-            "120000,11,13,10,12,120\\n"
+            "timestamp_ms,open,high,low,close,volume\n"
+            "0,10,12,9,11,100\n"
+            "120000,11,13,10,12,120\n"
         )
         with self.assertRaises(ValueError):
             load_ohlcv_csv(csv_text, interval_ms=60_000)
