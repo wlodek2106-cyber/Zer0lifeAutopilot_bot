@@ -1,4 +1,6 @@
 import unittest
+from unittest.mock import patch
+from zerolife_ai_trader.strategy import Signal
 
 from zerolife_ai_trader.indicators import ema, rsi
 from zerolife_ai_trader.strategy import analyze
@@ -149,6 +151,27 @@ class TraderFoundationTests(unittest.TestCase):
             run_backtest([100.0] * 30 + [True])
         with self.assertRaises(ValueError):
             run_backtest([100.0] * 31, fee_bps=float("nan"))
+
+    def test_backtest_executes_signals_on_next_bar_not_signal_bar(self):
+        closes = [100.0 + i for i in range(34)]
+
+        def controlled_signal(history):
+            if len(history) == 30:
+                return Signal("BUY", 0.9, history[-1], ("fixture buy",))
+            if len(history) == 32:
+                return Signal("SELL", 0.9, history[-1], ("fixture sell",))
+            return Signal("HOLD", 0.5, history[-1], ("fixture hold",))
+
+        with patch("zerolife_ai_trader.backtest.analyze", side_effect=controlled_signal):
+            result = run_backtest(closes, starting_cash=1000, fee_bps=0,
+                                  slippage_bps=0, order_fraction=0.5)
+        self.assertEqual(result["closed_trades"], 1)
+        trade = result["trades"][0]
+        self.assertEqual(trade["entry_index"], 30)
+        self.assertEqual(trade["entry_price"], closes[30])
+        self.assertEqual(trade["exit_index"], 33)
+        self.assertEqual(trade["exit_price"], closes[33])
+        self.assertEqual(result["open_trades"], 0)
 
 if __name__ == "__main__":
     unittest.main()
