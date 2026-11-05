@@ -393,5 +393,31 @@ class TraderFoundationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_dataset_manifest(candles, **args)
 
+    def test_binance_kline_parser_validates_public_spot_rows(self):
+        from zerolife_ai_trader.binance_data import parse_binance_klines
+        payload = []
+        for i in range(40):
+            timestamp = i * 60_000
+            payload.append([
+                timestamp, "100", "102", "99", "101", "1000",
+                timestamp + 59_999, "100000", 10, "500", "50000", "0"
+            ])
+        result = parse_binance_klines(payload, interval="1m")
+        self.assertEqual(result["count"], 40)
+        self.assertEqual(result["quality"], "complete")
+        self.assertEqual(result["source"], "binance_spot_public_klines")
+        self.assertEqual(result["candles"][0]["close"], 101.0)
+
+    def test_binance_kline_parser_rejects_malformed_rows_and_gaps(self):
+        from zerolife_ai_trader.binance_data import parse_binance_klines
+        row = [0, "100", "102", "99", "101", "1000",
+               59_999, "100000", 10, "500", "50000", "0"]
+        with self.assertRaises(ValueError):
+            parse_binance_klines([row[:-1]], interval="1m")
+        gap = [120_000, "100", "102", "99", "101", "1000",
+               179_999, "100000", 10, "500", "50000", "0"]
+        with self.assertRaises(ValueError):
+            parse_binance_klines([row, gap], interval="1m")
+
 if __name__ == "__main__":
     unittest.main()
