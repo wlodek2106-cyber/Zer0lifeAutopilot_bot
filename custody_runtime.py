@@ -1103,7 +1103,23 @@ class CustodyRuntime(WalletRuntime):
                         raise ValueError("Invalid symbol or close series length.")
             else:
                 raise ValueError("Unsupported market-data source.")
-            results = evaluate_watchlist(series, settings)
+            paper_cash = settings["capital"]
+            paper_equity = settings["capital"]
+            paper_open_positions = 0
+            if settings.get("paperAutoExecute") is True and source == "binance_public":
+                from zerolife_ai_trader.paper_store import PaperTradeStore
+                account = PaperTradeStore(self.ledger.path).account(telegram_id=uid)
+                if account["cash"] is not None:
+                    paper_cash = account["cash"]
+                    paper_open_positions = len(account["positions"])
+                    paper_equity = paper_cash + sum(
+                        position["quantity"] * position["average_cost"]
+                        for position in account["positions"]
+                    )
+            results = evaluate_watchlist(
+                series, settings, equity=paper_equity, cash=paper_cash,
+                open_positions=paper_open_positions,
+            )
         except (ValueError, TypeError, KeyError, json.JSONDecodeError):
             raise WalletError("Invalid signal evaluation request or market data.", 400)
         except RuntimeError as exc:
