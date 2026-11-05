@@ -79,6 +79,32 @@ class TraderFoundationTests(unittest.TestCase):
         self.assertEqual(broker.cash, before_cash)
         self.assertEqual(broker.positions, before_positions)
 
+    def test_paper_broker_rejects_underflowing_buy_without_mutation(self):
+        broker = PaperBroker(1000, fee_bps=0, slippage_bps=0)
+        with self.assertRaisesRegex(ValueError, "safe numeric bounds"):
+            broker.buy("TINY", 1e-320, 1e-320)
+        self.assertEqual(broker.cash, 1000.0)
+        self.assertEqual(broker.positions, {})
+
+    def test_paper_broker_rejects_underflowing_sell_without_mutation(self):
+        broker = PaperBroker(1000, fee_bps=0, slippage_bps=0)
+        broker.positions["TINY"] = 1e-320
+        before_cash = broker.cash
+        before_positions = dict(broker.positions)
+        with self.assertRaisesRegex(ValueError, "safe numeric bounds"):
+            broker.sell("TINY", 1e-320, 1e-320)
+        self.assertEqual(broker.cash, before_cash)
+        self.assertEqual(broker.positions, before_positions)
+
+    def test_paper_broker_rejects_corrupt_cash_without_mutation(self):
+        for invalid_cash in (float("nan"), float("inf"), -1.0, True):
+            broker = PaperBroker(1000)
+            broker.cash = invalid_cash
+            with self.subTest(cash=invalid_cash):
+                with self.assertRaisesRegex(ValueError, "cash balance"):
+                    broker.buy("BTC", 1, 10)
+                self.assertEqual(broker.positions, {})
+
     def test_paper_broker_rejects_boolean_and_blank_orders(self):
         broker = PaperBroker(1000)
         for symbol, quantity, price in (("", 1, 10), ("BTC", True, 10),
