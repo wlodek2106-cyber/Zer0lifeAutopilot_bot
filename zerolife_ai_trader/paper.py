@@ -34,7 +34,10 @@ class PaperBroker:
         notional = quantity * fill_price
         fee = notional * self.fee_bps / 10000
         total = notional + fee
-        new_position = self.positions.get(symbol, 0.0) + quantity
+        held = self.positions.get(symbol, 0.0)
+        if type(held) not in (int, float) or not isfinite(held) or held < 0:
+            raise ValueError("Existing paper position is invalid.")
+        new_position = held + quantity
         if (not all(isfinite(x) for x in (fill_price, notional, fee, total, new_position))
                 or total < 0):
             raise ValueError("Paper order arithmetic overflowed.")
@@ -50,7 +53,7 @@ class PaperBroker:
         if not isfinite(quantity) or not isfinite(market_price) or quantity <= 0 or market_price <= 0:
             raise ValueError("Quantity and price must be finite and positive.")
         held = self.positions.get(symbol, 0.0)
-        if not isfinite(held) or held <= 0:
+        if type(held) not in (int, float) or not isfinite(held) or held <= 0:
             raise ValueError("No paper position is available to sell.")
         if quantity > held:
             raise ValueError("Cannot sell more than the paper position.")
