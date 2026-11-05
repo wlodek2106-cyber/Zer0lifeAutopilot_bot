@@ -1155,6 +1155,7 @@ class CustodyRuntime(WalletRuntime):
                     slippage_bps=options["slippage_bps"],
                     order_fraction=options["order_fraction"],
                     min_confidence=options["min_confidence"],
+                    strategy=settings["strategy"],
                 )
                 report[symbol] = {
                     "metrics": {key: result[key] for key in (
