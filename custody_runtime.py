@@ -2,6 +2,7 @@
 import asyncio
 import base64
 import json
+from zerolife_ai_trader.settings import DEFAULT_SETTINGS, validate_settings
 import math
 import os
 import random
@@ -1028,6 +1029,54 @@ class CustodyRuntime(WalletRuntime):
     def uid(self, request):
         return int(request["telegram_user"]["id"])
 
+    def _ensure_ai_trader_settings_table(self):
+        with self.ledger.db() as db:
+            db.execute("""CREATE TABLE IF NOT EXISTS ai_trader_user_settings (
+                telegram_id INTEGER PRIMARY KEY,
+                settings_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )""")
+
+    async def get_ai_trader_settings(self, request, session):
+        self._ensure_ai_trader_settings_table()
+        uid = self.uid(request)
+        with self.ledger.db() as db:
+            row = db.execute(
+                "SELECT settings_json, updated_at FROM ai_trader_user_settings WHERE telegram_id=?",
+                (uid,)
+            ).fetchone()
+        settings = dict(DEFAULT_SETTINGS)
+        updated_at = None
+        if row:
+            try:
+                stored = json.loads(row["settings_json"])
+                settings = validate_settings(stored)
+                updated_at = row["updated_at"]
+            except (ValueError, TypeError, json.JSONDecodeError):
+                self.log("AI Trader settings: invalid stored settings for user")
+        return web.json_response({"success": True, "settings": settings,
+                                  "updated_at": updated_at, "storage": "server"})
+
+    async def save_ai_trader_settings(self, request, session):
+        self._ensure_ai_trader_settings_table()
+        try:
+            payload = await request.json()
+            settings = validate_settings(payload)
+        except (ValueError, TypeError, json.JSONDecodeError):
+            raise WalletError("Invalid AI Trader settings payload.", 400)
+        uid = self.uid(request)
+        encoded = json.dumps(settings, sort_keys=True, separators=(",", ":"),
+                             allow_nan=False)
+        with self.ledger.db() as db:
+            db.execute("""INSERT INTO ai_trader_user_settings
+                (telegram_id, settings_json, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(telegram_id) DO UPDATE SET
+                settings_json=excluded.settings_json,
+                updated_at=CURRENT_TIMESTAMP""", (uid, encoded))
+        return web.json_response({"success": True, "settings": settings,
+                                  "storage": "server"})
+
     def admit(self, uid):
         if not self.public_enabled and uid not in self.beta_users:
             raise WalletError("Публичный приём средств ещё не открыт.", 503)
@@ -1075,7 +1124,8 @@ class CustodyRuntime(WalletRuntime):
             if (getattr(self, "web_access", None) and request.method == "POST"
                     and action.__name__ in {"ai_preview", "scan_candidates", "trading_readiness",
                                             "save_trading_settings", "save_investor_budget",
-                                            "save_base_paper_budget", "scan_base_paper"}):
+                                            "save_base_paper_budget", "scan_base_paper",
+                                            "save_ai_trader_settings"}):
                 self.web_access.trading_request(request)
             if (getattr(self, "accounts", None) and request.method == "POST" and action.__name__ in
                     {"create_invoice","deposit","wallet_link","toggle","toggle_sniper","withdraw",
