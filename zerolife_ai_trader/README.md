@@ -21,3 +21,24 @@ python -m unittest discover -s tests -p 'test_zerolife_ai_trader.py' -v
 ```
 
 No real funds or API keys are needed.
+
+## Phase 2: existing-market-context shadow adapter
+
+`zerolife_ai_trader.shadow.assess_market_context(symbol, metrics)` consumes the
+numeric chart fields already emitted by the repository's `market_context`
+module. It returns `BUY_CANDIDATE` or `HOLD` with explicit reasons. It is
+read-only and does not call `ai_decisions`, `execution_policy`, custody,
+wallet, signer, RPC, or any order endpoint.
+
+Example:
+
+```python
+from zerolife_ai_trader.shadow import assess_market_context
+
+assessment = assess_market_context("SOL", main_context.get("SOL", {}))
+# Log/display assessment for comparison; never pass it to an executor.
+```
+
+A GitHub Actions workflow runs the isolated paper and shadow unit-test suites.
+The adapter is deliberately not wired into the production trading loop yet:
+first compare its decisions against the existing rules and review test results.
