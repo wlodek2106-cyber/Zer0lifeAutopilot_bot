@@ -9,6 +9,10 @@ A non-invasive, dependency-free research and paper-trading foundation for the ex
 - `paper.py`: in-memory paper broker with fee and slippage modelling.
 - `portfolio.py`: validated mark-to-market paper portfolio valuation, PnL, and drawdown metrics.
 - `paper_store.py`: immutable, per-user SQLite journal for simulated fills and fee/realized-PnL summaries.
+
+Authenticated dashboard endpoint:
+
+- `GET /api/ai-trader/paper-journal?limit=50` — returns the signed-in Telegram user's paper-fill history and summary only. The endpoint is read-only and does not place orders.
 - `shadow.py`: read-only adapter for the existing `market_context` output. It mirrors conservative chart-entry checks and produces shadow-only `PAPER_BUY` / `HOLD` recommendations.
 
 ## Per-user configuration
