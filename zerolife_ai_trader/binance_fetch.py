@@ -11,7 +11,8 @@ from urllib.request import Request, urlopen
 
 from .binance_data import parse_binance_klines, _BINANCE_INTERVALS
 
-_BASE_URL = "https://api.binance.com/api/v3/klines"\n_MAX_RESPONSE_BYTES = 10_000_000
+_BASE_URL = "https://api.binance.com/api/v3/klines"
+_MAX_RESPONSE_BYTES = 10_000_000
 
 
 def fetch_binance_klines(symbol, *, interval, start_time_ms, end_time_ms,
@@ -53,7 +54,10 @@ def fetch_binance_klines(symbol, *, interval, start_time_ms, end_time_ms,
             with urlopen(request, timeout=timeout) as response:
                 if response.status != 200:
                     raise RuntimeError(f"Binance returned HTTP {response.status}.")
-                body = response.read(_MAX_RESPONSE_BYTES + 1)\n                if len(body) > _MAX_RESPONSE_BYTES:\n                    raise RuntimeError("Binance response exceeds the 10 MB safety limit.")\n                payload = json.loads(body.decode("utf-8"))
+                body = response.read(_MAX_RESPONSE_BYTES + 1)
+                if len(body) > _MAX_RESPONSE_BYTES:
+                    raise RuntimeError("Binance response exceeds the 10 MB safety limit.")
+                payload = json.loads(body.decode("utf-8"))
         except HTTPError as exc:
             raise RuntimeError(f"Binance HTTP error: {exc.code}.") from exc
         except (URLError, TimeoutError, OSError) as exc:
