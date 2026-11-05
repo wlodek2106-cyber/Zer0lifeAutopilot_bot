@@ -7,6 +7,7 @@ A non-invasive, dependency-free research and paper-trading foundation for the ex
 - `strategy.py`: explainable deterministic BUY / SELL / HOLD signals.
 - `risk.py`: independent position-count, confidence, order-size and daily-loss gate.
 - `paper.py`: in-memory paper broker with fee and slippage modelling.
+- `portfolio.py`: validated mark-to-market paper portfolio valuation, PnL, and drawdown metrics.
 - `shadow.py`: read-only adapter for the existing `market_context` output. It mirrors conservative chart-entry checks and produces shadow-only `PAPER_BUY` / `HOLD` recommendations.
 
 ## Per-user configuration
@@ -27,6 +28,7 @@ From the repository root:
 
 ```bash
 python -m unittest discover -s tests -p 'test_zerolife_ai_trader*.py' -v
+python -m unittest discover -s tests -p 'test_ai_trader_portfolio.py' -v
 ```
 
 ## Safety boundary
