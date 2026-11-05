@@ -8,6 +8,7 @@ DEFAULT_SETTINGS = {
     "capital": 1000.0, "orderRisk": 2.0, "dailyLoss": 3.0,
     "maxPositions": 5, "confidence": 60.0, "fee": 10, "slippage": 5,
     "notifySignals": True, "notifyRisk": True, "notifyReports": False,
+    "paperAutoExecute": False,
 }
 STRATEGIES = {"ema_rsi", "trend_following", "mean_reversion", "manual"}
 SOURCES = {"binance_public", "dexscreener_readonly", "csv"}
@@ -48,7 +49,7 @@ def validate_settings(payload):
     for key in ("fee", "slippage"):
         if type(result[key]) is not int:
             raise ValueError(key + " must be an integer.")
-    for key in ("notifySignals", "notifyRisk", "notifyReports"):
+    for key in ("notifySignals", "notifyRisk", "notifyReports", "paperAutoExecute"):
         if type(result[key]) is not bool:
             raise ValueError("Invalid notification setting: " + key)
     return result
