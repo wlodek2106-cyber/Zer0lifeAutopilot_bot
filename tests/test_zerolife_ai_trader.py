@@ -335,5 +335,27 @@ class TraderFoundationTests(unittest.TestCase):
                 period_end_ms=39 * 60_000,
             )
 
+    def test_backtest_report_csv_export_round_trips_summary_fields(self):
+        import csv
+        from io import StringIO
+        from zerolife_ai_trader.report import build_backtest_report, report_to_csv
+        from zerolife_ai_trader.backtest import run_candle_backtest
+        candles = [
+            {"timestamp_ms": i * 60_000, "open": 100 + i, "high": 102 + i,
+             "low": 99 + i, "close": 101 + i, "volume": 1000}
+            for i in range(40)
+        ]
+        result = run_candle_backtest(candles, interval_ms=60_000)
+        report = build_backtest_report(
+            result, symbol="SOL/USDC", interval="1m",
+            data_source="fixture", period_start_ms=0,
+            period_end_ms=39 * 60_000,
+        )
+        rows = list(csv.DictReader(StringIO(report_to_csv(report))))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["symbol"], "SOL/USDC")
+        self.assertEqual(rows[0]["data_quality"], "complete")
+        self.assertEqual(float(rows[0]["return_pct"]), result["return_pct"])
+
 if __name__ == "__main__":
     unittest.main()
