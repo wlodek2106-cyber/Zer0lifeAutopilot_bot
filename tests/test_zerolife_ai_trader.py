@@ -436,8 +436,9 @@ class TraderFoundationTests(unittest.TestCase):
                 return self
             def __exit__(self, *args):
                 return False
-            def read(self):
-                return json.dumps(payload).encode()
+            def read(self, size=-1):
+                data = json.dumps(payload).encode()
+                return data if size < 0 else data[:size]
 
         with patch("zerolife_ai_trader.binance_fetch.urlopen",
                    return_value=FakeResponse()) as mocked:
