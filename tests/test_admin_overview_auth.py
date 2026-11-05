@@ -5,6 +5,7 @@ from aiohttp import web
 
 from custody_runtime import CustodyRuntime
 from wallet_runtime import WalletError
+from custody_ledger import LedgerError
 
 
 class FakeLedger:
@@ -44,6 +45,22 @@ class AdminOverviewAuthorizationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(raised.exception.status, 403)
         self.assertEqual(runtime.ledger.snapshot_calls, 0)
+        self.assertEqual(runtime.ledger.audit_calls, 0)
+
+    async def test_audit_failure_fails_closed_without_returning_snapshot(self):
+        runtime = self.make_runtime()
+
+        def fail_audit():
+            raise LedgerError("ledger integrity failure")
+
+        runtime.ledger.audit = fail_audit
+        request = SimpleNamespace(telegram_uid=runtime.owner_id)
+
+        with self.assertRaises(WalletError) as raised:
+            await runtime.admin_overview(request, None)
+
+        self.assertEqual(raised.exception.status, 503)
+        self.assertEqual(runtime.ledger.snapshot_calls, 1)
         self.assertEqual(runtime.ledger.audit_calls, 0)
 
     async def test_owner_receives_read_only_aggregate_without_cache(self):
