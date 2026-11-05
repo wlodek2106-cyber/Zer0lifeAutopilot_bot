@@ -8385,6 +8385,10 @@ async def main():
         return web.Response(text=Path(__file__).with_name("web_terminal.js").read_text(encoding="utf-8"),
                             content_type="application/javascript", headers={"Cache-Control":"no-store"})
     app.router.add_get('/web-terminal.js', web_script)
+    async def dashboard_script(request):
+        return web.Response(text=Path(__file__).with_name("static").joinpath("dashboard.js").read_text(encoding="utf-8"),
+                            content_type="application/javascript", headers={"Cache-Control":"no-store"})
+    app.router.add_get('/dashboard.js', dashboard_script)
     app.router.add_get('/web-auth/me', runtime.web_access.public)
     app.router.add_post('/web-auth/start', runtime.web_access.public)
     app.router.add_post('/web-auth/finish', runtime.web_access.public)
@@ -8398,6 +8402,12 @@ async def main():
     app.router.add_get('/api/partners', wallet_handler(runtime.partner_program))
     app.router.add_post('/api/partners/retry', wallet_handler(runtime.retry_partner_payout))
     app.router.add_get('/api/stats', wallet_handler(runtime.stats))
+    app.router.add_get('/api/ai-trader/settings', wallet_handler(runtime.get_ai_trader_settings))
+    app.router.add_post('/api/ai-trader/settings', wallet_handler(runtime.save_ai_trader_settings))
+    app.router.add_post('/api/ai-trader/signals/evaluate', wallet_handler(runtime.evaluate_ai_trader_signals))
+    app.router.add_get('/api/ai-trader/signals/history', wallet_handler(runtime.get_ai_trader_signal_history))
+    app.router.add_post('/api/ai-trader/backtest', wallet_handler(runtime.run_ai_trader_backtest))
+    app.router.add_get('/api/ai-trader/backtest/history', wallet_handler(runtime.get_ai_trader_backtest_history))
     app.router.add_get('/api/monthly-trading-fee', wallet_handler(runtime.monthly_trading_fee))
     app.router.add_post('/api/monthly-trading-fee', wallet_handler(runtime.monthly_trading_fee))
     support_inbox = SupportInbox(TELEGRAM_TOKEN, ADMIN_TELEGRAM_ID)
@@ -8426,6 +8436,7 @@ async def main():
     app.router.add_post('/api/verify_deposit', wallet_handler(runtime.deposit))
     app.router.add_post('/api/wallet_link', wallet_handler(runtime.wallet_link))
     app.router.add_post('/api/deposit_invoice', wallet_handler(runtime.create_invoice))
+    app.router.add_get('/api/admin/overview', wallet_handler(runtime.admin_overview))
     app.router.add_get('/api/admin/status', wallet_handler(runtime.admin_status))
     app.router.add_get('/api/admin/pending_operations', wallet_handler(runtime.admin_pending_operations))
     app.router.add_get('/api/admin/balance_check', wallet_handler(runtime.admin_balance_check))
