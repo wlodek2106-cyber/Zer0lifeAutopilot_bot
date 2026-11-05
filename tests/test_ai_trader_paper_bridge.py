@@ -51,7 +51,7 @@ class PaperBridgeTests(unittest.TestCase):
     def test_sell_requires_matching_existing_paper_position(self):
         self.run_signal(self.base_signal())
         sell = self.base_signal(side="SELL", candle_id="candle-2",
-            position_id="paper:solana:SOLUSDC", quantity=4.0)
+            position_id="paper:SOLANA:SOLUSDC", quantity=4.0)
         sell.pop("amount_usdc")
         result = self.run_signal(sell, price=12.0)
         self.assertEqual(result["status"], "PAPER_DONE")
@@ -62,7 +62,7 @@ class PaperBridgeTests(unittest.TestCase):
     def test_sell_cannot_reference_another_symbol_position(self):
         self.run_signal(self.base_signal())
         sell = self.base_signal(side="SELL", candle_id="candle-3",
-            position_id="paper:base:ETHUSDC", quantity=1.0)
+            position_id="paper:BASE:ETHUSDC", quantity=1.0)
         sell.pop("amount_usdc")
         with self.assertRaisesRegex(ValueError, "matching user's paper position"):
             self.run_signal(sell)
@@ -70,7 +70,7 @@ class PaperBridgeTests(unittest.TestCase):
     def test_sell_cannot_exceed_held_quantity(self):
         self.run_signal(self.base_signal())
         sell = self.base_signal(side="SELL", candle_id="candle-4",
-            position_id="paper:SOLUSDC", quantity=11.0)
+            position_id="paper:SOLANA:SOLUSDC", quantity=11.0)
         sell.pop("amount_usdc")
         with self.assertRaisesRegex(ValueError, "more than the paper position"):
             self.run_signal(sell)
