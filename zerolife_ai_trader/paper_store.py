@@ -227,15 +227,15 @@ class PaperTradeStore:
                 return {"executed": False, "duplicate": True,
                         "fill": dict(row) if row else None}
 
-            account = db.execute("""SELECT cash FROM ai_trader_paper_accounts
-                WHERE telegram_id=?""", (telegram_id,)).fetchone()
-            if account is None:
-                raise ValueError("No paper account is available to sell.")
             position = db.execute("""SELECT quantity, average_cost
                 FROM ai_trader_paper_positions WHERE telegram_id=? AND symbol=?""",
                 (telegram_id, symbol)).fetchone()
             if position is None:
                 raise ValueError("No paper position is available to sell.")
+            account = db.execute("""SELECT cash FROM ai_trader_paper_accounts
+                WHERE telegram_id=?""", (telegram_id,)).fetchone()
+            if account is None:
+                raise ValueError("No paper account is available to sell.")
             held = float(position["quantity"])
             average_cost = float(position["average_cost"])
             if quantity > held:
