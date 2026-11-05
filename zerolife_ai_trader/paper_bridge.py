@@ -32,20 +32,21 @@ def execute_paper_signal(signal, *, dispatch_store, paper_store, token_allowlist
 
     def paper_executor(plan):
         signal_id = _paper_signal_id(plan["signal_key"])
+        ledger_symbol = plan["chain"].upper() + ":" + plan["symbol"]
         if plan["side"] == "BUY":
             quantity = plan["amount_usdc"] / float(market_price)
             return paper_store.execute_buy(
                 telegram_id=plan["telegram_id"], signal_id=signal_id,
-                symbol=plan["symbol"], quantity=quantity,
+                symbol=ledger_symbol, quantity=quantity,
                 market_price=float(market_price), fee_bps=fee_bps,
                 slippage_bps=slippage_bps, starting_cash=starting_cash,
             )
-        expected_position = "paper:" + plan["symbol"]
+        expected_position = "paper:" + ledger_symbol
         if plan["position_id"] != expected_position:
             raise ValueError("SELL must reference the matching user's paper position.")
         return paper_store.execute_sell(
             telegram_id=plan["telegram_id"], signal_id=signal_id,
-            symbol=plan["symbol"], quantity=plan["quantity"],
+            symbol=ledger_symbol, quantity=plan["quantity"],
             market_price=float(market_price), fee_bps=fee_bps,
             slippage_bps=slippage_bps,
         )
