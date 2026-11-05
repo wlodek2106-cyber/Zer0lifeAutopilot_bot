@@ -20,7 +20,18 @@ class RiskDecision:
 
 def assess_order(*, equity, cash, price, confidence, open_positions=0,
                  daily_pnl=0.0, limits=None):
-    limits = limits or RiskLimits()
+    limits = RiskLimits() if limits is None else limits
+    if not isinstance(limits, RiskLimits):
+        return RiskDecision(False, 0.0, "Invalid risk-limit configuration.")
+    limit_numbers = (limits.max_order_fraction, limits.max_daily_loss_fraction,
+                     limits.min_confidence)
+    if (any(type(x) not in (int, float) or not isfinite(x) for x in limit_numbers)
+            or not 0 < limits.max_order_fraction <= 1
+            or not 0 < limits.max_daily_loss_fraction <= 1
+            or not 0 <= limits.min_confidence <= 1
+            or type(limits.max_open_positions) is not int
+            or limits.max_open_positions < 1):
+        return RiskDecision(False, 0.0, "Invalid risk-limit configuration.")
     numbers = (equity, cash, price, confidence, daily_pnl)
     if any(type(x) not in (int, float) or not isfinite(x) for x in numbers):
         return RiskDecision(False, 0.0, "Invalid or non-finite risk input.")
