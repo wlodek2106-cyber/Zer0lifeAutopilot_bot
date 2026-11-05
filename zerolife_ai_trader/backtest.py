@@ -90,6 +90,20 @@ def run_backtest(closes, *, starting_cash=1000.0, fee_bps=10.0,
         equity_curve.append(cash)
 
     final_equity = cash
+    # Fully invested buy-and-hold benchmark with the same fee and slippage model.
+    benchmark_entry = closes[0] * (1 + slip_rate)
+    benchmark_quantity = starting_cash / (benchmark_entry * (1 + fee_rate))
+    benchmark_entry_cost = benchmark_quantity * benchmark_entry * (1 + fee_rate)
+    benchmark_exit = closes[-1] * (1 - slip_rate)
+    benchmark_gross = benchmark_quantity * benchmark_exit
+    benchmark_exit_fee = benchmark_gross * fee_rate
+    benchmark_final_equity = benchmark_gross - benchmark_exit_fee
+    benchmark_fees = (benchmark_quantity * benchmark_entry * fee_rate
+                      + benchmark_exit_fee)
+    benchmark_return_pct = (benchmark_final_equity / starting_cash - 1) * 100
+    strategy_vs_buy_hold_pct = (
+        (final_equity / starting_cash - 1) * 100 - benchmark_return_pct
+    )
     peak = equity_curve[0]
     max_drawdown = 0.0
     for equity in equity_curve:
@@ -115,6 +129,10 @@ def run_backtest(closes, *, starting_cash=1000.0, fee_bps=10.0,
         "final_equity": final_equity,
         "net_pnl": final_equity - starting_cash,
         "return_pct": (final_equity / starting_cash - 1) * 100,
+        "buy_hold_final_equity": benchmark_final_equity,
+        "buy_hold_return_pct": benchmark_return_pct,
+        "buy_hold_fees_paid": benchmark_fees,
+        "excess_return_vs_buy_hold_pct": strategy_vs_buy_hold_pct,
         "max_drawdown_pct": max_drawdown * 100,
         "closed_trades": len(closed),
         "open_trades": len(trades) - len(closed),
