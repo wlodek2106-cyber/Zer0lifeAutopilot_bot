@@ -87,5 +87,12 @@ class TraderFoundationTests(unittest.TestCase):
             broker.sell("CORRUPT", 1, 10)
         self.assertEqual(broker.cash, 1000.0)
 
+    def test_paper_broker_reports_insufficient_cash_without_mutation(self):
+        broker = PaperBroker(10, fee_bps=0, slippage_bps=0)
+        with self.assertRaisesRegex(ValueError, "Insufficient paper cash"):
+            broker.buy("BTC", 2, 10)
+        self.assertEqual(broker.cash, 10.0)
+        self.assertEqual(broker.positions, {})
+
 if __name__ == "__main__":
     unittest.main()
