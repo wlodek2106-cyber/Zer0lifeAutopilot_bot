@@ -13,6 +13,18 @@ class AITraderSettingsTests(unittest.TestCase):
         self.assertEqual(result["symbols"], "SOLUSDC,BTCUSDT,ETHUSDT")
         self.assertEqual(result["strategy"], "ema_rsi")
 
+    def test_legacy_saved_settings_default_paper_auto_execute_to_off(self):
+        payload = self.payload()
+        payload.pop("paperAutoExecute")
+        result = validate_settings(payload)
+        self.assertIs(result["paperAutoExecute"], False)
+
+    def test_paper_auto_execute_requires_boolean(self):
+        payload = self.payload()
+        payload["paperAutoExecute"] = "yes"
+        with self.assertRaises(ValueError):
+            validate_settings(payload)
+
     def test_symbols_are_normalized_and_deduplicated(self):
         payload = self.payload()
         payload["symbols"] = " solusdc, BTCUSDT,solusdc "
