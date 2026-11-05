@@ -58,3 +58,12 @@ jobs:
           python -m unittest discover -s tests -p 'test_account_security.py' -v
           python -m unittest discover -s tests -p 'test_security_headers.py' -v
           python -m unittest discover -s tests -p 'test_market_context.py' -v
+          python -m unittest discover -s tests -p 'test_account_browser.py' -v
+          python -m unittest discover -s tests -p 'test_activity_log.py' -v
+          python -m unittest discover -s tests -p 'test_execution_policy.py' -v
+          python -m unittest discover -s tests -p 'test_entry_costs.py' -v
+          python -m unittest discover -s tests -p 'test_fee_reserve.py' -v
+          python -m unittest discover -s tests -p 'test_trade_audit.py' -v
+          python -m unittest discover -s tests -p 'test_real_trading_only.py' -v
+          python -m unittest discover -s tests -p 'test_base_paper.py' -v
+          python -m unittest discover -s tests -p 'test_rule_signals.py' -v
