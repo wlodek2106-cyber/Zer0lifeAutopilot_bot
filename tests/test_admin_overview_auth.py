@@ -51,6 +51,7 @@ class AdminOverviewAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         runtime = self.make_runtime()
 
         def fail_audit():
+            runtime.ledger.audit_calls += 1
             raise LedgerError("ledger integrity failure")
 
         runtime.ledger.audit = fail_audit
@@ -61,7 +62,7 @@ class AdminOverviewAuthorizationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(raised.exception.status, 503)
         self.assertEqual(runtime.ledger.snapshot_calls, 1)
-        self.assertEqual(runtime.ledger.audit_calls, 0)
+        self.assertEqual(runtime.ledger.audit_calls, 1)
 
     async def test_owner_receives_read_only_aggregate_without_cache(self):
         runtime = self.make_runtime()
