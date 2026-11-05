@@ -25,13 +25,16 @@ def evaluate_context(context, *, equity=1000.0, cash=1000.0,
         chart_ready = metrics.get("chart_ready")
         buy_setup = metrics.get("chart_buy_setup")
         candle_age = metrics.get("chart_m5_age_seconds")
+        hourly_age = metrics.get("chart_h1_age_seconds")
         valid = (
             type(price) in (int, float) and isfinite(price) and price > 0
             and type(change_m5) in (int, float) and isfinite(change_m5)
             and type(change_h1) in (int, float) and isfinite(change_h1)
             and trend in (0, 1) and chart_ready == 1 and buy_setup == 1
             and type(candle_age) in (int, float) and isfinite(candle_age)
-            and 0 <= candle_age <= 600
+            and 0 <= candle_age <= 420
+            and type(hourly_age) in (int, float) and isfinite(hourly_age)
+            and 0 <= hourly_age <= 4200
             and change_m5 > 0 and change_h1 >= 0
         )
         if not valid:
