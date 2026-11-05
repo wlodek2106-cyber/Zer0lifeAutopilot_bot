@@ -33,6 +33,7 @@ from web_access import WebAccess
 from wallet_runtime import WalletError
 from spl_token_support import TOKEN_2022_PROGRAM_ID
 from support_inbox import SupportInbox, MAX_SUPPORT_REQUEST_BYTES
+from access_control import admin_access_status
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -184,12 +185,11 @@ async def telegram_auth_middleware(request, handler):
     # cannot accidentally ship without the central owner check. Individual
     # runtime methods still enforce ownership as a second line of defense.
     if request.path in ADMIN_API_PATHS or request.path.startswith("/api/admin/"):
-        try:
-            admin_id = int(ADMIN_TELEGRAM_ID)
-        except (TypeError, ValueError):
+        access_status = admin_access_status(telegram_user.get("id"), ADMIN_TELEGRAM_ID)
+        if access_status == 503:
             return web.json_response({"success": False, "message": "ADMIN_TELEGRAM_ID is not configured."}, status=503)
-        if int(telegram_user["id"]) != admin_id:
-            return web.json_response({"success": False, "message": "Admin access required."}, status=403)
+        if access_status is not None:
+            return web.json_response({"success": False, "message": "Admin access required."}, status=access_status)
     return await handler(request)
 
 def hash_pin(pin: str) -> str:
