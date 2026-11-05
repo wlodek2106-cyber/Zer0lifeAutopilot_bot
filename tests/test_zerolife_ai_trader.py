@@ -105,6 +105,18 @@ class TraderFoundationTests(unittest.TestCase):
                     broker.buy("BTC", 1, 10)
                 self.assertEqual(broker.positions, {})
 
+    def test_paper_broker_rejects_corrupt_cash_before_sell(self):
+        for invalid_cash in (float("nan"), float("inf"), -1.0, True):
+            broker = PaperBroker(1000)
+            broker.positions["BTC"] = 2.0
+            broker.cash = invalid_cash
+            before_positions = dict(broker.positions)
+            with self.subTest(cash=invalid_cash):
+                with self.assertRaisesRegex(ValueError, "cash balance"):
+                    broker.sell("BTC", 1, 10)
+                self.assertEqual(broker.positions, before_positions)
+                self.assertIs(broker.cash, invalid_cash) if isinstance(invalid_cash, bool) else self.assertEqual(broker.cash, invalid_cash)
+
     def test_paper_broker_rejects_boolean_and_blank_orders(self):
         broker = PaperBroker(1000)
         for symbol, quantity, price in (("", 1, 10), ("BTC", True, 10),
