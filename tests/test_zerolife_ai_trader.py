@@ -94,5 +94,21 @@ class TraderFoundationTests(unittest.TestCase):
         self.assertEqual(broker.cash, 10.0)
         self.assertEqual(broker.positions, {})
 
+    def test_indicators_reject_boolean_and_string_prices(self):
+        for prices in ([1, 2, True], [1, 2, "3"]):
+            with self.assertRaises(ValueError):
+                ema(prices, 2)
+            with self.assertRaises(ValueError):
+                rsi(prices, 2)
+
+    def test_paper_broker_rejects_corrupt_existing_position_on_buy(self):
+        broker = PaperBroker(1000)
+        broker.positions["BTC"] = float("nan")
+        before_cash = broker.cash
+        with self.assertRaises(ValueError):
+            broker.buy("BTC", 1, 10)
+        self.assertEqual(broker.cash, before_cash)
+        self.assertTrue(float("nan") != broker.positions["BTC"])
+
 if __name__ == "__main__":
     unittest.main()
