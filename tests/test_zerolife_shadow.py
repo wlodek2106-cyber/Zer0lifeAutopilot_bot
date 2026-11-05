@@ -13,6 +13,7 @@ class ShadowAdapterTests(unittest.TestCase):
             "chart_ready": 1,
             "chart_buy_setup": 1,
             "chart_m5_age_seconds": 30,
+            "chart_h1_age_seconds": 300,
         }}
 
     def test_valid_context_produces_shadow_only_recommendation(self):
