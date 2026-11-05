@@ -7,6 +7,10 @@ software, not a forecast or a live execution adapter.
 from math import isfinite
 from .signal_engine import analyze_with_strategy
 
+# Compatibility hook retained for existing default-strategy tests/integrations.
+def analyze(closes):
+    return analyze_with_strategy(closes, "ema_rsi")
+
 
 def run_backtest(closes, *, starting_cash=1000.0, fee_bps=10.0,
                  slippage_bps=5.0, order_fraction=0.02,
@@ -74,7 +78,8 @@ def run_backtest(closes, *, starting_cash=1000.0, fee_bps=10.0,
         equity_curve.append(cash + quantity * close)
         # Do not generate a signal on the final bar: use it only to liquidate.
         if index < len(closes) - 1 and index >= 29:
-            signal = analyze_with_strategy(closes[:index + 1], strategy)
+            signal = (analyze(closes[:index + 1]) if strategy == "ema_rsi"
+                      else analyze_with_strategy(closes[:index + 1], strategy))
             if signal.confidence >= min_confidence:
                 if signal.action == "BUY" and quantity == 0:
                     pending = "BUY"
