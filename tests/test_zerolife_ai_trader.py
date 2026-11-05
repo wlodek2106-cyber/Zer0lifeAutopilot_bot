@@ -34,6 +34,14 @@ class TraderFoundationTests(unittest.TestCase):
         self.assertGreater(sale.cash_after, fill.cash_after)
         self.assertNotIn("BTC", broker.positions)
 
+    def test_risk_gate_rejects_overflowing_order_quantity(self):
+        decision = assess_order(
+            equity=1000, cash=1000, price=1e-320, confidence=0.9
+        )
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.quantity, 0.0)
+        self.assertIn("numeric bounds", decision.reason)
+
 
     def test_invalid_risk_limits_fail_closed(self):
         from zerolife_ai_trader.risk import RiskLimits, assess_order
