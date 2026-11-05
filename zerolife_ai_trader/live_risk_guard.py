@@ -1,16 +1,13 @@
 """Fail-closed shared capital and daily-loss guard for dual-chain live mode.
 
-This module is policy-only: it does not sign, submit, or broadcast transactions.
-Live mode remains disabled until a separate, reviewed dispatcher is integrated.
+Policy only: this module never signs or submits transactions. A capital ceiling
+must be supplied from an explicitly approved configuration; no user limit is
+assumed in code. Live mode defaults off.
 """
 from decimal import Decimal, InvalidOperation
 
-TOTAL_CAP_USDC = Decimal("100000")
-CHAIN_CAPS_USDC = {
-    "solana": Decimal("50000"),
-    "base": Decimal("50000"),
-}
 LIVE_MODE_DEFAULT_ENABLED = False
+SUPPORTED_CHAINS = frozenset({"solana", "base"})
 
 
 class LiveRiskGuardError(ValueError):
@@ -30,17 +27,29 @@ def _amount(value, field):
 def check_live_order(*, chain, order_usdc, chain_exposure_usdc,
                      other_chain_exposure_usdc, pending_usdc=0,
                      daily_realized_loss_usdc, daily_loss_limit_usdc,
+                     total_cap_usdc=None, chain_caps_usdc=None,
                      live_enabled=False):
-    """Return a safe approval result or raise; unknown/missing risk data fails closed.
+    """Approve only when all risk inputs and explicitly approved caps are present.
 
-    Exposures include open positions and any already-reserved orders. pending_usdc
-    is additional same-chain reserved capital not yet reflected in exposure.
-    daily_realized_loss_usdc is expressed as a positive loss magnitude.
+    Exposures include open positions and reserved orders. pending_usdc is
+    additional same-chain reserved capital. Loss is a positive loss magnitude.
     """
     if live_enabled is not True:
         raise LiveRiskGuardError("Live mode is disabled.")
-    if chain not in CHAIN_CAPS_USDC:
+    if chain not in SUPPORTED_CHAINS:
         raise LiveRiskGuardError("Unsupported live trading chain.")
+    if total_cap_usdc is None or not isinstance(chain_caps_usdc, dict):
+        raise LiveRiskGuardError("Explicitly approved capital caps are not configured.")
+    if set(chain_caps_usdc) != SUPPORTED_CHAINS:
+        raise LiveRiskGuardError("Capital caps must be configured for both chains.")
+    total_cap = _amount(total_cap_usdc, "total_cap_usdc")
+    chain_caps = {name: _amount(value, name + "_cap_usdc")
+                  for name, value in chain_caps_usdc.items()}
+    if total_cap <= 0 or any(value <= 0 for value in chain_caps.values()):
+        raise LiveRiskGuardError("Capital caps must be greater than zero.")
+    if sum(chain_caps.values(), Decimal("0")) > total_cap:
+        raise LiveRiskGuardError("Per-chain caps exceed the combined capital cap.")
+
     order = _amount(order_usdc, "order_usdc")
     same = _amount(chain_exposure_usdc, "chain_exposure_usdc")
     other = _amount(other_chain_exposure_usdc, "other_chain_exposure_usdc")
@@ -55,16 +64,16 @@ def check_live_order(*, chain, order_usdc, chain_exposure_usdc,
         raise LiveRiskGuardError("Daily loss limit must be greater than zero.")
     if loss >= loss_limit:
         raise LiveRiskGuardError("Daily realized-loss limit reached.")
-    if same + pending + order > CHAIN_CAPS_USDC[chain]:
+    if same + pending + order > chain_caps[chain]:
         raise LiveRiskGuardError("Per-chain USDC capital cap would be exceeded.")
-    if same + other + pending + order > TOTAL_CAP_USDC:
+    if same + other + pending + order > total_cap:
         raise LiveRiskGuardError("Combined Solana and Base USDC capital cap would be exceeded.")
     return {
         "allowed": True,
         "chain": chain,
         "order_usdc": str(order),
-        "chain_cap_usdc": str(CHAIN_CAPS_USDC[chain]),
-        "combined_cap_usdc": str(TOTAL_CAP_USDC),
-        "remaining_chain_usdc": str(CHAIN_CAPS_USDC[chain] - same - pending - order),
-        "remaining_combined_usdc": str(TOTAL_CAP_USDC - same - other - pending - order),
+        "chain_cap_usdc": str(chain_caps[chain]),
+        "combined_cap_usdc": str(total_cap),
+        "remaining_chain_usdc": str(chain_caps[chain] - same - pending - order),
+        "remaining_combined_usdc": str(total_cap - same - other - pending - order),
     }
