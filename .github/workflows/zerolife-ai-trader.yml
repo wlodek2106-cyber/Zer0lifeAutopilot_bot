@@ -12,6 +12,7 @@ on:
       - "index.html"
       - "static/dashboard.js"
       - "tests/test_admin_overview.py"
+      - "tests/test_admin_overview_auth.py"
       - "tests/test_zerolife_ai_trader.py"
       - "tests/test_zerolife_shadow.py"
       - ".github/workflows/zerolife-ai-trader.yml"
@@ -24,6 +25,7 @@ on:
       - "index.html"
       - "static/dashboard.js"
       - "tests/test_admin_overview.py"
+      - "tests/test_admin_overview_auth.py"
       - "tests/test_zerolife_ai_trader.py"
       - "tests/test_zerolife_shadow.py"
       - ".github/workflows/zerolife-ai-trader.yml"
@@ -47,4 +49,4 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_zerolife_ai_trader.py' -v
           python -m unittest discover -s tests -p 'test_zerolife_shadow.py' -v
-          python -m unittest discover -s tests -p 'test_admin_overview.py' -v
+          python -m unittest discover -s tests -p 'test_admin_overview*.py' -v
