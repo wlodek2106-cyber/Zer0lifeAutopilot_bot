@@ -20,6 +20,8 @@ on:
       - "tests/test_admin_overview_auth.py"
       - "tests/test_zerolife_ai_trader.py"
       - "tests/test_ai_trader_settings.py"
+      - "tests/test_ai_trader_paper_store.py"
+      - "tests/test_ai_trader_settings.py"
       - "tests/test_ai_trader_configuration.py"
       - "tests/test_zerolife_shadow.py"
       - ".github/workflows/zerolife-ai-trader.yml"
