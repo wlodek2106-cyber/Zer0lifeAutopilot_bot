@@ -1058,31 +1058,55 @@ class CustodyRuntime(WalletRuntime):
                                   "updated_at": updated_at, "storage": "server"})
 
     async def evaluate_ai_trader_signals(self, request, session):
-        """Evaluate caller-supplied close series; persist decisions, never place orders."""
+        """Evaluate supplied closes or fetch public Binance candles; never place orders."""
+        from zerolife_ai_trader.binance_public import fetch_public_klines, INTERVALS
         from zerolife_ai_trader.signal_engine import evaluate_watchlist
         uid = self.uid(request)
         self._ensure_ai_trader_settings_table()
         try:
             payload = await request.json()
-            if not isinstance(payload, dict) or set(payload) != {"price_series"}:
-                raise ValueError("Expected only price_series.")
-            series = payload["price_series"]
-            if not isinstance(series, dict) or not 1 <= len(series) <= 10:
-                raise ValueError("Provide close series for 1 to 10 symbols.")
-            for symbol, closes in series.items():
-                if not isinstance(symbol, str) or len(symbol) > 24:
-                    raise ValueError("Invalid symbol.")
-                if not isinstance(closes, list) or not 30 <= len(closes) <= 5000:
-                    raise ValueError("Each close series must contain 30 to 5000 values.")
+            if not isinstance(payload, dict):
+                raise ValueError("Invalid signal evaluation request.")
             with self.ledger.db() as db:
                 row = db.execute(
                     "SELECT settings_json FROM ai_trader_user_settings WHERE telegram_id=?",
                     (uid,)
                 ).fetchone()
             settings = validate_settings(json.loads(row["settings_json"])) if row else dict(DEFAULT_SETTINGS)
+            source = payload.get("source", "manual")
+            if source == "binance_public":
+                if set(payload) != {"source"} or settings["source"] != "binance_public":
+                    raise ValueError("Binance public data must be enabled in saved settings.")
+                interval = settings["timeframe"]
+                series = {}
+                market_quality = {}
+                for symbol in settings["symbols"].split(","):
+                    market = await fetch_public_klines(
+                        symbol, interval, limit=200, session=session
+                    )
+                    series[symbol] = [candle["close"] for candle in market["candles"]]
+                    market_quality[symbol] = {
+                        "candles": market["count"], "interval_ms": market["interval_ms"],
+                        "quality": market["quality"], "last_timestamp_ms": market["last_timestamp_ms"],
+                    }
+            elif source == "manual":
+                if set(payload) != {"price_series"}:
+                    raise ValueError("Expected price_series for manual evaluation.")
+                series = payload["price_series"]
+                market_quality = {"source": "manual"}
+                if not isinstance(series, dict) or not 1 <= len(series) <= 10:
+                    raise ValueError("Provide close series for 1 to 10 symbols.")
+                for symbol, closes in series.items():
+                    if (not isinstance(symbol, str) or symbol not in settings["symbols"].split(",")
+                            or not isinstance(closes, list) or not 30 <= len(closes) <= 5000):
+                        raise ValueError("Invalid symbol or close series length.")
+            else:
+                raise ValueError("Unsupported market-data source.")
             results = evaluate_watchlist(series, settings)
         except (ValueError, TypeError, KeyError, json.JSONDecodeError):
             raise WalletError("Invalid signal evaluation request or market data.", 400)
+        except RuntimeError as exc:
+            raise WalletError(str(exc), 502)
         self._ensure_ai_trader_signal_table()
         with self.ledger.db() as db:
             for item in results:
@@ -1093,6 +1117,7 @@ class CustodyRuntime(WalletRuntime):
                      item["price"], json.dumps(item["reasons"]),
                      json.dumps(item["risk"], allow_nan=False)))
         return web.json_response({"success": True, "signals": results,
+                                  "market_data": market_quality,
                                   "execution": "paper_signal_only"})
 
     def _ensure_ai_trader_signal_table(self):
