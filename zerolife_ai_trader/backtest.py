@@ -98,8 +98,18 @@ def run_backtest(closes, *, starting_cash=1000.0, fee_bps=10.0,
             max_drawdown = max(max_drawdown, (peak - equity) / peak)
 
     closed = [t for t in trades if t["pnl"] is not None]
-    wins = sum(t["pnl"] > 0 for t in closed)
-    losses = sum(t["pnl"] < 0 for t in closed)
+    winning_trades = [t["pnl"] for t in closed if t["pnl"] > 0]
+    losing_trades = [t["pnl"] for t in closed if t["pnl"] < 0]
+    wins = len(winning_trades)
+    losses = len(losing_trades)
+    gross_profit = sum(winning_trades)
+    gross_loss = -sum(losing_trades)
+    profit_factor = (gross_profit / gross_loss) if gross_loss else (
+        None if not gross_profit else None
+    )
+    expectancy = (sum(t["pnl"] for t in closed) / len(closed)) if closed else 0.0
+    average_win = (gross_profit / wins) if wins else 0.0
+    average_loss = (-gross_loss / losses) if losses else 0.0
     return {
         "starting_cash": starting_cash,
         "final_equity": final_equity,
@@ -111,6 +121,12 @@ def run_backtest(closes, *, starting_cash=1000.0, fee_bps=10.0,
         "wins": wins,
         "losses": losses,
         "win_rate_pct": (wins / len(closed) * 100) if closed else 0.0,
+        "gross_profit": gross_profit,
+        "gross_loss": gross_loss,
+        "profit_factor": profit_factor,
+        "expectancy_per_trade": expectancy,
+        "average_win": average_win,
+        "average_loss": average_loss,
         "fees_paid": sum(t["entry_fee"] + (t["exit_fee"] or 0)
                          for t in trades),
         "trades": trades,
