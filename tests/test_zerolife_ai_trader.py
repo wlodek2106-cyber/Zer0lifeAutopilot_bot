@@ -357,5 +357,41 @@ class TraderFoundationTests(unittest.TestCase):
         self.assertEqual(rows[0]["data_quality"], "complete")
         self.assertEqual(float(rows[0]["return_pct"]), result["return_pct"])
 
+    def test_dataset_manifest_is_reproducible_and_hashes_candles(self):
+        from zerolife_ai_trader.dataset import build_dataset_manifest, manifest_to_json
+        candles = [
+            {"timestamp_ms": i * 60_000, "open": 100 + i, "high": 102 + i,
+             "low": 99 + i, "close": 101 + i, "volume": 1000}
+            for i in range(40)
+        ]
+        args = dict(symbol="SOL/USDC", interval="1m", interval_ms=60_000,
+                    data_source="fixture")
+        first = build_dataset_manifest(candles, **args)
+        second = build_dataset_manifest(candles, **args)
+        self.assertEqual(first, second)
+        self.assertEqual(first["candle_count"], 40)
+        self.assertEqual(first["data_quality"], "complete")
+        self.assertEqual(len(first["dataset_sha256"]), 64)
+        self.assertEqual(manifest_to_json(first), manifest_to_json(second))
+        changed = [dict(candle) for candle in candles]
+        changed[10]["volume"] += 1
+        third = build_dataset_manifest(changed, **args)
+        self.assertNotEqual(first["dataset_sha256"], third["dataset_sha256"])
+
+    def test_dataset_manifest_rejects_gaps_and_invalid_source_hash(self):
+        from zerolife_ai_trader.dataset import build_dataset_manifest
+        candles = [
+            {"timestamp_ms": i * 60_000, "open": 100, "high": 102,
+             "low": 99, "close": 101, "volume": 1000}
+            for i in range(3)
+        ]
+        args = dict(symbol="SOL/USDC", interval="1m", interval_ms=60_000,
+                    data_source="fixture")
+        with self.assertRaises(ValueError):
+            build_dataset_manifest(candles, source_sha256="not-a-hash", **args)
+        candles[2]["timestamp_ms"] = 180_000
+        with self.assertRaises(ValueError):
+            build_dataset_manifest(candles, **args)
+
 if __name__ == "__main__":
     unittest.main()
