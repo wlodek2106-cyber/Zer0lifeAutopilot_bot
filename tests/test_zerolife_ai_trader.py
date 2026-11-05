@@ -45,5 +45,28 @@ class TraderFoundationTests(unittest.TestCase):
             self.assertFalse(decision.allowed)
             self.assertEqual(decision.quantity, 0.0)
 
+    def test_paper_broker_rejects_overflow_without_mutating_state(self):
+        broker = PaperBroker(1000, fee_bps=0, slippage_bps=0)
+        with self.assertRaises(ValueError):
+            broker.buy("BTC", 1e308, 1e308)
+        self.assertEqual(broker.cash, 1000.0)
+        self.assertEqual(broker.positions, {})
+        broker.buy("BTC", 1, 1)
+        before_cash = broker.cash
+        before_positions = dict(broker.positions)
+        with self.assertRaises(ValueError):
+            broker.sell("BTC", 1e308, 1e308)
+        self.assertEqual(broker.cash, before_cash)
+        self.assertEqual(broker.positions, before_positions)
+
+    def test_paper_broker_rejects_boolean_and_blank_orders(self):
+        broker = PaperBroker(1000)
+        for symbol, quantity, price in (("", 1, 10), ("BTC", True, 10),
+                                        ("BTC", 1, False)):
+            with self.assertRaises(ValueError):
+                broker.buy(symbol, quantity, price)
+        self.assertEqual(broker.cash, 1000.0)
+        self.assertEqual(broker.positions, {})
+
 if __name__ == "__main__":
     unittest.main()
