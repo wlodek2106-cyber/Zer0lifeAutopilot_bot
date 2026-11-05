@@ -17,7 +17,7 @@ The signal engine is rules-based, not an LLM. No paid AI API is required. Public
 From the repository root:
 
 ```bash
-python -m unittest tests.test_zerolife_ai_trader -v
+python -m unittest discover -s tests -p 'test_zerolife_ai_trader.py' -v
 ```
 
 No real funds or API keys are needed.
