@@ -35,6 +35,7 @@ class PaperBridgeTests(unittest.TestCase):
         self.assertEqual(result["status"], "PAPER_DONE")
         account = self.paper.account(telegram_id=77)
         self.assertEqual(len(account["positions"]), 1)
+        self.assertEqual(account["positions"][0]["symbol"], "SOLANA:SOLUSDC")
         self.assertAlmostEqual(account["positions"][0]["quantity"], 10.0)
         self.assertLess(account["cash"], 400.0)
         self.assertEqual(self.paper.history(telegram_id=77)[0]["side"], "BUY")
@@ -50,7 +51,7 @@ class PaperBridgeTests(unittest.TestCase):
     def test_sell_requires_matching_existing_paper_position(self):
         self.run_signal(self.base_signal())
         sell = self.base_signal(side="SELL", candle_id="candle-2",
-            position_id="paper:SOLUSDC", quantity=4.0)
+            position_id="paper:solana:SOLUSDC", quantity=4.0)
         sell.pop("amount_usdc")
         result = self.run_signal(sell, price=12.0)
         self.assertEqual(result["status"], "PAPER_DONE")
@@ -61,7 +62,7 @@ class PaperBridgeTests(unittest.TestCase):
     def test_sell_cannot_reference_another_symbol_position(self):
         self.run_signal(self.base_signal())
         sell = self.base_signal(side="SELL", candle_id="candle-3",
-            position_id="paper:ETHUSDC", quantity=1.0)
+            position_id="paper:base:ETHUSDC", quantity=1.0)
         sell.pop("amount_usdc")
         with self.assertRaisesRegex(ValueError, "matching user's paper position"):
             self.run_signal(sell)
