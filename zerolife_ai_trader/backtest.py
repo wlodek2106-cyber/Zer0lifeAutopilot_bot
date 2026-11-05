@@ -198,3 +198,26 @@ def run_segmented_evaluation(closes, *, segments=3, **backtest_settings):
         "all_segments_positive": all(value > 0 for value in returns),
         "evaluation_method": "chronological_non_overlapping_segments",
     }
+
+
+def run_candle_backtest(candles, *, interval_ms, anchor_ms=0,
+                        reject_gaps=True, **backtest_settings):
+    """Run the close-price backtest only after strict OHLCV validation."""
+    from .market_data import validate_candles
+
+    report = validate_candles(
+        candles, interval_ms=interval_ms, anchor_ms=anchor_ms,
+        reject_gaps=reject_gaps,
+    )
+    closes = [candle["close"] for candle in report["candles"]]
+    result = run_backtest(closes, **backtest_settings)
+    result["data_quality"] = {
+        "quality": report["quality"],
+        "candle_count": report["count"],
+        "interval_ms": report["interval_ms"],
+        "anchor_ms": report["anchor_ms"],
+        "gap_count": report["gap_count"],
+        "first_timestamp_ms": report["first_timestamp_ms"],
+        "last_timestamp_ms": report["last_timestamp_ms"],
+    }
+    return result
