@@ -8402,6 +8402,8 @@ async def main():
     app.router.add_get('/api/partners', wallet_handler(runtime.partner_program))
     app.router.add_post('/api/partners/retry', wallet_handler(runtime.retry_partner_payout))
     app.router.add_get('/api/stats', wallet_handler(runtime.stats))
+    app.router.add_get('/api/ai-trader/settings', wallet_handler(runtime.get_ai_trader_settings))
+    app.router.add_post('/api/ai-trader/settings', wallet_handler(runtime.save_ai_trader_settings))
     app.router.add_get('/api/monthly-trading-fee', wallet_handler(runtime.monthly_trading_fee))
     app.router.add_post('/api/monthly-trading-fee', wallet_handler(runtime.monthly_trading_fee))
     support_inbox = SupportInbox(TELEGRAM_TOKEN, ADMIN_TELEGRAM_ID)
