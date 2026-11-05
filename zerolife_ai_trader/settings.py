@@ -17,7 +17,12 @@ ALLOWED_SYMBOLS = {"SOLUSDC", "BTCUSDT", "ETHUSDT", "SOLUSDT", "JUPUSDC", "RAYUS
 
 
 def validate_settings(payload):
-    if not isinstance(payload, dict) or set(payload) != set(DEFAULT_SETTINGS):
+    if not isinstance(payload, dict):
+        raise ValueError("Settings payload has missing or unsupported fields.")
+    legacy_fields = set(DEFAULT_SETTINGS) - {"paperAutoExecute"}
+    if set(payload) == legacy_fields:
+        payload = {**payload, "paperAutoExecute": False}
+    if set(payload) != set(DEFAULT_SETTINGS):
         raise ValueError("Settings payload has missing or unsupported fields.")
     result = deepcopy(payload)
     if result["strategy"] not in STRATEGIES:
