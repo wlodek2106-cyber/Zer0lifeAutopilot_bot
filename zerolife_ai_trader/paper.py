@@ -17,7 +17,8 @@ class PaperBroker:
         values = (starting_cash, fee_bps, slippage_bps)
         if any(type(v) not in (int, float) or not isfinite(v) for v in values):
             raise ValueError("Broker configuration must be finite numbers.")
-        if starting_cash <= 0 or not 0 <= fee_bps <= 1000 or not 0 <= slippage_bps <= 1000:
+        if (starting_cash <= 0 or not 0 <= fee_bps <= 1000
+                or not 0 <= slippage_bps <= 1000):
             raise ValueError("Broker configuration is outside safe bounds.")
         self.cash = float(starting_cash)
         self.fee_bps = float(fee_bps)
@@ -34,7 +35,8 @@ class PaperBroker:
         fee = notional * self.fee_bps / 10000
         total = notional + fee
         new_position = self.positions.get(symbol, 0.0) + quantity
-        if not all(isfinite(x) for x in (fill_price, notional, fee, total, new_position)):
+        if (not all(isfinite(x) for x in (fill_price, notional, fee, total, new_position))
+                or total < 0 or total > self.cash):
             raise ValueError("Paper order arithmetic overflowed.")
         if total > self.cash:
             raise ValueError("Insufficient paper cash.")
@@ -43,11 +45,13 @@ class PaperBroker:
         return Fill("BUY", quantity, fill_price, fee, self.cash)
 
     def sell(self, symbol, quantity, market_price):
-        held = self.positions.get(symbol, 0.0)
         if not isinstance(symbol, str) or not symbol.strip() or type(quantity) not in (int, float) or type(market_price) not in (int, float):
             raise ValueError("Invalid paper order.")
         if not isfinite(quantity) or not isfinite(market_price) or quantity <= 0 or market_price <= 0:
             raise ValueError("Quantity and price must be finite and positive.")
+        held = self.positions.get(symbol, 0.0)
+        if not isfinite(held) or held <= 0:
+            raise ValueError("No paper position is available to sell.")
         if quantity > held:
             raise ValueError("Cannot sell more than the paper position.")
         fill_price = market_price * (1 - self.slippage_bps / 10000)
