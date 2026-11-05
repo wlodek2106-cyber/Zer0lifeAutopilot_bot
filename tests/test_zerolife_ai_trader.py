@@ -173,5 +173,30 @@ class TraderFoundationTests(unittest.TestCase):
         self.assertEqual(trade["exit_price"], closes[32])
         self.assertEqual(result["open_trades"], 0)
 
+    def test_backtest_uptrend_and_downtrend_forced_exit_metrics(self):
+        def buy_once(history):
+            if len(history) == 30:
+                return Signal("BUY", 0.9, history[-1], ("fixture buy",))
+            return Signal("HOLD", 0.5, history[-1], ("fixture hold",))
+
+        rising = [100.0] * 30 + [100.0 + i for i in range(1, 11)]
+        falling = [100.0] * 30 + [100.0 - i for i in range(1, 11)]
+        results = []
+        for prices in (rising, falling):
+            with patch("zerolife_ai_trader.backtest.analyze", side_effect=buy_once):
+                results.append(run_backtest(prices, starting_cash=1000,
+                                             fee_bps=10, slippage_bps=5,
+                                             order_fraction=0.5))
+        up, down = results
+        self.assertEqual(up["closed_trades"], 1)
+        self.assertTrue(up["trades"][0].get("forced_exit"))
+        self.assertGreater(up["net_pnl"], 0)
+        self.assertEqual(down["closed_trades"], 1)
+        self.assertTrue(down["trades"][0].get("forced_exit"))
+        self.assertLess(down["net_pnl"], 0)
+        self.assertGreater(down["max_drawdown_pct"], 0)
+        self.assertGreater(up["fees_paid"], 0)
+        self.assertGreater(down["fees_paid"], 0)
+
 if __name__ == "__main__":
     unittest.main()
