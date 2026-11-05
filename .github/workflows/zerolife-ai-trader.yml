@@ -1,0 +1,32 @@
+name: Zer0Life AI Trader foundation
+
+on:
+  push:
+    branches: [ai-trader-2027-foundation]
+    paths:
+      - "zerolife_ai_trader/**"
+      - "tests/test_zerolife_ai_trader.py"
+      - "tests/test_zerolife_shadow.py"
+      - ".github/workflows/zerolife-ai-trader.yml"
+  pull_request:
+    paths:
+      - "zerolife_ai_trader/**"
+      - "tests/test_zerolife_ai_trader.py"
+      - "tests/test_zerolife_shadow.py"
+      - ".github/workflows/zerolife-ai-trader.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  paper-foundation-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run isolated paper and shadow tests
+        run: |
+          python -m unittest discover -s tests -p 'test_zerolife_ai_trader.py' -v
+          python -m unittest discover -s tests -p 'test_zerolife_shadow.py' -v
