@@ -16,7 +16,7 @@ def evaluate_context(context, *, equity=1000.0, cash=1000.0,
         return []
     results = []
     for symbol, metrics in context.items():
-        if not isinstance(symbol, str) or not isinstance(metrics, dict):
+        if not isinstance(symbol, str) or not symbol.strip() or not isinstance(metrics, dict):
             continue
         price = metrics.get("chart_price_usd")
         change_m5 = metrics.get("change_m5_pct")
@@ -30,7 +30,9 @@ def evaluate_context(context, *, equity=1000.0, cash=1000.0,
             type(price) in (int, float) and isfinite(price) and price > 0
             and type(change_m5) in (int, float) and isfinite(change_m5)
             and type(change_h1) in (int, float) and isfinite(change_h1)
-            and trend in (0, 1) and chart_ready == 1 and buy_setup == 1
+            and type(trend) is int and trend in (0, 1)
+            and type(chart_ready) is int and chart_ready == 1
+            and type(buy_setup) is int and buy_setup == 1
             and type(candle_age) in (int, float) and isfinite(candle_age)
             and 0 <= candle_age <= 420
             and type(hourly_age) in (int, float) and isfinite(hourly_age)
@@ -52,7 +54,7 @@ def evaluate_context(context, *, equity=1000.0, cash=1000.0,
         risk = assess_order(
             equity=equity, cash=cash, price=float(price), confidence=confidence,
             open_positions=open_positions, daily_pnl=daily_pnl,
-            limits=limits or RiskLimits(),
+            limits=RiskLimits() if limits is None else limits,
         )
         results.append({
             "symbol": symbol,
