@@ -108,6 +108,59 @@ class PaperTradeStoreTests(unittest.TestCase):
             )
         self.assertEqual(self.store.summary(telegram_id=101)["fills"], 1)
 
+    def test_execute_sell_realizes_pnl_and_reduces_position(self):
+        self.store.execute_buy(
+            telegram_id=101, signal_id=1, symbol="SOLUSDC", quantity=2,
+            market_price=100, fee_bps=10, slippage_bps=5, starting_cash=1000,
+        )
+        result = self.store.execute_sell(
+            telegram_id=101, signal_id=2, symbol="SOLUSDC", quantity=1,
+            market_price=110, fee_bps=10, slippage_bps=5,
+        )
+        self.assertTrue(result["executed"])
+        self.assertFalse(result["duplicate"])
+        self.assertEqual(result["fill"]["side"], "SELL")
+        self.assertAlmostEqual(result["fill"]["price"], 109.945)
+        self.assertAlmostEqual(result["fill"]["realized_pnl"], 9.685005)
+        account = self.store.account(telegram_id=101)
+        self.assertAlmostEqual(account["positions"][0]["quantity"], 1)
+        self.assertGreater(account["cash"], 899)
+
+    def test_execute_sell_closes_position_and_deduplicates(self):
+        self.store.execute_buy(
+            telegram_id=101, signal_id=10, symbol="BTCUSDT", quantity=0.01,
+            market_price=50000, starting_cash=1000,
+        )
+        first = self.store.execute_sell(
+            telegram_id=101, signal_id=11, symbol="BTCUSDT", quantity=0.01,
+            market_price=51000,
+        )
+        second = self.store.execute_sell(
+            telegram_id=101, signal_id=11, symbol="BTCUSDT", quantity=0.01,
+            market_price=51000,
+        )
+        self.assertTrue(first["executed"])
+        self.assertTrue(second["duplicate"])
+        self.assertEqual(self.store.account(telegram_id=101)["positions"], [])
+        self.assertEqual(self.store.summary(telegram_id=101)["fills"], 2)
+
+    def test_execute_sell_rejects_missing_or_oversized_position(self):
+        with self.assertRaisesRegex(ValueError, "No paper position"):
+            self.store.execute_sell(
+                telegram_id=101, signal_id=1, symbol="SOLUSDC", quantity=1,
+                market_price=100,
+            )
+        self.store.execute_buy(
+            telegram_id=101, signal_id=2, symbol="SOLUSDC", quantity=1,
+            market_price=100, starting_cash=1000,
+        )
+        with self.assertRaisesRegex(ValueError, "Cannot sell more"):
+            self.store.execute_sell(
+                telegram_id=101, signal_id=3, symbol="SOLUSDC", quantity=2,
+                market_price=100,
+            )
+        self.assertEqual(self.store.summary(telegram_id=101)["fills"], 1)
+
     def test_limit_is_bounded(self):
         with self.assertRaises(ValueError):
             self.store.history(telegram_id=101, limit=201)
