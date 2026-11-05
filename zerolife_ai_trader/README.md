@@ -8,7 +8,7 @@ A non-invasive, dependency-free research and paper-trading foundation for the ex
 - `risk.py`: independent position-count, confidence, order-size and daily-loss gate.
 - `paper.py`: in-memory paper broker with fee and slippage modelling.
 - `portfolio.py`: validated mark-to-market paper portfolio valuation, PnL, and drawdown metrics.
-- `paper_store.py`: immutable, per-user SQLite journal for simulated fills and fee/realized-PnL summaries.
+- `paper_store.py`: immutable, per-user SQLite journal plus atomic, idempotent simulated BUY execution and persistent paper balances/positions.
 
 Authenticated dashboard endpoint:
 
@@ -17,16 +17,17 @@ Authenticated dashboard endpoint:
 
 ## Per-user configuration
 
-The dashboard exposes a validated configuration for strategy selection, read-only market-data source, allowlisted symbols, timeframe, paper capital, risk limits, simulated fees/slippage, and notification preferences.
+The dashboard exposes a validated configuration for strategy selection, read-only market-data source, allowlisted symbols, timeframe, paper capital, risk limits, simulated fees/slippage, notification preferences, and an explicit opt-in for automatic paper BUY execution. The opt-in defaults to off; older saved settings are migrated with it off.
 
 Settings are stored per Telegram account in the existing application ledger database through authenticated endpoints:
 
 - `GET /api/ai-trader/settings`
 - `POST /api/ai-trader/settings`
+- `GET /api/ai-trader/paper-journal?limit=50` — authenticated read-only paper account, positions, and fill history.
 
 The server validates the complete schema and rejects unknown fields, unsupported symbols, invalid numeric ranges, and non-boolean notification flags. API secrets are intentionally not accepted by this configuration endpoint.
 
-**Important boundary:** these settings are currently saved and displayed as account configuration. They are not yet wired into a running strategy scheduler or live order executor. Paper/shadow remains the only approved execution scope; live trading is not enabled.
+**Important boundary:** these settings are currently saved and displayed as account configuration. When `paperAutoExecute` is enabled, fresh BUY signals from public Binance candles are simulated once per candle using configured paper capital, fee and slippage. Repeated evaluations of the same candle are deduplicated. Manual/CSV signals are never auto-executed. Paper/shadow remains the only approved execution scope; live trading is not enabled.
 
 ## Run focused tests
 From the repository root:
