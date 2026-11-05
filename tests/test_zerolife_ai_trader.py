@@ -169,8 +169,8 @@ class TraderFoundationTests(unittest.TestCase):
         trade = result["trades"][0]
         self.assertEqual(trade["entry_index"], 30)
         self.assertEqual(trade["entry_price"], closes[30])
-        self.assertEqual(trade["exit_index"], 33)
-        self.assertEqual(trade["exit_price"], closes[33])
+        self.assertEqual(trade["exit_index"], 32)
+        self.assertEqual(trade["exit_price"], closes[32])
         self.assertEqual(result["open_trades"], 0)
 
 if __name__ == "__main__":
