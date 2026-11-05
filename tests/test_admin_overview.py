@@ -1,9 +1,8 @@
 import tempfile
 import unittest
+import uuid
 
-from solders.signature import Signature
-
-from custody_ledger import CustodyLedger, USDC
+from custody_ledger import CustodyLedger, LedgerError, USDC
 
 
 class AdminOverviewSnapshotTests(unittest.TestCase):
@@ -17,7 +16,7 @@ class AdminOverviewSnapshotTests(unittest.TestCase):
     def test_snapshot_is_aggregate_and_preserves_per_user_liabilities(self):
         for uid, amount in ((101, 2_000_000), (202, 5_000_000)):
             invoice = self.ledger.invoice(uid, USDC, amount)
-            self.ledger.credit_deposit(invoice["id"], str(Signature.new_unique()), USDC, amount, invoice["created_at"])
+            self.ledger.credit_deposit(invoice["id"], str(uuid.uuid4()), USDC, amount, invoice["created_at"])
         snapshot = self.ledger.admin_overview_snapshot()
         self.assertTrue(snapshot["read_only"])
         self.assertEqual(snapshot["users_total"], 2)
@@ -28,7 +27,7 @@ class AdminOverviewSnapshotTests(unittest.TestCase):
         self.assertTrue(self.ledger.audit())
 
     def test_recent_limit_is_validated(self):
-        with self.assertRaises(Exception):
+        with self.assertRaises(LedgerError):
             self.ledger.admin_overview_snapshot(0)
         with self.assertRaises(Exception):
             self.ledger.admin_overview_snapshot(100)
