@@ -58,7 +58,11 @@ def run_backtest(closes, *, starting_cash=1000.0, fee_bps=10.0,
             fee = gross * fee_rate
             proceeds = gross - fee
             pnl = proceeds - entry_cost
-            cash += proceeds
+            cash_after = cash + proceeds
+            if (not all(isfinite(v) for v in (fill, gross, fee, proceeds, pnl, cash_after))
+                    or fill <= 0 or gross <= 0 or proceeds < 0 or cash_after < 0):
+                raise ValueError("Backtest sell arithmetic is outside safe numeric bounds.")
+            cash = cash_after
             trades[-1].update({"exit_index": index, "exit_price": fill,
                                "exit_fee": fee, "pnl": pnl})
             quantity = 0.0
@@ -83,7 +87,11 @@ def run_backtest(closes, *, starting_cash=1000.0, fee_bps=10.0,
         fee = gross * fee_rate
         proceeds = gross - fee
         pnl = proceeds - entry_cost
-        cash += proceeds
+        cash_after = cash + proceeds
+        if (not all(isfinite(v) for v in (fill, gross, fee, proceeds, pnl, cash_after))
+                or fill <= 0 or gross <= 0 or proceeds < 0 or cash_after < 0):
+            raise ValueError("Backtest forced-exit arithmetic is outside safe numeric bounds.")
+        cash = cash_after
         trades[-1].update({"exit_index": len(closes) - 1, "exit_price": fill,
                            "exit_fee": fee, "pnl": pnl, "forced_exit": True})
         quantity = 0.0
@@ -100,6 +108,11 @@ def run_backtest(closes, *, starting_cash=1000.0, fee_bps=10.0,
     benchmark_final_equity = benchmark_gross - benchmark_exit_fee
     benchmark_fees = (benchmark_quantity * benchmark_entry * fee_rate
                       + benchmark_exit_fee)
+    if not all(isfinite(v) for v in (
+            benchmark_entry, benchmark_quantity, benchmark_entry_cost,
+            benchmark_exit, benchmark_gross, benchmark_exit_fee,
+            benchmark_final_equity, benchmark_fees)):
+        raise ValueError("Backtest benchmark arithmetic is outside safe numeric bounds.")
     benchmark_return_pct = (benchmark_final_equity / starting_cash - 1) * 100
     strategy_vs_buy_hold_pct = (
         (final_equity / starting_cash - 1) * 100 - benchmark_return_pct
@@ -111,6 +124,8 @@ def run_backtest(closes, *, starting_cash=1000.0, fee_bps=10.0,
         if peak:
             max_drawdown = max(max_drawdown, (peak - equity) / peak)
 
+    if not all(isfinite(v) for v in (final_equity, max_drawdown)):
+        raise ValueError("Backtest result is outside safe numeric bounds.")
     closed = [t for t in trades if t["pnl"] is not None]
     winning_trades = [t["pnl"] for t in closed if t["pnl"] > 0]
     losing_trades = [t["pnl"] for t in closed if t["pnl"] < 0]
