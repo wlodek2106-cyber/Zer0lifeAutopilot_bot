@@ -2098,6 +2098,17 @@ class CustodyRuntime(WalletRuntime):
             "amount_usdc": display_raw(result["amount_raw"], 6),
         })
 
+    async def admin_overview(self, request, session):
+        """Read-only operator overview; aggregate only, owner-only."""
+        if self.uid(request) != self.owner_id:
+            raise WalletError("Только администратор.", 403)
+        try:
+            snapshot = self.ledger.admin_overview_snapshot(10)
+            self.ledger.audit()
+        except LedgerError as exc:
+            raise WalletError("Не удалось построить безопасную сводку.", 503) from exc
+        return web.json_response(snapshot, headers={"Cache-Control": "no-store"})
+
     async def admin_status(self, request, session):
         if self.uid(request) != self.owner_id:
             raise WalletError("Только администратор.", 403)
