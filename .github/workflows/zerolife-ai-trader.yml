@@ -5,6 +5,12 @@ on:
     branches: [ai-trader-2027-foundation]
     paths:
       - "zerolife_ai_trader/**"
+      - "custody_ledger.py"
+      - "custody_runtime.py"
+      - "main.py"
+      - "index.html"
+      - "static/dashboard.js"
+      - "tests/test_admin_overview.py"
       - "tests/test_zerolife_ai_trader.py"
       - "tests/test_zerolife_shadow.py"
       - "tests/test_admin_overview.py"
