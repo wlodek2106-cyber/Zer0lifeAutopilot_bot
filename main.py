@@ -8385,6 +8385,10 @@ async def main():
         return web.Response(text=Path(__file__).with_name("web_terminal.js").read_text(encoding="utf-8"),
                             content_type="application/javascript", headers={"Cache-Control":"no-store"})
     app.router.add_get('/web-terminal.js', web_script)
+    async def dashboard_script(request):
+        return web.Response(text=Path(__file__).with_name("static").joinpath("dashboard.js").read_text(encoding="utf-8"),
+                            content_type="application/javascript", headers={"Cache-Control":"no-store"})
+    app.router.add_get('/dashboard.js', dashboard_script)
     app.router.add_get('/web-auth/me', runtime.web_access.public)
     app.router.add_post('/web-auth/start', runtime.web_access.public)
     app.router.add_post('/web-auth/finish', runtime.web_access.public)
