@@ -32,5 +32,18 @@ class TraderFoundationTests(unittest.TestCase):
         self.assertNotIn("BTC", broker.positions)
 
 
+    def test_invalid_risk_limits_fail_closed(self):
+        from zerolife_ai_trader.risk import RiskLimits, assess_order
+        for limits in (
+            RiskLimits(max_order_fraction=2.0),
+            RiskLimits(max_daily_loss_fraction=0.0),
+            RiskLimits(min_confidence=True),
+            RiskLimits(max_open_positions=True),
+        ):
+            decision = assess_order(equity=1000, cash=1000, price=10,
+                                    confidence=0.9, limits=limits)
+            self.assertFalse(decision.allowed)
+            self.assertEqual(decision.quantity, 0.0)
+
 if __name__ == "__main__":
     unittest.main()
