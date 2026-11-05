@@ -38,6 +38,25 @@ class PaperTradeStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_ai_trader_paper_fills_user_time
                     ON ai_trader_paper_fills(telegram_id, id);
+                CREATE TABLE IF NOT EXISTS ai_trader_paper_accounts (
+                    telegram_id INTEGER PRIMARY KEY CHECK(telegram_id > 0),
+                    starting_cash REAL NOT NULL CHECK(starting_cash > 0),
+                    cash REAL NOT NULL CHECK(cash >= 0),
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS ai_trader_paper_positions (
+                    telegram_id INTEGER NOT NULL,
+                    symbol TEXT NOT NULL,
+                    quantity REAL NOT NULL CHECK(quantity > 0),
+                    average_cost REAL NOT NULL CHECK(average_cost > 0),
+                    PRIMARY KEY(telegram_id, symbol)
+                );
+                CREATE TABLE IF NOT EXISTS ai_trader_paper_executions (
+                    telegram_id INTEGER NOT NULL,
+                    signal_id INTEGER NOT NULL,
+                    fill_id TEXT NOT NULL UNIQUE,
+                    PRIMARY KEY(telegram_id, signal_id)
+                );
                 CREATE TRIGGER IF NOT EXISTS ai_trader_paper_fills_no_update
                     BEFORE UPDATE ON ai_trader_paper_fills
                     BEGIN SELECT RAISE(ABORT, 'paper fill journal is immutable'); END;
