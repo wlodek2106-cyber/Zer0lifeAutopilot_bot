@@ -308,5 +308,32 @@ class TraderFoundationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             run_candle_backtest(candles, interval_ms=60_000)
 
+    def test_backtest_report_exports_versioned_json_and_requires_clean_data(self):
+        import json
+        from zerolife_ai_trader.report import build_backtest_report, report_to_json
+        from zerolife_ai_trader.backtest import run_candle_backtest
+        candles = [
+            {"timestamp_ms": i * 60_000, "open": 100 + i, "high": 102 + i,
+             "low": 99 + i, "close": 101 + i, "volume": 1000}
+            for i in range(40)
+        ]
+        result = run_candle_backtest(candles, interval_ms=60_000)
+        report = build_backtest_report(
+            result, symbol="SOL/USDC", interval="1m",
+            data_source="test-fixture", period_start_ms=0,
+            period_end_ms=39 * 60_000,
+        )
+        payload = json.loads(report_to_json(report))
+        self.assertEqual(payload["schema_version"], 1)
+        self.assertEqual(payload["symbol"], "SOL/USDC")
+        self.assertEqual(payload["data_quality"]["quality"], "complete")
+        result["data_quality"]["quality"] = "gaps_detected"
+        with self.assertRaises(ValueError):
+            build_backtest_report(
+                result, symbol="SOL/USDC", interval="1m",
+                data_source="test-fixture", period_start_ms=0,
+                period_end_ms=39 * 60_000,
+            )
+
 if __name__ == "__main__":
     unittest.main()
