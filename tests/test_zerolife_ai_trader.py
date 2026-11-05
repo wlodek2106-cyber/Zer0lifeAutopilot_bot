@@ -43,6 +43,15 @@ class TraderFoundationTests(unittest.TestCase):
         self.assertIn("numeric bounds", decision.reason)
 
 
+    def test_risk_gate_rejects_confidence_outside_unit_interval(self):
+        for confidence in (-0.01, 1.01):
+            decision = assess_order(
+                equity=1000, cash=1000, price=10, confidence=confidence
+            )
+            self.assertFalse(decision.allowed)
+            self.assertEqual(decision.quantity, 0.0)
+            self.assertIn("confidence", decision.reason.lower())
+
     def test_invalid_risk_limits_fail_closed(self):
         from zerolife_ai_trader.risk import RiskLimits, assess_order
         for limits in (
