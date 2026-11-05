@@ -45,13 +45,20 @@ class RuleSignalTests(unittest.TestCase):
         self.assertEqual(decisions["sniper"]["action"], "HOLD")
         self.assertIn("verified shortlist", decisions["sniper"]["reason"])
 
-    def test_investor_requires_rising_hourly_trend(self):
+    def test_investor_accepts_flat_hour_only_with_green_5m_and_nonnegative_change(self):
         context = {"M_WIF": chart(trend=0)}
         decisions = rule_signals.build_decisions(
             {"main": ["SOL"], "sniper": [], "investor": ["M_WIF"]},
             {}, context, {"SOL": 100, "M_WIF": 1}, {}, {"M_WIF"})
+        self.assertEqual(decisions["investor"]["action"], "BUY")
+        self.assertIn("1h 0.20% are non-falling", decisions["investor"]["reason"])
+
+        context["M_WIF"]["change_h1_pct"] = -0.1
+        decisions = rule_signals.build_decisions(
+            {"main": ["SOL"], "sniper": [], "investor": ["M_WIF"]},
+            {}, context, {"SOL": 100, "M_WIF": 1}, {}, {"M_WIF"})
         self.assertEqual(decisions["investor"]["action"], "HOLD")
-        self.assertIn("rising setup", decisions["investor"]["reason"])
+        self.assertIn("nonnegative", decisions["investor"]["reason"])
 
     def test_server_review_is_bound_to_rule_buy_and_symbol(self):
         context = {"SOL": chart()}

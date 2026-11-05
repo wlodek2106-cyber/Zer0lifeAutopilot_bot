@@ -52,7 +52,7 @@ def _reason(mode, symbol, context):
     trend = "rising" if metrics.get("chart_trend_h1") == 1 else "flat"
     if mode == "investor":
         return (f"Rule BUY: fresh closed green 5m candle; 5m {m5:.2f}% and "
-                f"1h {h1:.2f}% are positive; 1h trend is rising. No paid AI used.")
+                f"1h {h1:.2f}% are non-falling; 1h trend is {trend}. No paid AI used.")
     return (f"Rule BUY: fresh closed green 5m candle; 5m {m5:.2f}%; "
             f"1h {h1:.2f}% and {trend}; within the existing extension limits. "
             "No paid AI used.")

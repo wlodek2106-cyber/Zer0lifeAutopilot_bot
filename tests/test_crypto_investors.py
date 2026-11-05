@@ -40,7 +40,7 @@ class CryptoInvestorsTests(unittest.TestCase):
         )[0]
         self.assertIn("Open investor positions", panel_content)
         self.assertIn("Closed trades and realized results", panel_content)
-        self.assertIn("Three entry tranches only while fresh chart data confirms an upward trend", panel_content)
+        self.assertIn("Entries require a fresh closed green 5m candle and a non-falling 1h chart", panel_content)
         self.assertIn("This strategy has no stop-loss", panel_content)
         self.assertIn("may lose most or all of its value", panel_content)
         self.assertIn("5% pullback from its peak", panel_content)

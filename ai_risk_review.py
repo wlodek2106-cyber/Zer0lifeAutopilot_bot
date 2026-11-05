@@ -31,7 +31,7 @@ def validate(value, decisions):
                 or not isinstance(item["reason"], str)
                 or not 1 <= len(item["reason"].strip()) <= 350):
             raise ReviewError("Risk reviewer returned an invalid verdict.")
-        allowed_trends = {"UP"} if mode == "investor" else {"UP", "RANGE"}
+        allowed_trends = {"UP", "RANGE"}
         if item["approved"] and item["trend"] not in allowed_trends:
             raise ReviewError("Risk approval does not match this mode's trend policy.")
     return value
@@ -91,13 +91,14 @@ async def review(session, decisions, main_context, sniper_context, learning):
                 "A support zone, RSI, MACD, relative-volume threshold, buyer pressure, EMA pattern or resistance room "
                 "is context, not a mandatory gate. Reject a falling hourly trend, missing/stale candles, "
                 "overextension above +3%/5m or +10%/1h, or a 6h drop below -5%. "
-                "For Investor, still require a fresh rising screened candidate and trend UP; it has no stop-loss "
+                "For Investor, require a fresh screened candidate, chart_ready=1, a green closed 5m candle, "
+                "positive 5m change and a flat or rising 1h chart with nonnegative 1h change. Investor has no stop-loss "
                 "and the server controls its profit ladder. "
                 "Use other numeric evidence to identify clear contradictions, not to restore removed pattern gates. "
                 "Use outcome memory cautiously: small/correlated samples are not proven edge. "
                 "Negative past outcomes are counterevidence; positive history cannot override risk. "
-                "trend UP or RANGE may be approved for Core/Sniper when the numeric chart policy permits it; "
-                "Investor requires UP. Explain in English, at most 350 characters.")},
+                "trend UP or RANGE may be approved for any mode only when its numeric chart policy permits it. "
+                "Explain in English, at most 350 characters.")},
             {"role": "user", "content": json.dumps({
                 "candidates": candidates, "outcome_memory": learning})},
         ],

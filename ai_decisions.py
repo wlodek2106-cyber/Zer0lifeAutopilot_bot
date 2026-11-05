@@ -267,7 +267,8 @@ async def analyze(session, market, universes, screening=None, main_context=None,
                 "Investor is a separate strategy with its own manually reserved SOL and USDC budgets. "
                 "For Investor, choose at most one screened token BUY or HOLD from the investor universe; "
                 "never output SELL. It may add the next server-sized tranche only when fresh chart evidence "
-                "confirms continued upward movement. Do not average down, choose order sizes, or override "
+                "shows a fresh closed green 5-minute candle, positive 5-minute change, and a flat or rising "
+                "1-hour chart with nonnegative 1-hour change. Do not average down, choose order sizes, or override "
                 "the server's five-slot/three-tranche budget controls. The server alone sells tranches at "
                 "+3.5% and +7%, then activates a final-tranche profit trail after +10%; Investor has no "
                 "stop-loss. This is not a profit guarantee.")}] if "investor" in universes else []),

@@ -185,19 +185,37 @@ class ReviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
         reviewer.assert_not_awaited()
         self.assertTrue(all(not v["approved"] for v in result["verdicts"].values()))
 
+    async def test_investor_flat_hour_passes_server_pre_review_gate(self):
+        from custody_runtime import CustodyRuntime
+        service = object.__new__(CustodyRuntime)
+        service.ledger = unittest.mock.Mock()
+        decisions = {"investor": {"action": "BUY", "symbol": "TOKEN", "reason": "entry"}}
+        context = {"TOKEN": {"chart_ready": 1, "chart_buy_setup": 1,
+                             "chart_trend_h1": 0, "change_m5_pct": 0.8,
+                             "change_h1_pct": 0.0}}
+        config = {"model": "test", "max_calls_per_day": 960}
+        verdicts = {"investor": {"symbol": "TOKEN", "approved": True,
+                                 "trend": "RANGE", "reason": "Green 5m; flat hour"}}
+        with patch("ai_risk_review.review", AsyncMock(return_value=verdicts)) as reviewer:
+            result = await service.review_ai_buys(
+                None, "id", decisions, {}, context, {}, config)
+        reviewer.assert_awaited_once()
+        self.assertTrue(result["verdicts"]["investor"]["approved"])
+
 
 class FlatTrendReviewTests(unittest.TestCase):
-    def test_flat_trend_is_allowed_only_for_core_and_sniper(self):
+    def test_flat_trend_is_allowed_for_all_modes_when_server_policy_passes(self):
         import ai_risk_review
 
-        for mode in ("main", "sniper"):
+        for mode in ("main", "sniper", "investor"):
             decision = {mode: {"action": "BUY", "symbol": "TOKEN"}}
             review = {mode: {"symbol": "TOKEN", "approved": True,
                              "trend": "RANGE", "reason": "Fresh green candle; flat hour"}}
             self.assertTrue(ai_risk_review.validate(review, decision)[mode]["approved"])
 
-        investor_decision = {"investor": {"action": "BUY", "symbol": "TOKEN"}}
-        investor_review = {"investor": {"symbol": "TOKEN", "approved": True,
-                            "trend": "RANGE", "reason": "Flat hour"}}
-        with self.assertRaises(ai_risk_review.ReviewError):
-            ai_risk_review.validate(investor_review, investor_decision)
+        for mode in ("main", "sniper", "investor"):
+            decision = {mode: {"action": "BUY", "symbol": "TOKEN"}}
+            review = {mode: {"symbol": "TOKEN", "approved": True,
+                             "trend": "DOWN", "reason": "Falling hour"}}
+            with self.assertRaises(ai_risk_review.ReviewError):
+                ai_risk_review.validate(review, decision)

@@ -829,9 +829,11 @@ class CustodyRuntime(WalletRuntime):
             metrics = contexts[mode].get(decision["symbol"], {})
             if mode == "investor":
                 trend_ok = (
-                    metrics.get("chart_trend_h1") == 1
+                    metrics.get("chart_trend_h1") in (0, 1)
+                    and execution_policy.bounded_pct(metrics.get("change_m5_pct"))
+                    and metrics["change_m5_pct"] > 0
                     and execution_policy.bounded_pct(metrics.get("change_h1_pct"))
-                    and metrics["change_h1_pct"] > 0
+                    and metrics["change_h1_pct"] >= 0
                 )
             else:
                 trend_ok = (

@@ -3914,7 +3914,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <details class="solana-investor-fold">
                         <summary>Strategy &amp; filters</summary>
                         <p class="solana-investor-rules">
-                            Three entry tranches only while fresh chart data confirms an upward trend; no averaging down.
+                            Entries require a fresh closed green 5m candle and a non-falling 1h chart. Later tranches require
+                            the price to rise above the prior entry; no averaging down.
                             The next tranche requires continued upward confirmation. Divide each currency's manually entered budget into five token slots per currency, with three equal tranches per slot. Sell tranche one at +3.5% and tranche two at +7%; activate the final tranche's profit trail after +10%, then exit after a 5% pullback from its peak. Automatic exits are blocked unless the quote's minimum return is above entry cost; a sudden price gap can leave the position open, and a manual sale can realize a loss. This strategy has no stop-loss; the allocation may lose most or all of its value. Targets use estimates; fills, returns and a profitable exit are not guaranteed. Manual sales remain available.
                         </p>
                         <p class="solana-investor-rules">

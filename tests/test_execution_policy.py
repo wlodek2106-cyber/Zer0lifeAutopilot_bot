@@ -470,12 +470,21 @@ class InvestorPolicyTests(unittest.TestCase):
         self.assertFalse(policy.investor_minimum_return_allows(1_000, 1_000))
         self.assertFalse(policy.investor_minimum_return_allows(999, 1_000))
 
-    def test_investor_entry_requires_fresh_rising_non_extended_chart(self):
+    def test_investor_entry_requires_green_5m_and_non_falling_1h_chart(self):
         context = {"TOKEN": {
             "chart_ready": 1, "chart_trend_h1": 1, "chart_buy_setup": 1,
             "change_m5_pct": 0.5, "change_h1_pct": 2, "change_h6_pct": -2,
         }}
         self.assertTrue(policy.investor_entry_signal("TOKEN", context, 101).allowed)
+        context["TOKEN"]["chart_trend_h1"] = 0
+        context["TOKEN"]["change_h1_pct"] = 0
+        self.assertTrue(policy.investor_entry_signal("TOKEN", context, 101).allowed)
+        context["TOKEN"]["chart_trend_h1"] = -1
+        self.assertFalse(policy.investor_entry_signal("TOKEN", context, 101).allowed)
+        context["TOKEN"]["chart_trend_h1"] = 0
+        context["TOKEN"]["change_h1_pct"] = -0.1
+        self.assertFalse(policy.investor_entry_signal("TOKEN", context, 101).allowed)
+        context["TOKEN"]["change_h1_pct"] = 2
         self.assertFalse(policy.investor_entry_signal(
             "TOKEN", context, 99, previous_entry=100).allowed)
         context["TOKEN"]["change_m5_pct"] = 5.1
