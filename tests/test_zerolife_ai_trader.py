@@ -197,6 +197,12 @@ class TraderFoundationTests(unittest.TestCase):
         self.assertGreater(down["max_drawdown_pct"], 0)
         self.assertGreater(up["fees_paid"], 0)
         self.assertGreater(down["fees_paid"], 0)
+        self.assertGreater(up["gross_profit"], 0)
+        self.assertGreater(down["gross_loss"], 0)
+        self.assertGreater(up["expectancy_per_trade"], 0)
+        self.assertLess(down["expectancy_per_trade"], 0)
+        self.assertGreaterEqual(up["average_win"], 0)
+        self.assertLessEqual(down["average_loss"], 0)
 
 if __name__ == "__main__":
     unittest.main()
