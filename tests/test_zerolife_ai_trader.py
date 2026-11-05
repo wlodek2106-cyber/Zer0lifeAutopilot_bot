@@ -293,5 +293,20 @@ class TraderFoundationTests(unittest.TestCase):
         self.assertEqual(report["quality"], "complete")
         self.assertEqual(report["anchor_ms"], 30_000)
 
+    def test_candle_backtest_requires_validated_complete_ohlcv(self):
+        from zerolife_ai_trader.backtest import run_candle_backtest
+        candles = [
+            {"timestamp_ms": i * 60_000, "open": 100 + i, "high": 102 + i,
+             "low": 99 + i, "close": 101 + i, "volume": 1000}
+            for i in range(40)
+        ]
+        result = run_candle_backtest(candles, interval_ms=60_000)
+        self.assertEqual(result["data_quality"]["quality"], "complete")
+        self.assertEqual(result["data_quality"]["candle_count"], 40)
+        self.assertIn("buy_hold_return_pct", result)
+        candles[5]["timestamp_ms"] += 30_000
+        with self.assertRaises(ValueError):
+            run_candle_backtest(candles, interval_ms=60_000)
+
 if __name__ == "__main__":
     unittest.main()
