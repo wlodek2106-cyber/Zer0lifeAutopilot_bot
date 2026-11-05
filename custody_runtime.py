@@ -1120,6 +1120,95 @@ class CustodyRuntime(WalletRuntime):
                                   "market_data": market_quality,
                                   "execution": "paper_signal_only"})
 
+    async def run_ai_trader_backtest(self, request, session):
+        """Run a bounded historical paper backtest; never submits orders."""
+        from zerolife_ai_trader.binance_public import fetch_public_klines
+        from zerolife_ai_trader.configuration import build_backtest_options
+        from zerolife_ai_trader.backtest import run_backtest
+        uid = self.uid(request)
+        self._ensure_ai_trader_settings_table()
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict) or set(payload) != {"source"}:
+                raise ValueError("Expected source=binance_public.")
+            if payload["source"] != "binance_public":
+                raise ValueError("Only public Binance historical data is supported.")
+            with self.ledger.db() as db:
+                row = db.execute(
+                    "SELECT settings_json FROM ai_trader_user_settings WHERE telegram_id=?",
+                    (uid,)
+                ).fetchone()
+            settings = validate_settings(json.loads(row["settings_json"])) if row else dict(DEFAULT_SETTINGS)
+            if settings["source"] != "binance_public":
+                raise ValueError("Enable Binance public data in saved settings first.")
+            options = build_backtest_options(settings)
+            report = {}
+            for symbol in settings["symbols"].split(","):
+                market = await fetch_public_klines(
+                    symbol, settings["timeframe"], limit=500, session=session
+                )
+                closes = [candle["close"] for candle in market["candles"]]
+                result = run_backtest(
+                    closes,
+                    starting_cash=options["starting_cash"],
+                    fee_bps=options["fee_bps"],
+                    slippage_bps=options["slippage_bps"],
+                    order_fraction=options["order_fraction"],
+                    min_confidence=options["min_confidence"],
+                )
+                report[symbol] = {
+                    "metrics": {key: result[key] for key in (
+                        "starting_cash", "final_equity", "net_pnl", "return_pct",
+                        "buy_hold_return_pct", "excess_return_vs_buy_hold_pct",
+                        "max_drawdown_pct", "closed_trades", "wins", "losses",
+                        "win_rate_pct", "profit_factor", "expectancy_per_trade",
+                        "fees_paid", "execution_model"
+                    )},
+                    "equity_curve": result["equity_curve"],
+                    "market_data": {
+                        "candles": market["count"], "interval_ms": market["interval_ms"],
+                        "quality": market["quality"],
+                        "last_timestamp_ms": market["last_timestamp_ms"],
+                    },
+                }
+            self._ensure_ai_trader_backtest_table()
+            with self.ledger.db() as db:
+                for symbol, item in report.items():
+                    db.execute("""INSERT INTO ai_trader_backtest_history
+                        (telegram_id, symbol, report_json)
+                        VALUES (?, ?, ?)""",
+                        (uid, symbol, json.dumps(item, allow_nan=False)))
+            return web.json_response({"success": True, "report": report,
+                                      "execution": "historical_paper_only"})
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+            raise WalletError("Invalid backtest request or settings.", 400)
+        except RuntimeError as exc:
+            raise WalletError(str(exc), 502)
+
+    def _ensure_ai_trader_backtest_table(self):
+        with self.ledger.db() as db:
+            db.execute("""CREATE TABLE IF NOT EXISTS ai_trader_backtest_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                report_json TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )""")
+            db.execute("""CREATE INDEX IF NOT EXISTS idx_ai_trader_backtest_user_time
+                ON ai_trader_backtest_history(telegram_id, created_at DESC)""")
+
+    async def get_ai_trader_backtest_history(self, request, session):
+        self._ensure_ai_trader_backtest_table()
+        uid = self.uid(request)
+        with self.ledger.db() as db:
+            rows = db.execute("""SELECT symbol, report_json, created_at
+                FROM ai_trader_backtest_history WHERE telegram_id=?
+                ORDER BY id DESC LIMIT 20""", (uid,)).fetchall()
+        return web.json_response({"success": True, "runs": [
+            {"symbol": row["symbol"], "report": json.loads(row["report_json"]),
+             "created_at": row["created_at"]} for row in rows
+        ]})
+
     def _ensure_ai_trader_signal_table(self):
         with self.ledger.db() as db:
             db.execute("""CREATE TABLE IF NOT EXISTS ai_trader_signal_history (
