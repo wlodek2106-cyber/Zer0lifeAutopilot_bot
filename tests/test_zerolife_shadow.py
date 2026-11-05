@@ -46,6 +46,32 @@ class ShadowAdapterTests(unittest.TestCase):
         context["SOL"]["chart_trend_h1"] = True
         self.assertEqual(evaluate_context(context)[0]["action"], "HOLD")
 
+    def test_non_finite_and_boolean_market_metrics_fail_closed(self):
+        mutations = (
+            ("chart_price_usd", float("nan")),
+            ("chart_price_usd", float("inf")),
+            ("change_m5_pct", float("nan")),
+            ("change_h1_pct", float("inf")),
+            ("chart_m5_age_seconds", float("nan")),
+            ("chart_h1_age_seconds", -1),
+            ("change_m5_pct", True),
+        )
+        for key, value in mutations:
+            with self.subTest(key=key, value=value):
+                context = self.valid()
+                context["SOL"][key] = value
+                result = evaluate_context(context)
+                self.assertEqual(result[0]["action"], "HOLD")
+                self.assertFalse(result[0]["risk"]["allowed"])
+                self.assertEqual(result[0]["risk"]["quantity"], 0.0)
+
+    def test_shadow_result_never_claims_real_order_execution(self):
+        result = evaluate_context(self.valid())
+        self.assertEqual(result[0]["action"], "PAPER_BUY")
+        self.assertNotIn("order_id", result[0])
+        self.assertNotIn("transaction_hash", result[0])
+        self.assertIn("shadow", result[0]["reason"].lower())
+
     def test_invalid_limits_are_not_silently_replaced(self):
         from zerolife_ai_trader.risk import RiskLimits
         result = evaluate_context(self.valid(), limits=RiskLimits(max_order_fraction=2.0))
