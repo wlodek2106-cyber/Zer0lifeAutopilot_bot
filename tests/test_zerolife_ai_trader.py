@@ -419,5 +419,49 @@ class TraderFoundationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_binance_klines([row, gap], interval="1m")
 
+    def test_binance_fetcher_uses_public_endpoint_and_returns_validated_history(self):
+        import json
+        from unittest.mock import patch
+        from zerolife_ai_trader.binance_fetch import fetch_binance_klines
+
+        payload = [
+            [i * 60_000, "100", "102", "99", "101", "1000",
+             i * 60_000 + 59_999, "100000", 10, "500", "50000", "0"]
+            for i in range(40)
+        ]
+
+        class FakeResponse:
+            status = 200
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def read(self):
+                return json.dumps(payload).encode()
+
+        with patch("zerolife_ai_trader.binance_fetch.urlopen",
+                   return_value=FakeResponse()) as mocked:
+            result = fetch_binance_klines(
+                "SOLUSDC", interval="1m", start_time_ms=0,
+                end_time_ms=40 * 60_000, page_limit=100,
+            )
+        self.assertEqual(result["count"], 40)
+        self.assertEqual(result["quality"], "complete")
+        self.assertEqual(result["symbol"], "SOLUSDC")
+        self.assertEqual(mocked.call_count, 1)
+
+    def test_binance_fetcher_rejects_unsafe_ranges_and_pagination_settings(self):
+        from zerolife_ai_trader.binance_fetch import fetch_binance_klines
+        with self.assertRaises(ValueError):
+            fetch_binance_klines("SOL/USDC", interval="1m",
+                                 start_time_ms=0, end_time_ms=60_000)
+        with self.assertRaises(ValueError):
+            fetch_binance_klines("SOLUSDC", interval="1m",
+                                 start_time_ms=60_000, end_time_ms=0)
+        with self.assertRaises(ValueError):
+            fetch_binance_klines("SOLUSDC", interval="1m",
+                                 start_time_ms=0, end_time_ms=60_000,
+                                 page_limit=5000)
+
 if __name__ == "__main__":
     unittest.main()
