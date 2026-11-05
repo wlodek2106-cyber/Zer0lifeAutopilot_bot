@@ -47,6 +47,6 @@ def assess_order(*, equity, cash, price, confidence, open_positions=0,
         return RiskDecision(False, 0.0, "Daily loss limit reached.")
     budget = min(cash, equity * limits.max_order_fraction)
     quantity = budget / price
-    if quantity <= 0:
-        return RiskDecision(False, 0.0, "No available paper-trading budget.")
+    if not isfinite(quantity) or quantity <= 0:
+        return RiskDecision(False, 0.0, "Calculated order quantity is outside safe numeric bounds.")
     return RiskDecision(True, quantity, "Paper risk checks passed.")
