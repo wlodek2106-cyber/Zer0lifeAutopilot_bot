@@ -110,5 +110,27 @@ class TraderFoundationTests(unittest.TestCase):
         self.assertEqual(broker.cash, before_cash)
         self.assertTrue(float("nan") != broker.positions["BTC"])
 
+    def test_historical_backtest_reports_costs_and_is_deterministic(self):
+        from zerolife_ai_trader.backtest import run_backtest
+        closes = [100 + i * 0.2 for i in range(80)]
+        first = run_backtest(closes)
+        second = run_backtest(closes)
+        self.assertEqual(first, second)
+        self.assertGreaterEqual(first["fees_paid"], 0)
+        self.assertGreaterEqual(first["max_drawdown_pct"], 0)
+        self.assertEqual(first["execution_model"], "next_bar_close_with_fee_and_slippage")
+        self.assertEqual(first["open_trades"], 0)
+
+    def test_backtest_rejects_invalid_data_and_settings(self):
+        from zerolife_ai_trader.backtest import run_backtest
+        closes = [100 + i for i in range(40)]
+        for bad in ([*closes[:-1], True], [*closes[:-1], float("nan")]):
+            with self.assertRaises(ValueError):
+                run_backtest(bad)
+        with self.assertRaises(ValueError):
+            run_backtest(closes, fee_bps=1001)
+        with self.assertRaises(ValueError):
+            run_backtest(closes, starting_cash=True)
+
 if __name__ == "__main__":
     unittest.main()
