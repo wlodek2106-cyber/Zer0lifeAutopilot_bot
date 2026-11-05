@@ -4,6 +4,7 @@ from zerolife_ai_trader.indicators import ema, rsi
 from zerolife_ai_trader.strategy import analyze
 from zerolife_ai_trader.risk import assess_order
 from zerolife_ai_trader.paper import PaperBroker
+from zerolife_ai_trader.backtest import run_backtest
 
 
 class TraderFoundationTests(unittest.TestCase):
@@ -131,6 +132,23 @@ class TraderFoundationTests(unittest.TestCase):
             run_backtest(closes, fee_bps=1001)
         with self.assertRaises(ValueError):
             run_backtest(closes, starting_cash=True)
+
+    def test_backtest_is_deterministic_and_accounts_for_costs(self):
+        closes = [100.0] * 40
+        first = run_backtest(closes, starting_cash=1000, fee_bps=10, slippage_bps=5)
+        second = run_backtest(closes, starting_cash=1000, fee_bps=10, slippage_bps=5)
+        self.assertEqual(first, second)
+        self.assertEqual(first["final_equity"], 1000.0)
+        self.assertEqual(first["closed_trades"], 0)
+        self.assertEqual(first["execution_model"], "next_bar_close_with_fee_and_slippage")
+
+    def test_backtest_rejects_invalid_prices_and_settings(self):
+        with self.assertRaises(ValueError):
+            run_backtest([100.0] * 29)
+        with self.assertRaises(ValueError):
+            run_backtest([100.0] * 30 + [True])
+        with self.assertRaises(ValueError):
+            run_backtest([100.0] * 31, fee_bps=float("nan"))
 
 if __name__ == "__main__":
     unittest.main()
