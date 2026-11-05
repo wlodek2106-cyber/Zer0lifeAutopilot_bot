@@ -26,7 +26,7 @@ def run_backtest(closes, *, starting_cash=1000.0, fee_bps=10.0,
            for p in closes):
         raise ValueError("Closes must be finite positive numeric values.")
 
-    if (strategy not in {"ema_rsi", "trend_following", "mean_reversion", "manual"}:
+    if strategy not in {"ema_rsi", "trend_following", "mean_reversion", "manual"}:
         raise ValueError("Unsupported backtest strategy.")
     cash = float(starting_cash)
     quantity = 0.0
