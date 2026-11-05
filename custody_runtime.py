@@ -1311,7 +1311,7 @@ class CustodyRuntime(WalletRuntime):
                     and action.__name__ in {"ai_preview", "scan_candidates", "trading_readiness",
                                             "save_trading_settings", "save_investor_budget",
                                             "save_base_paper_budget", "scan_base_paper",
-                                            "save_ai_trader_settings", "evaluate_ai_trader_signals"}):
+                                            "save_ai_trader_settings", "evaluate_ai_trader_signals", "run_ai_trader_backtest"}):
                 self.web_access.trading_request(request)
             if (getattr(self, "accounts", None) and request.method == "POST" and action.__name__ in
                     {"create_invoice","deposit","wallet_link","toggle","toggle_sniper","withdraw",
