@@ -463,5 +463,26 @@ class TraderFoundationTests(unittest.TestCase):
                                  start_time_ms=0, end_time_ms=60_000,
                                  page_limit=5000)
 
+    def test_binance_fetcher_rejects_oversized_http_response(self):
+        from unittest.mock import patch
+        from zerolife_ai_trader.binance_fetch import fetch_binance_klines
+
+        class OversizedResponse:
+            status = 200
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def read(self, limit):
+                return b"x" * limit
+
+        with patch("zerolife_ai_trader.binance_fetch.urlopen",
+                   return_value=OversizedResponse()):
+            with self.assertRaises(RuntimeError):
+                fetch_binance_klines(
+                    "SOLUSDC", interval="1m", start_time_ms=0,
+                    end_time_ms=60_000,
+                )
+
 if __name__ == "__main__":
     unittest.main()
