@@ -68,15 +68,15 @@ class TraderFoundationTests(unittest.TestCase):
         self.assertEqual(broker.cash, 1000.0)
         self.assertEqual(broker.positions, {})
 
-    def test_paper_broker_rejects_zero_proceeds_after_costs_without_mutation(self):
+    def test_paper_broker_maximum_costs_are_applied_without_negative_proceeds(self):
         broker = PaperBroker(1000, fee_bps=1000, slippage_bps=1000)
         broker.buy("BTC", 1, 100)
         before_cash = broker.cash
-        before_positions = dict(broker.positions)
-        with self.assertRaises(ValueError):
-            broker.sell("BTC", 1, 100)
-        self.assertEqual(broker.cash, before_cash)
-        self.assertEqual(broker.positions, before_positions)
+        sale = broker.sell("BTC", 1, 100)
+        self.assertGreater(sale.price, 0)
+        self.assertGreater(sale.cash_after, before_cash)
+        self.assertGreaterEqual(sale.fee, 0)
+        self.assertNotIn("BTC", broker.positions)
 
     def test_paper_broker_does_not_accept_missing_or_corrupt_position(self):
         broker = PaperBroker(1000)
