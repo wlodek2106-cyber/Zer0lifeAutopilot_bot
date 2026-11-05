@@ -36,7 +36,7 @@ class PaperBroker:
         total = notional + fee
         new_position = self.positions.get(symbol, 0.0) + quantity
         if (not all(isfinite(x) for x in (fill_price, notional, fee, total, new_position))
-                or total < 0 or total > self.cash):
+                or total < 0):
             raise ValueError("Paper order arithmetic overflowed.")
         if total > self.cash:
             raise ValueError("Insufficient paper cash.")
