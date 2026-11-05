@@ -1,5 +1,6 @@
 """Public multi-user custody routes. All user ownership comes from verified Telegram."""
 import asyncio
+import hashlib
 import base64
 import json
 from zerolife_ai_trader.settings import DEFAULT_SETTINGS, validate_settings
@@ -1102,23 +1103,92 @@ class CustodyRuntime(WalletRuntime):
                         raise ValueError("Invalid symbol or close series length.")
             else:
                 raise ValueError("Unsupported market-data source.")
-            results = evaluate_watchlist(series, settings)
+            paper_cash = settings["capital"]
+            paper_equity = settings["capital"]
+            paper_open_positions = 0
+            if settings.get("paperAutoExecute") is True and source == "binance_public":
+                from zerolife_ai_trader.paper_store import PaperTradeStore
+                account = PaperTradeStore(self.ledger.path).account(telegram_id=uid)
+                if account["cash"] is not None:
+                    paper_cash = account["cash"]
+                    paper_open_positions = len(account["positions"])
+                    paper_equity = paper_cash + sum(
+                        position["quantity"] * position["average_cost"]
+                        for position in account["positions"]
+                    )
+            results = evaluate_watchlist(
+                series, settings, equity=paper_equity, cash=paper_cash,
+                open_positions=paper_open_positions,
+            )
         except (ValueError, TypeError, KeyError, json.JSONDecodeError):
             raise WalletError("Invalid signal evaluation request or market data.", 400)
         except RuntimeError as exc:
             raise WalletError(str(exc), 502)
         self._ensure_ai_trader_signal_table()
+        from zerolife_ai_trader.paper_store import PaperTradeStore
+        paper_executions = []
         with self.ledger.db() as db:
             for item in results:
-                db.execute("""INSERT INTO ai_trader_signal_history
+                cursor = db.execute("""INSERT INTO ai_trader_signal_history
                     (telegram_id, symbol, action, confidence, price, reasons_json, risk_json)
                     VALUES (?, ?, ?, ?, ?, ?, ?)""",
                     (uid, item["symbol"], item["action"], item["confidence"],
                      item["price"], json.dumps(item["reasons"]),
                      json.dumps(item["risk"], allow_nan=False)))
+                item["signal_id"] = cursor.lastrowid
+        if settings.get("paperAutoExecute") is True and source == "binance_public":
+            from zerolife_ai_trader.configuration import build_risk_limits
+            from zerolife_ai_trader.risk import assess_order
+            store = PaperTradeStore(self.ledger.path)
+            for item in results:
+                if item["action"] != "PAPER_BUY" or not item["risk"].get("allowed"):
+                    continue
+                quality = market_quality.get(item["symbol"], {})
+                candle_id = quality.get("last_timestamp_ms")
+                if type(candle_id) is not int or candle_id <= 0:
+                    continue
+                stable_id = int.from_bytes(hashlib.sha256(
+                    (str(uid) + ":" + item["symbol"] + ":" + str(candle_id)).encode()
+                ).digest()[:8], "big") & 0x7FFFFFFFFFFFFFFF
+                try:
+                    account = store.account(telegram_id=uid)
+                    positions = account["positions"]
+                    cash = account["cash"] if account["cash"] is not None else settings["capital"]
+                    equity = cash + sum(
+                        p["quantity"] * p["average_cost"] for p in positions
+                    )
+                    already_held = any(p["symbol"] == item["symbol"] for p in positions)
+                    risk = assess_order(
+                        equity=equity, cash=cash, price=item["price"],
+                        confidence=item["confidence"],
+                        open_positions=max(0, len(positions) - (1 if already_held else 0)),
+                        daily_pnl=0.0, limits=build_risk_limits(settings),
+                    )
+                    if not risk.allowed:
+                        paper_executions.append({
+                            "symbol": item["symbol"], "executed": False,
+                            "reason": risk.reason,
+                        })
+                        continue
+                    result = store.execute_buy(
+                        telegram_id=uid, signal_id=stable_id,
+                        symbol=item["symbol"], quantity=risk.quantity,
+                        market_price=item["price"], fee_bps=settings["fee"],
+                        slippage_bps=settings["slippage"], starting_cash=settings["capital"],
+                    )
+                    paper_executions.append({
+                        "symbol": item["symbol"], "executed": result["executed"],
+                        "duplicate": result["duplicate"], "fill": result["fill"],
+                    })
+                except ValueError as exc:
+                    paper_executions.append({
+                        "symbol": item["symbol"], "executed": False, "reason": str(exc),
+                    })
         return web.json_response({"success": True, "signals": results,
                                   "market_data": market_quality,
-                                  "execution": "paper_signal_only"})
+                                  "paper_executions": paper_executions,
+                                  "execution": ("paper_auto" if paper_executions else
+                                                "paper_signal_only")})
 
     async def run_ai_trader_backtest(self, request, session):
         """Run a bounded historical paper backtest; never submits orders."""
@@ -1257,6 +1327,7 @@ class CustodyRuntime(WalletRuntime):
             return web.json_response({
                 "success": True,
                 "summary": store.summary(telegram_id=uid),
+                "account": store.account(telegram_id=uid),
                 "fills": store.history(telegram_id=uid, limit=limit),
                 "execution": "paper_journal_read_only",
             })

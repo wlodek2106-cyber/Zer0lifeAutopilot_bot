@@ -68,6 +68,46 @@ class PaperTradeStoreTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.store.record_fill(**(base | change))
 
+    def test_empty_account_is_safe_to_read_before_first_fill(self):
+        account = self.store.account(telegram_id=101)
+        self.assertIsNone(account["cash"])
+        self.assertEqual(account["positions"], [])
+
+    def test_execute_buy_persists_account_position_and_fill_once(self):
+        first = self.store.execute_buy(
+            telegram_id=101, signal_id=44, symbol="SOLUSDC", quantity=2,
+            market_price=100, fee_bps=10, slippage_bps=5, starting_cash=1000,
+        )
+        self.assertTrue(first["executed"])
+        self.assertFalse(first["duplicate"])
+        self.assertAlmostEqual(first["fill"]["price"], 100.05)
+        self.assertAlmostEqual(first["fill"]["fee"], 0.2001)
+        self.assertAlmostEqual(first["fill"]["cash_after"], 799.6999)
+        account = self.store.account(telegram_id=101)
+        self.assertAlmostEqual(account["cash"], 799.6999)
+        self.assertEqual(len(account["positions"]), 1)
+        self.assertEqual(account["positions"][0]["symbol"], "SOLUSDC")
+        second = self.store.execute_buy(
+            telegram_id=101, signal_id=44, symbol="SOLUSDC", quantity=2,
+            market_price=100, fee_bps=10, slippage_bps=5, starting_cash=1000,
+        )
+        self.assertFalse(second["executed"])
+        self.assertTrue(second["duplicate"])
+        self.assertEqual(self.store.summary(telegram_id=101)["fills"], 1)
+
+    def test_execute_buy_is_scoped_and_rejects_insufficient_cash(self):
+        self.store.execute_buy(
+            telegram_id=101, signal_id=1, symbol="BTCUSDT", quantity=0.01,
+            market_price=50000, fee_bps=10, slippage_bps=5, starting_cash=1000,
+        )
+        self.assertIsNone(self.store.account(telegram_id=202)["cash"])
+        with self.assertRaisesRegex(ValueError, "Insufficient paper cash"):
+            self.store.execute_buy(
+                telegram_id=101, signal_id=2, symbol="BTCUSDT", quantity=1,
+                market_price=50000, fee_bps=10, slippage_bps=5, starting_cash=1000,
+            )
+        self.assertEqual(self.store.summary(telegram_id=101)["fills"], 1)
+
     def test_limit_is_bounded(self):
         with self.assertRaises(ValueError):
             self.store.history(telegram_id=101, limit=201)

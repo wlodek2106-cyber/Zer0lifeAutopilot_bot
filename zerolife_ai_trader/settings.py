@@ -8,6 +8,7 @@ DEFAULT_SETTINGS = {
     "capital": 1000.0, "orderRisk": 2.0, "dailyLoss": 3.0,
     "maxPositions": 5, "confidence": 60.0, "fee": 10, "slippage": 5,
     "notifySignals": True, "notifyRisk": True, "notifyReports": False,
+    "paperAutoExecute": False,
 }
 STRATEGIES = {"ema_rsi", "trend_following", "mean_reversion", "manual"}
 SOURCES = {"binance_public", "dexscreener_readonly", "csv"}
@@ -16,7 +17,12 @@ ALLOWED_SYMBOLS = {"SOLUSDC", "BTCUSDT", "ETHUSDT", "SOLUSDT", "JUPUSDC", "RAYUS
 
 
 def validate_settings(payload):
-    if not isinstance(payload, dict) or set(payload) != set(DEFAULT_SETTINGS):
+    if not isinstance(payload, dict):
+        raise ValueError("Settings payload has missing or unsupported fields.")
+    legacy_fields = set(DEFAULT_SETTINGS) - {"paperAutoExecute"}
+    if set(payload) == legacy_fields:
+        payload = {**payload, "paperAutoExecute": False}
+    if set(payload) != set(DEFAULT_SETTINGS):
         raise ValueError("Settings payload has missing or unsupported fields.")
     result = deepcopy(payload)
     if result["strategy"] not in STRATEGIES:
@@ -48,7 +54,7 @@ def validate_settings(payload):
     for key in ("fee", "slippage"):
         if type(result[key]) is not int:
             raise ValueError(key + " must be an integer.")
-    for key in ("notifySignals", "notifyRisk", "notifyReports"):
+    for key in ("notifySignals", "notifyRisk", "notifyReports", "paperAutoExecute"):
         if type(result[key]) is not bool:
             raise ValueError("Invalid notification setting: " + key)
     return result
