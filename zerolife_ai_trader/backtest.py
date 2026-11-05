@@ -5,12 +5,12 @@ at the following bar close, avoiding same-bar look-ahead. This is research
 software, not a forecast or a live execution adapter.
 """
 from math import isfinite
-from .strategy import analyze
+from .signal_engine import analyze_with_strategy
 
 
 def run_backtest(closes, *, starting_cash=1000.0, fee_bps=10.0,
                  slippage_bps=5.0, order_fraction=0.02,
-                 min_confidence=0.60):
+                 min_confidence=0.60, strategy="ema_rsi"):
     values = (starting_cash, fee_bps, slippage_bps, order_fraction,
               min_confidence)
     if any(type(v) not in (int, float) or not isfinite(v) for v in values):
@@ -26,6 +26,8 @@ def run_backtest(closes, *, starting_cash=1000.0, fee_bps=10.0,
            for p in closes):
         raise ValueError("Closes must be finite positive numeric values.")
 
+    if (strategy not in {"ema_rsi", "trend_following", "mean_reversion", "manual"}:
+        raise ValueError("Unsupported backtest strategy.")
     cash = float(starting_cash)
     quantity = 0.0
     entry_cost = 0.0
@@ -72,7 +74,7 @@ def run_backtest(closes, *, starting_cash=1000.0, fee_bps=10.0,
         equity_curve.append(cash + quantity * close)
         # Do not generate a signal on the final bar: use it only to liquidate.
         if index < len(closes) - 1 and index >= 29:
-            signal = analyze(closes[:index + 1])
+            signal = analyze_with_strategy(closes[:index + 1], strategy)
             if signal.confidence >= min_confidence:
                 if signal.action == "BUY" and quantity == 0:
                     pending = "BUY"
@@ -165,6 +167,7 @@ def run_backtest(closes, *, starting_cash=1000.0, fee_bps=10.0,
         "trades": trades,
         "equity_curve": equity_curve,
         "execution_model": "next_bar_close_with_fee_and_slippage",
+        "strategy": strategy,
     }
 
 
