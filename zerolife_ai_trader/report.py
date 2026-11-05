@@ -69,3 +69,39 @@ def report_to_json(report):
     if not isinstance(report, dict) or report.get("schema_version") != 1:
         raise ValueError("Unsupported or invalid report schema.")
     return json.dumps(report, sort_keys=True, indent=2, allow_nan=False)
+
+
+def report_to_csv(report):
+    """Export one summary row; detailed trade/equity series remain in JSON."""
+    import csv
+    from io import StringIO
+
+    if not isinstance(report, dict) or report.get("schema_version") != 1:
+        raise ValueError("Unsupported or invalid report schema.")
+    metrics = report.get("metrics")
+    period = report.get("period")
+    quality = report.get("data_quality")
+    if not all(isinstance(item, dict) for item in (metrics, period, quality)):
+        raise ValueError("Report is missing required sections.")
+    fields = (
+        "schema_version", "symbol", "interval", "data_source",
+        "period_start_ms", "period_end_ms", "data_quality",
+        "candle_count", "gap_count", *_REPORT_FIELDS,
+    )
+    row = {
+        "schema_version": report["schema_version"],
+        "symbol": report.get("symbol"),
+        "interval": report.get("interval"),
+        "data_source": report.get("data_source"),
+        "period_start_ms": period.get("start_timestamp_ms"),
+        "period_end_ms": period.get("end_timestamp_ms"),
+        "data_quality": quality.get("quality"),
+        "candle_count": quality.get("candle_count"),
+        "gap_count": quality.get("gap_count"),
+        **metrics,
+    }
+    output = StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=fields, extrasaction="raise")
+    writer.writeheader()
+    writer.writerow(row)
+    return output.getvalue()
