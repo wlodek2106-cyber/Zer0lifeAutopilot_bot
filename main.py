@@ -8430,6 +8430,7 @@ async def main():
     app.router.add_post('/api/verify_deposit', wallet_handler(runtime.deposit))
     app.router.add_post('/api/wallet_link', wallet_handler(runtime.wallet_link))
     app.router.add_post('/api/deposit_invoice', wallet_handler(runtime.create_invoice))
+    app.router.add_get('/api/admin/overview', wallet_handler(runtime.admin_overview))
     app.router.add_get('/api/admin/status', wallet_handler(runtime.admin_status))
     app.router.add_get('/api/admin/pending_operations', wallet_handler(runtime.admin_pending_operations))
     app.router.add_get('/api/admin/balance_check', wallet_handler(runtime.admin_balance_check))
