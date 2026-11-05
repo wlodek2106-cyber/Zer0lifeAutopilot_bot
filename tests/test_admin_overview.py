@@ -54,8 +54,10 @@ class AdminOverviewSnapshotTests(unittest.TestCase):
     def test_recent_limit_is_validated(self):
         with self.assertRaises(LedgerError):
             self.ledger.admin_overview_snapshot(0)
-        with self.assertRaises(Exception):
+        with self.assertRaises(LedgerError):
             self.ledger.admin_overview_snapshot(100)
+        with self.assertRaises(LedgerError):
+            self.ledger.admin_overview_snapshot(True)
 
 
 if __name__ == "__main__":
