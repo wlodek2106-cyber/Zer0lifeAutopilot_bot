@@ -185,10 +185,13 @@ class MemePaperEngine:
                              (telegram_id,)).fetchone()
         return bool(row and row[0])
 
-    def active_accounts(self):
+    def monitor_accounts(self):
+        # Continue enforcing exits for open positions even after new entries are paused.
         with sqlite3.connect(self.db_path, timeout=10) as db:
-            return [int(row[0]) for row in db.execute(
-                "SELECT telegram_id FROM meme_paper_settings WHERE enabled=1 ORDER BY telegram_id")]
+            rows = db.execute("""SELECT telegram_id FROM meme_paper_settings WHERE enabled=1
+                UNION SELECT DISTINCT telegram_id FROM ai_trader_paper_positions
+                ORDER BY telegram_id""").fetchall()
+        return [int(row[0]) for row in rows]
 
     def history(self, telegram_id, limit=50):
         if type(telegram_id) is not int or telegram_id <= 0:
