@@ -3387,8 +3387,12 @@ class CustodyRuntime(WalletRuntime):
         try:
             wire = await self.safe_simulation(session, tx, row, info)
             if getattr(self, "web_access", None) and row["kind"] in ("BUY", "SELL"):
+                automated_exit = info.get("exit_reason") in (
+                    "STOP_LOSS", "TRAILING_STOP",
+                    "INVESTOR_TAKE_PROFIT_STEP_1", "INVESTOR_TAKE_PROFIT_STEP_2",
+                    "INVESTOR_TRAILING_TAKE_PROFIT")
                 self.web_access.require(row["uid"], row["kind"], row.get("position_id"),
-                                        manual=info.get("manual_close") is True)
+                    manual=info.get("manual_close") is True, automated_exit=automated_exit)
             if row["kind"] in ("BUY", "SELL"):
                 self.authorize_execution_order(
                     row["uid"], row["asset"], info["output_asset"], row["raw"],

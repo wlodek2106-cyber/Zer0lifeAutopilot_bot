@@ -239,8 +239,11 @@ class WebAccess:
                 if uid is not None else (int(self.runtime.owner_id), now, now))
         # close_requested is deliberately preserved: explicit user-requested exits.
 
-    def require(self, uid, kind="BUY", position_id=None, manual=False):
-        if manual and kind == "SELL":
+    def require(self, uid, kind="BUY", position_id=None, manual=False,
+                automated_exit=False):
+        # Expired access must stop new entries, not strand assets already held.
+        # Only an explicitly permitted exit for this user's own open position may bypass it.
+        if kind == "SELL" and (manual or automated_exit):
             if any(p["id"] == position_id and p["state"] in ("OPEN", "RESERVED")
                    for p in self.ledger.positions(uid)):
                 return
