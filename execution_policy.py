@@ -15,6 +15,17 @@ MAX_POSITIONS = MappingProxyType({"main": 5, "sniper": 5})
 MAX_SNIPER_ORDER_RAW = 50_000_000       # 0.05 SOL per entry
 MAX_SNIPER_EXPOSURE_RAW = 150_000_000   # 0.15 SOL aggregate open cost basis
 MAX_SNIPER_DAILY_LOSS_RAW = 4_500_000   # 0.0045 SOL; 3% of max open exposure
+
+
+def validate_sniper_order_size(raw):
+    """Reject invalid or oversized Sniper entries before mode activation."""
+    if type(raw) is not int or raw <= 0:
+        raise WalletError("Sniper order size must be a positive SOL amount.", 400)
+    if raw > MAX_SNIPER_ORDER_RAW:
+        raise WalletError(
+            "Sniper order exceeds the hard server limit of 0.05 SOL. "
+            "Set the order size to 0.05 SOL or less; Sniper remains OFF.", 409)
+    return raw
 INVESTOR_MAX_SLOTS = 5
 INVESTOR_TRANCHES = 3
 INVESTOR_TARGETS_PCT = MappingProxyType({1: 3.5, 2: 7.0})
