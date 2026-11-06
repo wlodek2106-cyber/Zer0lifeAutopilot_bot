@@ -190,6 +190,22 @@ class MemePaperEngine:
             return [int(row[0]) for row in db.execute(
                 "SELECT telegram_id FROM meme_paper_settings WHERE enabled=1 ORDER BY telegram_id")]
 
+    def history(self, telegram_id, limit=50):
+        if type(telegram_id) is not int or telegram_id <= 0:
+            raise ValueError("Invalid paper account owner.")
+        meta = self._metadata(telegram_id)
+        rows = self.store.history(telegram_id=telegram_id, limit=limit)
+        enriched = []
+        for row in rows:
+            asset = meta.get(row["symbol"])
+            enriched.append({
+                **row,
+                "asset_key": row["symbol"],
+                "symbol": asset["symbol"] if asset else row["symbol"],
+                "mint": asset["mint"] if asset else None,
+            })
+        return enriched
+
     def open_position_assets(self, telegram_id):
         account=self.store.account(telegram_id=telegram_id)
         meta=self._metadata(telegram_id)
