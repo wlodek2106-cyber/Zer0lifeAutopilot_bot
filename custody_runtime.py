@@ -517,10 +517,16 @@ class CustodyRuntime(WalletRuntime):
                 candidate = {**candidate, "price": prices_by_code[code]}
                 price_by_mint[candidate["mint"]] = prices_by_code[code]
             fresh_candidates.append(candidate)
+        entries_enabled = self.meme_paper_engine.enabled(self.uid(request))
         report = self.meme_paper_engine.process_snapshot(
-            telegram_id=self.uid(request), candidates=fresh_candidates,
+            telegram_id=self.uid(request),
+            candidates=(fresh_candidates if entries_enabled else []),
             market_prices=price_by_mint, snapshot_id=int(time.time()))
-        return web.json_response({"success": True, **report})
+        return web.json_response({
+            "success": True, "monitor_enabled": entries_enabled,
+            "message": ("Paper scan completed with new entries enabled." if entries_enabled
+                        else "New entries are paused. Existing positions were checked for exits."),
+            **report})
 
     async def meme_paper_history(self, request, session):
         self.admit_meme_paper(request)
