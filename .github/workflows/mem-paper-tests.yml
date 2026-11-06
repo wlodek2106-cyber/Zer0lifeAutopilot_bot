@@ -1,0 +1,34 @@
+name: Mem-Sniper Paper Engine Tests
+
+on:
+  pull_request:
+    paths:
+      - "meme_paper_engine.py"
+      - "zerolife_ai_trader/paper_store.py"
+      - "tests/test_meme_paper_engine.py"
+      - ".github/workflows/mem-paper-tests.yml"
+  push:
+    branches:
+      - main
+      - "feature/**"
+    paths:
+      - "meme_paper_engine.py"
+      - "zerolife_ai_trader/paper_store.py"
+      - "tests/test_meme_paper_engine.py"
+      - ".github/workflows/mem-paper-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  paper-engine:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run isolated paper engine tests
+        run: python -m unittest discover -s tests -p "test_meme_paper_engine.py" -v
