@@ -6010,21 +6010,30 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         function getUserData() {
+            // Telegram identity takes precedence on the /terminal page too:
+            // that route also sets ZRL_WEB for standalone-browser support.
+            const telegramUser = tg?.initDataUnsafe?.user;
+            if (tg?.initData && telegramUser?.id) {
+                return { id: Number(telegramUser.id),
+                    username: telegramUser.username || telegramUser.first_name || 'User' };
+            }
             if(window.ZRL_WEB)return window.webSession?.user||null;
-            const user = tg?.initDataUnsafe?.user;
-            if (!tg?.initData || !user?.id) return null;
-            return { id: Number(user.id), username: user.username || user.first_name || 'User' };
+            return null;
         }
 
         async function apiFetch(url, options = {}) {
+            // Never downgrade an in-Telegram request to a separate browser session.
+            if (tg?.initData) {
+                const headers = Object.assign({}, options.headers || {},
+                    { 'X-Telegram-Init-Data': tg.initData });
+                return fetch(url, Object.assign({}, options, { headers }));
+            }
             if(window.ZRL_WEB){
                 if(!window.webSession?.user)throw Error('Sign in to the web terminal.');
                 return fetch(url,{...options,credentials:'same-origin',
                     headers:{...(options.headers||{}),'X-ZRL-CSRF':window.webSession.csrf}});
             }
-            if (!tg?.initData) throw new Error('Open this app through Telegram.');
-            const headers = Object.assign({}, options.headers || {}, { 'X-Telegram-Init-Data': tg.initData });
-            return fetch(url, Object.assign({}, options, { headers }));
+            throw new Error('Open this app through Telegram.');
         }
 
         function openSupport(){
