@@ -158,6 +158,18 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(old_row["state"], "FAILED")
         self.assertEqual(old_row["failure_reason"], "")
 
+    def test_open_position_keeps_user_in_worker_even_when_all_modes_are_paused(self):
+        self.credit(101, SOL, 5_000_000)
+        buy = self.ledger.reserve(101, str(uuid.uuid4()), "BUY", SOL, 1_000_000,
+            {"output_asset": "sniper-mint", "symbol": "BOME", "decimals": 6}, "recipient")
+        self.ledger.prepared(buy["id"], str(Signature.new_unique()), "offline-wire")
+        self.ledger.finalize(buy["id"], 1_000_000, 0, 100_000)
+        self.ledger.settings(101, enabled=False, sniper_enabled=False, investor_enabled=False)
+
+        active = self.ledger.active_users()
+        self.assertEqual([row["uid"] for row in active], [101])
+        self.assertFalse(active[0]["sniper_trading"])
+
     def test_separate_balances_on_one_wallet(self):
         self.assertEqual(self.ledger.balance(101, USDC), 10_000_000)
         self.assertEqual(self.ledger.balance(202, USDC), 30_000_000)
@@ -951,6 +963,35 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.service.poll_discovery.assert_called_once_with()
         self.service.current_prices.assert_not_awaited()
+
+    async def test_paused_sniper_still_checks_and_submits_protective_exit(self):
+        user = {"uid": 101, "trading": False, "sniper_trading": False,
+                "investor_trading": 0, "close_requested": False}
+        position = {"id": "paused-sniper-position", "uid": 101, "asset": "sniper-mint",
+                    "funding_asset": SOL, "symbol": "BOME", "raw": 100,
+                    "decimals": 6, "cost_raw": 1_000_000, "peak_price": 1.0,
+                    "strategy": "sniper"}
+        self.service.reconcile = AsyncMock()
+        self.service.process_close_queues = AsyncMock(return_value=False)
+        self.service.scan_deposits = AsyncMock()
+        self.service.process_due_monthly_trading_fees = AsyncMock()
+        self.service.poll_discovery = Mock()
+        self.service.current_prices = AsyncMock(return_value={"BOME": 0.94})
+        self.service.poll_ai = Mock(return_value=None)
+        self.service.exit_reason = Mock(return_value="STOP_LOSS")
+        self.service.trade = AsyncMock(return_value={"state": "SUBMITTED"})
+        with patch.object(self.ledger, "active_users", return_value=[user]), \
+             patch.object(self.ledger, "settings", return_value=user), \
+             patch.object(self.ledger, "positions", return_value=[position]), \
+             patch.object(self.ledger, "record_position_peak", return_value=1.0) as peak, \
+             patch.object(self.ledger, "exit_retry_due", return_value=True):
+            await self.service.worker_cycle(None)
+
+        peak.assert_called_once_with(101, "paused-sniper-position", 1.0)
+        self.service.exit_reason.assert_called_once()
+        self.service.trade.assert_awaited_once()
+        self.assertEqual(self.service.trade.await_args.args[5], "SELL")
+        self.assertEqual(self.service.trade.await_args.args[6]["exit_reason"], "STOP_LOSS")
 
     async def test_all_protective_exits_are_checked_before_any_new_entry(self):
         users = [{"uid": uid, "trading": True, "sniper_trading": True,
