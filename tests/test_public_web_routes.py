@@ -17,7 +17,7 @@ class PublicWebRouteTests(unittest.IsolatedAsyncioTestCase):
         app = web.Application()
         main.register_public_web_routes(app)
 
-        for path in ("/", "/terminal", "/web-terminal.js", "/dashboard.js"):
+        for path in ("/", "/terminal", "/terminal/", "/web-terminal.js", "/dashboard.js"):
             with self.subTest(path=path):
                 match = await app.router.resolve(make_mocked_request("GET", path, app=app))
                 self.assertNotIsInstance(match, web.HTTPNotFound)
@@ -30,6 +30,13 @@ class PublicWebRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("window.ZRL_WEB=true", body)
         self.assertIn('/web-terminal.js', body)
         self.assertIn("<!DOCTYPE html>", body)
+
+    async def test_terminal_trailing_slash_returns_html_with_web_bootstrap(self):
+        response = await main.index_handler(SimpleNamespace(path="/terminal/"))
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.content_type, "text/html")
+        self.assertIn("window.ZRL_WEB=true", response.text)
+        self.assertIn("/web-terminal.js", response.text)
 
     async def test_root_handler_returns_html_without_terminal_bootstrap(self):
         response = await main.index_handler(SimpleNamespace(path="/"))
