@@ -1106,9 +1106,13 @@ class CustodyRuntime(WalletRuntime):
             paper_cash = settings["capital"]
             paper_equity = settings["capital"]
             paper_open_positions = 0
+            paper_daily_pnl = 0.0
+            paper_store = None
             if settings.get("paperAutoExecute") is True and source == "binance_public":
                 from zerolife_ai_trader.paper_store import PaperTradeStore
-                account = PaperTradeStore(self.ledger.path).account(telegram_id=uid)
+                paper_store = PaperTradeStore(self.ledger.path)
+                account = paper_store.account(telegram_id=uid)
+                paper_daily_pnl = paper_store.daily_realized_pnl(telegram_id=uid)
                 if account["cash"] is not None:
                     paper_cash = account["cash"]
                     paper_open_positions = len(account["positions"])
@@ -1118,7 +1122,7 @@ class CustodyRuntime(WalletRuntime):
                     )
             results = evaluate_watchlist(
                 series, settings, equity=paper_equity, cash=paper_cash,
-                open_positions=paper_open_positions,
+                open_positions=paper_open_positions, daily_pnl=paper_daily_pnl,
             )
         except (ValueError, TypeError, KeyError, json.JSONDecodeError):
             raise WalletError("Invalid signal evaluation request or market data.", 400)
@@ -1139,43 +1143,64 @@ class CustodyRuntime(WalletRuntime):
         if settings.get("paperAutoExecute") is True and source == "binance_public":
             from zerolife_ai_trader.configuration import build_risk_limits
             from zerolife_ai_trader.risk import assess_order
-            store = PaperTradeStore(self.ledger.path)
+            store = paper_store or PaperTradeStore(self.ledger.path)
             for item in results:
-                if item["action"] != "PAPER_BUY" or not item["risk"].get("allowed"):
+                action = item["action"]
+                if action not in {"PAPER_BUY", "SELL"}:
+                    continue
+                if action == "PAPER_BUY" and not item["risk"].get("allowed"):
                     continue
                 quality = market_quality.get(item["symbol"], {})
                 candle_id = quality.get("last_timestamp_ms")
                 if type(candle_id) is not int or candle_id <= 0:
                     continue
                 stable_id = int.from_bytes(hashlib.sha256(
-                    (str(uid) + ":" + item["symbol"] + ":" + str(candle_id)).encode()
+                    (str(uid) + ":" + item["symbol"] + ":" + action + ":" + str(candle_id)).encode()
                 ).digest()[:8], "big") & 0x7FFFFFFFFFFFFFFF
                 try:
                     account = store.account(telegram_id=uid)
                     positions = account["positions"]
                     cash = account["cash"] if account["cash"] is not None else settings["capital"]
-                    equity = cash + sum(
-                        p["quantity"] * p["average_cost"] for p in positions
-                    )
-                    already_held = any(p["symbol"] == item["symbol"] for p in positions)
-                    risk = assess_order(
-                        equity=equity, cash=cash, price=item["price"],
-                        confidence=item["confidence"],
-                        open_positions=max(0, len(positions) - (1 if already_held else 0)),
-                        daily_pnl=0.0, limits=build_risk_limits(settings),
-                    )
-                    if not risk.allowed:
-                        paper_executions.append({
-                            "symbol": item["symbol"], "executed": False,
-                            "reason": risk.reason,
-                        })
-                        continue
-                    result = store.execute_buy(
-                        telegram_id=uid, signal_id=stable_id,
-                        symbol=item["symbol"], quantity=risk.quantity,
-                        market_price=item["price"], fee_bps=settings["fee"],
-                        slippage_bps=settings["slippage"], starting_cash=settings["capital"],
-                    )
+                    if action == "SELL":
+                        position = next(
+                            (p for p in positions if p["symbol"] == item["symbol"]), None
+                        )
+                        if position is None:
+                            paper_executions.append({
+                                "symbol": item["symbol"], "executed": False,
+                                "reason": "No matching paper position to sell.",
+                            })
+                            continue
+                        result = store.execute_sell(
+                            telegram_id=uid, signal_id=stable_id,
+                            symbol=item["symbol"], quantity=position["quantity"],
+                            market_price=item["price"], fee_bps=settings["fee"],
+                            slippage_bps=settings["slippage"],
+                        )
+                    else:
+                        equity = cash + sum(
+                            p["quantity"] * p["average_cost"] for p in positions
+                        )
+                        already_held = any(p["symbol"] == item["symbol"] for p in positions)
+                        risk = assess_order(
+                            equity=equity, cash=cash, price=item["price"],
+                            confidence=item["confidence"],
+                            open_positions=max(0, len(positions) - (1 if already_held else 0)),
+                            daily_pnl=store.daily_realized_pnl(telegram_id=uid),
+                            limits=build_risk_limits(settings),
+                        )
+                        if not risk.allowed:
+                            paper_executions.append({
+                                "symbol": item["symbol"], "executed": False,
+                                "reason": risk.reason,
+                            })
+                            continue
+                        result = store.execute_buy(
+                            telegram_id=uid, signal_id=stable_id,
+                            symbol=item["symbol"], quantity=risk.quantity,
+                            market_price=item["price"], fee_bps=settings["fee"],
+                            slippage_bps=settings["slippage"], starting_cash=settings["capital"],
+                        )
                     paper_executions.append({
                         "symbol": item["symbol"], "executed": result["executed"],
                         "duplicate": result["duplicate"], "fill": result["fill"],
