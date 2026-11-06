@@ -63,6 +63,18 @@ class MemePaperEngineTests(unittest.TestCase):
         self.assertEqual(report["positions"], [])
         self.assertEqual(report["live_transactions_sent"], 0)
 
+    def test_trailing_stop_uses_persisted_peak_and_does_not_reenter(self):
+        self.engine.process_snapshot(
+            telegram_id=123, candidates=[candidate()], starting_cash=1000, candle_id=1)
+        self.engine.process_snapshot(
+            telegram_id=123, candidates=[candidate(price=1.05)], starting_cash=1000, candle_id=2)
+        report = self.engine.process_snapshot(
+            telegram_id=123, candidates=[candidate(price=1.028)], starting_cash=1000, candle_id=3)
+        self.assertEqual(report["actions"][0]["action"], "PAPER_SELL")
+        self.assertEqual(report["actions"][0]["reason"], "TRAILING_STOP")
+        self.assertEqual(report["positions"], [])
+        self.assertEqual(report["live_transactions_sent"], 0)
+
     def test_users_have_separate_paper_accounts(self):
         self.engine.process_snapshot(
             telegram_id=123, candidates=[candidate()], starting_cash=1000, candle_id=1)
