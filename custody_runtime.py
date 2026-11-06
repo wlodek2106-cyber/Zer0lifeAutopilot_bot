@@ -44,6 +44,7 @@ import trade_learning
 import trade_audit
 import execution_policy
 import activity_log
+import chart_analysis
 import rule_signals
 from entry_costs import EntryCostError, quote_amounts
 from meme_discovery import MemeDiscovery
