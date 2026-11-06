@@ -415,7 +415,7 @@ class CustodyRuntime(WalletRuntime):
         self.meme_paper_engine.set_enabled(uid, False)
         return web.json_response({
             "success": True, "enabled": False,
-            "message": "Mem-Sniper Paper monitor paused. Open positions remain in the journal.",
+            "message": "New Paper entries paused. Existing positions remain monitored for stop-loss exits.",
             "live_transactions_sent": 0, "wallet_accessed": False,
         })
 
@@ -423,7 +423,7 @@ class CustodyRuntime(WalletRuntime):
         """Persistent opt-in Paper monitor; no live wallet or signing code is called."""
         while True:
             try:
-                active_users = self.meme_paper_engine.active_accounts()
+                active_users = self.meme_paper_engine.monitor_accounts()
                 if active_users:
                     held_by_user = {
                         uid: self.meme_paper_engine.open_position_assets(uid)
@@ -454,12 +454,13 @@ class CustodyRuntime(WalletRuntime):
                             if code in prices_by_code:
                                 user_prices[asset["mint"]] = prices_by_code[code]
                         self.meme_paper_engine.process_snapshot(
-                            telegram_id=uid, candidates=fresh_candidates,
+                            telegram_id=uid,
+                            candidates=(fresh_candidates if self.meme_paper_engine.enabled(uid) else []),
                             market_prices=user_prices, snapshot_id=snapshot_id)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                self.log("Mem-Sniper Paper monitor paused for this cycle (" +
+                self.log("Mem-Sniper Paper monitor cycle failed (" +
                          self.discovery.failure_category(exc) + ").")
             await asyncio.sleep(30)
 
