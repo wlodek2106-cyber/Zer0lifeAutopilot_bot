@@ -297,6 +297,17 @@ class PaperTradeStore:
                 ORDER BY rowid DESC LIMIT ?""", (telegram_id, limit)).fetchall()
         return [dict(row) for row in rows]
 
+    def daily_realized_pnl(self, *, telegram_id):
+        """Return today's realized paper P&L using the journal's UTC timestamps."""
+        if type(telegram_id) is not int or telegram_id <= 0:
+            raise ValueError("Invalid paper account owner.")
+        with self._connect() as db:
+            row = db.execute("""SELECT COALESCE(SUM(realized_pnl), 0) AS realized_pnl
+                FROM ai_trader_paper_fills
+                WHERE telegram_id=? AND date(created_at)=date('now')""",
+                (telegram_id,)).fetchone()
+        return float(row["realized_pnl"])
+
     def summary(self, *, telegram_id):
         if type(telegram_id) is not int or telegram_id <= 0:
             raise ValueError("Invalid paper account owner.")

@@ -10,6 +10,11 @@ on:
       - "tests/test_ai_trader_backtest_strategies.py"
       - "tests/test_ai_trader_portfolio.py"
       - "tests/test_ai_trader_paper_store.py"
+      - "tests/test_ai_trader_signal_dispatcher.py"
+      - "tests/test_ai_trader_paper_bridge.py"
+      - "tests/test_ai_trader_public_price.py"
+      - "tests/test_ai_trader_paper_cycle.py"
+      - "tests/test_ai_trader_daily_pnl.py"
       - "custody_ledger.py"
       - "custody_runtime.py"
       - "main.py"
@@ -24,6 +29,7 @@ on:
       - "tests/test_ai_trader_settings.py"
       - "tests/test_ai_trader_configuration.py"
       - "tests/test_zerolife_shadow.py"
+      - "tests/test_ai_trader_paper_bridge.py"
       - ".github/workflows/zerolife-ai-trader.yml"
   pull_request:
     paths:
@@ -65,6 +71,11 @@ jobs:
           python -m unittest discover -s tests -p 'test_ai_trader_backtest_strategies.py' -v
           python -m unittest discover -s tests -p 'test_ai_trader_portfolio.py' -v
           python -m unittest discover -s tests -p 'test_ai_trader_paper_store.py' -v
+          python -m unittest discover -s tests -p 'test_ai_trader_signal_dispatcher.py' -v
+          python -m unittest discover -s tests -p 'test_ai_trader_paper_bridge.py' -v
+          python -m unittest discover -s tests -p 'test_ai_trader_public_price.py' -v
+          python -m unittest discover -s tests -p 'test_ai_trader_paper_cycle.py' -v
+          python -m unittest discover -s tests -p 'test_ai_trader_daily_pnl.py' -v
           python -m unittest discover -s tests -p 'test_zerolife_shadow.py' -v
           python -m unittest discover -s tests -p 'test_admin_overview*.py' -v
           python -m unittest discover -s tests -p 'test_custody.py' -v
