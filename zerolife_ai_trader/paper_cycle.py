@@ -41,9 +41,10 @@ async def run_paper_cycle(
     account = paper_store.account(telegram_id=telegram_id)
     cash = account["cash"] if account["cash"] is not None else config["capital"]
     open_positions = len(account["positions"])
+    daily_pnl = paper_store.daily_realized_pnl(telegram_id=telegram_id)
     analysis = evaluate_watchlist(
         price_series, config, equity=config["capital"], cash=cash,
-        open_positions=open_positions, daily_pnl=0.0,
+        open_positions=open_positions, daily_pnl=daily_pnl,
     )
     executions = []
     if config["paperAutoExecute"]:
