@@ -524,7 +524,7 @@ class CustodyRuntime(WalletRuntime):
     async def meme_paper_history(self, request, session):
         self.admit_meme_paper(request)
         return web.json_response({"success": True,
-            "history": self.meme_paper_engine.store.history(telegram_id=self.uid(request))})
+            "history": self.meme_paper_engine.history(telegram_id=self.uid(request))})
 
     async def scan_candidates(self, request, session):
         self.admit(self.uid(request))
