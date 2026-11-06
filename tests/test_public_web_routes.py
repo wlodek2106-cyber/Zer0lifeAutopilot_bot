@@ -38,6 +38,22 @@ class PublicWebRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("window.ZRL_WEB=true", response.text)
         self.assertIn("/web-terminal.js", response.text)
 
+
+    async def test_telegram_identity_precedes_browser_fallback_on_terminal(self):
+        source = main.RAW_HTML
+        user_start = source.index("function getUserData()")
+        user_end = source.index("async function apiFetch(", user_start)
+        user_flow = source[user_start:user_end]
+        self.assertLess(user_flow.index("if (tg?.initData && telegramUser?.id)"),
+                        user_flow.index("if(window.ZRL_WEB)"))
+
+        api_start = source.index("async function apiFetch(")
+        api_end = source.index("function openSupport(", api_start)
+        api_flow = source[api_start:api_end]
+        self.assertLess(api_flow.index("if (tg?.initData)"),
+                        api_flow.index("if(window.ZRL_WEB)"))
+        self.assertIn("'X-Telegram-Init-Data': tg.initData", api_flow)
+
     async def test_root_handler_opens_terminal_with_web_bootstrap(self):
         response = await main.index_handler(SimpleNamespace(path="/"))
         self.assertEqual(response.status, 200)
