@@ -399,6 +399,70 @@ class CustodyRuntime(WalletRuntime):
         elif uid != int(self.owner_id) and uid not in self.beta_users and not self.public_enabled:
             raise WalletError("Paper trading access is not enabled for this account.", 403)
 
+    async def meme_paper_start(self, request, session):
+        self.admit_meme_paper(request)
+        uid = self.uid(request)
+        self.meme_paper_engine.set_enabled(uid, True)
+        return web.json_response({
+            "success": True, "enabled": True,
+            "message": "Mem-Sniper Paper monitor enabled. Only simulated fills are possible.",
+            "live_transactions_sent": 0, "wallet_accessed": False,
+        })
+
+    async def meme_paper_stop(self, request, session):
+        self.admit_meme_paper(request)
+        uid = self.uid(request)
+        self.meme_paper_engine.set_enabled(uid, False)
+        return web.json_response({
+            "success": True, "enabled": False,
+            "message": "Mem-Sniper Paper monitor paused. Open positions remain in the journal.",
+            "live_transactions_sent": 0, "wallet_accessed": False,
+        })
+
+    async def meme_paper_worker(self):
+        """Persistent opt-in Paper monitor; no live wallet or signing code is called."""
+        while True:
+            try:
+                active_users = self.meme_paper_engine.active_accounts()
+                if active_users:
+                    held_by_user = {
+                        uid: self.meme_paper_engine.open_position_assets(uid)
+                        for uid in active_users
+                    }
+                    held_codes = list(dict.fromkeys(
+                        asset["code"]
+                        for assets in held_by_user.values()
+                        for asset in assets if asset.get("code")
+                    ))
+                    candidates = self.discovery.candidates(strategy="sniper")
+                    async with aiohttp.ClientSession(
+                            timeout=aiohttp.ClientTimeout(total=35)) as session:
+                        prices_by_code = await self.discovery.prices(session, held_codes)
+                    fresh_candidates = []
+                    price_by_mint = {}
+                    for candidate in candidates:
+                        code = candidate.get("code")
+                        if code in prices_by_code:
+                            candidate = {**candidate, "price": prices_by_code[code]}
+                            price_by_mint[candidate["mint"]] = prices_by_code[code]
+                        fresh_candidates.append(candidate)
+                    snapshot_id = int(time.time())
+                    for uid in active_users:
+                        user_prices = dict(price_by_mint)
+                        for asset in held_by_user[uid]:
+                            code = asset.get("code")
+                            if code in prices_by_code:
+                                user_prices[asset["mint"]] = prices_by_code[code]
+                        self.meme_paper_engine.process_snapshot(
+                            telegram_id=uid, candidates=fresh_candidates,
+                            market_prices=user_prices, snapshot_id=snapshot_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.log("Mem-Sniper Paper monitor paused for this cycle (" +
+                         self.discovery.failure_category(exc) + ").")
+            await asyncio.sleep(30)
+
     async def meme_paper_status(self, request, session):
         self.admit_meme_paper(request)
         engine = self.meme_paper_engine
@@ -409,7 +473,9 @@ class CustodyRuntime(WalletRuntime):
                          for asset in held if asset.get("code") and asset["code"] in prices_by_code}
         report = engine.status_report(
             telegram_id=self.uid(request), market_prices=price_by_mint)
-        return web.json_response({"success": True, **report})
+        return web.json_response({
+            "success": True, "monitor_enabled": engine.enabled(self.uid(request)),
+            **report})
 
     async def meme_paper_scan(self, request, session):
         self.admit_meme_paper(request)
