@@ -7228,15 +7228,11 @@ RAW_HTML = r"""<!DOCTYPE html>
             };
             if (button && button.disabled) return;
             const size = String(currentTradingSettings.order_usdc || 1);
-            if (!tradingActive && !window.confirm(
-                'Enable autopilot for your account? Order size: ' + size +
-                ' USDC. Live trades can lose money. Continue?')) return;
-
             if (button) {
                 button.disabled = true;
                 button.setAttribute('aria-busy', 'true');
             }
-            showStatus(tradingActive ? 'Turning autopilot off…' : 'Checking wallet and trading readiness…');
+            showStatus(tradingActive ? 'Turning autopilot off…' : 'Sending enable request…');
             try {
                 const response = await apiFetch('/api/toggle_trading', {
                     method: 'POST',
