@@ -59,7 +59,7 @@ class MemePaperEngine:
         if not cls.valid_mint(mint):
             raise ValueError("A valid Solana mint is required.")
         # PaperTradeStore's legacy symbol column is capped at 32 characters.
-        return "M" + hashlib.sha256(mint.encode("ascii")).hexdigest()[:31]
+        return "M" + hashlib.sha256(mint.encode("ascii")).hexdigest()[:31].upper()
 
     @classmethod
     def candidate_is_eligible(cls, item):
