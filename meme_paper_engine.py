@@ -30,9 +30,40 @@ class MemePaperEngine:
             raise ValueError("Paper fee must be an integer from 0 to 1000 bps.")
         if type(slippage_bps) is not int or not 0 <= slippage_bps <= 1000:
             raise ValueError("Paper slippage must be an integer from 0 to 1000 bps.")
+        self.db_path = db_path
         self.store = PaperTradeStore(db_path)
         self.fee_bps = fee_bps
         self.slippage_bps = slippage_bps
+        import sqlite3
+        with sqlite3.connect(self.db_path, timeout=10) as db:
+            db.execute("""CREATE TABLE IF NOT EXISTS meme_paper_peaks (
+                telegram_id INTEGER NOT NULL CHECK(telegram_id > 0),
+                symbol TEXT NOT NULL,
+                peak_price REAL NOT NULL CHECK(peak_price > 0),
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY(telegram_id, symbol)
+            )""")
+
+    def _record_peak(self, telegram_id, symbol, price, now):
+        import sqlite3
+        with sqlite3.connect(self.db_path, timeout=10) as db:
+            row = db.execute(
+                "SELECT peak_price FROM meme_paper_peaks WHERE telegram_id=? AND symbol=?",
+                (telegram_id, symbol),
+            ).fetchone()
+            peak = max(float(row[0]) if row else price, price)
+            db.execute("""INSERT INTO meme_paper_peaks
+                (telegram_id, symbol, peak_price, updated_at) VALUES (?, ?, ?, ?)
+                ON CONFLICT(telegram_id, symbol) DO UPDATE SET
+                peak_price=MAX(meme_paper_peaks.peak_price, excluded.peak_price),
+                updated_at=excluded.updated_at""", (telegram_id, symbol, peak, now))
+            return peak
+
+    def _clear_peak(self, telegram_id, symbol):
+        import sqlite3
+        with sqlite3.connect(self.db_path, timeout=10) as db:
+            db.execute("DELETE FROM meme_paper_peaks WHERE telegram_id=? AND symbol=?",
+                       (telegram_id, symbol))
 
     @staticmethod
     def _number(value):
@@ -103,7 +134,7 @@ class MemePaperEngine:
                 continue
             price = item["price"]
             entry = position["average_cost"]
-            peak = max(entry, item.get("peak_price", entry))
+            peak = self._record_peak(telegram_id, symbol, price, now)
             reason = sniper_exit_reason(price, entry, peak)
             # Use the same 5% hard stop and +3.5% activation / 2% peak trail.
             if price <= entry * (1 - self.STOP_LOSS_FRACTION):
@@ -120,6 +151,7 @@ class MemePaperEngine:
                 actions.append({"symbol": symbol, "action": "PAPER_SELL",
                                 "reason": reason, "execution": result})
                 positions.pop(symbol, None)
+                self._clear_peak(telegram_id, symbol)
 
         account = self.store.account(telegram_id=telegram_id)
         cash = account["cash"] if account["cash"] is not None else float(starting_cash)
