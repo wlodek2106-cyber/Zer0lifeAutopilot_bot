@@ -537,6 +537,12 @@ class WebAccessTests(unittest.IsolatedAsyncioTestCase):
         self.ledger.finalize(row["id"],1_000_000,5000,10_000_000)
         position = self.ledger.positions(101,"OPEN")[0]
         self.access.require(101,"SELL",position["id"],manual=True)
+        # Automatic deterministic exits must remain executable after access expiry.
+        self.access.require(101, "SELL", position["id"], automated_exit=True)
+        with self.assertRaises(WalletError):
+            self.access.require(102, "SELL", position["id"], automated_exit=True)
+        with self.assertRaises(WalletError):
+            self.access.require(101, "SELL", position["id"], automated_exit=False)
         self.ledger.settings(101,close=True)
         self.access.require(101,"SELL",position["id"],manual=True)
         self.ledger.reserve(101,"close-fixture","SELL",SOL,position["raw"],
