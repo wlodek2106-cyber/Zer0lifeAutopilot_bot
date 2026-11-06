@@ -122,6 +122,7 @@ class MemePaperEngine:
         cash = account["cash"] if account["cash"] is not None else float(starting_cash)
         positions = {p["symbol"]: p for p in account["positions"]}
         actions = []
+        closed_this_snapshot = set()
         equity = cash + sum(
             p["quantity"] * by_symbol.get(p["symbol"], {}).get("price", p["average_cost"])
             for p in positions.values()
@@ -152,6 +153,7 @@ class MemePaperEngine:
                                 "reason": reason, "execution": result})
                 positions.pop(symbol, None)
                 self._clear_peak(telegram_id, symbol)
+                closed_this_snapshot.add(symbol)
 
         account = self.store.account(telegram_id=telegram_id)
         cash = account["cash"] if account["cash"] is not None else float(starting_cash)
@@ -161,7 +163,8 @@ class MemePaperEngine:
 
         if not loss_limit_hit:
             for symbol, item in by_symbol.items():
-                if symbol in positions or len(positions) >= self.MAX_OPEN_POSITIONS:
+                if (symbol in positions or symbol in closed_this_snapshot
+                        or len(positions) >= self.MAX_OPEN_POSITIONS):
                     continue
                 if not self.candidate_is_eligible(item):
                     continue
