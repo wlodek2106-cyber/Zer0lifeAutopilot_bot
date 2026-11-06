@@ -7940,7 +7940,7 @@ HTML_CONTENT = RAW_HTML.replace("__SPLASH_URL__", SPLASH_IMAGE_URL).replace("__D
 
 async def index_handler(request):
     page = HTML_CONTENT
-    if request.path.rstrip("/") == "/terminal":
+    if request.path.rstrip("/") in ("", "/terminal"):
         panel = Path(__file__).with_name("web_login.html").read_text(encoding="utf-8")
         page = page.replace("</head>", "<script>window.ZRL_WEB=true;</script></head>")
         page = page.replace("</body>", panel + '<script src="/web-terminal.js"></script></body>')
