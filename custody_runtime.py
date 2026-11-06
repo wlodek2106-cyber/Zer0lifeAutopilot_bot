@@ -222,6 +222,8 @@ class CustodyRuntime(WalletRuntime):
         self._monthly_fee_worker_status = "idle"
         self.legacy_runtime = WalletRuntime(*args, **kwargs)
         self.ledger = CustodyLedger(self.db_file)
+        from meme_paper_engine import MemePaperEngine
+        self.meme_paper_engine = MemePaperEngine(self.ledger.path)
         self.base_paper = BasePaperEngine(self.ledger.path, self.owner_id)
         self.base_live_readiness = BaseLiveReadiness(
             persistent_storage_check=lambda: durable(self.db_file)
@@ -384,6 +386,38 @@ class CustodyRuntime(WalletRuntime):
                 and not self.discovery.scan_cooldown_remaining()):
             self.discovery_started = time.time()
             self.discovery_task = asyncio.create_task(self.background_discovery())
+
+    async def meme_paper_status(self, request, session):
+        self.admit(self.uid(request))
+        engine = self.meme_paper_engine
+        held = engine.open_position_assets(self.uid(request))
+        held_codes = [asset["code"] for asset in held if asset.get("code")]
+        prices_by_code = await self.discovery.prices(session, held_codes)
+        price_by_mint = {asset["mint"]: prices_by_code[asset["code"]]
+                         for asset in held if asset.get("code") and asset["code"] in prices_by_code}
+        report = engine.process_snapshot(
+            telegram_id=self.uid(request), candidates=[],
+            market_prices=price_by_mint, snapshot_id=int(time.time()))
+        return web.json_response({"success": True, **report})
+
+    async def meme_paper_scan(self, request, session):
+        self.admit(self.uid(request))
+        self.poll_discovery()
+        candidates = self.discovery.candidates(strategy="sniper")
+        held = self.meme_paper_engine.open_position_assets(self.uid(request))
+        held_codes = [asset["code"] for asset in held if asset.get("code")]
+        prices_by_code = await self.discovery.prices(session, held_codes)
+        price_by_mint = {asset["mint"]: prices_by_code[asset["code"]]
+                         for asset in held if asset.get("code") and asset["code"] in prices_by_code}
+        report = self.meme_paper_engine.process_snapshot(
+            telegram_id=self.uid(request), candidates=candidates,
+            market_prices=price_by_mint, snapshot_id=int(time.time()))
+        return web.json_response({"success": True, **report})
+
+    async def meme_paper_history(self, request, session):
+        self.admit(self.uid(request))
+        return web.json_response({"success": True,
+            "history": self.meme_paper_engine.store.history(telegram_id=self.uid(request))})
 
     async def scan_candidates(self, request, session):
         self.admit(self.uid(request))
