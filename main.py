@@ -3115,6 +3115,46 @@ RAW_HTML = r"""<!DOCTYPE html>
                 transition-duration: .01ms !important;
             }
         }
+
+        /* Zer0Life premium Telegram UI refresh — visual-only, trading behavior untouched */
+        :root {
+            --zrl-bg:#080d0c; --zrl-panel:#111a17; --zrl-line:rgba(151,190,169,.18);
+            --zrl-mint:#54e6ae; --zrl-muted:#9aaba2;
+        }
+        body { background:#080d0c !important; color:#edf7f1 !important; }
+        #app { background:radial-gradient(ellipse at 50% 0%,rgba(58,210,151,.10),transparent 42%),linear-gradient(160deg,#080d0c,#0b1210 58%,#080d0c) !important; }
+        #app .card, #app .stat-box, #app .account-summary, #app .overview-funds,
+        #app .exchange-swap-card, #app .trading-readiness-card, #app .base-paper-card,
+        #app .partner-card, #app .tariff-package {
+            background:linear-gradient(145deg,rgba(22,33,29,.97),rgba(12,19,17,.98)) !important;
+            border:1px solid var(--zrl-line) !important; border-radius:18px !important;
+            box-shadow:0 12px 30px rgba(0,0,0,.24),inset 0 1px rgba(255,255,255,.035) !important;
+        }
+        #app .page-heading h1 { color:#f1fbf5 !important; letter-spacing:-.045em !important; font-weight:850 !important; }
+        #app .eyebrow, #app .page-heading .eyebrow { color:var(--zrl-mint) !important; letter-spacing:.16em !important; }
+        #app .muted, #app .section-note, #app .stat-label { color:var(--zrl-muted) !important; }
+        #app input, #app select, #app textarea, #app .sig-input {
+            background:#080f0d !important; color:#eaf7ef !important;
+            border:1px solid rgba(130,174,151,.24) !important; border-radius:12px !important;
+        }
+        #app button, #app .btn-ctl, #app .action-btn, #app .btn-secondary,
+        #app .exchange-quote-button, #app .btn-verify {
+            border-radius:12px !important; transition:filter .16s ease,transform .16s ease !important;
+        }
+        #app .btn-green-main, #app .btn-toggle-on, #app .exchange-quote-button {
+            background:linear-gradient(135deg,#1eae7b,#52e5ad) !important;
+            color:#04130c !important; border-color:rgba(84,230,174,.5) !important;
+            box-shadow:0 7px 20px rgba(39,194,135,.14) !important;
+        }
+        #app .tab-panel { scrollbar-color:rgba(84,230,174,.28) transparent; }
+        #app .wallet-tabs, #app .control-bar { border-color:var(--zrl-line) !important; }
+        #app .wallet-tab.active, #app .active { color:#eafff4; }
+        #app .stat-val { color:#f0fff7 !important; font-variant-numeric:tabular-nums; }
+        #app :is(button,a,input,select,textarea):focus-visible { outline:2px solid var(--zrl-mint) !important; outline-offset:3px; }
+        @media(max-width:767px) {
+            #app .card, #app .stat-box { border-radius:16px !important; }
+            #app .page-heading h1 { font-size:clamp(25px,7vw,30px) !important; }
+        }
     </style>
 </head>
 <body>
