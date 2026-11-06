@@ -54,6 +54,25 @@ class PublicWebRouteTests(unittest.IsolatedAsyncioTestCase):
                         api_flow.index("if(window.ZRL_WEB)"))
         self.assertIn("'X-Telegram-Init-Data': tg.initData", api_flow)
 
+    async def test_tariffs_remain_available_inside_telegram_on_terminal_route(self):
+        source = main.RAW_HTML
+        self.assertIn(
+            "if((window.ZRL_WEB&&!tg?.initData)||telegramTariffBusy||!getUserData())return;",
+            source,
+        )
+        self.assertIn(
+            "if((window.ZRL_WEB&&!tg?.initData)||!telegramTariffState)return;",
+            source,
+        )
+        self.assertIn(
+            "if(id==='tariffs'&&(!window.ZRL_WEB||tg?.initData)){",
+            source,
+        )
+        self.assertIn(
+            "if(!window.ZRL_WEB||tg?.initData)refreshTelegramTariffs();",
+            source,
+        )
+
     async def test_root_handler_opens_terminal_with_web_bootstrap(self):
         response = await main.index_handler(SimpleNamespace(path="/"))
         self.assertEqual(response.status, 200)
