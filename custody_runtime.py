@@ -4056,6 +4056,9 @@ class CustodyRuntime(WalletRuntime):
                 f"{remaining_minutes} minute(s) remain. No BUY was sent.")
         else:
             budget_free = None
+            daily_realized_loss_raw = (
+                self.ledger.sniper_daily_realized_loss_raw(uid)
+                if kind == "BUY" and asset == SOL else 0)
             if kind == "BUY" and info.get("strategy") == "investor":
                 budget_key = "usdc" if asset == USDC else "sol"
                 budget_free = self.ledger.investor_budget_summary(uid)[budget_key]["free_raw"]
@@ -4067,7 +4070,7 @@ class CustodyRuntime(WalletRuntime):
                 watchlist=self.watchlist, universes=self.ai_universes(),
                 balance=(budget_free if budget_free is not None else
                          self.ledger.balance(uid, asset) + (raw if reserved and kind == "BUY" else 0)),
-                reserved=reserved)
+                reserved=reserved, daily_realized_loss_raw=daily_realized_loss_raw)
         if verdict.allowed and info.get("ai_analysis") and not execution_policy.fresh(
                 info.get("ai_created_at"), time.time(), execution_policy.DECISION_SECONDS):
             verdict = execution_policy.deny("stale", "BLOCKED: AI decision expired before execution.")
