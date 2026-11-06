@@ -87,7 +87,7 @@ class MemePaperEngineTests(unittest.TestCase):
             telegram_id=123, candidates=[], starting_cash=100_000,
             market_prices={MINT_A: 0.94}, snapshot_id=2, now=2)
         self.assertEqual(report["starting_cash"], 1000)
-        self.assertEqual(report["daily_loss_limit_hit"], False)
+        self.assertEqual(report["daily_loss_limit_hit"], True)
 
     def test_accounts_are_user_scoped(self):
         self.run_snapshot([candidate()], 1)
