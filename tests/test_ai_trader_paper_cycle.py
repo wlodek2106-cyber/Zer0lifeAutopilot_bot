@@ -9,6 +9,9 @@ class FakePaperStore:
     def account(self, *, telegram_id):
         return {"cash": None, "positions": []}
 
+    def daily_realized_pnl(self, *, telegram_id):
+        return -5.0
+
 
 class FakeDispatchStore:
     pass
