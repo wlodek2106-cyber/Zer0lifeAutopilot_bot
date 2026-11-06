@@ -4464,8 +4464,6 @@ class CustodyRuntime(WalletRuntime):
         body = await request.json()
         raw = amount_raw(body.get("order_usdc", "1"), 6)
         sniper_raw = amount_raw(body["order_sol"], 9) if "order_sol" in body else None
-        if sniper_raw is not None:
-            execution_policy.validate_sniper_order_size(sniper_raw)
         async with self.lock:
             if self.ledger.settings(uid)["trading"] or self.ledger.settings(uid)["sniper_trading"] or self.pending():
                 raise WalletError("Остановите автопилот и дождитесь подтверждения операций перед изменением размера покупки.", 409)
@@ -4659,7 +4657,6 @@ class CustodyRuntime(WalletRuntime):
             if settings["sniper_trading"]:
                 self.ledger.settings(uid, sniper_enabled=False)
             else:
-                execution_policy.validate_sniper_order_size(settings["sniper_order_raw"])
                 self.admit_trading(uid)
                 if getattr(self, "web_access", None):
                     self.web_access.trading_request(request)
