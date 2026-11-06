@@ -23,6 +23,17 @@ def quote():
 
 
 class PolicyTests(unittest.TestCase):
+    def test_sniper_order_size_is_rejected_above_hard_cap_before_activation(self):
+        self.assertEqual(policy.validate_sniper_order_size(1), 1)
+        self.assertEqual(policy.validate_sniper_order_size(policy.MAX_SNIPER_ORDER_RAW),
+                         policy.MAX_SNIPER_ORDER_RAW)
+        for raw in (policy.MAX_SNIPER_ORDER_RAW + 1, 900_000_000):
+            with self.subTest(raw=raw), self.assertRaises(policy.WalletError):
+                policy.validate_sniper_order_size(raw)
+        for raw in (0, -1, True, 0.05):
+            with self.subTest(raw=raw), self.assertRaises(policy.WalletError):
+                policy.validate_sniper_order_size(raw)
+
     def test_both_modes_share_5_percent_stop_and_peak_trailing_exit(self):
         for exit_reason in (policy.risk_exit_reason, policy.sniper_exit_reason):
             with self.subTest(exit_reason=exit_reason.__name__):
