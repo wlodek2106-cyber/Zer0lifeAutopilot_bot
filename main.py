@@ -6096,7 +6096,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         };
         let telegramTariffDismissed=false,nextTelegramTariffCheck=0;
         async function refreshTelegramTariffs(){
-            if(window.ZRL_WEB||telegramTariffBusy||!getUserData())return;
+            if((window.ZRL_WEB&&!tg?.initData)||telegramTariffBusy||!getUserData())return;
             telegramTariffBusy=true;
             try{
                 const response=await apiFetch('/api/subscription'),data=await response.json();
@@ -6171,7 +6171,7 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
         document.getElementById('telegram-trial-start')?.addEventListener('click',startTelegramTrial);
         function tickTelegramTariffCountdown(){
-            if(window.ZRL_WEB||!telegramTariffState)return;
+            if((window.ZRL_WEB&&!tg?.initData)||!telegramTariffState)return;
             const label=document.getElementById('telegram-tariff-countdown');
             if(telegramTariffState.trial_active&&telegramTariffState.trial_expires_at){
                 const trialSeconds=Number(telegramTariffState.trial_expires_at)-
@@ -6405,7 +6405,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             document.getElementById('app').style.display = 'block';
             document.getElementById('nav').style.display = 'flex';
             refresh();
-            if(!window.ZRL_WEB)refreshTelegramTariffs();
+            if(!window.ZRL_WEB||tg?.initData)refreshTelegramTariffs();
         }
 
         function gotoTab(id, btn) {
@@ -6414,7 +6414,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             const target = document.getElementById('tab-' + id);
             if (target) target.classList.add('active');
             if (btn) btn.classList.add('active');
-            if(id==='tariffs'&&!window.ZRL_WEB){
+            if(id==='tariffs'&&(!window.ZRL_WEB||tg?.initData)){
                 document.getElementById('telegram-tariff-view').hidden=false;
                 refreshTelegramTariffs();
             }
