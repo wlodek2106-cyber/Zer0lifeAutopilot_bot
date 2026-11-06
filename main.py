@@ -3215,7 +3215,7 @@ RAW_HTML = r"""<!DOCTYPE html>
                 <div id="account-pending-operation-details" role="status" style="display:none;color:#cbd5e1;font-size:11px;margin-top:8px;overflow-wrap:anywhere;white-space:pre-wrap;"></div>
             </div>
             <div class="control-bar">
-                <button id="btn-toggle" class="btn-ctl btn-toggle-off" onclick="toggleTrading()">
+                <button id="btn-toggle" type="button" class="btn-ctl btn-toggle-off">
                     <span id="toggle-dot">●</span>
                     <span id="toggle-text">Autopilot: OFF</span>
                 </button>
@@ -7959,6 +7959,16 @@ RAW_HTML = r"""<!DOCTYPE html>
                 }
             } catch(e) {}
         }
+        // Explicit listener for Telegram iOS WebView; avoids inline-handler lookup issues.
+        const primaryTradingButton = document.getElementById('btn-toggle');
+        if (primaryTradingButton) {
+            primaryTradingButton.addEventListener('click', function(event) {
+                event.preventDefault();
+                event.stopPropagation();
+                toggleTrading();
+            });
+        }
+        window.toggleTrading = toggleTrading;
         initializeSolanaPayControls();
         restoreSolanaPayInvoice();
         setInterval(refresh, 5000);
