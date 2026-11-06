@@ -73,6 +73,18 @@ class PublicWebRouteTests(unittest.IsolatedAsyncioTestCase):
             source,
         )
 
+
+    async def test_institutional_dashboard_uses_real_paper_journal_metrics(self):
+        dashboard = (Path(__file__).resolve().parents[1] / "static" / "dashboard.js").read_text()
+        self.assertIn("renderClosedTrades(data.fills||[])", dashboard)
+        self.assertIn("function renderClosedTrades(fills)", dashboard)
+        self.assertIn('String(f.side).toUpperCase()==="SELL"', dashboard)
+        self.assertIn('id="zrl-win-rate"', dashboard)
+        self.assertIn('id="zrl-profit-factor"', dashboard)
+        self.assertIn('id="zrl-agent-question"', dashboard)
+        self.assertIn('loadBacktestHistory();loadPaperJournal();', dashboard)
+        self.assertIn("window.zrlDeskContext", dashboard)
+
     async def test_root_handler_opens_terminal_with_web_bootstrap(self):
         response = await main.index_handler(SimpleNamespace(path="/"))
         self.assertEqual(response.status, 200)
