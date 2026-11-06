@@ -15,7 +15,7 @@ def candles(count=60, start=1_800_000_000, step=300, trend=1):
 
 class MultiMarketTechnicalAgentTests(unittest.TestCase):
     def test_analyzes_both_market_adapters_with_same_ohlcv_contract(self):
-        now=1_800_000_000+59*300+1
+        now=1_800_000_000+59*3600+1
         for market in ("solana", "binance"):
             result=analyze_market(market, "SOL/USDC",
                 {"5m": candles(start=1_800_000_000),
