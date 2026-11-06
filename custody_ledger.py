@@ -2010,8 +2010,9 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
     def active_users(self):
         with self.db() as db:
             return [dict(r) for r in db.execute(
-                "SELECT * FROM custody_users WHERE trading=1 OR sniper_trading=1 "
-                "OR investor_trading=1 OR close_requested=1")]
+                "SELECT u.* FROM custody_users u WHERE u.trading=1 OR u.sniper_trading=1 "
+                "OR u.investor_trading=1 OR u.close_requested=1 OR EXISTS ("
+                "SELECT 1 FROM custody_positions p WHERE p.uid=u.uid AND p.state='OPEN')")]
 
     def restart_pause(self):
         with self.db() as db:

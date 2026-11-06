@@ -5285,27 +5285,23 @@ class CustodyRuntime(WalletRuntime):
                 target_reason = None
                 protection_waiting = False
                 for position in positions:
-                    mode_enabled = (
-                        current.get("investor_trading", 0) if position.get("strategy") == "investor"
-                        else current["sniper_trading"] if position["funding_asset"] == SOL
-                        else current["trading"])
-                    if mode_enabled:
-                        price = self.position_exit_price(position, prices)
-                        entry = self.position_entry_price(position)
-                        if price is not None and entry is not None:
-                            peak = self.ledger.record_position_peak(
-                                uid, position["id"], max(entry, price))
-                            if peak is not None:
-                                position["peak_price"] = peak
+                    # Pausing new entries must never disable protection for an
+                    # already-open position. Keep peaks and deterministic exits live
+                    # until the position is closed, regardless of the entry-mode flag.
+                    price = self.position_exit_price(position, prices)
+                    entry = self.position_entry_price(position)
+                    if price is not None and entry is not None:
+                        peak = self.ledger.record_position_peak(
+                            uid, position["id"], max(entry, price))
+                        if peak is not None:
+                            position["peak_price"] = peak
                     chart_key = ("sniper_market_context" if position["funding_asset"] == SOL
                                  else "main_market_context")
                     exit_snapshot = ((snapshot or {}).get("sniper_snapshot", snapshot or {})
                                      if position["funding_asset"] == SOL else snapshot or {})
-                    chart_context = (exit_snapshot.get(chart_key, {})
-                                     if mode_enabled else {})
-                    metrics = chart_context.get(position["symbol"], {})
+                    metrics = exit_snapshot.get(chart_key, {}).get(position["symbol"], {})
                     reason = self.exit_reason(position, prices, metrics=metrics,
-                        snapshot_created_at=exit_snapshot.get("created_at")) if mode_enabled else None
+                        snapshot_created_at=exit_snapshot.get("created_at"))
                     if reason:
                         if not self.ledger.exit_retry_due(position["id"], int(time.time())):
                             protection_waiting = True
