@@ -5,6 +5,27 @@ import uuid
 from custody_ledger import CustodyLedger, LedgerError, USDC
 
 
+class GlobalEntryPauseTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = self.tmp.name + "/ledger.sqlite3"
+        self.ledger = CustodyLedger(self.path)
+
+    def test_global_pause_is_persistent_and_defaults_to_unpaused(self):
+        self.assertFalse(self.ledger.global_entry_paused())
+        self.ledger.set_global_entry_paused(True, "Emergency test")
+        self.assertTrue(self.ledger.global_entry_paused())
+        restarted = CustodyLedger(self.path)
+        self.assertTrue(restarted.global_entry_paused())
+        restarted.set_global_entry_paused(False)
+        self.assertFalse(self.ledger.global_entry_paused())
+
+    def test_global_pause_rejects_non_boolean_state(self):
+        with self.assertRaises(LedgerError):
+            self.ledger.set_global_entry_paused(1)
+
+
 class AdminOverviewSnapshotTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
