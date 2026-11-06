@@ -14,6 +14,7 @@ MAX_POSITIONS = MappingProxyType({"main": 5, "sniper": 5})
 # Hard server-side Solana Sniper limits, independent of editable dashboard settings.
 MAX_SNIPER_ORDER_RAW = 50_000_000       # 0.05 SOL per entry
 MAX_SNIPER_EXPOSURE_RAW = 150_000_000   # 0.15 SOL aggregate open cost basis
+MAX_SNIPER_DAILY_LOSS_RAW = 4_500_000   # 0.0045 SOL; 3% of max open exposure
 INVESTOR_MAX_SLOTS = 5
 INVESTOR_TRANCHES = 3
 INVESTOR_TARGETS_PCT = MappingProxyType({1: 3.5, 2: 7.0})
@@ -281,7 +282,7 @@ def proposal(*, mode, decision, universe, created_at, original, prices, samples,
 
 
 def order(*, uid, kind, asset, output_asset, raw, metadata, position_id,
-          settings, positions, watchlist, universes, balance, reserved=False):
+          settings, positions, watchlist, universes, balance, reserved=False,\n          daily_realized_loss_raw=0):
     """Runs before reserving and again immediately before preparing the signed wire."""
     if kind not in ("BUY", "SELL") or type(raw) is not int or raw <= 0:
         return deny("order", "BLOCKED: invalid order type or amount.")
@@ -329,6 +330,12 @@ def order(*, uid, kind, asset, output_asset, raw, metadata, position_id,
     if (mode != "investor" and raw != settings[key]) or balance < raw:
         return deny("size", "BLOCKED: order exceeds the saved amount or available funds.")
     if mode == "sniper":
+        if (type(daily_realized_loss_raw) is not int or daily_realized_loss_raw < 0):
+            return deny("sniper_daily_loss_unknown",
+                "BLOCKED: today's realized Sniper loss cannot be verified safely.")
+        if daily_realized_loss_raw >= MAX_SNIPER_DAILY_LOSS_RAW:
+            return deny("sniper_daily_loss_cap",
+                "BLOCKED: the daily Sniper loss limit has been reached; new buys are paused until the next UTC day.")
         if raw > MAX_SNIPER_ORDER_RAW:
             return deny("sniper_order_cap",
                 "BLOCKED: Sniper entry exceeds the hard server limit of 0.05 SOL.")
@@ -401,7 +408,7 @@ def describe():
             "buy_max_price_impact_pct": float(MAX_IMPACT_PCT), "core_max_cost_pct": MAX_COST_BPS / 100,
             "max_positions": {**dict(MAX_POSITIONS), "investor_slots_per_currency": INVESTOR_MAX_SLOTS},
             "sniper_hard_limits": {"max_order_sol": MAX_SNIPER_ORDER_RAW / 1e9,
-                                   "max_open_exposure_sol": MAX_SNIPER_EXPOSURE_RAW / 1e9},
+                                   "max_open_exposure_sol": MAX_SNIPER_EXPOSURE_RAW / 1e9,\n                                   "daily_realized_loss_limit_sol": MAX_SNIPER_DAILY_LOSS_RAW / 1e9},
             "liquidity_basis": "executable_route_price_impact",
             "entry_filters_never_block_exits": True,
             "sniper_buy_requires_fresh_chart_confirmation": True,
