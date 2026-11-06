@@ -11,6 +11,9 @@ from wallet_runtime import WalletError
 
 VERSION = "independent-execution-v13-investor-flat-hour"
 MAX_POSITIONS = MappingProxyType({"main": 5, "sniper": 5})
+# Hard server-side Solana Sniper limits, independent of editable dashboard settings.
+MAX_SNIPER_ORDER_RAW = 50_000_000       # 0.05 SOL per entry
+MAX_SNIPER_EXPOSURE_RAW = 150_000_000   # 0.15 SOL aggregate open cost basis
 INVESTOR_MAX_SLOTS = 5
 INVESTOR_TRANCHES = 3
 INVESTOR_TARGETS_PCT = MappingProxyType({1: 3.5, 2: 7.0})
@@ -325,6 +328,23 @@ def order(*, uid, kind, asset, output_asset, raw, metadata, position_id,
             return deny("position_limit", "BLOCKED: all five Investor token slots are occupied.")
     if (mode != "investor" and raw != settings[key]) or balance < raw:
         return deny("size", "BLOCKED: order exceeds the saved amount or available funds.")
+    if mode == "sniper":
+        if raw > MAX_SNIPER_ORDER_RAW:
+            return deny("sniper_order_cap",
+                "BLOCKED: Sniper entry exceeds the hard server limit of 0.05 SOL.")
+        sniper_positions = [p for p in positions
+                            if p.get("funding_asset") == SOL
+                            and p.get("state", "OPEN") in ("OPEN", "RESERVED")]
+        exposure = 0
+        for position in sniper_positions:
+            cost = position.get("cost_raw")
+            if type(cost) is not int or cost <= 0:
+                return deny("sniper_exposure_unknown",
+                    "BLOCKED: existing Sniper exposure cannot be verified safely.")
+            exposure += cost
+        if exposure + raw > MAX_SNIPER_EXPOSURE_RAW:
+            return deny("sniper_exposure_cap",
+                "BLOCKED: this entry would exceed the hard 0.15 SOL total Sniper exposure limit.")
     held = [p for p in positions if p["funding_asset"] == asset]
     if mode == "investor":
         investor_held = [p for p in held if p.get("strategy") == "investor"]
@@ -380,6 +400,8 @@ def describe():
             "quote_max_slot_distance": MAX_SLOT_DISTANCE, "slippage_bps": MAX_SLIPPAGE_BPS,
             "buy_max_price_impact_pct": float(MAX_IMPACT_PCT), "core_max_cost_pct": MAX_COST_BPS / 100,
             "max_positions": {**dict(MAX_POSITIONS), "investor_slots_per_currency": INVESTOR_MAX_SLOTS},
+            "sniper_hard_limits": {"max_order_sol": MAX_SNIPER_ORDER_RAW / 1e9,
+                                   "max_open_exposure_sol": MAX_SNIPER_EXPOSURE_RAW / 1e9},
             "liquidity_basis": "executable_route_price_impact",
             "entry_filters_never_block_exits": True,
             "sniper_buy_requires_fresh_chart_confirmation": True,
