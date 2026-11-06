@@ -969,14 +969,14 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                 "investor_trading": 0, "close_requested": False}
         position = {"id": "paused-sniper-position", "uid": 101, "asset": "sniper-mint",
                     "funding_asset": SOL, "symbol": "BOME", "raw": 100,
-                    "decimals": 6, "cost_raw": 1_000_000, "peak_price": 1.0,
+                    "decimals": 6, "cost_raw": 100_000, "peak_price": 1.0,
                     "strategy": "sniper"}
         self.service.reconcile = AsyncMock()
         self.service.process_close_queues = AsyncMock(return_value=False)
         self.service.scan_deposits = AsyncMock()
         self.service.process_due_monthly_trading_fees = AsyncMock()
         self.service.poll_discovery = Mock()
-        self.service.current_prices = AsyncMock(return_value={"BOME": 0.94})
+        self.service.current_prices = AsyncMock(return_value={"BOME": 0.94, "SOL": 1.0})
         self.service.poll_ai = Mock(return_value=None)
         self.service.exit_reason = Mock(return_value="STOP_LOSS")
         self.service.trade = AsyncMock(return_value={"state": "SUBMITTED"})
