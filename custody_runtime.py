@@ -418,10 +418,23 @@ class CustodyRuntime(WalletRuntime):
         if discovery_task and not discovery_task.done():
             done, _ = await asyncio.wait({discovery_task}, timeout=20)
             if not done:
+                # Discovery can take longer than this request. Still refresh every
+                # already-open Paper position and enforce its exits while waiting.
+                held = self.meme_paper_engine.open_position_assets(self.uid(request))
+                held_codes = [asset["code"] for asset in held if asset.get("code")]
+                prices_by_code = await self.discovery.prices(session, held_codes)
+                held_prices = {
+                    asset["mint"]: prices_by_code[asset["code"]]
+                    for asset in held
+                    if asset.get("code") and asset["code"] in prices_by_code
+                }
+                report = self.meme_paper_engine.process_snapshot(
+                    telegram_id=self.uid(request), candidates=[],
+                    market_prices=held_prices, snapshot_id=int(time.time()))
                 return web.json_response({
                     "success": True, "scan_state": "discovery_running",
-                    "message": "Market discovery is still running. No Paper entry was opened; retry the Paper scan shortly.",
-                    "live_transactions_sent": 0, "wallet_accessed": False,
+                    "message": "Market discovery is still running. Existing Paper positions were checked; no new entry was opened.",
+                    **report,
                 })
         candidates = self.discovery.candidates(strategy="sniper")
         held = self.meme_paper_engine.open_position_assets(self.uid(request))
