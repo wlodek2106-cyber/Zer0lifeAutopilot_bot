@@ -4047,6 +4047,9 @@ class CustodyRuntime(WalletRuntime):
                                   position_id=None, reserved=False):
         positions = (self.ledger.positions(uid) if reserved and kind == "SELL"
                      else self.ledger.positions(uid, "OPEN"))
+        daily_realized_loss_raw = 0
+        if kind == "BUY" and asset == SOL and info.get("strategy") != "investor":
+            daily_realized_loss_raw = self.ledger.sniper_daily_realized_loss_raw(uid)
         cooldown_until = (self.ledger.entry_cooldown_until(output_asset)
                           if kind == "BUY" else None)
         if cooldown_until:
@@ -4056,9 +4059,6 @@ class CustodyRuntime(WalletRuntime):
                 f"{remaining_minutes} minute(s) remain. No BUY was sent.")
         else:
             budget_free = None
-            daily_realized_loss_raw = (
-                self.ledger.sniper_daily_realized_loss_raw(uid)
-                if kind == "BUY" and asset == SOL else 0)
             if kind == "BUY" and info.get("strategy") == "investor":
                 budget_key = "usdc" if asset == USDC else "sol"
                 budget_free = self.ledger.investor_budget_summary(uid)[budget_key]["free_raw"]
