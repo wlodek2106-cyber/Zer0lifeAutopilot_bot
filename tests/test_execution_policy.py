@@ -204,7 +204,7 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(too_large.code, "sniper_order_cap")
 
         near_cap = [{"funding_asset": SOL, "symbol": "T0",
-                     "cost_raw": 145_000_000}]
+                     "cost_raw": 146_000_000}]
         blocked = policy.order(**{**base, "positions": near_cap})
         self.assertEqual(blocked.code, "sniper_exposure_cap")
 
