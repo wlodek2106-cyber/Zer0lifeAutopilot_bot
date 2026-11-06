@@ -7948,6 +7948,23 @@ async def index_handler(request):
         "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff",
         "Content-Security-Policy": "frame-ancestors 'none'; object-src 'none'; base-uri 'none'"})
 
+def register_public_web_routes(app):
+    """Register the browser terminal and its static assets in one testable place."""
+    async def web_script(request):
+        return web.Response(text=Path(__file__).with_name("web_terminal.js").read_text(encoding="utf-8"),
+                            content_type="application/javascript", headers={"Cache-Control": "no-store"})
+
+    async def dashboard_script(request):
+        return web.Response(text=Path(__file__).with_name("static").joinpath("dashboard.js").read_text(encoding="utf-8"),
+                            content_type="application/javascript", headers={"Cache-Control": "no-store"})
+
+    app.router.add_get("/", index_handler)
+    app.router.add_get("/terminal", index_handler)
+    app.router.add_get("/static/zerolife-ai-trader-core.webp", splash_asset_handler)
+    app.router.add_get("/web-terminal.js", web_script)
+    app.router.add_get("/dashboard.js", dashboard_script)
+
+
 async def splash_asset_handler(request):
     asset = Path(__file__).with_name("static") / "zerolife-ai-trader-core.webp"
     if not asset.is_file():
@@ -8378,17 +8395,7 @@ async def main():
             "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
             "Content-Security-Policy": "frame-ancestors 'none'; object-src 'none'; base-uri 'none'",
             "X-Content-Type-Options": "nosniff"})
-    app.router.add_get('/', index_handler)
-    app.router.add_get('/terminal', index_handler)
-    app.router.add_get('/static/zerolife-ai-trader-core.webp', splash_asset_handler)
-    async def web_script(request):
-        return web.Response(text=Path(__file__).with_name("web_terminal.js").read_text(encoding="utf-8"),
-                            content_type="application/javascript", headers={"Cache-Control":"no-store"})
-    app.router.add_get('/web-terminal.js', web_script)
-    async def dashboard_script(request):
-        return web.Response(text=Path(__file__).with_name("static").joinpath("dashboard.js").read_text(encoding="utf-8"),
-                            content_type="application/javascript", headers={"Cache-Control":"no-store"})
-    app.router.add_get('/dashboard.js', dashboard_script)
+    register_public_web_routes(app)
     app.router.add_get('/web-auth/me', runtime.web_access.public)
     app.router.add_post('/web-auth/start', runtime.web_access.public)
     app.router.add_post('/web-auth/finish', runtime.web_access.public)
