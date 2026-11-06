@@ -7226,49 +7226,36 @@ RAW_HTML = r"""<!DOCTYPE html>
             const showStatus = message => {
                 if (status) { status.textContent = message; status.hidden = !message; }
             };
-            if (button?.disabled) return;
-            let size = '1';
-            if (!tradingActive) {
-                size = String(currentTradingSettings.order_usdc || 1);
-                const message = 'Start trading on your own account? Order size: ' + size +
-                    ' USDC. You can lose money; returns are not guaranteed.';
-                let approved = false;
-                try {
-                    const telegramApp = window.Telegram && window.Telegram.WebApp;
-                    if (telegramApp && typeof telegramApp.showConfirm === 'function') {
-                        approved = await new Promise(resolve => {
-                            let settled = false;
-                            const finish = value => {
-                                if (settled) return;
-                                settled = true;
-                                resolve(value === true);
-                            };
-                            telegramApp.showConfirm(message, finish);
-                        });
-                    } else {
-                        approved = window.confirm(message);
-                    }
-                } catch (error) {
-                    showStatus('Telegram confirmation failed: ' + String(error?.message || error));
-                    return;
-                }
-                if (!approved) return;
+            if (button && button.disabled) return;
+            const size = String(currentTradingSettings.order_usdc || 1);
+            if (!tradingActive && !window.confirm(
+                'Enable autopilot for your account? Order size: ' + size +
+                ' USDC. Live trades can lose money. Continue?')) return;
+
+            if (button) {
+                button.disabled = true;
+                button.setAttribute('aria-busy', 'true');
             }
-            if (button) { button.disabled = true; button.setAttribute('aria-busy', 'true'); }
-            showStatus(tradingActive ? 'Turning autopilot off…' : 'Checking wallet, balance and trading readiness…');
+            showStatus(tradingActive ? 'Turning autopilot off…' : 'Checking wallet and trading readiness…');
             try {
                 const response = await apiFetch('/api/toggle_trading', {
-                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({trade_amount_usdc: size})
                 });
-                const data = await response.json();
-                if (!response.ok || !data.success) throw new Error(data.message || ('Trading request failed (' + response.status + ').'));
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok || !data.success) {
+                    throw new Error(data.message || ('Server rejected the request (' + response.status + ').'));
+                }
                 showStatus(data.trading_active ? 'Autopilot enabled.' : 'Autopilot disabled.');
                 await refresh();
-            } catch(e) {
-                showStatus(String(e?.message || 'Could not change the trading mode. No trade was confirmed.'));
+            } catch (error) {
+                showStatus(String(error && error.message || 'Trading toggle failed. No trade was confirmed.'));
             } finally {
-                if (button) { button.disabled = false; button.removeAttribute('aria-busy'); }
+                if (button) {
+                    button.disabled = false;
+                    button.removeAttribute('aria-busy');
+                }
             }
         }
 
