@@ -1,6 +1,7 @@
 """Integration coverage for the complete analysis-to-paper-journal cycle."""
 import os
 import tempfile
+import time
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -11,7 +12,8 @@ from zerolife_ai_trader.settings import DEFAULT_SETTINGS
 
 
 USER_ID = 987654321
-NOW = 1_800_000_000.0
+# Use the current clock so signal freshness validation accepts this fixture.
+NOW = time.time()
 ALLOWLIST = {"solana": {"SOLUSDC": "So11111111111111111111111111111111111111112"}}
 
 
