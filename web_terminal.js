@@ -201,15 +201,25 @@ document.getElementById('web-logout').onclick=async()=>{
   window.webSession=null;location.reload();
  }catch(e){document.getElementById('subscription-state').textContent=e.message;}
 };
-loadWebSession().then(async()=>{
- if(!window.webSession)document.getElementById('web-login').hidden=false;
-  else if(requestedPackageId){
-   document.getElementById('web-login').hidden=true;
-   await openTerminal();
-   await refreshAccess();
-   if(document.getElementById('nav').style.display!=='none')focusRequestedPackage();
-  }else refreshAccess();
-}).catch(e=>{document.getElementById('web-login').hidden=false;webMessage.textContent=e.message;});
+// Existing Telegram users retain their Telegram-authenticated account.
+ // Browser passkey login is only for users opening this page outside Telegram.
+ const telegramApp=window.Telegram?.WebApp;
+ if(telegramApp?.initData){
+  document.getElementById('web-login').hidden=true;
+  telegramApp.ready?.();
+  telegramApp.expand?.();
+  if(requestedPackageId) focusRequestedPackage();
+ } else {
+  loadWebSession().then(async()=>{
+   if(!window.webSession)document.getElementById('web-login').hidden=false;
+   else if(requestedPackageId){
+    document.getElementById('web-login').hidden=true;
+    await openTerminal();
+    await refreshAccess();
+    if(document.getElementById('nav').style.display!=='none')focusRequestedPackage();
+   }else refreshAccess();
+  }).catch(e=>{document.getElementById('web-login').hidden=false;webMessage.textContent=e.message;});
+ }
 setInterval(refreshAccess,15000);
 function tickFreeCountdown(){
  const label=document.getElementById('subscription-free-countdown');
