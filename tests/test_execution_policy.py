@@ -189,7 +189,7 @@ class PolicyTests(unittest.TestCase):
         self.assertTrue(policy.order(positions=four_open, **order_values).allowed)
         self.assertEqual(policy.order(positions=five_open, **order_values).code, "position_limit")
         self.assertEqual(policy.order(positions=four_open[:3] + [
-            {"funding_asset": SOL, "symbol": "WIF"}], **order_values).code, "already_open")
+            {"funding_asset": SOL, "symbol": "WIF", "cost_raw": 5_000_000}], **order_values).code, "already_open")
 
     def test_sniper_hard_per_order_and_total_exposure_caps(self):
         base = dict(uid=101, kind="BUY", asset=SOL, output_asset="wif-mint",
