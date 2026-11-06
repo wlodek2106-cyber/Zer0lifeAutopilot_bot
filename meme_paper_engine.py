@@ -52,7 +52,15 @@ class MemePaperEngine:
 
     @staticmethod
     def valid_mint(mint):
-        return isinstance(mint, str) and re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{32,44}", mint) is not None
+        if not isinstance(mint, str) or re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{32,44}", mint) is None:
+            return False
+        alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+        value = 0
+        for char in mint:
+            value = value * 58 + alphabet.index(char)
+        decoded_bytes = (value.bit_length() + 7) // 8
+        decoded_bytes += len(mint) - len(mint.lstrip("1"))
+        return decoded_bytes == 32
 
     @classmethod
     def asset_key(cls, mint):
