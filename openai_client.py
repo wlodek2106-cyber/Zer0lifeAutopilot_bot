@@ -10,7 +10,7 @@ import aiohttp
 
 
 URL = "https://api.openai.com/v1/chat/completions"
-PAID_AI_ENABLED = False
+PAID_AI_ENABLED = True
 MIN_REQUEST_INTERVAL_SECONDS = 5
 RATE_LIMIT_BACKOFF_SECONDS = 60
 MAX_RATE_LIMIT_BACKOFF_SECONDS = 1800
