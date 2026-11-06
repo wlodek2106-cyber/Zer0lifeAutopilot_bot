@@ -387,8 +387,17 @@ class CustodyRuntime(WalletRuntime):
             self.discovery_started = time.time()
             self.discovery_task = asyncio.create_task(self.background_discovery())
 
+    def admit_meme_paper(self, request):
+        uid = self.uid(request)
+        # Paper simulation must not require a wallet signer, reserve wallet,
+        # RPC readiness, or custody reconciliation.
+        if getattr(self, "web_access", None):
+            self.web_access.trading_request(request)
+        elif uid != int(self.owner_id) and uid not in self.beta_users and not self.public_enabled:
+            raise WalletError("Paper trading access is not enabled for this account.", 403)
+
     async def meme_paper_status(self, request, session):
-        self.admit(self.uid(request))
+        self.admit_meme_paper(request)
         engine = self.meme_paper_engine
         held = engine.open_position_assets(self.uid(request))
         held_codes = [asset["code"] for asset in held if asset.get("code")]
@@ -400,7 +409,7 @@ class CustodyRuntime(WalletRuntime):
         return web.json_response({"success": True, **report})
 
     async def meme_paper_scan(self, request, session):
-        self.admit(self.uid(request))
+        self.admit_meme_paper(request)
         self.poll_discovery()
         candidates = self.discovery.candidates(strategy="sniper")
         held = self.meme_paper_engine.open_position_assets(self.uid(request))
@@ -414,7 +423,7 @@ class CustodyRuntime(WalletRuntime):
         return web.json_response({"success": True, **report})
 
     async def meme_paper_history(self, request, session):
-        self.admit(self.uid(request))
+        self.admit_meme_paper(request)
         return web.json_response({"success": True,
             "history": self.meme_paper_engine.store.history(telegram_id=self.uid(request))})
 
