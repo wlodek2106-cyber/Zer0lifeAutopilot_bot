@@ -45,6 +45,10 @@ class MemePaperEngine:
                 telegram_id INTEGER PRIMARY KEY CHECK(telegram_id > 0),
                 starting_cash REAL NOT NULL CHECK(starting_cash > 0),
                 created_at INTEGER NOT NULL)""")
+            db.execute("""CREATE TABLE IF NOT EXISTS meme_paper_settings (
+                telegram_id INTEGER PRIMARY KEY CHECK(telegram_id > 0),
+                enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0,1)),
+                updated_at INTEGER NOT NULL)""")
 
     @staticmethod
     def _number(v):
@@ -162,6 +166,29 @@ class MemePaperEngine:
     def _clear_peak(self, uid, key):
         with sqlite3.connect(self.db_path, timeout=10) as db:
             db.execute("DELETE FROM meme_paper_peaks WHERE telegram_id=? AND asset_key=?",(uid,key))
+
+    def set_enabled(self, telegram_id, enabled):
+        if type(telegram_id) is not int or telegram_id <= 0 or type(enabled) is not bool:
+            raise ValueError("Invalid paper monitor setting.")
+        with sqlite3.connect(self.db_path, timeout=10) as db:
+            db.execute("""INSERT INTO meme_paper_settings (telegram_id, enabled, updated_at)
+                VALUES(?,?,?) ON CONFLICT(telegram_id) DO UPDATE SET
+                enabled=excluded.enabled, updated_at=excluded.updated_at""",
+                (telegram_id, int(enabled), int(time.time())))
+        return enabled
+
+    def enabled(self, telegram_id):
+        if type(telegram_id) is not int or telegram_id <= 0:
+            raise ValueError("Invalid paper account owner.")
+        with sqlite3.connect(self.db_path, timeout=10) as db:
+            row = db.execute("SELECT enabled FROM meme_paper_settings WHERE telegram_id=?",
+                             (telegram_id,)).fetchone()
+        return bool(row and row[0])
+
+    def active_accounts(self):
+        with sqlite3.connect(self.db_path, timeout=10) as db:
+            return [int(row[0]) for row in db.execute(
+                "SELECT telegram_id FROM meme_paper_settings WHERE enabled=1 ORDER BY telegram_id")]
 
     def open_position_assets(self, telegram_id):
         account=self.store.account(telegram_id=telegram_id)
