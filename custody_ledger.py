@@ -1892,6 +1892,20 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                 (uid, state) if state else (uid,))
             return [dict(r) for r in rows]
 
+    def sniper_daily_realized_loss_raw(self, uid, now=None):
+        """Gross realized SOL-denominated Sniper losses since UTC midnight."""
+        current = int(time.time() if now is None else now)
+        day_start = current - (current % 86400)
+        with self.db() as db:
+            row = db.execute("""SELECT COALESCE(SUM(
+                CASE WHEN COALESCE(proceeds_raw,0) < cost_raw
+                     THEN cost_raw - COALESCE(proceeds_raw,0) ELSE 0 END),0) AS loss_raw
+                FROM custody_positions
+                WHERE uid=? AND strategy='sniper' AND funding_asset=?
+                  AND state='CLOSED' AND closed_at>=? AND closed_at<?""",
+                (int(uid), SOL, day_start, day_start + 86400)).fetchone()
+            return int(row["loss_raw"] or 0)
+
     def request_manual_close(self, uid, position_id):
         with self.db() as db:
             position = db.execute(
