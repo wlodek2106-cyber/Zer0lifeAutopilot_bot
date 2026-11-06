@@ -85,6 +85,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_ai_trader_configuration.py' -v
           python -m unittest discover -s tests -p 'test_ai_trader_signal_engine.py' -v
           python -m unittest discover -s tests -p 'test_multi_market_technical_agent.py' -v
+          python -m unittest discover -s tests -p 'test_technical_market_adapters.py' -v
           python -m unittest discover -s tests -p 'test_ai_trader_binance_public.py' -v
           python -m unittest discover -s tests -p 'test_ai_trader_backtest_strategies.py' -v
           python -m unittest discover -s tests -p 'test_ai_trader_portfolio.py' -v
