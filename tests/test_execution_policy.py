@@ -191,6 +191,41 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(policy.order(positions=four_open[:3] + [
             {"funding_asset": SOL, "symbol": "WIF", "cost_raw": 5_000_000}], **order_values).code, "already_open")
 
+    def test_global_emergency_pause_blocks_every_buy_but_never_sell(self):
+        for asset, output_asset, metadata, settings, watchlist, universes in (
+            (USDC, SOL, {"symbol": "SOL", "decimals": 9},
+             {"trading": True, "order_raw": 1_000_000},
+             {"SOL": {"mint": policy.WRAPPED_SOL, "decimals": 9}},
+             {"main": ["SOL"], "sniper": []}),
+            (SOL, "wif-mint", {"symbol": "WIF", "decimals": 6},
+             {"sniper_trading": True, "sniper_order_raw": 5_000_000},
+             {"WIF": {"mint": "wif-mint", "decimals": 6}},
+             {"main": [], "sniper": ["WIF"]}),
+        ):
+            result = policy.order(uid=101, kind="BUY", asset=asset,
+                output_asset=output_asset, raw=settings.get("order_raw", settings.get("sniper_order_raw")),
+                metadata=metadata, position_id=None, settings=settings, positions=[],
+                watchlist=watchlist, universes=universes,
+                balance=settings.get("order_raw", settings.get("sniper_order_raw")),
+                global_entry_paused=True)
+            self.assertEqual(result.code, "global_entry_pause")
+        self.assertEqual(policy.order(uid=101, kind="BUY", asset=SOL,
+            output_asset="wif-mint", raw=5_000_000,
+            metadata={"symbol": "WIF", "decimals": 6}, position_id=None,
+            settings={"sniper_trading": True, "sniper_order_raw": 5_000_000},
+            positions=[], watchlist={"WIF": {"mint": "wif-mint", "decimals": 6}},
+            universes={"main": [], "sniper": ["WIF"]}, balance=10_000_000,
+            global_entry_paused=None).code, "global_pause_unknown")
+
+        position = {"id": "p1", "uid": 101, "asset": "wif-mint",
+                    "funding_asset": SOL, "raw": 100, "state": "OPEN"}
+        sale = policy.order(uid=101, kind="SELL", asset="wif-mint",
+            output_asset=SOL, raw=100, metadata={"exit_reason": "STOP_LOSS"},
+            position_id="p1", settings={}, positions=[position], watchlist={},
+            universes={"main": [], "sniper": []}, balance=0,
+            global_entry_paused=True)
+        self.assertTrue(sale.allowed)
+
     def test_sniper_daily_realized_loss_cap_blocks_buys_but_not_sells(self):
         base = dict(uid=101, kind="BUY", asset=SOL, output_asset="wif-mint",
             raw=5_000_000, metadata={"symbol": "WIF", "decimals": 6},

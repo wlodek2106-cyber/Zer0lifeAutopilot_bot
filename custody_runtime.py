@@ -2620,7 +2620,8 @@ class CustodyRuntime(WalletRuntime):
     async def admin_status(self, request, session):
         if self.uid(request) != self.owner_id:
             raise WalletError("Только администратор.", 403)
-        payload = {"success": True, "legacy_check_error": None, "balance_check_error": None}
+        payload = {"success": True, "legacy_check_error": None, "balance_check_error": None,
+                   "global_entry_paused": self.ledger.global_entry_paused()}
         try:
             payload["overview"] = self.ledger.admin_overview_snapshot(10)
         except LedgerError:
@@ -2647,6 +2648,30 @@ class CustodyRuntime(WalletRuntime):
             "unassigned_usdc": display_raw(backing[USDC]["raw"] - liabilities.get(USDC, 0), 6),
             "unassigned_sol": display_raw(backing[SOL]["raw"] - liabilities.get(SOL, 0), 9),
             "fee_reserve_sol": display_raw(fee["raw"] if fee else 0, 9)})
+
+    async def admin_set_entry_pause(self, request, session):
+        uid = self.uid(request)
+        if uid != self.owner_id:
+            raise WalletError("Administrator only.", 403)
+        try:
+            body = await request.json()
+        except (ValueError, TypeError):
+            raise WalletError("A valid JSON request is required.", 400)
+        paused = body.get("paused")
+        expected = "PAUSE_NEW_BUYS" if paused is True else "RESUME_NEW_BUYS"
+        if type(paused) is not bool or body.get("confirm") != expected:
+            raise WalletError(
+                "Explicit confirmation is required: PAUSE_NEW_BUYS or RESUME_NEW_BUYS.", 400)
+        state = self.ledger.set_global_entry_paused(
+            paused, "Administrator emergency stop" if paused else "")
+        return web.json_response({
+            "success": True, **state,
+            "new_buys_paused": paused,
+            "sells_and_protective_exits_allowed": True,
+            "message": ("Emergency stop active: all new buys are blocked; sells remain available."
+                        if paused else
+                        "Emergency stop released: user trading modes remain unchanged."),
+        }, headers={"Cache-Control": "no-store"})
 
     async def admin_pending_operations(self, request, session):
         if self.uid(request) != self.owner_id:
@@ -4047,6 +4072,7 @@ class CustodyRuntime(WalletRuntime):
                                   position_id=None, reserved=False):
         positions = (self.ledger.positions(uid) if reserved and kind == "SELL"
                      else self.ledger.positions(uid, "OPEN"))
+        global_entry_paused = self.ledger.global_entry_paused() if kind == "BUY" else False
         daily_realized_loss_raw = 0
         if kind == "BUY" and asset == SOL and info.get("strategy") != "investor":
             daily_realized_loss_raw = self.ledger.sniper_daily_realized_loss_raw(uid)
@@ -4070,7 +4096,8 @@ class CustodyRuntime(WalletRuntime):
                 watchlist=self.watchlist, universes=self.ai_universes(),
                 balance=(budget_free if budget_free is not None else
                          self.ledger.balance(uid, asset) + (raw if reserved and kind == "BUY" else 0)),
-                reserved=reserved, daily_realized_loss_raw=daily_realized_loss_raw)
+                reserved=reserved, daily_realized_loss_raw=daily_realized_loss_raw,
+                global_entry_paused=global_entry_paused)
         if verdict.allowed and info.get("ai_analysis") and not execution_policy.fresh(
                 info.get("ai_created_at"), time.time(), execution_policy.DECISION_SECONDS):
             verdict = execution_policy.deny("stale", "BLOCKED: AI decision expired before execution.")

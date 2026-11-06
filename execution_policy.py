@@ -283,7 +283,7 @@ def proposal(*, mode, decision, universe, created_at, original, prices, samples,
 
 def order(*, uid, kind, asset, output_asset, raw, metadata, position_id,
           settings, positions, watchlist, universes, balance, reserved=False,
-          daily_realized_loss_raw=0):
+          daily_realized_loss_raw=0, global_entry_paused=False):
     """Runs before reserving and again immediately before preparing the signed wire."""
     if kind not in ("BUY", "SELL") or type(raw) is not int or raw <= 0:
         return deny("order", "BLOCKED: invalid order type or amount.")
@@ -295,6 +295,12 @@ def order(*, uid, kind, asset, output_asset, raw, metadata, position_id,
             return deny("ownership", "BLOCKED: sell does not match this account's owned position.")
         # Entry-efficiency/position-count filters must never prevent an exit.
         return sell_authorization(metadata)
+    if global_entry_paused is not False and global_entry_paused is not True:
+        return deny("global_pause_unknown",
+            "BLOCKED: global emergency-stop state cannot be verified.")
+    if global_entry_paused:
+        return deny("global_entry_pause",
+            "BLOCKED: administrator emergency stop is active; all new buys are paused.")
     if asset not in (USDC, SOL) or not settings:
         return deny("funding", "BLOCKED: invalid funding account.")
     strategy = metadata.get("strategy")

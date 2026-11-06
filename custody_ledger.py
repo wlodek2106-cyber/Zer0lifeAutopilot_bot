@@ -86,6 +86,14 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                 CREATE TABLE IF NOT EXISTS custody_execution_checks (
                     uid INTEGER PRIMARY KEY, report TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS custody_global_controls (
+                    id INTEGER PRIMARY KEY CHECK(id=1),
+                    entry_paused INTEGER NOT NULL DEFAULT 0 CHECK(entry_paused IN (0,1)),
+                    reason TEXT NOT NULL DEFAULT '',
+                    updated_at INTEGER NOT NULL
+                );
+                INSERT OR IGNORE INTO custody_global_controls
+                    (id,entry_paused,reason,updated_at) VALUES(1,0,'',0);
                 CREATE TABLE IF NOT EXISTS custody_entry_cost_checks (
                     uid INTEGER PRIMARY KEY, report TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS custody_partner_codes (
@@ -1969,6 +1977,25 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
     # Kept for callers from older releases; the cooldown now applies after every close.
     def loss_entry_cooldown_until(self, asset, now=None):
         return self.entry_cooldown_until(asset, now)
+
+    def global_entry_paused(self):
+        with self.db() as db:
+            row = db.execute(
+                "SELECT entry_paused FROM custody_global_controls WHERE id=1").fetchone()
+            if not row:
+                raise LedgerError("Global execution control is unavailable; new buys are blocked.")
+            return row["entry_paused"] == 1
+
+    def set_global_entry_paused(self, paused, reason=""):
+        if type(paused) is not bool or (paused and not isinstance(reason, str)):
+            raise LedgerError("Invalid global execution control value.")
+        with self.db() as db:
+            db.execute("""INSERT INTO custody_global_controls
+                (id,entry_paused,reason,updated_at) VALUES(1,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET entry_paused=excluded.entry_paused,
+                reason=excluded.reason,updated_at=excluded.updated_at""",
+                (int(paused), str(reason)[:160] if paused else "", int(time.time())))
+        return {"entry_paused": paused, "reason": str(reason)[:160] if paused else ""}
 
     def settings(self, uid, enabled=None, raw=None, close=None, sniper_enabled=None,
                  sniper_raw=None, investor_enabled=None):
