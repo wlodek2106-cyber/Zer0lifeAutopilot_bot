@@ -1,4 +1,5 @@
 import tempfile
+import sqlite3
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -90,6 +91,13 @@ class MemePaperEngineTests(unittest.TestCase):
                 market_prices={MINT_A: 0.94}, snapshot_id=2, now=2)
         self.assertEqual(report["starting_cash"], 1000)
         self.assertEqual(report["daily_loss_limit_hit"], True)
+
+    def test_mem_sniper_capital_does_not_inherit_ai_trader_balance(self):
+        with sqlite3.connect(self.engine.db_path) as db:
+            db.execute(
+                "INSERT INTO ai_trader_paper_accounts (telegram_id, starting_cash, cash) VALUES (?, ?, ?)",
+                (123, 7500.0, 7500.0))
+        self.assertEqual(self.engine._capital(123, 1000.0), 1000.0)
 
     def test_initial_capital_is_locked_before_first_trade(self):
         first = self.engine.process_snapshot(
