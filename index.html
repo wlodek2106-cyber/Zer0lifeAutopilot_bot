@@ -266,6 +266,22 @@
             transform: translateY(-2px);
             text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
         }
+
+        /* Zer0Life premium visual refresh — presentation only */
+        :root{--neon-green:#39e6a2;--neon-green-glow:rgba(57,230,162,.22);--bg-dark:#070a0d;--panel-bg:rgba(17,23,27,.88);--text-muted:#9aa8a4}
+        body,html{background-color:#070a0d;background-image:radial-gradient(ellipse at 50% -12%,rgba(57,230,162,.13),transparent 55%),linear-gradient(145deg,#070a0d 0%,#0a1112 52%,#080b0f 100%)}
+        .container{padding:22px 17px calc(112px + env(safe-area-inset-bottom)) 17px}
+        .panel{background:linear-gradient(150deg,rgba(22,31,32,.96),rgba(12,17,20,.96));border:1px solid rgba(117,161,144,.2);border-radius:22px;padding:22px;box-shadow:0 16px 42px rgba(0,0,0,.32),inset 0 1px rgba(255,255,255,.035)}
+        .panel-title{font-size:19px;letter-spacing:-.35px}
+        .panel-desc{color:#a0ada8;line-height:1.65}
+        .address-box,.input-field{background:rgba(4,9,10,.72);border-color:rgba(105,153,133,.28);border-radius:13px}
+        .btn-primary{background:linear-gradient(135deg,#24c98d,#57efb2);border-radius:13px;box-shadow:0 7px 22px rgba(36,201,141,.16);letter-spacing:.7px}
+        .btn-secondary{background:rgba(57,230,162,.08);border-color:rgba(57,230,162,.26);color:#73efbd}
+        .floating-nav{bottom:calc(13px + env(safe-area-inset-bottom));width:calc(100% - 30px);max-width:430px;padding:8px 10px;background:rgba(13,20,22,.94);border:1px solid rgba(132,171,154,.18);border-radius:22px;box-shadow:0 12px 36px rgba(0,0,0,.48),inset 0 1px rgba(255,255,255,.04)}
+        .nav-item{font-size:9px;letter-spacing:.8px;color:#87958f;padding:9px 3px}
+        .nav-item.active{background:linear-gradient(180deg,rgba(57,230,162,.13),rgba(57,230,162,.045));color:#e9fff5}
+        .nav-item.active .nav-icon{color:#55e9ad;text-shadow:0 0 14px rgba(57,230,162,.32)}
+        @media(max-width:380px){.container{padding-left:13px;padding-right:13px}.panel{padding:18px;border-radius:19px}}
     </style>
 </head>
 <body>
