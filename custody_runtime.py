@@ -223,7 +223,10 @@ class CustodyRuntime(WalletRuntime):
         self.legacy_runtime = WalletRuntime(*args, **kwargs)
         self.ledger = CustodyLedger(self.db_file)
         from meme_paper_engine import MemePaperEngine
-        self.meme_paper_engine = MemePaperEngine(self.ledger.path)
+        # Keep Mem-Sniper's simulated cash, fills and positions physically separate
+        # from the AI Trader paper journal and all custody/live-wallet tables.
+        self.meme_paper_db_path = str(self.ledger.path) + ".mem_sniper_paper.sqlite3"
+        self.meme_paper_engine = MemePaperEngine(self.meme_paper_db_path)
         self.base_paper = BasePaperEngine(self.ledger.path, self.owner_id)
         self.base_live_readiness = BaseLiveReadiness(
             persistent_storage_check=lambda: durable(self.db_file)
@@ -411,6 +414,15 @@ class CustodyRuntime(WalletRuntime):
     async def meme_paper_scan(self, request, session):
         self.admit_meme_paper(request)
         self.poll_discovery()
+        discovery_task = self.discovery_task
+        if discovery_task and not discovery_task.done():
+            done, _ = await asyncio.wait({discovery_task}, timeout=20)
+            if not done:
+                return web.json_response({
+                    "success": True, "scan_state": "discovery_running",
+                    "message": "Market discovery is still running. No Paper entry was opened; retry the Paper scan shortly.",
+                    "live_transactions_sent": 0, "wallet_accessed": False,
+                })
         candidates = self.discovery.candidates(strategy="sniper")
         held = self.meme_paper_engine.open_position_assets(self.uid(request))
         held_codes = [asset["code"] for asset in held if asset.get("code")]
