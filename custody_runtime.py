@@ -912,6 +912,12 @@ class CustodyRuntime(WalletRuntime):
         decisions = dict(latest_record.get("decisions") or {})
         if scheduled_record.get("decisions"):
             decisions["main"] = scheduled_record["decisions"]["main"]
+        chart_freshness = {
+            "main": chart_analysis.summarize_chart_freshness(
+                scheduled_record.get("main_market_context", {})),
+            "sniper": chart_analysis.summarize_chart_freshness(
+                latest_record.get("sniper_market_context", {})),
+        }
         discovery_report = (self.discovery.status_report()
                             if getattr(self, "discovery", None) else None)
         if (getattr(self, "discovery", None)
@@ -943,6 +949,7 @@ class CustodyRuntime(WalletRuntime):
                  "timings_ms": latest_record.get("timings_ms"),
                  "completed_at": latest_record.get("completed_at"),
                 "chart_context": scheduled_record.get("main_market_context", {}),
+                "chart_freshness": chart_freshness,
                 "last_trigger": latest_record.get("trigger", "scheduled") if latest else None,
                 "sniper_assets": self.ai_universes()["sniper"],
                 "asset_labels": {s: info.get("label", s) + (" · "+info["mint"][:4]+"…"+info["mint"][-4:]
