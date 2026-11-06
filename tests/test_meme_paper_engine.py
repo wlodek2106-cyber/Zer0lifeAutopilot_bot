@@ -109,6 +109,9 @@ class MemePaperEngineTests(unittest.TestCase):
 
     def test_bad_or_missing_mint_fails_closed(self):
         self.assertFalse(self.engine.candidate_is_eligible(candidate(mint="not-a-mint")))
+        self.assertFalse(self.engine.valid_mint("11111111111111111111111111111111"))
+        self.assertEqual(len(self.engine.asset_key(MINT_A)), 32)
+        self.assertEqual(self.engine.asset_key(MINT_A), self.engine.asset_key(MINT_A).upper())
         with self.assertRaises(ValueError):
             self.engine.process_snapshot(telegram_id=0, candidates=[])
 
