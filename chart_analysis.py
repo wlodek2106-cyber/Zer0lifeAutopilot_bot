@@ -299,3 +299,36 @@ def analyze_charts(m5_candles, h1_candles, *, now, m5_stale=False, h1_stale=Fals
         len(m5) >= 2 and _engulfing(m5[-2], m5[-1], bullish=False))
     return {key: value for key, value in result.items()
             if type(value) in (int, float) and math.isfinite(value)}
+
+
+def summarize_chart_freshness(context, *, now=None):
+    """Summarize stored chart evidence without treating missing data as fresh."""
+    import time
+    now = time.time() if now is None else now
+    if not isinstance(context, dict) or not context:
+        return {"state": "unavailable", "symbols": 0, "ready": 0,
+                "stale": 0, "missing": 0, "max_m5_age_seconds": None,
+                "max_h1_age_seconds": None}
+    ready = stale = missing = 0
+    m5_ages, h1_ages = [], []
+    for metrics in context.values():
+        if not isinstance(metrics, dict):
+            missing += 1
+            continue
+        m5_age = metrics.get("chart_m5_age_seconds")
+        h1_age = metrics.get("chart_h1_age_seconds")
+        if type(m5_age) in (int, float) and math.isfinite(m5_age) and m5_age >= 0:
+            m5_ages.append(int(m5_age))
+        if type(h1_age) in (int, float) and math.isfinite(h1_age) and h1_age >= 0:
+            h1_ages.append(int(h1_age))
+        if metrics.get("chart_ready") == 1:
+            ready += 1
+        elif m5_age is None or h1_age is None:
+            missing += 1
+        else:
+            stale += 1
+    state = "fresh" if ready == len(context) else "partial" if ready else "unavailable"
+    return {"state": state, "symbols": len(context), "ready": ready,
+            "stale": stale, "missing": missing,
+            "max_m5_age_seconds": max(m5_ages) if m5_ages else None,
+            "max_h1_age_seconds": max(h1_ages) if h1_ages else None}

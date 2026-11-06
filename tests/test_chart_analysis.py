@@ -241,3 +241,25 @@ class ChartAnalysisTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChartFreshnessSummaryTests(unittest.TestCase):
+    def test_reports_fresh_partial_and_missing_chart_evidence(self):
+        from chart_analysis import summarize_chart_freshness
+        fresh = {"SOL": {"chart_ready": 1, "chart_m5_age_seconds": 120,
+                         "chart_h1_age_seconds": 600}}
+        self.assertEqual(summarize_chart_freshness(fresh, now=1000), {
+            "state": "fresh", "symbols": 1, "ready": 1, "stale": 0,
+            "missing": 0, "max_m5_age_seconds": 120,
+            "max_h1_age_seconds": 600})
+        mixed = {**fresh, "WIF": {"chart_ready": 0,
+                                  "chart_m5_age_seconds": 900,
+                                  "chart_h1_age_seconds": 4000}}
+        result = summarize_chart_freshness(mixed, now=1000)
+        self.assertEqual(result["state"], "partial")
+        self.assertEqual(result["stale"], 1)
+        self.assertEqual(result["max_m5_age_seconds"], 900)
+        self.assertEqual(summarize_chart_freshness({"NEW": {}}, now=1000)["state"],
+                         "unavailable")
+        self.assertEqual(summarize_chart_freshness({}, now=1000)["state"],
+                         "unavailable")
