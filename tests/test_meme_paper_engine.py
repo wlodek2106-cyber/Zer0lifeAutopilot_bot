@@ -108,6 +108,24 @@ class MemePaperEngineTests(unittest.TestCase):
         self.assertEqual(second["starting_cash"], 1000)
         self.assertEqual(second["cash"], 1000)
 
+    def test_paused_new_entries_still_monitor_existing_positions(self):
+        self.run_snapshot([candidate()], 1)
+        self.engine.set_enabled(123, True)
+        self.assertEqual(self.engine.monitor_accounts(), [123])
+        self.engine.set_enabled(123, False)
+        self.assertFalse(self.engine.enabled(123))
+        self.assertEqual(self.engine.monitor_accounts(), [123])
+        report = self.run_snapshot([], 2, market_prices={MINT_A: 0.94})
+        self.assertEqual(report["actions"][0]["reason"], "STOP_LOSS")
+        self.assertEqual(report["positions"], [])
+
+    def test_history_returns_real_mint_and_symbol(self):
+        self.run_snapshot([candidate()], 1)
+        history = self.engine.history(123)
+        self.assertEqual(history[0]["mint"], MINT_A)
+        self.assertEqual(history[0]["symbol"], "SAME")
+        self.assertNotEqual(history[0]["asset_key"], MINT_A)
+
     def test_accounts_are_user_scoped(self):
         self.run_snapshot([candidate()], 1)
         other = self.engine.process_snapshot(
