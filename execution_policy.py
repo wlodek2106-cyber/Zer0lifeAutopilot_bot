@@ -282,7 +282,8 @@ def proposal(*, mode, decision, universe, created_at, original, prices, samples,
 
 
 def order(*, uid, kind, asset, output_asset, raw, metadata, position_id,
-          settings, positions, watchlist, universes, balance, reserved=False,\n          daily_realized_loss_raw=0):
+          settings, positions, watchlist, universes, balance, reserved=False,
+          daily_realized_loss_raw=0):
     """Runs before reserving and again immediately before preparing the signed wire."""
     if kind not in ("BUY", "SELL") or type(raw) is not int or raw <= 0:
         return deny("order", "BLOCKED: invalid order type or amount.")
