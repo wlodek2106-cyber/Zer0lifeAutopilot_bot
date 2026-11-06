@@ -41,6 +41,10 @@ class MemePaperEngine:
                 telegram_id INTEGER NOT NULL CHECK(telegram_id > 0),
                 asset_key TEXT NOT NULL, peak_price REAL NOT NULL CHECK(peak_price > 0),
                 updated_at INTEGER NOT NULL, PRIMARY KEY(telegram_id, asset_key))""")
+            db.execute("""CREATE TABLE IF NOT EXISTS meme_paper_capital (
+                telegram_id INTEGER PRIMARY KEY CHECK(telegram_id > 0),
+                starting_cash REAL NOT NULL CHECK(starting_cash > 0),
+                created_at INTEGER NOT NULL)""")
 
     @staticmethod
     def _number(v):
@@ -76,6 +80,49 @@ class MemePaperEngine:
     def _signal_id(uid, mint, side, snapshot):
         raw = f"mem-paper:{uid}:{mint}:{side}:{snapshot}".encode()
         return int.from_bytes(hashlib.sha256(raw).digest()[:8], "big") & 0x7FFFFFFFFFFFFFFF or 1
+
+    def _capital(self, uid, requested):
+        with sqlite3.connect(self.db_path, timeout=10) as db:
+            legacy = db.execute(
+                "SELECT starting_cash FROM ai_trader_paper_accounts WHERE telegram_id=?", (uid,)
+            ).fetchone()
+            initial = float(legacy[0]) if legacy else float(requested)
+            db.execute("INSERT OR IGNORE INTO meme_paper_capital VALUES(?,?,?)",
+                       (uid, initial, int(time.time())))
+            row = db.execute("SELECT starting_cash FROM meme_paper_capital WHERE telegram_id=?", (uid,)).fetchone()
+            return float(row[0])
+
+    def status_report(self, *, telegram_id, market_prices=None):
+        if type(telegram_id) is not int or telegram_id <= 0:
+            raise ValueError("Invalid paper account owner.")
+        market_prices = market_prices or {}
+        if not isinstance(market_prices, dict):
+            raise ValueError("Market prices must be a mapping.")
+        account = self.store.account(telegram_id=telegram_id)
+        meta = self._metadata(telegram_id)
+        capital = self._capital(telegram_id, 1000.0)
+        positions, marked = [], 0.0
+        for pos in account["positions"]:
+            asset = meta.get(pos["symbol"])
+            mint = asset["mint"] if asset else None
+            price = market_prices.get(mint) if mint else None
+            fresh = self._number(price) and price > 0
+            if not fresh:
+                price = pos["average_cost"]
+            marked += pos["quantity"] * price
+            positions.append({**pos, "mint": mint,
+                "symbol_label": asset["symbol"] if asset else pos["symbol"],
+                "market_price": price, "price_fresh": fresh})
+        cash = float(account["cash"]) if account["cash"] is not None else capital
+        daily = self.store.daily_realized_pnl(telegram_id=telegram_id)
+        return {"execution":"solana_meme_paper_only","live_transactions_sent":0,
+            "wallet_accessed":False,"starting_cash":capital,"cash":cash,
+            "positions":positions,"marked_positions_value":marked,
+            "equity_estimate":cash+marked,"daily_realized_pnl":daily,
+            "daily_loss_limit_hit":daily <= -capital*self.MAX_DAILY_LOSS_FRACTION,
+            "summary":self.store.summary(telegram_id=telegram_id),"actions":[],
+            "stale_positions":[{"mint":p["mint"],"symbol":p["symbol_label"],
+                "reason":"fresh_price_unavailable"} for p in positions if not p["price_fresh"]]}
 
     def _metadata(self, uid):
         with sqlite3.connect(self.db_path, timeout=10) as db:
@@ -131,7 +178,7 @@ class MemePaperEngine:
                 if old is None or item.get("liquidity_usd",0)>old.get("liquidity_usd",0): by_mint[item["mint"]]=item
 
         account=self.store.account(telegram_id=telegram_id)
-        capital=float(account["starting_cash"]) if account["starting_cash"] is not None else float(starting_cash)
+        capital=self._capital(telegram_id, float(starting_cash))
         meta=self._metadata(telegram_id)
         actions=[]; stale=[]; closed=set()
 
