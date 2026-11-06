@@ -168,7 +168,11 @@ def report(runtime, uid):
                    "Next AI analysis is due; waiting for the worker.")
     else:
         status += "Waiting for the first AI analysis and market data."
-    if active and getattr(runtime, "ai_activity_error", ""):
+    # A previous provider failure is stale once a replacement analysis has
+    # been queued. Keep it hidden while the new task is running; poll_ai will
+    # clear it on success or replace it with the latest failure on completion.
+    if (active and getattr(runtime, "ai_activity_error", "")
+            and getattr(runtime, "ai_task", None) is None):
         status += " " + runtime.ai_activity_error
     if settings["close_requested"]:
         remaining = len(runtime.ledger.positions(uid, "OPEN"))
