@@ -395,9 +395,8 @@ class CustodyRuntime(WalletRuntime):
         prices_by_code = await self.discovery.prices(session, held_codes)
         price_by_mint = {asset["mint"]: prices_by_code[asset["code"]]
                          for asset in held if asset.get("code") and asset["code"] in prices_by_code}
-        report = engine.process_snapshot(
-            telegram_id=self.uid(request), candidates=[],
-            market_prices=price_by_mint, snapshot_id=int(time.time()))
+        report = engine.status_report(
+            telegram_id=self.uid(request), market_prices=price_by_mint)
         return web.json_response({"success": True, **report})
 
     async def meme_paper_scan(self, request, session):
