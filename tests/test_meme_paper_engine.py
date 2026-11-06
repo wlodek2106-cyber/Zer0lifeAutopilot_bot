@@ -51,7 +51,7 @@ class MemePaperEngineTests(unittest.TestCase):
             telegram_id=123, candidates=[candidate()], starting_cash=1000, candle_id=77)
         self.assertEqual(first["summary"]["fills"], 1)
         self.assertEqual(second["summary"]["fills"], 1)
-        self.assertEqual(second["actions"][0]["execution"]["duplicate"], True)
+        self.assertEqual(second["actions"], [])
 
     def test_hard_stop_closes_virtual_position(self):
         self.engine.process_snapshot(
