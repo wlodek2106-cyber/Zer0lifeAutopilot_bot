@@ -7955,6 +7955,7 @@ async def index_handler(request):
         panel = Path(__file__).with_name("web_login.html").read_text(encoding="utf-8")
         page = page.replace("</head>", "<script>window.ZRL_WEB=true;</script></head>")
         page = page.replace("</body>", panel + '<script src="/web-terminal.js"></script></body>')
+    page = page.replace("</body>", '<script src="/dashboard.js"></script></body>')
     return web.Response(text=page, content_type='text/html', headers={"Cache-Control": "no-store",
         "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff",
         "Content-Security-Policy": "frame-ancestors 'none'; object-src 'none'; base-uri 'none'"})
