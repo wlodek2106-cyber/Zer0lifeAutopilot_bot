@@ -38,12 +38,13 @@ class PublicWebRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("window.ZRL_WEB=true", response.text)
         self.assertIn("/web-terminal.js", response.text)
 
-    async def test_root_handler_returns_html_without_terminal_bootstrap(self):
+    async def test_root_handler_opens_terminal_with_web_bootstrap(self):
         response = await main.index_handler(SimpleNamespace(path="/"))
         self.assertEqual(response.status, 200)
         self.assertEqual(response.content_type, "text/html")
         self.assertIn("<!DOCTYPE html>", response.text)
-        self.assertNotIn("window.ZRL_WEB=true", response.text)
+        self.assertIn("window.ZRL_WEB=true", response.text)
+        self.assertIn("/web-terminal.js", response.text)
 
 
 if __name__ == "__main__":
