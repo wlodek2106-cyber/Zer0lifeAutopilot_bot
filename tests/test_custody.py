@@ -949,6 +949,40 @@ class LedgerTests(unittest.TestCase):
             db.execute("UPDATE custody_accounts SET raw=raw-1 WHERE account=? AND asset=?", (available(101), USDC))
 
 
+    def test_sniper_daily_realized_loss_uses_only_closed_sniper_sol_positions_today(self):
+        now = 1_800_000_000
+        day_start = now - (now % 86400)
+        rows = [
+            # today's losing Sniper SOL position: counted
+            (101, "sniper", SOL, "CLOSED", day_start + 100, 10_000_000, 6_000_000),
+            # today's winning Sniper SOL position: not a loss
+            (101, "sniper", SOL, "CLOSED", day_start + 200, 5_000_000, 7_000_000),
+            # Core SOL loss: excluded
+            (101, "core", SOL, "CLOSED", day_start + 300, 9_000_000, 1_000_000),
+            # Sniper USDC loss: excluded
+            (101, "sniper", USDC, "CLOSED", day_start + 400, 8_000_000, 2_000_000),
+            # Still-open Sniper position: excluded
+            (101, "sniper", SOL, "OPEN", day_start + 500, 9_000_000, None),
+            # Yesterday's loss: excluded
+            (101, "sniper", SOL, "CLOSED", day_start - 1, 9_000_000, 1_000_000),
+            # Another user's loss: excluded
+            (202, "sniper", SOL, "CLOSED", day_start + 600, 9_000_000, 1_000_000),
+        ]
+        with self.ledger.db() as db:
+            for uid, strategy, funding, state, closed_at, cost, proceeds in rows:
+                db.execute("""INSERT INTO custody_positions
+                    (id,uid,asset,symbol,decimals,raw,cost_usdc,state,buy_tx,
+                     sell_tx,created_at,funding_asset,cost_raw,proceeds_raw,closed_at,strategy)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (str(uuid.uuid4()), uid, "mint", "TEST", 6, 1, 1, state,
+                     "buy-signature", "sell-signature" if state == "CLOSED" else None,
+                     closed_at, funding, cost, proceeds, closed_at if state == "CLOSED" else None,
+                     strategy))
+        self.assertEqual(self.ledger.sniper_daily_realized_loss_raw(101, now=now), 4_000_000)
+        self.assertEqual(self.ledger.sniper_daily_realized_loss_raw(202, now=now), 8_000_000)
+        self.assertEqual(self.ledger.sniper_daily_realized_loss_raw(101, now=day_start + 86400), 0)
+
+
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_candidate_discovery_keeps_running_when_all_trading_modes_are_off(self):
         self.service.reconcile = AsyncMock()
