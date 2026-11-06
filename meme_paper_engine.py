@@ -91,10 +91,9 @@ class MemePaperEngine:
 
     def _capital(self, uid, requested):
         with sqlite3.connect(self.db_path, timeout=10) as db:
-            legacy = db.execute(
-                "SELECT starting_cash FROM ai_trader_paper_accounts WHERE telegram_id=?", (uid,)
-            ).fetchone()
-            initial = float(legacy[0]) if legacy else float(requested)
+            # Mem-Sniper starts with its own default/explicit paper capital.
+            # Never inherit the AI Trader paper account's balance or settings.
+            initial = float(requested)
             db.execute("INSERT OR IGNORE INTO meme_paper_capital VALUES(?,?,?)",
                        (uid, initial, int(time.time())))
             row = db.execute("SELECT starting_cash FROM meme_paper_capital WHERE telegram_id=?", (uid,)).fetchone()
