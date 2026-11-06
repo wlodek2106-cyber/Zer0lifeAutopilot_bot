@@ -182,12 +182,48 @@ class PolicyTests(unittest.TestCase):
             position_id=None, settings={"sniper_trading": True, "sniper_order_raw": 5_000_000},
             watchlist={"WIF": {"mint": "wif-mint", "decimals": 6}},
             universes={"main": [], "sniper": ["WIF"]}, balance=25_000_000)
-        four_open = [{"funding_asset": SOL, "symbol": f"TOKEN{i}"} for i in range(4)]
-        five_open = [{"funding_asset": SOL, "symbol": f"TOKEN{i}"} for i in range(5)]
+        four_open = [{"funding_asset": SOL, "symbol": f"TOKEN{i}",
+                       "cost_raw": 5_000_000} for i in range(4)]
+        five_open = [{"funding_asset": SOL, "symbol": f"TOKEN{i}",
+                      "cost_raw": 5_000_000} for i in range(5)]
         self.assertTrue(policy.order(positions=four_open, **order_values).allowed)
         self.assertEqual(policy.order(positions=five_open, **order_values).code, "position_limit")
         self.assertEqual(policy.order(positions=four_open[:3] + [
             {"funding_asset": SOL, "symbol": "WIF"}], **order_values).code, "already_open")
+
+    def test_sniper_hard_per_order_and_total_exposure_caps(self):
+        base = dict(uid=101, kind="BUY", asset=SOL, output_asset="wif-mint",
+            raw=5_000_000, metadata={"symbol": "WIF", "decimals": 6},
+            position_id=None, settings={"sniper_trading": True, "sniper_order_raw": 5_000_000},
+            positions=[], watchlist={"WIF": {"mint": "wif-mint", "decimals": 6}},
+            universes={"main": [], "sniper": ["WIF"]}, balance=200_000_000)
+
+        too_large = policy.order(**{**base, "raw": policy.MAX_SNIPER_ORDER_RAW + 1,
+            "settings": {"sniper_trading": True,
+                         "sniper_order_raw": policy.MAX_SNIPER_ORDER_RAW + 1}})
+        self.assertEqual(too_large.code, "sniper_order_cap")
+
+        near_cap = [{"funding_asset": SOL, "symbol": "T0",
+                     "cost_raw": 145_000_000}]
+        blocked = policy.order(**{**base, "positions": near_cap})
+        self.assertEqual(blocked.code, "sniper_exposure_cap")
+
+        within_cap = [{"funding_asset": SOL, "symbol": "T0",
+                       "cost_raw": 100_000_000}]
+        self.assertTrue(policy.order(**{**base, "positions": within_cap}).allowed)
+
+        unknown = [{"funding_asset": SOL, "symbol": "T0"}]
+        self.assertEqual(policy.order(**{**base, "positions": unknown}).code,
+                         "sniper_exposure_unknown")
+
+    def test_sniper_hard_caps_do_not_block_position_sales(self):
+        position = {"id": "p1", "uid": 101, "asset": "wif-mint",
+                    "funding_asset": SOL, "raw": 100, "state": "OPEN"}
+        result = policy.order(uid=101, kind="SELL", asset="wif-mint",
+            output_asset=SOL, raw=100, metadata={"exit_reason": "STOP_LOSS"},
+            position_id="p1", settings={}, positions=[position], watchlist={},
+            universes={"main": [], "sniper": []}, balance=0)
+        self.assertTrue(result.allowed)
 
     def test_hold_cannot_execute(self):
         self.assertEqual(self.proposal(decision={"action": "HOLD", "symbol": None,
