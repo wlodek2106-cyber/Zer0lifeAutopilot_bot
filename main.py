@@ -3224,6 +3224,8 @@ RAW_HTML = r"""<!DOCTYPE html>
                     <span>Refresh</span>
                 </button>
             </div>
+            <div id="trading-toggle-status" role="status" aria-live="polite" hidden
+                 style="margin:8px 2px 12px;padding:10px 12px;border:1px solid rgba(148,163,184,.25);border-radius:10px;color:#cbd5e1;font-size:12px;white-space:pre-wrap;"></div>
 
             <button class="btn-sell-all" onclick="closeAllPositions()">
                 <span>Close all my positions</span>
@@ -7219,20 +7221,46 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         async function toggleTrading() {
+            const button = document.getElementById('btn-toggle');
+            const status = document.getElementById('trading-toggle-status');
+            const showStatus = message => {
+                if (status) { status.textContent = message; status.hidden = !message; }
+            };
+            if (button?.disabled) return;
             let size = '1';
             if (!tradingActive) {
                 size = String(currentTradingSettings.order_usdc || 1);
-                if (!size || !confirm('Start trading on your own account? Order size: ' + size + ' USDC. You can lose money; returns are not guaranteed.')) return;
+                const message = 'Start trading on your own account? Order size: ' + size +
+                    ' USDC. You can lose money; returns are not guaranteed.';
+                let approved = false;
+                try {
+                    if (tg?.showConfirm) {
+                        approved = await new Promise(resolve => tg.showConfirm(message, resolve));
+                    } else {
+                        approved = window.confirm(message);
+                    }
+                } catch (error) {
+                    showStatus('Confirmation could not be opened. Reopen the Mini App and try again.');
+                    return;
+                }
+                if (!approved) return;
             }
+            if (button) { button.disabled = true; button.setAttribute('aria-busy', 'true'); }
+            showStatus(tradingActive ? 'Turning autopilot off…' : 'Checking wallet, balance and trading readiness…');
             try {
                 const response = await apiFetch('/api/toggle_trading', {
                     method: 'POST', headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({trade_amount_usdc: size})
                 });
                 const data = await response.json();
-                if (!data.success) alert(data.message);
+                if (!response.ok || !data.success) throw new Error(data.message || ('Trading request failed (' + response.status + ').'));
+                showStatus(data.trading_active ? 'Autopilot enabled.' : 'Autopilot disabled.');
                 await refresh();
-            } catch(e) { alert('Could not change the trading mode.'); }
+            } catch(e) {
+                showStatus(String(e?.message || 'Could not change the trading mode. No trade was confirmed.'));
+            } finally {
+                if (button) { button.disabled = false; button.removeAttribute('aria-busy'); }
+            }
         }
 
         async function toggleMemeTrading() {
