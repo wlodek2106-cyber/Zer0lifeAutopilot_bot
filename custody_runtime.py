@@ -415,10 +415,18 @@ class CustodyRuntime(WalletRuntime):
         held = self.meme_paper_engine.open_position_assets(self.uid(request))
         held_codes = [asset["code"] for asset in held if asset.get("code")]
         prices_by_code = await self.discovery.prices(session, held_codes)
+        # Use the latest refreshed quote for each screened entry as well as held positions.
         price_by_mint = {asset["mint"]: prices_by_code[asset["code"]]
                          for asset in held if asset.get("code") and asset["code"] in prices_by_code}
+        fresh_candidates = []
+        for candidate in candidates:
+            code = candidate.get("code")
+            if code in prices_by_code:
+                candidate = {**candidate, "price": prices_by_code[code]}
+                price_by_mint[candidate["mint"]] = prices_by_code[code]
+            fresh_candidates.append(candidate)
         report = self.meme_paper_engine.process_snapshot(
-            telegram_id=self.uid(request), candidates=candidates,
+            telegram_id=self.uid(request), candidates=fresh_candidates,
             market_prices=price_by_mint, snapshot_id=int(time.time()))
         return web.json_response({"success": True, **report})
 
