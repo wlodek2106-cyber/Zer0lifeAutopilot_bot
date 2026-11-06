@@ -14,6 +14,7 @@ on:
       - "tests/test_ai_trader_paper_bridge.py"
       - "tests/test_ai_trader_public_price.py"
       - "tests/test_ai_trader_paper_cycle.py"
+      - "tests/test_ai_trader_paper_cycle_integration.py"
       - "tests/test_ai_trader_daily_pnl.py"
       - "custody_ledger.py"
       - "custody_runtime.py"
@@ -75,6 +76,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_ai_trader_paper_bridge.py' -v
           python -m unittest discover -s tests -p 'test_ai_trader_public_price.py' -v
           python -m unittest discover -s tests -p 'test_ai_trader_paper_cycle.py' -v
+          python -m unittest discover -s tests -p 'test_ai_trader_paper_cycle_integration.py' -v
           python -m unittest discover -s tests -p 'test_ai_trader_daily_pnl.py' -v
           python -m unittest discover -s tests -p 'test_zerolife_shadow.py' -v
           python -m unittest discover -s tests -p 'test_admin_overview*.py' -v
