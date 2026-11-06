@@ -18,8 +18,8 @@ class MultiMarketTechnicalAgentTests(unittest.TestCase):
         now=1_800_000_000+59*3600+1
         for market in ("solana", "binance"):
             result=analyze_market(market, "SOL/USDC",
-                {"5m": candles(start=1_800_000_000),
-                 "1h": candles(start=1_800_000_000, step=3600)},
+                {"5m": candles(start=now-59*300-1),
+                 "1h": candles(start=now-59*3600-1, step=3600)},
                 now=now, max_age_seconds=7200)
             self.assertEqual(result["market"], market)
             self.assertIn(result["action"], {"BUY_WATCH", "SELL_WATCH", "HOLD"})
