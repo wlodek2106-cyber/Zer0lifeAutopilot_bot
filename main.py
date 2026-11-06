@@ -7286,7 +7286,7 @@ RAW_HTML = r"""<!DOCTYPE html>
             tradingActive = !!isActive;
             const btn = document.getElementById('btn-toggle');
             if (btn) {
-                if(window.ZRL_WEB)btn.disabled=!window.webAccessActive;
+                if(window.ZRL_WEB&&!tg?.initData)btn.disabled=!window.webAccessActive;else if(!btn.hasAttribute('aria-busy'))btn.disabled=false;
                 btn.className = isActive ? "btn-ctl btn-toggle-on" : "btn-ctl btn-toggle-off";
                 document.getElementById('toggle-text').innerText = isActive ? "Autopilot: ON" : "Autopilot: OFF";
             }
