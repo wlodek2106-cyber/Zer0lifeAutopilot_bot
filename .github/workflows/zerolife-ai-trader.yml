@@ -16,6 +16,7 @@ on:
       - "tests/test_ai_trader_paper_cycle.py"
       - "tests/test_ai_trader_paper_cycle_integration.py"
       - "tests/test_ai_trader_daily_pnl.py"
+      - "tests/test_public_web_routes.py"
       - "custody_ledger.py"
       - "custody_runtime.py"
       - "main.py"
@@ -100,6 +101,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_web_access.py' -v
           python -m unittest discover -s tests -p 'test_account_security.py' -v
           python -m unittest discover -s tests -p 'test_security_headers.py' -v
+          python -m unittest discover -s tests -p 'test_public_web_routes.py' -v
           python -m unittest discover -s tests -p 'test_market_context.py' -v
           PYTHONPATH=tests python -m unittest test_activity_log.ActivityTests -v
           python -m unittest discover -s tests -p 'test_execution_policy.py' -v
