@@ -7234,13 +7234,22 @@ RAW_HTML = r"""<!DOCTYPE html>
                     ' USDC. You can lose money; returns are not guaranteed.';
                 let approved = false;
                 try {
-                    if (tg?.showConfirm) {
-                        approved = await new Promise(resolve => tg.showConfirm(message, resolve));
+                    const telegramApp = window.Telegram && window.Telegram.WebApp;
+                    if (telegramApp && typeof telegramApp.showConfirm === 'function') {
+                        approved = await new Promise(resolve => {
+                            let settled = false;
+                            const finish = value => {
+                                if (settled) return;
+                                settled = true;
+                                resolve(value === true);
+                            };
+                            telegramApp.showConfirm(message, finish);
+                        });
                     } else {
                         approved = window.confirm(message);
                     }
                 } catch (error) {
-                    showStatus('Confirmation could not be opened. Reopen the Mini App and try again.');
+                    showStatus('Telegram confirmation failed: ' + String(error?.message || error));
                     return;
                 }
                 if (!approved) return;
