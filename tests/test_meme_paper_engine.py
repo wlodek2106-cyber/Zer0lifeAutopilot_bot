@@ -89,6 +89,15 @@ class MemePaperEngineTests(unittest.TestCase):
         self.assertEqual(report["starting_cash"], 1000)
         self.assertEqual(report["daily_loss_limit_hit"], True)
 
+    def test_initial_capital_is_locked_before_first_trade(self):
+        first = self.engine.process_snapshot(
+            telegram_id=123, candidates=[], starting_cash=1000, snapshot_id=1, now=1)
+        second = self.engine.process_snapshot(
+            telegram_id=123, candidates=[], starting_cash=100_000, snapshot_id=2, now=2)
+        self.assertEqual(first["starting_cash"], 1000)
+        self.assertEqual(second["starting_cash"], 1000)
+        self.assertEqual(second["cash"], 1000)
+
     def test_accounts_are_user_scoped(self):
         self.run_snapshot([candidate()], 1)
         other = self.engine.process_snapshot(
