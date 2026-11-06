@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from meme_paper_engine import MemePaperEngine
@@ -83,9 +84,10 @@ class MemePaperEngineTests(unittest.TestCase):
 
     def test_initial_capital_and_daily_loss_limit_cannot_be_reset(self):
         self.run_snapshot([candidate()], 1)
-        report = self.engine.process_snapshot(
-            telegram_id=123, candidates=[], starting_cash=100_000,
-            market_prices={MINT_A: 0.94}, snapshot_id=2, now=2)
+        with patch.object(self.engine.store, "daily_realized_pnl", return_value=-40):
+            report = self.engine.process_snapshot(
+                telegram_id=123, candidates=[], starting_cash=100_000,
+                market_prices={MINT_A: 0.94}, snapshot_id=2, now=2)
         self.assertEqual(report["starting_cash"], 1000)
         self.assertEqual(report["daily_loss_limit_hit"], True)
 
