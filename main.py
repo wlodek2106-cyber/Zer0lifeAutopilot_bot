@@ -6273,7 +6273,9 @@ RAW_HTML = r"""<!DOCTYPE html>
             return data;
         }
         async function openTerminal() {
-            if(window.ZRL_WEB&&!window.webSession?.user){
+            // Telegram Mini App users keep their original Telegram identity and account.
+            // Standalone browser sessions are required only outside Telegram.
+            if(window.ZRL_WEB&&!window.Telegram?.WebApp?.initData&&!window.webSession?.user){
                 document.getElementById('web-login').hidden=false;return;
             }
             const user = getUserData();
