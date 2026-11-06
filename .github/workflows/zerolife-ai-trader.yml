@@ -59,6 +59,7 @@ on:
       - "requirements.txt"
       - "tests/test_admin_overview.py"
       - "tests/test_admin_overview_auth.py"
+      - "tests/test_public_web_routes.py"
       - "tests/test_zerolife_ai_trader.py"
       - "tests/test_zerolife_shadow.py"
       - ".github/workflows/zerolife-ai-trader.yml"
