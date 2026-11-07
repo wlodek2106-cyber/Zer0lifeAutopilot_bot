@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from .market_data import validate_candles
 
 BASE_URL = "https://api.binance.com"
-ALLOWED_SYMBOLS = {"SOLUSDC", "BTCUSDT", "ETHUSDT", "SOLUSDT", "JUPUSDC", "RAYUSDC"}
+ALLOWED_SYMBOLS = {"SOLUSDC", "SOLUSDT", "JUPUSDC", "RAYUSDC"}
 INTERVALS = {
     "1m": 60_000, "5m": 300_000, "15m": 900_000,
     "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000,
