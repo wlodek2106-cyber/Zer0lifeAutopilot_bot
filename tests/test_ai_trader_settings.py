@@ -10,7 +10,7 @@ class AITraderSettingsTests(unittest.TestCase):
 
     def test_defaults_are_valid_and_normalized(self):
         result = validate_settings(self.payload())
-        self.assertEqual(result["symbols"], "SOLUSDC,BTCUSDT,ETHUSDT")
+        self.assertEqual(result["symbols"], "SOLUSDC,JUPUSDC,RAYUSDC")
         self.assertEqual(result["strategy"], "ema_rsi")
 
     def test_legacy_saved_settings_default_paper_auto_execute_to_off(self):
@@ -27,8 +27,8 @@ class AITraderSettingsTests(unittest.TestCase):
 
     def test_symbols_are_normalized_and_deduplicated(self):
         payload = self.payload()
-        payload["symbols"] = " solusdc, BTCUSDT,solusdc "
-        self.assertEqual(validate_settings(payload)["symbols"], "SOLUSDC,BTCUSDT")
+        payload["symbols"] = " solusdc, JUPUSDC,solusdc "
+        self.assertEqual(validate_settings(payload)["symbols"], "SOLUSDC,JUPUSDC")
 
     def test_rejects_unknown_fields_and_missing_fields(self):
         payload = self.payload()
