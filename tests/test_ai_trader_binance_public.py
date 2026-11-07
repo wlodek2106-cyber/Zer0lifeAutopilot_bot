@@ -38,28 +38,28 @@ def klines(count=30, interval_ms=60_000):
 class BinancePublicClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_fetches_and_validates_public_klines(self):
         session = FakeSession(klines())
-        result = await fetch_public_klines("BTCUSDT", "1m", limit=30, session=session)
+        result = await fetch_public_klines("SOLUSDC", "1m", limit=30, session=session)
         self.assertEqual(result["count"], 30)
         self.assertEqual(result["quality"], "complete")
         args, kwargs = session.get_calls[0]
         self.assertIn("/api/v3/klines", args[0])
         self.assertEqual(kwargs["params"], {
-            "symbol": "BTCUSDT", "interval": "1m", "limit": 30,
+            "symbol": "SOLUSDC", "interval": "1m", "limit": 30,
         })
         self.assertFalse(kwargs["allow_redirects"])
 
     async def test_rejects_unsupported_symbol_interval_and_limit(self):
-        for args in (("UNKNOWN", "1m"), ("BTCUSDT", "2m")):
+        for args in (("UNKNOWN", "1m"), ("SOLUSDC", "2m")):
             with self.subTest(args=args), self.assertRaises(ValueError):
                 await fetch_public_klines(*args, session=FakeSession(klines()))
         with self.assertRaises(ValueError):
-            await fetch_public_klines("BTCUSDT", "1m", limit=29,
+            await fetch_public_klines("SOLUSDC", "1m", limit=29,
                                       session=FakeSession(klines()))
 
     async def test_rejects_malformed_or_incomplete_provider_data(self):
         for payload in ([], [["bad"]], klines(29)):
             with self.subTest(payload=payload[:1]), self.assertRaises(ValueError):
-                await fetch_public_klines("BTCUSDT", "1m", limit=30,
+                await fetch_public_klines("SOLUSDC", "1m", limit=30,
                                           session=FakeSession(payload))
 
     async def test_rejects_non_200_provider_response(self):
@@ -69,7 +69,7 @@ class BinancePublicClientTests(unittest.IsolatedAsyncioTestCase):
             def get(self, *args, **kwargs):
                 return ErrorResponse(self.payload)
         with self.assertRaises(RuntimeError):
-            await fetch_public_klines("BTCUSDT", "1m", limit=30,
+            await fetch_public_klines("SOLUSDC", "1m", limit=30,
                                       session=ErrorSession(klines()))
 
 
