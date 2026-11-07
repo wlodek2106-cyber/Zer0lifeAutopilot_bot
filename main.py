@@ -8168,6 +8168,11 @@ def register_public_web_routes(app):
     app.router.add_get("/", index_handler)
     app.router.add_get("/terminal", index_handler)
     app.router.add_get("/terminal/", index_handler)
+    # Stable browser entry points for the Zer0Life AI Trader cockpit.
+    app.router.add_get("/ai-trader", index_handler)
+    app.router.add_get("/ai-trader/", index_handler)
+    app.router.add_get("/trading", index_handler)
+    app.router.add_get("/trading/", index_handler)
     app.router.add_get("/static/zerolife-ai-trader-core.webp", splash_asset_handler)
     app.router.add_get("/web-terminal.js", web_script)
     app.router.add_get("/dashboard.js", dashboard_script)
