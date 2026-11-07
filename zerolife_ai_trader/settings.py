@@ -4,7 +4,7 @@ from math import isfinite
 
 DEFAULT_SETTINGS = {
     "strategy": "ema_rsi", "source": "binance_public",
-    "symbols": "SOLUSDC,BTCUSDT,ETHUSDT", "timeframe": "15m",
+    "symbols": "SOLUSDC,JUPUSDC,RAYUSDC", "timeframe": "15m",
     "capital": 1000.0, "orderRisk": 2.0, "dailyLoss": 3.0,
     "maxPositions": 5, "confidence": 60.0, "fee": 10, "slippage": 5,
     "notifySignals": True, "notifyRisk": True, "notifyReports": False,
@@ -13,7 +13,7 @@ DEFAULT_SETTINGS = {
 STRATEGIES = {"ema_rsi", "trend_following", "mean_reversion", "manual"}
 SOURCES = {"binance_public", "dexscreener_readonly", "csv"}
 TIMEFRAMES = {"1m", "5m", "15m", "1h", "4h", "1d"}
-ALLOWED_SYMBOLS = {"SOLUSDC", "BTCUSDT", "ETHUSDT", "SOLUSDT", "JUPUSDC", "RAYUSDC"}
+ALLOWED_SYMBOLS = {"SOLUSDC", "SOLUSDT", "JUPUSDC", "RAYUSDC"}
 
 
 def validate_settings(payload):
