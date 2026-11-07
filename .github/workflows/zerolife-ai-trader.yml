@@ -29,6 +29,7 @@ on:
       - "tests/test_admin_overview_auth.py"
       - "tests/test_zerolife_ai_trader.py"
       - "tests/test_ai_trader_settings.py"
+      - "tests/test_ai_trader_binance_public.py"
       - "tests/test_ai_trader_paper_store.py"
       - "tests/test_ai_trader_settings.py"
       - "tests/test_ai_trader_configuration.py"
