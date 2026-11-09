@@ -3443,5 +3443,11 @@ class SimulationTests(unittest.IsolatedAsyncioTestCase):
             info={"output_asset": SOL, "minimum_out": 5_900_000}, versioned=True))
 
 
+class JitoPriorityTipConfigurationTests(unittest.TestCase):
+    def test_jito_tip_is_fixed_at_the_approved_150000_lamport_cap(self):
+        self.assertEqual(runtime.JITO_TIP_MIN_LAMPORTS, 150_000)
+        self.assertEqual(runtime.JITO_TIP_MAX_LAMPORTS, 150_000)
+
+
 if __name__ == "__main__":
     unittest.main()
