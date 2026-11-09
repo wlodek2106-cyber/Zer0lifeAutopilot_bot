@@ -62,7 +62,7 @@ JITO_BUNDLE_SEND_URL = "https://mainnet.block-engine.jito.wtf/api/v1/bundles"
 JITO_BUNDLE_STATUS_URL = "https://mainnet.block-engine.jito.wtf/api/v1/getInflightBundleStatuses"
 JITO_TIP_ACCOUNTS_URL = "https://mainnet.block-engine.jito.wtf/api/v1/bundles"
 JITO_TIP_FLOOR_URL = "https://bundles.jito.wtf/api/v1/bundles/tip_floor"
-JITO_TIP_MIN_LAMPORTS = 50_000
+JITO_TIP_MIN_LAMPORTS = 150_000
 JITO_TIP_MAX_LAMPORTS = 150_000
 JITO_TIP_CACHE_SECONDS = 15
 JITO_TIP_MAX_AGE_SECONDS = 120
@@ -147,7 +147,7 @@ def operator_tip_lamports(info):
             or (route == "jito_bundle_only"
                 and not JITO_TIP_MIN_LAMPORTS <= tip <= JITO_TIP_MAX_LAMPORTS)
             or (tip and route != "jito_bundle_only")):
-        raise WalletError("The recorded Jito tip is outside the approved 50,000–150,000 lamport range.")
+        raise WalletError("The recorded Jito tip is outside the approved 150,000 lamport fixed priority tip.")
     return tip
 
 
