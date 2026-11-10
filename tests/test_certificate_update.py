@@ -25,7 +25,8 @@ class CertificateUpdateTests(unittest.IsolatedAsyncioTestCase):
         handler = next(node for node in source.body
                        if isinstance(node, ast.AsyncFunctionDef)
                        and node.name == "health_handler")
-        namespace = {"certifi": certifi, "os": os, "web": web}
+        namespace = {"certifi": certifi, "os": os, "web": web,
+                     "SOLANA_RPC_PROVIDER": "helius"}
         exec(compile(ast.Module(body=[handler], type_ignores=[]),
                      str(ROOT / "main.py"), "exec"), namespace)
         for active in (False, True):
@@ -39,3 +40,4 @@ class CertificateUpdateTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result["certifi_version"], certifi.__version__)
                 self.assertEqual(result["trading_active"], active)
                 self.assertEqual(result["status"], "custody_beta")
+                self.assertEqual(result["solana_rpc_provider"], "helius")

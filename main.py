@@ -33,6 +33,7 @@ from web_access import WebAccess
 from wallet_runtime import WalletError
 from spl_token_support import TOKEN_2022_PROGRAM_ID
 from support_inbox import SupportInbox, MAX_SUPPORT_REQUEST_BYTES
+from solana_rpc_config import resolve_solana_rpc
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 
@@ -53,7 +54,7 @@ CUSTODY_PAUSE_MESSAGE = "Операции с реальными средства
 DB_DIR = "/var/data"
 DB_FILE = os.path.join(DB_DIR, "zer0life_users.db") if os.path.exists(DB_DIR) else "zer0life_users.db"
 
-SOLANA_RPC = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com").strip()
+SOLANA_RPC, SOLANA_RPC_PROVIDER = resolve_solana_rpc(os.environ)
 SHARED_HOT_WALLET = os.getenv("DEPOSIT_WALLET", "8hxiCofyaKCBkhR5nsDqvUivmfgxcVx8zo2WiCzSdM6L").strip()
 CUSTODY_RESERVE_WALLET = os.getenv("CUSTODY_RESERVE_WALLET", "").strip()
 SHARED_DEPOSIT_WALLET = CUSTODY_RESERVE_WALLET or SHARED_HOT_WALLET
@@ -7966,6 +7967,7 @@ async def health_handler(request):
         "certifi_version": certifi.__version__,
         "deposit_parser_version": "phantom-authority-v1",
         "ai_configured": bool(os.getenv("OPENAI_API_KEY")),
+        "solana_rpc_provider": SOLANA_RPC_PROVIDER,
         "web_terminal_version": "access-packages-v2",
         "trading_active": bool(runtime.ledger.active_users())})
 
