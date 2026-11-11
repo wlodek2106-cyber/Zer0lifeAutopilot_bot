@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from types import MappingProxyType
 
-from custody_ledger import USDC, SOL
+from custody_ledger import USDC, SOL, LIPPY_MINT
 from entry_costs import MAX_COST_BPS, MAX_PRICE_IMPACT_PCT, MAX_QUOTE_AGE_SECONDS, assess_entry
 from wallet_runtime import WalletError
 
@@ -26,6 +26,7 @@ CORE_STOP_LOSS_PCT = 0.05
 SNIPER_STOP_LOSS_PCT = 0.05
 TRAILING_ACTIVATION_PCT = 0.035
 TRAILING_DRAWDOWN_PCT = 0.02
+LIPPY_TAKE_PROFIT_MULTIPLE = 4.0
 
 
 class ExecutionDenied(WalletError):
@@ -79,6 +80,13 @@ def sniper_exit_reason(price, entry, peak):
     return trailing_exit_reason(price, entry, peak, SNIPER_STOP_LOSS_PCT)
 
 
+def lippy_exit_reason(price, entry):
+    """LIPPY's owner-authorized cycle exits only at +300% from this entry."""
+    if positive(price) and positive(entry) and price >= entry * LIPPY_TAKE_PROFIT_MULTIPLE:
+        return "LIPPY_TAKE_PROFIT_300"
+    return None
+
+
 def investor_exit_reason(price, entry, peak, entry_step):
     """Investor exits take profit only; this strategy has no stop-loss."""
     if not positive(price) or not positive(entry) or type(entry_step) is not int:
@@ -112,11 +120,17 @@ def sell_authorization(metadata):
     """Only explicit manual exits or deterministic protection may request a sale."""
     if not isinstance(metadata, dict) or "ai_analysis" in metadata:
         return deny("ai_sell_disabled",
-            "BLOCKED: AI SELL cannot close a position. Automatic exits use only the "
-            "5% stop or the 2% peak trail activated after +3.5%. Manual sales remain available.")
+            "BLOCKED: AI SELL cannot close a position. Automatic sales require the applicable "
+            "server-side exit trigger; manual sales remain available.")
     if metadata.get("manual_close") is True:
         return allow()
     if metadata.get("exit_reason") in ("STOP_LOSS", "TRAILING_STOP"):
+        return allow()
+    if (metadata.get("lippy_cycle") is True
+            and metadata.get("strategy") == "sniper"
+            and metadata.get("symbol") == "LIPPY"
+            and metadata.get("position_asset") == LIPPY_MINT
+            and metadata.get("exit_reason") == "LIPPY_TAKE_PROFIT_300"):
         return allow()
     if (metadata.get("strategy") == "investor"
             and metadata.get("exit_reason") in (

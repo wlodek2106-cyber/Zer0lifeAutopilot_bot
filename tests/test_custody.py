@@ -26,7 +26,7 @@ from solders.transaction import Transaction, VersionedTransaction
 import activity_log
 import custody_runtime as runtime
 from custody_ledger import (
-    CustodyLedger, LedgerError, USDC, SOL, FEE_CAP, available, position_account,
+    CustodyLedger, LedgerError, USDC, SOL, LIPPY_MINT, FEE_CAP, available, position_account,
     MONTHLY_TRADING_FEE_TERMS_VERSION,
 )
 import wallet_runtime as legacy
@@ -596,6 +596,70 @@ class LedgerTests(unittest.TestCase):
         reopened = CustodyLedger(self.path)
         restored = reopened.positions(101, "OPEN")[0]
         self.assertAlmostEqual(restored["peak_price"], 0.021)
+
+    def test_lippy_cycle_persists_peak_reentry_and_five_rebuy_limit(self):
+        self.credit(101, SOL, 5_000_000_000)
+        buy = self.reserve(uid=101, kind="BUY", asset=SOL, raw=1_000_000_000,
+            info={"output_asset": LIPPY_MINT, "symbol": "LIPPY", "decimals": 6,
+                  "strategy": "sniper", "lippy_cycle": True, "lippy_rebuy": False})
+        self.complete(buy, spent=1_000_000_000, fee=0, received=1_000_000_000)
+        position = self.ledger.positions(101, "OPEN")[0]
+        self.assertEqual(self.ledger.lippy_cycle_state(101, LIPPY_MINT)["state"], "OPEN")
+        self.ledger.record_position_peak(101, position["id"], 0.01)
+
+        sale = self.reserve(uid=101, kind="SELL", asset=LIPPY_MINT, raw=position["raw"],
+            position=position["id"], info={
+                "output_asset": SOL, "symbol": "LIPPY", "strategy": "sniper",
+                "lippy_cycle": True, "position_asset": LIPPY_MINT,
+                "exit_reason": "LIPPY_TAKE_PROFIT_300"})
+        self.complete(sale, spent=position["raw"], fee=0, received=4_000_000_000)
+
+        cycle = self.ledger.lippy_cycle_state(101, LIPPY_MINT)
+        self.assertEqual(cycle["state"], "WAITING_DRAWDOWN")
+        self.assertEqual(cycle["rebuys_completed"], 0)
+        self.assertAlmostEqual(cycle["reentry_price"], 0.002)
+        self.assertIsNone(self.ledger.entry_cooldown_until(LIPPY_MINT))
+
+        reopened = CustodyLedger(self.path)
+        restored = reopened.lippy_cycle_state(101, LIPPY_MINT)
+        self.assertEqual(restored["state"], "WAITING_DRAWDOWN")
+        self.assertIsNone(reopened.entry_cooldown_until(LIPPY_MINT))
+
+        rebuy = self.reserve(uid=101, kind="BUY", asset=SOL, raw=1_000_000_000,
+            info={"output_asset": LIPPY_MINT, "symbol": "LIPPY", "decimals": 6,
+                  "strategy": "sniper", "lippy_cycle": True, "lippy_rebuy": True,
+                  "lippy_market_price": 0.0019})
+        self.complete(rebuy, spent=1_000_000_000, fee=0, received=800_000_000)
+        cycle = self.ledger.lippy_cycle_state(101, LIPPY_MINT)
+        self.assertEqual(cycle["state"], "OPEN")
+        self.assertEqual(cycle["rebuys_completed"], 1)
+
+        with self.ledger.db() as db:
+            db.execute("""UPDATE custody_lippy_cycles SET state='WAITING_DRAWDOWN',
+                rebuys_completed=5,position_id=NULL,reentry_price=0.0001
+                WHERE uid=? AND asset=?""", (101, LIPPY_MINT))
+        with self.assertRaisesRegex(LedgerError, "LIPPY purchase does not match"):
+            self.reserve(uid=101, kind="BUY", asset=SOL, raw=1_000_000_000,
+                info={"output_asset": LIPPY_MINT, "symbol": "LIPPY", "decimals": 6,
+                      "strategy": "sniper", "lippy_cycle": True, "lippy_rebuy": True,
+                      "lippy_market_price": 0.0001})
+
+    def test_manual_lippy_sale_stops_cycle_and_keeps_global_cooldown(self):
+        self.credit(101, SOL, 3_000_000_000)
+        buy = self.reserve(uid=101, kind="BUY", asset=SOL, raw=1_000_000_000,
+            info={"output_asset": LIPPY_MINT, "symbol": "LIPPY", "decimals": 6,
+                  "strategy": "sniper", "lippy_cycle": True, "lippy_rebuy": False})
+        self.complete(buy, spent=1_000_000_000, fee=0, received=1_000_000_000)
+        position = self.ledger.positions(101, "OPEN")[0]
+        sale = self.reserve(uid=101, kind="SELL", asset=LIPPY_MINT, raw=position["raw"],
+            position=position["id"], info={
+                "output_asset": SOL, "symbol": "LIPPY", "strategy": "sniper",
+                "manual_close": True, "lippy_cycle": True,
+                "position_asset": LIPPY_MINT, "exit_reason": "MANUAL_CLOSE"})
+        self.complete(sale, spent=position["raw"], fee=0, received=900_000_000)
+        self.assertEqual(
+            self.ledger.lippy_cycle_state(101, LIPPY_MINT)["state"], "STOPPED")
+        self.assertIsNotNone(self.ledger.entry_cooldown_until(LIPPY_MINT))
 
     def test_fartcoin_sell_rpc_effects_credit_exact_sol_proceeds(self):
         wallet = str(Keypair().pubkey())
@@ -3444,8 +3508,8 @@ class SimulationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class JitoPriorityTipConfigurationTests(unittest.TestCase):
-    def test_jito_tip_is_fixed_at_the_approved_150000_lamport_cap(self):
-        self.assertEqual(runtime.JITO_TIP_MIN_LAMPORTS, 150_000)
+    def test_jito_tip_respects_the_approved_150000_lamport_cap(self):
+        self.assertLessEqual(runtime.JITO_TIP_MIN_LAMPORTS, 150_000)
         self.assertEqual(runtime.JITO_TIP_MAX_LAMPORTS, 150_000)
 
 

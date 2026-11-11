@@ -180,10 +180,11 @@ def gecko_pools_to_pairs(payload):
 
 
 class MemeDiscovery:
-    def __init__(self, ledger, rpc, excluded, seeds=None):
+    def __init__(self, ledger, rpc, excluded, seeds=None, *, sniper_only_mints=None):
         self.ledger, self.rpc, self.excluded = ledger, rpc, set(excluded)
         self.seeds = seeds or {}
         self.aliases = {info["mint"]: code for code, info in self.seeds.items()}
+        self.sniper_only_mints = set(sniper_only_mints or ())
         self.whale_priorities = {}
         self.whale_seen = {}
         self.active_provider = "dexscreener"
@@ -420,10 +421,15 @@ class MemeDiscovery:
                 strict_best.values(), key=lambda item: item["score"], reverse=True
             )[:MAX_VERIFIED_CANDIDATES]
             investor_ranked = sorted(
-                best.values(), key=lambda item: item["score"], reverse=True
+                (item for item in best.values()
+                 if item["mint"] not in self.sniper_only_mints),
+                key=lambda item: item["score"], reverse=True
             )[:MAX_VERIFIED_CANDIDATES]
             ranked_by_mint = {
-                item["mint"]: {**item, "eligible": True, "investor_eligible": True}
+                item["mint"]: {
+                    **item, "eligible": True,
+                    "investor_eligible": item["mint"] not in self.sniper_only_mints,
+                }
                 for item in strict_ranked
             }
             for item in investor_ranked:
@@ -461,13 +467,21 @@ class MemeDiscovery:
                         mint_rejections[item["mint"]] = [str(exc)]
                         continue
                     code = code or "M_" + hashlib.sha256(item["mint"].encode()).hexdigest()[:16]
-                    if code in self.seeds and decimals != self.seeds[code]["decimals"]:
+                    expected_seed_decimals = (self.seeds.get(code) or {}).get("decimals")
+                    if expected_seed_decimals is not None and decimals != expected_seed_decimals:
                         mint_rejections[item["mint"]] = ["mint decimals do not match the saved asset identity"]
                         continue
+                    if seed:
+                        item = {
+                            **item,
+                            "symbol": (seed.get("label") or seed.get("symbol")
+                                       or item["symbol"]),
+                        }
+                    eligibility = ranked_by_mint.get(item["mint"], {})
                     accepted.append({
-                        **item, "eligible": item["mint"] in ranked_by_mint
-                            and ranked_by_mint[item["mint"]]["eligible"],
-                        "investor_eligible": True, "code": code,
+                        **item, "eligible": bool(eligibility.get("eligible")),
+                        "investor_eligible": bool(eligibility.get("investor_eligible")),
+                        "code": code,
                         "decimals": decimals, "token_program": program,
                     })
             now = int(time.time())
@@ -542,6 +556,9 @@ class MemeDiscovery:
         rows = [json.loads(row["metrics"]) for row in self.assets()
                 if 0 <= now-row["checked_at"] < 1800
                 and json.loads(row["metrics"]).get(eligibility_key)]
+        if strategy == "investor":
+            rows = [row for row in rows
+                    if row.get("mint") not in self.sniper_only_mints]
         ranked = sorted(rows, key=lambda row: row["score"], reverse=True)[:MAX_VERIFIED_CANDIDATES]
         shortlist_size = (INVESTOR_AI_SHORTLIST_SIZE if strategy == "investor"
                           else AI_SHORTLIST_SIZE)
@@ -759,6 +776,13 @@ class MemeDiscovery:
             return False
         now = time.time()
         eligibility_key = "investor_eligible" if strategy == "investor" else "eligible"
-        return any(row["code"] == code and 0 <= now - row["checked_at"] < 1800
-                   and json.loads(row["metrics"]).get(eligibility_key)
-                   for row in self.assets())
+        for row in self.assets():
+            if row["code"] != code or not 0 <= now - row["checked_at"] < 1800:
+                continue
+            metrics = json.loads(row["metrics"])
+            if (strategy == "investor"
+                    and metrics.get("mint") in self.sniper_only_mints):
+                continue
+            if metrics.get(eligibility_key):
+                return True
+        return False

@@ -9,7 +9,7 @@ import dexscreener_client as dexscreener
 from unittest.mock import AsyncMock, patch
 
 from solders.pubkey import Pubkey
-from custody_ledger import CustodyLedger
+from custody_ledger import CustodyLedger, LIPPY_MINT
 from meme_discovery import (
     MAX_DISCOVERED_MINTS, MAX_VERIFIED_CANDIDATES, AI_SHORTLIST_SIZE,
     INVESTOR_AI_SHORTLIST_SIZE, MemeDiscovery, TARGETED_SEARCH_TERMS,
@@ -326,6 +326,50 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(candidate["code"], "OTC")
         self.assertEqual(candidate["token_program"], TOKEN_2022)
         self.assertTrue(seeded.entry_allowed("OTC"))
+
+    async def test_lippy_is_sniper_only_and_uses_its_exact_seeded_mint(self):
+        seeded = MemeDiscovery(
+            self.ledger, AsyncMock(return_value={"value": [mint_account()]}), [],
+            {"LIPPY": {"mint": LIPPY_MINT, "label": "LIPPY"}},
+            sniper_only_mints={LIPPY_MINT})
+
+        async def fetch(session, path):
+            if path.startswith("/tokens/"):
+                return [pool(LIPPY_MINT, baseToken={
+                    "address": LIPPY_MINT, "symbol": "LIPPY"})]
+            return [{"chainId": "solana", "tokenAddress": LIPPY_MINT}]
+
+        seeded.fetch = AsyncMock(side_effect=fetch)
+        report = await seeded.scan(None)
+        candidate = next(row for row in report["candidates"] if row["mint"] == LIPPY_MINT)
+        self.assertEqual(candidate["code"], "LIPPY")
+        self.assertFalse(candidate["investor_eligible"])
+        self.assertTrue(seeded.entry_allowed("LIPPY"))
+        self.assertFalse(seeded.entry_allowed("LIPPY", strategy="investor"))
+        self.assertEqual(seeded.candidates(strategy="investor"), [])
+
+    async def test_lippy_below_market_threshold_stays_ineligible_without_crashing_scan(self):
+        seeded = MemeDiscovery(
+            self.ledger, AsyncMock(return_value={"value": [mint_account()]}), [],
+            {"LIPPY": {"mint": LIPPY_MINT, "label": "LIPPY"}},
+            sniper_only_mints={LIPPY_MINT})
+
+        async def fetch(session, path):
+            if path.startswith("/tokens/"):
+                return [pool(
+                    LIPPY_MINT, liquidity={"usd": 141},
+                    volume={"h24": 611},
+                    txns={"h24": {"buys": 144, "sells": 126}},
+                    pairCreatedAt=int((time.time() - 2 * 3600) * 1000),
+                    baseToken={"address": LIPPY_MINT, "symbol": "LIPPY"})]
+            return [{"chainId": "solana", "tokenAddress": LIPPY_MINT}]
+
+        seeded.fetch = AsyncMock(side_effect=fetch)
+        report = await seeded.scan(None)
+        self.assertEqual(report["eligible"], 0)
+        self.assertEqual(report["investor_eligible"], 0)
+        self.assertEqual(seeded.candidates(), [])
+        self.assertFalse(seeded.entry_allowed("LIPPY"))
 
     async def test_dynamic_token_2022_assets_remain_rejected(self):
         unseeded = MemeDiscovery(self.ledger, AsyncMock(return_value={"value":[otc_mint_account()]}), [])

@@ -29,7 +29,8 @@ from wallet_runtime import (
     ATA, SYSTEM, MEMO, GENESIS, durable,
 )
 from custody_ledger import (
-    CustodyLedger, LedgerError, USDC, SOL, FEE_CAP, available, position_account,
+    CustodyLedger, LedgerError, USDC, SOL, LIPPY_MINT, LIPPY_MAX_REBUYS,
+    LIPPY_REENTRY_RETAINED_PRICE, FEE_CAP, available, position_account,
     MONTHLY_TRADING_FEE_USD_CENTS, MONTHLY_TRADING_FEE_PERIOD_SECONDS,
     MONTHLY_TRADING_FEE_TERMS_VERSION,
 )
@@ -63,7 +64,7 @@ JITO_BUNDLE_STATUS_URL = "https://mainnet.block-engine.jito.wtf/api/v1/getInflig
 JITO_TIP_ACCOUNTS_URL = "https://mainnet.block-engine.jito.wtf/api/v1/bundles"
 JITO_TIP_FLOOR_URL = "https://bundles.jito.wtf/api/v1/bundles/tip_floor"
 JITO_TIP_MIN_LAMPORTS = 50_000
-JITO_TIP_MAX_LAMPORTS = 300_000
+JITO_TIP_MAX_LAMPORTS = 150_000
 JITO_TIP_CACHE_SECONDS = 15
 JITO_TIP_MAX_AGE_SECONDS = 120
 JUPITER_PRIORITY_FEE_LAMPORTS = 100_000
@@ -147,7 +148,7 @@ def operator_tip_lamports(info):
             or (route == "jito_bundle_only"
                 and not JITO_TIP_MIN_LAMPORTS <= tip <= JITO_TIP_MAX_LAMPORTS)
             or (tip and route != "jito_bundle_only")):
-        raise WalletError("The recorded Jito tip is outside the approved 150,000 lamport fixed priority tip.")
+        raise WalletError("The recorded Jito tip exceeds the approved 150,000-lamport cap.")
     return tip
 
 
@@ -245,10 +246,12 @@ class CustodyRuntime(WalletRuntime):
         # PEPE is intentionally eligible for either strategy, with each mode
         # still using its own balance and independent execution gates.
         sniper_mints = {self.watchlist[s]["mint"] for s in self.sniper_symbols}
+        sniper_seeds = {s: self.watchlist[s] for s in self.sniper_symbols}
+        sniper_seeds["LIPPY"] = {"mint": LIPPY_MINT, "label": "LIPPY"}
         self.discovery = MemeDiscovery(self.ledger, self.rpc,
             [self.watchlist[s]["mint"] for s in self.main_symbols
              if self.watchlist[s]["mint"] not in sniper_mints],
-            {s: self.watchlist[s] for s in self.sniper_symbols})
+            sniper_seeds, sniper_only_mints={LIPPY_MINT})
         self.discovery_task = None
         self.discovery_due = 0
         self.discovery_started = 0
@@ -3531,9 +3534,36 @@ class CustodyRuntime(WalletRuntime):
                                   position_id=None, reserved=False):
         positions = (self.ledger.positions(uid) if reserved and kind == "SELL"
                      else self.ledger.positions(uid, "OPEN"))
+        lippy_buy = kind == "BUY" and output_asset == asset_for_mint(LIPPY_MINT)
+        lippy_rebuy = False
+        if lippy_buy:
+            cycle = self.ledger.lippy_cycle_state(uid, output_asset)
+            prior_positions = self.ledger.positions(uid)
+            market_price = info.get("lippy_market_price")
+            valid_initial = (
+                cycle is None and info.get("lippy_rebuy") is not True
+                and not any(p.get("asset") == output_asset for p in prior_positions))
+            valid_rebuy = (
+                cycle is not None
+                and cycle["state"] == "WAITING_DRAWDOWN"
+                and info.get("lippy_rebuy") is True
+                and cycle["rebuys_completed"] < LIPPY_MAX_REBUYS
+                and type(market_price) in (int, float)
+                and math.isfinite(market_price) and market_price > 0
+                and market_price <= cycle["reentry_price"])
+            if (uid != self.owner_id or info.get("strategy") != "sniper"
+                    or info.get("symbol") != "LIPPY"
+                    or info.get("lippy_cycle") is not True
+                    or not (valid_initial or valid_rebuy)):
+                verdict = execution_policy.deny(
+                    "lippy_cycle_policy",
+                    "BLOCKED: LIPPY buys are restricted to the owner’s Meme Sniper cycle and its saved re-entry limit.")
+                self.record_execution_check(
+                    uid, verdict, "order", kind, info.get("symbol", "")).require()
+            lippy_rebuy = valid_rebuy
         cooldown_until = (self.ledger.entry_cooldown_until(output_asset)
                           if kind == "BUY" else None)
-        if cooldown_until:
+        if cooldown_until and not lippy_rebuy:
             remaining_minutes = max(1, (cooldown_until - int(time.time()) + 59) // 60)
             verdict = execution_policy.deny("global_reentry_cooldown",
                 "BLOCKED: this token is globally locked after a recent completed trade; about "
@@ -3593,6 +3623,30 @@ class CustodyRuntime(WalletRuntime):
                 verdict = execution_policy.deny(
                     "investor_loss_exit",
                     "Investor automatic sale blocked: the quoted minimum return does not exceed position cost; position remains open.")
+        if (verdict.allowed and kind == "BUY"
+                and output_asset == asset_for_mint(LIPPY_MINT)
+                and info.get("lippy_rebuy") is True):
+            cycle = self.ledger.lippy_cycle_state(uid, output_asset)
+            try:
+                quote = info["risk_quote"]
+                decimals = int(info["decimals"])
+                quote_price = (
+                    Decimal(str(quote["inAmount"])) * Decimal(10 ** decimals)
+                    / (Decimal(str(quote["outAmount"])) * Decimal(1_000_000_000)))
+                threshold = Decimal(str(cycle["reentry_price"])) if cycle else Decimal(0)
+                quote_is_eligible = (
+                    cycle is not None and uid == self.owner_id
+                    and cycle["state"] == "WAITING_DRAWDOWN"
+                    and cycle["rebuys_completed"] < LIPPY_MAX_REBUYS
+                    and quote_price.is_finite() and quote_price > 0
+                    and threshold.is_finite() and threshold > 0
+                    and quote_price <= threshold)
+            except (KeyError, TypeError, ValueError, ArithmeticError):
+                quote_is_eligible = False
+            if not quote_is_eligible:
+                verdict = execution_policy.deny(
+                    "lippy_reentry_threshold",
+                    "BLOCKED: the live LIPPY quote is above its saved 80%-drawdown re-entry price; no buy was sent.")
         self.record_execution_check(uid, verdict, "quote", kind, info.get("symbol", "")).require()
 
     async def trade(self, session, uid, asset, output_asset, raw, kind, metadata, position_id=None, manual=False):
@@ -3601,6 +3655,14 @@ class CustodyRuntime(WalletRuntime):
         # supplied by a model. Check before RPC, reservation and signing.
         metadata = {**metadata, "manual_close": manual is True,
                     "execution_policy_version": execution_policy.VERSION}
+        if kind == "SELL" and uid == self.owner_id and position_id:
+            position = next((p for p in self.ledger.positions(uid)
+                             if p.get("id") == position_id), None)
+            if (position and position.get("asset") == asset_for_mint(LIPPY_MINT)
+                    and position.get("strategy") == "sniper"
+                    and position.get("symbol") == "LIPPY"):
+                metadata["lippy_cycle"] = True
+                metadata["position_asset"] = position["asset"]
         if kind == "SELL":
             self.record_execution_check(uid, execution_policy.sell_authorization(metadata),
                 "exit_policy", kind, metadata.get("symbol", "")).require()
@@ -4945,7 +5007,12 @@ class CustodyRuntime(WalletRuntime):
         entry = self.position_entry_price(position)
         if price is None or entry is None:
             return None
-        if position.get("strategy") == "investor":
+        if (position.get("uid") == self.owner_id
+                and position.get("asset") == asset_for_mint(LIPPY_MINT)
+                and position.get("strategy") == "sniper"
+                and position.get("symbol") == "LIPPY"):
+            reason = execution_policy.lippy_exit_reason(price, entry)
+        elif position.get("strategy") == "investor":
             reason = execution_policy.investor_exit_reason(
                 price, entry, max(position.get("peak_price") or entry, entry, price),
                 position.get("entry_step"))
@@ -4999,9 +5066,43 @@ class CustodyRuntime(WalletRuntime):
                                             "proposal", action, symbol or "")
             decision = snapshot["decisions"][mode]
             symbol, action = decision["symbol"], decision["action"]
+            lippy_cycle_buy = False
+            lippy_rebuy = False
+            lippy_market_price = None
             if not execution_policy.fresh(snapshot["created_at"], time.time(), execution_policy.DECISION_SECONDS):
                 note("stale", "SKIPPED: AI decision is older than 120 seconds. Waiting for a fresh analysis.")
                 continue
+            lippy_mint = (self.watchlist.get(symbol, {}).get("mint")
+                          if isinstance(symbol, str) else None)
+            if action == "BUY" and mode == "sniper" and lippy_mint == LIPPY_MINT:
+                output_asset = asset_for_mint(LIPPY_MINT)
+                if uid != self.owner_id:
+                    note("lippy_owner_only", "BLOCKED: LIPPY is available only to the owner’s Meme Sniper cycle.")
+                    continue
+                cycle = self.ledger.lippy_cycle_state(uid, output_asset)
+                if cycle is None:
+                    if any(p.get("asset") == output_asset for p in self.ledger.positions(uid)):
+                        note("lippy_cycle_state", "BLOCKED: prior LIPPY history has no saved cycle state; no duplicate buy was sent.")
+                        continue
+                    lippy_cycle_buy = True
+                elif cycle["state"] == "WAITING_DRAWDOWN":
+                    if cycle["rebuys_completed"] >= LIPPY_MAX_REBUYS:
+                        note("lippy_rebuy_limit", "BLOCKED: the LIPPY cycle has reached its five-rebuy limit.")
+                        continue
+                    current_price = self.position_exit_price(
+                        {"symbol": symbol, "funding_asset": SOL}, prices)
+                    if (current_price is None or cycle["reentry_price"] <= 0
+                            or current_price > cycle["reentry_price"]):
+                        note("lippy_reentry_wait",
+                             "WAITING: LIPPY has not reached 80% below the previous position’s peak; no buy was sent.")
+                        continue
+                    lippy_cycle_buy = True
+                    lippy_rebuy = True
+                    lippy_market_price = current_price
+                else:
+                    note("lippy_cycle_state",
+                         "BLOCKED: the LIPPY cycle is already open, stopped, or complete.")
+                    continue
             if (mode == "sniper" and action == "BUY" and
                     getattr(self, "discovery", None) and not self.discovery.entry_allowed(symbol)):
                 note("candidate", "SKIPPED: candidate screening is stale or the asset is no longer eligible.")
@@ -5009,7 +5110,7 @@ class CustodyRuntime(WalletRuntime):
             if action == "BUY" and symbol in self.watchlist:
                 mint = asset_for_mint(self.watchlist[symbol]["mint"])
                 cooldown_until = self.ledger.entry_cooldown_until(mint)
-                if cooldown_until:
+                if cooldown_until and not (lippy_cycle_buy and lippy_rebuy):
                     remaining_minutes = max(1, (cooldown_until - int(time.time()) + 59) // 60)
                     note("global_reentry_cooldown",
                          f"SKIPPED: {symbol} is globally locked after a recent completed trade; about "
@@ -5039,8 +5140,8 @@ class CustodyRuntime(WalletRuntime):
             if action == "SELL":
                 # Defence in depth: even a replaced proposal gate must not
                 # turn an analyst SELL into an execution request.
-                note("ai_sell_disabled", "BLOCKED: AI SELL is advisory only; automatic "
-                     "sales use the 5% stop or the peak trail activated after +3.5%.")
+                note("ai_sell_disabled",
+                     "BLOCKED: AI SELL is advisory only; automatic sales follow the position’s server-side exit policy.")
                 continue
             elif action == "BUY":
                 if mode == "sniper":
@@ -5056,7 +5157,11 @@ class CustodyRuntime(WalletRuntime):
                         {"symbol": symbol, "output_asset": asset_for_mint(watch["mint"]),
                          "strategy": mode,
                          "decimals": watch["decimals"], "ai_analysis": snapshot["id"],
-                         "ai_created_at": snapshot["created_at"]})
+                          "ai_created_at": snapshot["created_at"],
+                          **({"lippy_cycle": True, "lippy_rebuy": lippy_rebuy,
+                              **({"lippy_market_price": lippy_market_price}
+                                 if lippy_rebuy else {})}
+                             if lippy_cycle_buy else {})})
                     return
                 note("already_claimed", "SKIPPED: this analysis was already claimed; no automatic retry.")
 

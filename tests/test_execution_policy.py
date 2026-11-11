@@ -36,6 +36,22 @@ class PolicyTests(unittest.TestCase):
                 self.assertIsNone(exit_reason(1.10, 1.0, 1.10))
                 self.assertEqual(exit_reason(1.078, 1.0, 1.10), "TRAILING_STOP")
 
+    def test_lippy_exit_waits_for_four_times_entry_and_uses_exact_mint_authorization(self):
+        self.assertIsNone(policy.lippy_exit_reason(0.5, 1.0))
+        self.assertIsNone(policy.lippy_exit_reason(3.999, 1.0))
+        self.assertEqual(policy.lippy_exit_reason(4.0, 1.0), "LIPPY_TAKE_PROFIT_300")
+
+        approved = {
+            "lippy_cycle": True, "strategy": "sniper", "symbol": "LIPPY",
+            "position_asset": policy.LIPPY_MINT,
+            "exit_reason": "LIPPY_TAKE_PROFIT_300",
+        }
+        self.assertTrue(policy.sell_authorization(approved).allowed)
+        self.assertFalse(policy.sell_authorization({
+            **approved, "position_asset": "different-mint"}).allowed)
+        self.assertFalse(policy.sell_authorization({
+            **approved, "strategy": "investor"}).allowed)
+
     def test_resistance_rejection_never_independently_triggers_a_sale(self):
         metrics = {
             "chart_ready": 1, "chart_sell_setup": 1,
@@ -344,6 +360,36 @@ class RuntimePolicyTests(unittest.IsolatedAsyncioTestCase):
         sell = self.ledger.reserve(101, "global-lockout-exit", "SELL",
             position["asset"], position["raw"], sell_info, position_id=position["id"])
         self.assertEqual(sell["state"], "RESERVED")
+
+    async def test_lippy_rebuy_quote_must_stay_below_saved_drawdown_price(self):
+        self.service.owner_id = 101
+        with self.ledger.db() as db:
+            db.execute("""INSERT INTO custody_lippy_cycles
+                (uid,asset,state,rebuys_completed,position_id,peak_price,reentry_price,updated_at)
+                VALUES(?,?,'WAITING_DRAWDOWN',0,NULL,0.01,0.002,?)""",
+                (101, policy.LIPPY_MINT, int(time.time())))
+        common = {
+            "symbol": "LIPPY", "strategy": "sniper", "decimals": 6,
+            "lippy_cycle": True, "lippy_rebuy": True,
+            "quote_received_at": time.time(),
+        }
+        allowed_quote = {
+            **quote(), "inputMint": policy.WRAPPED_SOL,
+            "outputMint": policy.LIPPY_MINT, "inAmount": "1000000000",
+            "outAmount": "1000000000", "otherAmountThreshold": "996000000",
+        }
+        await self.service.authorize_execution_quote(
+            None, 101, "BUY", SOL, policy.LIPPY_MINT, 1_000_000_000,
+            {**common, "risk_quote": allowed_quote})
+
+        too_expensive_quote = {
+            **allowed_quote, "outAmount": "400000000",
+            "otherAmountThreshold": "398400000",
+        }
+        with self.assertRaises(policy.ExecutionDenied):
+            await self.service.authorize_execution_quote(
+                None, 101, "BUY", SOL, policy.LIPPY_MINT, 1_000_000_000,
+                {**common, "risk_quote": too_expensive_quote})
 
     async def test_sell_revalidation_accepts_only_its_reserved_position(self):
         position = fixtures.RuntimeTests.open_position_for_close(self)

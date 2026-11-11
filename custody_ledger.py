@@ -14,6 +14,9 @@ import trade_audit
 
 USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 SOL = "SOL"
+LIPPY_MINT = "9fGTsrxW5D8wxpjXVzuK8U2c6S5KVgGyi3UVcb89pump"
+LIPPY_MAX_REBUYS = 5
+LIPPY_REENTRY_RETAINED_PRICE = 0.2
 FEE_CAP = 5_000_000
 MONTHLY_TRADING_FEE_USD_CENTS = 500
 MONTHLY_TRADING_FEE_PERIOD_SECONDS = 30 * 24 * 60 * 60
@@ -251,6 +254,18 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                     proceeds_usdc INTEGER, created_at INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS custody_loss_reentry_cooldowns (
                     asset TEXT PRIMARY KEY, blocked_until INTEGER NOT NULL, last_loss_at INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS custody_lippy_cycles (
+                    uid INTEGER NOT NULL REFERENCES custody_users(uid),
+                    asset TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN (
+                        'OPEN','WAITING_DRAWDOWN','COMPLETE','STOPPED')),
+                    rebuys_completed INTEGER NOT NULL DEFAULT 0
+                        CHECK(rebuys_completed BETWEEN 0 AND 5),
+                    position_id TEXT,
+                    peak_price REAL NOT NULL DEFAULT 0,
+                    reentry_price REAL NOT NULL DEFAULT 0,
+                    updated_at INTEGER NOT NULL,
+                    PRIMARY KEY(uid,asset));
                 CREATE TABLE IF NOT EXISTS custody_scan_cursor (
                     address TEXT PRIMARY KEY, signature TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS custody_seen_signatures (
@@ -309,11 +324,18 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                     ON o.position_id=p.id AND o.kind='SELL' AND o.state='COMPLETED'
                 WHERE p.state='CLOSED'
                     AND COALESCE(p.closed_at,o.created_at) >= ?
+                    AND NOT (p.symbol='LIPPY' AND p.strategy='sniper'
+                        AND p.exit_reason='LIPPY_TAKE_PROFIT_300'
+                        AND p.asset=?
+                        AND EXISTS (SELECT 1 FROM custody_lippy_cycles lc
+                            WHERE lc.uid=p.uid AND lc.asset=p.asset
+                                AND lc.state IN ('WAITING_DRAWDOWN','COMPLETE')
+                                AND lc.updated_at=COALESCE(p.closed_at,o.created_at)))
                 GROUP BY p.asset
                 ON CONFLICT(asset) DO UPDATE SET
                     blocked_until=MAX(custody_loss_reentry_cooldowns.blocked_until,excluded.blocked_until),
                     last_loss_at=MAX(custody_loss_reentry_cooldowns.last_loss_at,excluded.last_loss_at)""",
-                (REENTRY_COOLDOWN_SECONDS, now - REENTRY_COOLDOWN_SECONDS))
+                (REENTRY_COOLDOWN_SECONDS, now - REENTRY_COOLDOWN_SECONDS, LIPPY_MINT))
         self.credit_safe_partner_earnings()
 
     @contextmanager
@@ -1442,9 +1464,42 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                     source = investor_budget_account(uid)
                     if _balance(db, source, asset) < raw:
                         raise LedgerError("Investor purchase exceeds the free amount in its allocated budget.")
+                if (metadata.get("lippy_cycle") is True
+                        and metadata.get("output_asset") != LIPPY_MINT):
+                    raise LedgerError("LIPPY cycle metadata does not match the verified mint.")
+                lippy_rebuy = False
+                if metadata.get("output_asset") == LIPPY_MINT:
+                    cycle = db.execute("""SELECT state,rebuys_completed,reentry_price
+                        FROM custody_lippy_cycles
+                        WHERE uid=? AND asset=?""", (uid, LIPPY_MINT)).fetchone()
+                    prior_lippy_position = db.execute("""SELECT 1 FROM custody_positions
+                        WHERE uid=? AND asset=? LIMIT 1""", (uid, LIPPY_MINT)).fetchone()
+                    valid_initial = (
+                        asset == SOL and cycle is None and prior_lippy_position is None
+                        and metadata.get("strategy") == "sniper"
+                        and metadata.get("symbol") == "LIPPY"
+                        and metadata.get("lippy_cycle") is True
+                        and metadata.get("lippy_rebuy") is not True)
+                    valid_rebuy = (
+                        asset == SOL and cycle is not None
+                        and cycle["state"] == "WAITING_DRAWDOWN"
+                        and cycle["rebuys_completed"] < 5
+                        and metadata.get("strategy") == "sniper"
+                        and metadata.get("symbol") == "LIPPY"
+                        and metadata.get("lippy_cycle") is True
+                        and metadata.get("lippy_rebuy") is True
+                        and type(metadata.get("lippy_market_price")) in (int, float)
+                        and math.isfinite(metadata["lippy_market_price"])
+                        and metadata["lippy_market_price"] > 0
+                        and metadata["lippy_market_price"] <= cycle["reentry_price"])
+                    if not (valid_initial or valid_rebuy):
+                        raise LedgerError(
+                            "BLOCKED: LIPPY purchase does not match its owner-authorized Sniper cycle state.")
+                    lippy_rebuy = valid_rebuy
                 cooldown = db.execute("""SELECT blocked_until FROM custody_loss_reentry_cooldowns
                     WHERE asset=?""", (metadata["output_asset"],)).fetchone()
-                if cooldown and cooldown["blocked_until"] > int(time.time()):
+                if (cooldown and cooldown["blocked_until"] > int(time.time())
+                        and not lippy_rebuy):
                     raise LedgerError(
                         "BLOCKED: token is under a global 24-hour re-entry cooldown after a completed trade; "
                         "no funds were reserved.")
@@ -1818,6 +1873,42 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                     (oid, row["uid"], info["output_asset"], info["symbol"], info["decimals"],
                      received, spent if row["asset"] == USDC else 1,
                      row["signature"], int(time.time()), row["asset"], spent, strategy, entry_step))
+                if (info.get("lippy_cycle") is True and info.get("symbol") == "LIPPY"
+                        and strategy == "sniper"):
+                    previous_cycle = db.execute("""SELECT * FROM custody_lippy_cycles
+                        WHERE uid=? AND asset=?""",
+                        (row["uid"], info["output_asset"])).fetchone()
+                    is_rebuy = info.get("lippy_rebuy") is True
+                    valid_cycle_entry = (
+                        previous_cycle is None and not is_rebuy
+                        or previous_cycle is not None
+                        and previous_cycle["state"] == "WAITING_DRAWDOWN"
+                        and is_rebuy
+                        and previous_cycle["rebuys_completed"] < 5)
+                    if valid_cycle_entry:
+                        rebuys_completed = (
+                            previous_cycle["rebuys_completed"] + 1 if is_rebuy else 0)
+                    else:
+                        rebuys_completed = (
+                            previous_cycle["rebuys_completed"] if previous_cycle else 0)
+                    try:
+                        decimals = int(info["decimals"])
+                        entry_price = (
+                            (spent / (1_000_000_000 if row["asset"] == SOL else 1_000_000))
+                            / (received / (10 ** decimals)))
+                    except (KeyError, TypeError, ValueError, ZeroDivisionError, OverflowError):
+                        entry_price = 0.0
+                        valid_cycle_entry = False
+                    cycle_state = "OPEN" if valid_cycle_entry and entry_price > 0 else "STOPPED"
+                    db.execute("""INSERT INTO custody_lippy_cycles
+                        (uid,asset,state,rebuys_completed,position_id,peak_price,reentry_price,updated_at)
+                        VALUES(?,?,?,?,?,?,0,?)
+                        ON CONFLICT(uid,asset) DO UPDATE SET
+                            state=excluded.state,rebuys_completed=excluded.rebuys_completed,
+                            position_id=excluded.position_id,peak_price=excluded.peak_price,
+                            reentry_price=excluded.reentry_price,updated_at=excluded.updated_at""",
+                        (row["uid"], info["output_asset"], cycle_state, rebuys_completed,
+                         oid, float(entry_price) if entry_price > 0 else 0.0, int(time.time())))
             elif row["kind"] == "SELL":
                 if spent != row["raw"]:
                     raise LedgerError("Частичная продажа требует отдельного разбора.")
@@ -1836,7 +1927,55 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
                     and info.get("manual_close") is not True
                     and info.get("exit_reason") in (
                         "INVESTOR_TAKE_PROFIT_STEP_1", "INVESTOR_TAKE_PROFIT_STEP_2"))
-                if not investor_partial_exit:
+                lippy_cycle_exit = False
+                lippy_managed = (
+                    info.get("lippy_cycle") is True
+                    and position["symbol"] == "LIPPY"
+                    and position["strategy"] == "sniper"
+                    and position["funding_asset"] == SOL)
+                if lippy_managed:
+                    cycle = db.execute("""SELECT * FROM custody_lippy_cycles
+                        WHERE uid=? AND asset=?""",
+                        (row["uid"], position["asset"])).fetchone()
+                    matching_open_cycle = (
+                        cycle is not None
+                        and cycle["state"] == "OPEN"
+                        and cycle["position_id"] == position["id"])
+                    if matching_open_cycle and (
+                            info.get("exit_reason") == "LIPPY_TAKE_PROFIT_300"
+                            and info.get("manual_close") is not True
+                            and cycle["rebuys_completed"] <= 5):
+                        try:
+                            entry_price = (
+                                (int(position["cost_raw"])
+                                 / (1_000_000_000 if position["funding_asset"] == SOL
+                                    else 1_000_000))
+                                / (int(position["raw"]) / (10 ** int(position["decimals"]))))
+                            peak_price = max(float(position["peak_price"] or 0), entry_price)
+                        except (KeyError, TypeError, ValueError, ZeroDivisionError, OverflowError):
+                            peak_price = 0.0
+                        if peak_price > 0:
+                            next_state = (
+                                "COMPLETE" if cycle["rebuys_completed"] >= 5
+                                else "WAITING_DRAWDOWN")
+                            reentry_price = peak_price * LIPPY_REENTRY_RETAINED_PRICE
+                            db.execute("""UPDATE custody_lippy_cycles SET state=?,
+                                position_id=NULL,peak_price=?,reentry_price=?,updated_at=?
+                                WHERE uid=? AND asset=?""",
+                                (next_state, peak_price, reentry_price, closed_at,
+                                 row["uid"], position["asset"]))
+                            lippy_cycle_exit = True
+                        else:
+                            db.execute("""UPDATE custody_lippy_cycles SET state='STOPPED',
+                                position_id=NULL,reentry_price=0,updated_at=?
+                                WHERE uid=? AND asset=?""",
+                                (closed_at, row["uid"], position["asset"]))
+                    elif cycle is not None:
+                        db.execute("""UPDATE custody_lippy_cycles SET state='STOPPED',
+                            position_id=NULL,reentry_price=0,updated_at=?
+                            WHERE uid=? AND asset=?""",
+                            (closed_at, row["uid"], position["asset"]))
+                if not investor_partial_exit and not lippy_cycle_exit:
                     blocked_until = closed_at + REENTRY_COOLDOWN_SECONDS
                     db.execute("""INSERT INTO custody_loss_reentry_cooldowns
                         (asset,blocked_until,last_loss_at) VALUES(?,?,?)
@@ -1951,6 +2090,14 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
             row = db.execute("""SELECT blocked_until FROM custody_loss_reentry_cooldowns
                 WHERE asset=? AND blocked_until>?""", (asset, now)).fetchone()
             return int(row["blocked_until"]) if row else None
+
+    def lippy_cycle_state(self, uid, asset):
+        with self.db() as db:
+            row = db.execute("""SELECT state,rebuys_completed,position_id,
+                    peak_price,reentry_price,updated_at
+                FROM custody_lippy_cycles WHERE uid=? AND asset=?""",
+                (uid, asset)).fetchone()
+            return dict(row) if row else None
 
     # Kept for callers from older releases; the cooldown now applies after every close.
     def loss_entry_cooldown_until(self, asset, now=None):
