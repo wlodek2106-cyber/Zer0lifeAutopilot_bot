@@ -734,32 +734,43 @@ class CustodyRuntime(WalletRuntime):
                 "liquidity_usd", "volume_24h_usd", "transactions_24h", "age_hours",
                 "change_m5_pct", "change_h1_pct") if key in row}
                 for symbol, row in screening_rows.items()}
-            main_context = {}
-            sniper_context = {}
-            if self.market_context_fn and not whale_triggered:
+            sniper_context_symbols = list(dict.fromkeys([
+                *screening_rows, *self.held_sniper_symbols()]))
+
+            async def fetch_main_context():
+                if not self.market_context_fn or whale_triggered:
+                    return {}
                 try:
                     raw_context = await self.market_context_fn(session)
                     if isinstance(raw_context, dict):
-                        main_context = {
+                        return {
                             symbol: metrics for symbol, metrics in raw_context.items()
                             if symbol in universes["main"] and isinstance(metrics, dict)
                         }
                 except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
-                    main_context = {}
-            sniper_context_symbols = list(dict.fromkeys([
-                *screening_rows, *self.held_sniper_symbols()]))
-            if self.sniper_market_context_fn and sniper_context_symbols:
+                    pass
+                return {}
+
+            async def fetch_sniper_context():
+                if not self.sniper_market_context_fn or not sniper_context_symbols:
+                    return {}
                 try:
                     raw_context = await self.sniper_market_context_fn(
                         session, self.watchlist, sniper_context_symbols)
                     if isinstance(raw_context, dict):
-                        sniper_context = {
+                        return {
                             symbol: metrics for symbol, metrics in raw_context.items()
                             if symbol in universes["sniper"] and isinstance(metrics, dict)
                         }
                 except Exception:
                     # Missing chart data fails closed for buys, but must not prevent position exits.
-                    sniper_context = {}
+                    pass
+                return {}
+
+            # Overlap context construction so one strategy's network wait does
+            # not postpone discovery work for the other.
+            main_context, sniper_context = await asyncio.gather(
+                fetch_main_context(), fetch_sniper_context())
             if whale_triggered and any(symbol not in market for symbol in whale_symbols):
                 raise WalletError("Whale candidate has no fresh market price; AI analysis was not sent.", 409)
             permitted_mints = {

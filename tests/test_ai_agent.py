@@ -774,9 +774,26 @@ class AIControllerTests(unittest.IsolatedAsyncioTestCase):
             "SOL": {"change_m5_pct": 0.8, "liquidity_usd": 200_000},
             "WIF": {"change_m5_pct": 50},
         }
-        self.service.market_context_fn = AsyncMock(return_value=context)
+        both_contexts_started = asyncio.Event()
+        contexts_started = set()
+
+        async def fetch_main_context(_session):
+            contexts_started.add("main")
+            if len(contexts_started) == 2:
+                both_contexts_started.set()
+            await asyncio.wait_for(both_contexts_started.wait(), timeout=0.2)
+            return context
+
         sniper_context = {"WIF": {"chart_ready": 1, "chart_buy_setup": 1}}
-        self.service.sniper_market_context_fn = AsyncMock(return_value=sniper_context)
+        async def fetch_sniper_context(_session, _watchlist, _symbols):
+            contexts_started.add("sniper")
+            if len(contexts_started) == 2:
+                both_contexts_started.set()
+            await asyncio.wait_for(both_contexts_started.wait(), timeout=0.2)
+            return sniper_context
+
+        self.service.market_context_fn = AsyncMock(side_effect=fetch_main_context)
+        self.service.sniper_market_context_fn = AsyncMock(side_effect=fetch_sniper_context)
         decisions = {
             "main": {"action": "HOLD", "symbol": None, "reason": "No clear USDC signal."},
             "sniper": {"action": "HOLD", "symbol": None, "reason": "No signal."},
