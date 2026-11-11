@@ -28,13 +28,10 @@ class CryptoInvestorsTests(unittest.TestCase):
         )
         elements = Elements()
         elements.feed(html)
-        tag, button = elements.by_id["btn-ai-crypto-investors"]
-        self.assertEqual(tag, "button")
-        self.assertEqual(button["type"], "button")
-        self.assertEqual(button["onclick"], "gotoTab('ai-crypto-investors', null)")
+        self.assertNotIn("btn-ai-crypto-investors", elements.by_id)
         _, panel = elements.by_id["tab-ai-crypto-investors"]
         self.assertEqual(panel["class"], "tab-panel")
-        self.assertIn(">Ai Crypto Investors</button>", html)
+        self.assertNotIn(">Ai Crypto Investors</button>", html)
         panel_content = html.split('id="tab-ai-crypto-investors"', 1)[1].split(
             '<div id="nav"', 1
         )[0]

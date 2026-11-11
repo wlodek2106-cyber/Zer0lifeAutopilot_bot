@@ -177,10 +177,11 @@ class MenuBrowserTests(unittest.TestCase):
                 Object.defineProperty(navigator,'share',{configurable:true,value:async data=>{
                     window.nativeShares.push({text:data.text,files:(data.files||[]).map(file=>file.name)});
                 }});
-                assert(document.querySelectorAll('.nav-btn').length===6,'six navigation items including Exchange');
-                const exchangeNav=Array.from(document.querySelectorAll('.nav-btn')).find(button=>button.textContent.includes('Exchange'));
-                assert(!!exchangeNav,'Exchange is a distinct navigation destination');
-                assert(exchangeNav.getAttribute('onclick').includes("'exchange'"),'Exchange navigation opens its own tab');
+                assert(document.querySelectorAll('.nav-btn').length===5,'five remaining navigation items');
+                assert(!Array.from(document.querySelectorAll('.nav-btn')).some(button=>button.textContent.includes('Exchange')),
+                    'Exchange is removed from the bottom navigation');
+                assert(!document.getElementById('btn-ai-crypto-investors'),
+                    'the Investors shortcut is removed from Overview');
                 const exchangePanel=document.getElementById('tab-exchange');
                 assert(!!exchangePanel,'Exchange panel exists');
                 assert(exchangePanel.textContent.includes('QUOTE · CONFIRM TO EXCHANGE'),'quote status is explicit');
@@ -261,7 +262,8 @@ class MenuBrowserTests(unittest.TestCase):
                    assert(document.getElementById('trade-share-caption').value.includes('Реализованная прибыль'),
                        'manual share caption follows the Russian account language');
                    closeTradeShareDialog();gotoTab('terminal',document.querySelectorAll('.nav-btn')[0]);
-                 assert(exchangeNav.textContent.includes('Обмен'),'navigation is translated to Russian');
+                 assert(!Array.from(document.querySelectorAll('.nav-btn')).some(button=>button.textContent.includes('Обмен')),
+                     'removed Exchange tab does not appear in Russian navigation');
                   assert(document.getElementById('ui-language-select').value==='ru','selector follows active language');
                   assert(localizeUiText('Token to Base')==='Token на Base','short words translate without corrupting part of a token name');
                   assert(localizeUiText('AI Crypto Investors')==='AI-криптоинвесторы','Investors title is localized in Russian');
@@ -293,7 +295,8 @@ class MenuBrowserTests(unittest.TestCase):
                    const ukTransferError=localizeUiText('The Solana transaction failed safe validation [USDC_TRANSFER_COUNT_2]; nothing was sent.');
                    assert(ukTransferError==='Транзакція Solana не пройшла безпечну перевірку [USDC_TRANSFER_COUNT_2]; нічого не надіслано.',
                        'Solana validation errors are also translated into Ukrainian');
-                  assert(exchangeNav.textContent.includes('Обмін'),'navigation is translated to Ukrainian');
+                  assert(!Array.from(document.querySelectorAll('.nav-btn')).some(button=>button.textContent.includes('Обмін')),
+                      'removed Exchange tab does not appear in Ukrainian navigation');
                   assert(localizeUiText('Token to Base')==='Token до Base','whole-word translation also works in Ukrainian');
                   assert(localizeUiText('BASE NETWORK · L2')==='МЕРЕЖА BASE · L2','Base network label is localized in Ukrainian');
                   assert(document.getElementById('base-paper-status').textContent.includes('Сканування Base завершено: умов для входу чи виходу не виявлено.'),
@@ -310,7 +313,8 @@ class MenuBrowserTests(unittest.TestCase):
                  assert(window.languagePosts.length===1&&window.languagePosts[0].language==='uk',
                      'selected language is saved to the account API');
                  applyUiLanguage('en');
-                  assert(exchangeNav.textContent.includes('Exchange'),'English can be restored');
+                  assert(!Array.from(document.querySelectorAll('.nav-btn')).some(button=>button.textContent.includes('Exchange')),
+                      'removed Exchange tab stays absent when English is restored');
                   assert(uiLocale()===undefined,'English keeps the device locale');
                   assert(document.getElementById('base-paper-status').textContent.includes('Base scan completed; no entry or exit trigger passed.'),
                       'Base status returns to English without stale translated copy');
@@ -425,7 +429,7 @@ class MenuBrowserTests(unittest.TestCase):
                 assert(chartText.includes('YES\\nJUP: fresh candles unavailable'),
                     'chart rows use real line breaks');
                 assert(!chartText.includes('\\\\n'),'chart zones do not show literal slash-n text');
-                const tabs=['terminal','trading','deposit','exchange','settings'];
+                const tabs=['terminal','trading','deposit','settings'];
                 for(let i=0;i<tabs.length;i++){
                     gotoTab(tabs[i],document.querySelectorAll('.nav-btn')[i]);
                     assert(document.querySelectorAll('.tab-panel.active').length===1,'single active panel');

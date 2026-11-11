@@ -3209,7 +3209,6 @@ RAW_HTML = r"""<!DOCTYPE html>
     <div id="app" data-ui-version="console-ai-v1" style="display: none;">
         <div id="tab-terminal" class="tab-panel active">
             <header class="page-heading"><div><p class="eyebrow">AI Trader · Personal account</p><h1>Overview</h1></div></header>
-            <button id="btn-ai-crypto-investors" type="button" class="btn-green-main" onclick="gotoTab('ai-crypto-investors', null)">Ai Crypto Investors</button>
             <div class="banner-limit account-summary" style="border-color:#ef4444; background:#2a1014; margin-bottom:12px;">
                 <div style="color:#4ade80; font-size:13px; font-weight:800;">Your account · USDC / SOL</div>
                 <div id="wallet-runtime-status" style="color:#cbd5e1; font-size:11px; margin-top:4px;">Personal funds. Trading carries risk.</div>
@@ -3940,7 +3939,6 @@ RAW_HTML = r"""<!DOCTYPE html>
         <button class="nav-btn active" onclick="gotoTab('terminal', this)"><span>◈</span>Overview</button>
         <button class="nav-btn" onclick="gotoTab('trading', this)"><span>↗</span>Trading</button>
         <button class="nav-btn" onclick="gotoTab('deposit', this)"><span>⇄</span>Wallet</button>
-        <button class="nav-btn" onclick="gotoTab('exchange', this)"><span>⇆</span>Exchange</button>
         <button class="nav-btn" onclick="gotoTab('settings', this)"><span>⚙</span>Settings</button>
         <button id="nav-tariffs" class="nav-btn" onclick="gotoTab('tariffs', this)"><span>▤</span>Tariffs</button>
     </div>
