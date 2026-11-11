@@ -1975,6 +1975,38 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
             row = db.execute("SELECT * FROM custody_users WHERE uid=?", (uid,)).fetchone()
             return dict(row) if row else None
 
+    def admin_overview_snapshot(self, recent_limit=10):
+        """Return aggregate, read-only operator metrics without customer identifiers."""
+        if type(recent_limit) is not int or not 1 <= recent_limit <= 25:
+            raise LedgerError("Invalid operator dashboard activity limit.")
+        with self.db() as db:
+            users = int(db.execute("SELECT COUNT(*) FROM custody_users").fetchone()[0])
+            profiles_exists = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_profiles'"
+            ).fetchone()
+            registered = (int(db.execute("SELECT COUNT(*) FROM app_profiles").fetchone()[0])
+                          if profiles_exists else 0)
+            positions = {str(row["state"]): int(row["total"]) for row in db.execute(
+                "SELECT state,COUNT(*) AS total FROM custody_positions GROUP BY state")}
+            operations = {str(row["state"]): int(row["total"]) for row in db.execute(
+                "SELECT state,COUNT(*) AS total FROM custody_operations GROUP BY state")}
+            liabilities = {str(row["asset"]): int(row["raw"] or 0) for row in db.execute(
+                "SELECT asset,SUM(raw) AS raw FROM custody_accounts "
+                "WHERE account LIKE 'user:%' GROUP BY asset")}
+            recent = [dict(row) for row in db.execute(
+                "SELECT kind,state,asset,raw,created_at FROM custody_operations "
+                "ORDER BY created_at DESC,id DESC LIMIT ?", (recent_limit,))]
+        return {
+            "success": True,
+            "read_only": True,
+            "users_total": users,
+            "registered_profiles": registered,
+            "positions_by_state": positions,
+            "operations_by_state": operations,
+            "customer_liabilities_raw": liabilities,
+            "recent_operations": recent,
+        }
+
     def active_users(self):
         with self.db() as db:
             return [dict(r) for r in db.execute(

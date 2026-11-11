@@ -6009,21 +6009,30 @@ RAW_HTML = r"""<!DOCTYPE html>
         }
 
         function getUserData() {
+            // Telegram identity takes precedence on the /terminal page too:
+            // that route also sets ZRL_WEB for standalone-browser support.
+            const telegramUser = tg?.initDataUnsafe?.user;
+            if (tg?.initData && telegramUser?.id) {
+                return { id: Number(telegramUser.id),
+                    username: telegramUser.username || telegramUser.first_name || 'User' };
+            }
             if(window.ZRL_WEB)return window.webSession?.user||null;
-            const user = tg?.initDataUnsafe?.user;
-            if (!tg?.initData || !user?.id) return null;
-            return { id: Number(user.id), username: user.username || user.first_name || 'User' };
+            return null;
         }
 
         async function apiFetch(url, options = {}) {
+            // Never downgrade an in-Telegram request to a separate browser session.
+            if (tg?.initData) {
+                const headers = Object.assign({}, options.headers || {},
+                    { 'X-Telegram-Init-Data': tg.initData });
+                return fetch(url, Object.assign({}, options, { headers }));
+            }
             if(window.ZRL_WEB){
                 if(!window.webSession?.user)throw Error('Sign in to the web terminal.');
                 return fetch(url,{...options,credentials:'same-origin',
                     headers:{...(options.headers||{}),'X-ZRL-CSRF':window.webSession.csrf}});
             }
-            if (!tg?.initData) throw new Error('Open this app through Telegram.');
-            const headers = Object.assign({}, options.headers || {}, { 'X-Telegram-Init-Data': tg.initData });
-            return fetch(url, Object.assign({}, options, { headers }));
+            throw new Error('Open this app through Telegram.');
         }
 
         function openSupport(){
@@ -6272,7 +6281,9 @@ RAW_HTML = r"""<!DOCTYPE html>
             return data;
         }
         async function openTerminal() {
-            if(window.ZRL_WEB&&!window.webSession?.user){
+            // Telegram Mini App users keep their original Telegram identity and account.
+            // Standalone browser sessions are required only outside Telegram.
+            if(window.ZRL_WEB&&!window.Telegram?.WebApp?.initData&&!window.webSession?.user){
                 document.getElementById('web-login').hidden=false;return;
             }
             const user = getUserData();
@@ -7939,13 +7950,31 @@ HTML_CONTENT = RAW_HTML.replace("__SPLASH_URL__", SPLASH_IMAGE_URL).replace("__D
 
 async def index_handler(request):
     page = HTML_CONTENT
-    if request.path == "/terminal":
+    if request.path.rstrip("/") in ("", "/terminal"):
         panel = Path(__file__).with_name("web_login.html").read_text(encoding="utf-8")
         page = page.replace("</head>", "<script>window.ZRL_WEB=true;</script></head>")
         page = page.replace("</body>", panel + '<script src="/web-terminal.js"></script></body>')
     return web.Response(text=page, content_type='text/html', headers={"Cache-Control": "no-store",
         "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff",
         "Content-Security-Policy": "frame-ancestors 'none'; object-src 'none'; base-uri 'none'"})
+
+def register_public_web_routes(app):
+    """Register the browser terminal and its static assets in one testable place."""
+    async def web_script(request):
+        return web.Response(text=Path(__file__).with_name("web_terminal.js").read_text(encoding="utf-8"),
+                            content_type="application/javascript", headers={"Cache-Control": "no-store"})
+
+    async def dashboard_script(request):
+        return web.Response(text=Path(__file__).with_name("static").joinpath("dashboard.js").read_text(encoding="utf-8"),
+                            content_type="application/javascript", headers={"Cache-Control": "no-store"})
+
+    app.router.add_get("/", index_handler)
+    app.router.add_get("/terminal", index_handler)
+    app.router.add_get("/terminal/", index_handler)
+    app.router.add_get("/static/zerolife-ai-trader-core.webp", splash_asset_handler)
+    app.router.add_get("/web-terminal.js", web_script)
+    app.router.add_get("/dashboard.js", dashboard_script)
+
 
 async def splash_asset_handler(request):
     asset = Path(__file__).with_name("static") / "zerolife-ai-trader-core.webp"
@@ -8378,13 +8407,7 @@ async def main():
             "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
             "Content-Security-Policy": "frame-ancestors 'none'; object-src 'none'; base-uri 'none'",
             "X-Content-Type-Options": "nosniff"})
-    app.router.add_get('/', index_handler)
-    app.router.add_get('/terminal', index_handler)
-    app.router.add_get('/static/zerolife-ai-trader-core.webp', splash_asset_handler)
-    async def web_script(request):
-        return web.Response(text=Path(__file__).with_name("web_terminal.js").read_text(encoding="utf-8"),
-                            content_type="application/javascript", headers={"Cache-Control":"no-store"})
-    app.router.add_get('/web-terminal.js', web_script)
+    register_public_web_routes(app)
     app.router.add_get('/web-auth/me', runtime.web_access.public)
     app.router.add_post('/web-auth/start', runtime.web_access.public)
     app.router.add_post('/web-auth/finish', runtime.web_access.public)
@@ -8398,6 +8421,13 @@ async def main():
     app.router.add_get('/api/partners', wallet_handler(runtime.partner_program))
     app.router.add_post('/api/partners/retry', wallet_handler(runtime.retry_partner_payout))
     app.router.add_get('/api/stats', wallet_handler(runtime.stats))
+    app.router.add_get('/api/ai-trader/settings', wallet_handler(runtime.get_ai_trader_settings))
+    app.router.add_post('/api/ai-trader/settings', wallet_handler(runtime.save_ai_trader_settings))
+    app.router.add_post('/api/ai-trader/signals/evaluate', wallet_handler(runtime.evaluate_ai_trader_signals))
+    app.router.add_get('/api/ai-trader/signals/history', wallet_handler(runtime.get_ai_trader_signal_history))
+    app.router.add_get('/api/ai-trader/paper-journal', wallet_handler(runtime.get_ai_trader_paper_journal))
+    app.router.add_post('/api/ai-trader/backtest', wallet_handler(runtime.run_ai_trader_backtest))
+    app.router.add_get('/api/ai-trader/backtest/history', wallet_handler(runtime.get_ai_trader_backtest_history))
     app.router.add_get('/api/monthly-trading-fee', wallet_handler(runtime.monthly_trading_fee))
     app.router.add_post('/api/monthly-trading-fee', wallet_handler(runtime.monthly_trading_fee))
     support_inbox = SupportInbox(TELEGRAM_TOKEN, ADMIN_TELEGRAM_ID)
@@ -8426,6 +8456,7 @@ async def main():
     app.router.add_post('/api/verify_deposit', wallet_handler(runtime.deposit))
     app.router.add_post('/api/wallet_link', wallet_handler(runtime.wallet_link))
     app.router.add_post('/api/deposit_invoice', wallet_handler(runtime.create_invoice))
+    app.router.add_get('/api/admin/overview', wallet_handler(runtime.admin_overview))
     app.router.add_get('/api/admin/status', wallet_handler(runtime.admin_status))
     app.router.add_get('/api/admin/pending_operations', wallet_handler(runtime.admin_pending_operations))
     app.router.add_get('/api/admin/balance_check', wallet_handler(runtime.admin_balance_check))
