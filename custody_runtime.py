@@ -1,7 +1,9 @@
 """Public multi-user custody routes. All user ownership comes from verified Telegram."""
 import asyncio
+import hashlib
 import base64
 import json
+from zerolife_ai_trader.settings import DEFAULT_SETTINGS, validate_settings
 import math
 import os
 import random
@@ -1039,6 +1041,330 @@ class CustodyRuntime(WalletRuntime):
     def uid(self, request):
         return int(request["telegram_user"]["id"])
 
+    def _ensure_ai_trader_settings_table(self):
+        with self.ledger.db() as db:
+            db.execute("""CREATE TABLE IF NOT EXISTS ai_trader_user_settings (
+                telegram_id INTEGER PRIMARY KEY,
+                settings_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )""")
+
+    async def get_ai_trader_settings(self, request, session):
+        self._ensure_ai_trader_settings_table()
+        uid = self.uid(request)
+        with self.ledger.db() as db:
+            row = db.execute(
+                "SELECT settings_json, updated_at FROM ai_trader_user_settings WHERE telegram_id=?",
+                (uid,)
+            ).fetchone()
+        settings = dict(DEFAULT_SETTINGS)
+        updated_at = None
+        if row:
+            try:
+                stored = json.loads(row["settings_json"])
+                settings = validate_settings(stored)
+                updated_at = row["updated_at"]
+            except (ValueError, TypeError, json.JSONDecodeError):
+                self.log("AI Trader settings: invalid stored settings for user")
+        return web.json_response({"success": True, "settings": settings,
+                                  "updated_at": updated_at, "storage": "server"})
+
+    async def evaluate_ai_trader_signals(self, request, session):
+        """Evaluate supplied closes or fetch public Binance candles; never place orders."""
+        from zerolife_ai_trader.binance_public import fetch_public_klines, INTERVALS
+        from zerolife_ai_trader.signal_engine import evaluate_watchlist
+        uid = self.uid(request)
+        self._ensure_ai_trader_settings_table()
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                raise ValueError("Invalid signal evaluation request.")
+            with self.ledger.db() as db:
+                row = db.execute(
+                    "SELECT settings_json FROM ai_trader_user_settings WHERE telegram_id=?",
+                    (uid,)
+                ).fetchone()
+            settings = validate_settings(json.loads(row["settings_json"])) if row else dict(DEFAULT_SETTINGS)
+            source = payload.get("source", "manual")
+            if source == "binance_public":
+                if set(payload) != {"source"} or settings["source"] != "binance_public":
+                    raise ValueError("Binance public data must be enabled in saved settings.")
+                interval = settings["timeframe"]
+                series = {}
+                market_quality = {}
+                for symbol in settings["symbols"].split(","):
+                    market = await fetch_public_klines(
+                        symbol, interval, limit=200, session=session
+                    )
+                    series[symbol] = [candle["close"] for candle in market["candles"]]
+                    market_quality[symbol] = {
+                        "candles": market["count"], "interval_ms": market["interval_ms"],
+                        "quality": market["quality"], "last_timestamp_ms": market["last_timestamp_ms"],
+                    }
+            elif source == "manual":
+                if set(payload) != {"price_series"}:
+                    raise ValueError("Expected price_series for manual evaluation.")
+                series = payload["price_series"]
+                market_quality = {"source": "manual"}
+                if not isinstance(series, dict) or not 1 <= len(series) <= 10:
+                    raise ValueError("Provide close series for 1 to 10 symbols.")
+                for symbol, closes in series.items():
+                    if (not isinstance(symbol, str) or symbol not in settings["symbols"].split(",")
+                            or not isinstance(closes, list) or not 30 <= len(closes) <= 5000):
+                        raise ValueError("Invalid symbol or close series length.")
+            else:
+                raise ValueError("Unsupported market-data source.")
+            paper_cash = settings["capital"]
+            paper_equity = settings["capital"]
+            paper_open_positions = 0
+            if settings.get("paperAutoExecute") is True and source == "binance_public":
+                from zerolife_ai_trader.paper_store import PaperTradeStore
+                account = PaperTradeStore(self.ledger.path).account(telegram_id=uid)
+                if account["cash"] is not None:
+                    paper_cash = account["cash"]
+                    paper_open_positions = len(account["positions"])
+                    paper_equity = paper_cash + sum(
+                        position["quantity"] * position["average_cost"]
+                        for position in account["positions"]
+                    )
+            results = evaluate_watchlist(
+                series, settings, equity=paper_equity, cash=paper_cash,
+                open_positions=paper_open_positions,
+            )
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+            raise WalletError("Invalid signal evaluation request or market data.", 400)
+        except RuntimeError as exc:
+            raise WalletError(str(exc), 502)
+        self._ensure_ai_trader_signal_table()
+        from zerolife_ai_trader.paper_store import PaperTradeStore
+        paper_executions = []
+        with self.ledger.db() as db:
+            for item in results:
+                cursor = db.execute("""INSERT INTO ai_trader_signal_history
+                    (telegram_id, symbol, action, confidence, price, reasons_json, risk_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (uid, item["symbol"], item["action"], item["confidence"],
+                     item["price"], json.dumps(item["reasons"]),
+                     json.dumps(item["risk"], allow_nan=False)))
+                item["signal_id"] = cursor.lastrowid
+        if settings.get("paperAutoExecute") is True and source == "binance_public":
+            from zerolife_ai_trader.configuration import build_risk_limits
+            from zerolife_ai_trader.risk import assess_order
+            store = PaperTradeStore(self.ledger.path)
+            for item in results:
+                if item["action"] != "PAPER_BUY" or not item["risk"].get("allowed"):
+                    continue
+                quality = market_quality.get(item["symbol"], {})
+                candle_id = quality.get("last_timestamp_ms")
+                if type(candle_id) is not int or candle_id <= 0:
+                    continue
+                stable_id = int.from_bytes(hashlib.sha256(
+                    (str(uid) + ":" + item["symbol"] + ":" + str(candle_id)).encode()
+                ).digest()[:8], "big") & 0x7FFFFFFFFFFFFFFF
+                try:
+                    account = store.account(telegram_id=uid)
+                    positions = account["positions"]
+                    cash = account["cash"] if account["cash"] is not None else settings["capital"]
+                    equity = cash + sum(
+                        p["quantity"] * p["average_cost"] for p in positions
+                    )
+                    already_held = any(p["symbol"] == item["symbol"] for p in positions)
+                    risk = assess_order(
+                        equity=equity, cash=cash, price=item["price"],
+                        confidence=item["confidence"],
+                        open_positions=max(0, len(positions) - (1 if already_held else 0)),
+                        daily_pnl=0.0, limits=build_risk_limits(settings),
+                    )
+                    if not risk.allowed:
+                        paper_executions.append({
+                            "symbol": item["symbol"], "executed": False,
+                            "reason": risk.reason,
+                        })
+                        continue
+                    result = store.execute_buy(
+                        telegram_id=uid, signal_id=stable_id,
+                        symbol=item["symbol"], quantity=risk.quantity,
+                        market_price=item["price"], fee_bps=settings["fee"],
+                        slippage_bps=settings["slippage"], starting_cash=settings["capital"],
+                    )
+                    paper_executions.append({
+                        "symbol": item["symbol"], "executed": result["executed"],
+                        "duplicate": result["duplicate"], "fill": result["fill"],
+                    })
+                except ValueError as exc:
+                    paper_executions.append({
+                        "symbol": item["symbol"], "executed": False, "reason": str(exc),
+                    })
+        return web.json_response({"success": True, "signals": results,
+                                  "market_data": market_quality,
+                                  "paper_executions": paper_executions,
+                                  "execution": ("paper_auto" if paper_executions else
+                                                "paper_signal_only")})
+
+    async def run_ai_trader_backtest(self, request, session):
+        """Run a bounded historical paper backtest; never submits orders."""
+        from zerolife_ai_trader.binance_public import fetch_public_klines
+        from zerolife_ai_trader.configuration import build_backtest_options
+        from zerolife_ai_trader.backtest import run_backtest
+        uid = self.uid(request)
+        self._ensure_ai_trader_settings_table()
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict) or set(payload) != {"source"}:
+                raise ValueError("Expected source=binance_public.")
+            if payload["source"] != "binance_public":
+                raise ValueError("Only public Binance historical data is supported.")
+            with self.ledger.db() as db:
+                row = db.execute(
+                    "SELECT settings_json FROM ai_trader_user_settings WHERE telegram_id=?",
+                    (uid,)
+                ).fetchone()
+            settings = validate_settings(json.loads(row["settings_json"])) if row else dict(DEFAULT_SETTINGS)
+            if settings["source"] != "binance_public":
+                raise ValueError("Enable Binance public data in saved settings first.")
+            options = build_backtest_options(settings)
+            report = {}
+            for symbol in settings["symbols"].split(","):
+                market = await fetch_public_klines(
+                    symbol, settings["timeframe"], limit=500, session=session
+                )
+                closes = [candle["close"] for candle in market["candles"]]
+                result = run_backtest(
+                    closes,
+                    starting_cash=options["starting_cash"],
+                    fee_bps=options["fee_bps"],
+                    slippage_bps=options["slippage_bps"],
+                    order_fraction=options["order_fraction"],
+                    min_confidence=options["min_confidence"],
+                    strategy=settings["strategy"],
+                )
+                report[symbol] = {
+                    "metrics": {key: result[key] for key in (
+                        "starting_cash", "final_equity", "net_pnl", "return_pct",
+                        "buy_hold_return_pct", "excess_return_vs_buy_hold_pct",
+                        "max_drawdown_pct", "closed_trades", "wins", "losses",
+                        "win_rate_pct", "profit_factor", "expectancy_per_trade",
+                        "fees_paid", "execution_model"
+                    )},
+                    "equity_curve": result["equity_curve"],
+                    "market_data": {
+                        "candles": market["count"], "interval_ms": market["interval_ms"],
+                        "quality": market["quality"],
+                        "last_timestamp_ms": market["last_timestamp_ms"],
+                    },
+                }
+            self._ensure_ai_trader_backtest_table()
+            with self.ledger.db() as db:
+                for symbol, item in report.items():
+                    db.execute("""INSERT INTO ai_trader_backtest_history
+                        (telegram_id, symbol, report_json)
+                        VALUES (?, ?, ?)""",
+                        (uid, symbol, json.dumps(item, allow_nan=False)))
+            return web.json_response({"success": True, "report": report,
+                                      "execution": "historical_paper_only"})
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+            raise WalletError("Invalid backtest request or settings.", 400)
+        except RuntimeError as exc:
+            raise WalletError(str(exc), 502)
+
+    def _ensure_ai_trader_backtest_table(self):
+        with self.ledger.db() as db:
+            db.execute("""CREATE TABLE IF NOT EXISTS ai_trader_backtest_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                report_json TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )""")
+            db.execute("""CREATE INDEX IF NOT EXISTS idx_ai_trader_backtest_user_time
+                ON ai_trader_backtest_history(telegram_id, created_at DESC)""")
+
+    async def get_ai_trader_backtest_history(self, request, session):
+        self._ensure_ai_trader_backtest_table()
+        uid = self.uid(request)
+        with self.ledger.db() as db:
+            rows = db.execute("""SELECT symbol, report_json, created_at
+                FROM ai_trader_backtest_history WHERE telegram_id=?
+                ORDER BY id DESC LIMIT 20""", (uid,)).fetchall()
+        return web.json_response({"success": True, "runs": [
+            {"symbol": row["symbol"], "report": json.loads(row["report_json"]),
+             "created_at": row["created_at"]} for row in rows
+        ]})
+
+    def _ensure_ai_trader_signal_table(self):
+        with self.ledger.db() as db:
+            db.execute("""CREATE TABLE IF NOT EXISTS ai_trader_signal_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                action TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                price REAL,
+                reasons_json TEXT NOT NULL,
+                risk_json TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )""")
+            db.execute("""CREATE INDEX IF NOT EXISTS idx_ai_trader_signals_user_time
+                ON ai_trader_signal_history(telegram_id, created_at DESC)""")
+
+    async def get_ai_trader_signal_history(self, request, session):
+        self._ensure_ai_trader_signal_table()
+        uid = self.uid(request)
+        with self.ledger.db() as db:
+            rows = db.execute("""SELECT symbol, action, confidence, price,
+                reasons_json, risk_json, created_at FROM ai_trader_signal_history
+                WHERE telegram_id=? ORDER BY id DESC LIMIT 50""", (uid,)).fetchall()
+        history = []
+        for row in rows:
+            history.append({
+                "symbol": row["symbol"], "action": row["action"],
+                "confidence": row["confidence"], "price": row["price"],
+                "reasons": json.loads(row["reasons_json"]),
+                "risk": json.loads(row["risk_json"]),
+                "created_at": row["created_at"],
+            })
+        return web.json_response({"success": True, "signals": history})
+
+    async def get_ai_trader_paper_journal(self, request, session):
+        """Return only the authenticated user's immutable paper-fill journal."""
+        from zerolife_ai_trader.paper_store import PaperTradeStore
+        uid = self.uid(request)
+        try:
+            raw_limit = request.query.get("limit", "50")
+            if not raw_limit.isdigit():
+                raise ValueError("History limit must be an integer.")
+            limit = int(raw_limit)
+            store = PaperTradeStore(self.ledger.path)
+            return web.json_response({
+                "success": True,
+                "summary": store.summary(telegram_id=uid),
+                "account": store.account(telegram_id=uid),
+                "fills": store.history(telegram_id=uid, limit=limit),
+                "execution": "paper_journal_read_only",
+            })
+        except ValueError as exc:
+            raise WalletError(str(exc), 400)
+
+    async def save_ai_trader_settings(self, request, session):
+        self._ensure_ai_trader_settings_table()
+        try:
+            payload = await request.json()
+            settings = validate_settings(payload)
+        except (ValueError, TypeError, json.JSONDecodeError):
+            raise WalletError("Invalid AI Trader settings payload.", 400)
+        uid = self.uid(request)
+        encoded = json.dumps(settings, sort_keys=True, separators=(",", ":"),
+                             allow_nan=False)
+        with self.ledger.db() as db:
+            db.execute("""INSERT INTO ai_trader_user_settings
+                (telegram_id, settings_json, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(telegram_id) DO UPDATE SET
+                settings_json=excluded.settings_json,
+                updated_at=CURRENT_TIMESTAMP""", (uid, encoded))
+        return web.json_response({"success": True, "settings": settings,
+                                  "storage": "server"})
+
     def admit(self, uid):
         if not self.public_enabled and uid not in self.beta_users:
             raise WalletError("Публичный приём средств ещё не открыт.", 503)
@@ -1086,7 +1412,8 @@ class CustodyRuntime(WalletRuntime):
             if (getattr(self, "web_access", None) and request.method == "POST"
                     and action.__name__ in {"ai_preview", "scan_candidates", "trading_readiness",
                                             "save_trading_settings", "save_investor_budget",
-                                            "save_base_paper_budget", "scan_base_paper"}):
+                                            "save_base_paper_budget", "scan_base_paper",
+                                            "save_ai_trader_settings", "evaluate_ai_trader_signals", "run_ai_trader_backtest"}):
                 self.web_access.trading_request(request)
             if (getattr(self, "accounts", None) and request.method == "POST" and action.__name__ in
                     {"create_invoice","deposit","wallet_link","toggle","toggle_sniper","withdraw",
@@ -2109,10 +2436,25 @@ class CustodyRuntime(WalletRuntime):
             "amount_usdc": display_raw(result["amount_raw"], 6),
         })
 
+    async def admin_overview(self, request, session):
+        """Read-only operator overview; aggregate only, owner-only."""
+        if self.uid(request) != self.owner_id:
+            raise WalletError("Только администратор.", 403)
+        try:
+            snapshot = self.ledger.admin_overview_snapshot(10)
+            self.ledger.audit()
+        except LedgerError as exc:
+            raise WalletError("Не удалось построить безопасную сводку.", 503) from exc
+        return web.json_response(snapshot, headers={"Cache-Control": "no-store"})
+
     async def admin_status(self, request, session):
         if self.uid(request) != self.owner_id:
             raise WalletError("Только администратор.", 403)
         payload = {"success": True, "legacy_check_error": None, "balance_check_error": None}
+        try:
+            payload["overview"] = self.ledger.admin_overview_snapshot(10)
+        except LedgerError:
+            payload["overview"] = {"success": False, "message": "Operator overview temporarily unavailable."}
         try:
             await self.reconcile(session)
         except Exception as exc:
