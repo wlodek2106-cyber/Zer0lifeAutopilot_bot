@@ -46,7 +46,9 @@ class PolicyTests(unittest.TestCase):
             "position_asset": policy.LIPPY_MINT,
             "exit_reason": "LIPPY_TAKE_PROFIT_300",
         }
-        self.assertTrue(policy.sell_authorization(approved).allowed)
+        self.assertFalse(policy.sell_authorization(approved).allowed)
+        self.assertTrue(policy.sell_authorization({
+            **approved, "manual_close": True, "exit_reason": "MANUAL_CLOSE"}).allowed)
         self.assertFalse(policy.sell_authorization({
             **approved, "position_asset": "different-mint"}).allowed)
         self.assertFalse(policy.sell_authorization({

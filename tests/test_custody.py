@@ -598,6 +598,7 @@ class LedgerTests(unittest.TestCase):
         self.assertAlmostEqual(restored["peak_price"], 0.021)
 
     def test_lippy_cycle_persists_peak_reentry_and_five_rebuy_limit(self):
+        self.enterContext(patch("custody_ledger.LIPPY_TRADING_ENABLED", True))
         self.credit(101, SOL, 5_000_000_000)
         buy = self.reserve(uid=101, kind="BUY", asset=SOL, raw=1_000_000_000,
             info={"output_asset": LIPPY_MINT, "symbol": "LIPPY", "decimals": 6,
@@ -645,6 +646,7 @@ class LedgerTests(unittest.TestCase):
                       "lippy_market_price": 0.0001})
 
     def test_manual_lippy_sale_stops_cycle_and_keeps_global_cooldown(self):
+        self.enterContext(patch("custody_ledger.LIPPY_TRADING_ENABLED", True))
         self.credit(101, SOL, 3_000_000_000)
         buy = self.reserve(uid=101, kind="BUY", asset=SOL, raw=1_000_000_000,
             info={"output_asset": LIPPY_MINT, "symbol": "LIPPY", "decimals": 6,
@@ -660,6 +662,16 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(
             self.ledger.lippy_cycle_state(101, LIPPY_MINT)["state"], "STOPPED")
         self.assertIsNotNone(self.ledger.entry_cooldown_until(LIPPY_MINT))
+
+    def test_lippy_buy_is_disabled_without_reserving_funds(self):
+        self.credit(101, SOL, 1_500_000_000)
+        before = self.ledger.balance(101, SOL)
+        with self.assertRaisesRegex(LedgerError, "LIPPY trading is disabled"):
+            self.reserve(uid=101, kind="BUY", asset=SOL, raw=500_000_000,
+                info={"output_asset": LIPPY_MINT, "symbol": "LIPPY", "decimals": 6,
+                      "strategy": "sniper", "lippy_cycle": True})
+        self.assertEqual(self.ledger.balance(101, SOL), before)
+        self.assertEqual(self.ledger.pending(), [])
 
     def test_fartcoin_sell_rpc_effects_credit_exact_sol_proceeds(self):
         wallet = str(Keypair().pubkey())
@@ -1541,6 +1553,19 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             snapshot_created_at=now - 100, now=now))
         self.assertEqual(position["state"], "OPEN")
         self.assertEqual(self.ledger.balance(101, USDC), 1_000_000)
+
+    def test_lippy_automatic_exit_is_disabled_but_manual_sale_remains_available(self):
+        position = {
+            "uid": 101, "asset": LIPPY_MINT, "strategy": "sniper",
+            "symbol": "LIPPY", "funding_asset": SOL,
+            "cost_raw": 1_000_000_000, "raw": 1_000_000, "decimals": 6,
+        }
+        self.assertIsNone(self.service.exit_reason(
+            position, {"LIPPY": 4.0, "SOL": 1.0}))
+        self.assertTrue(runtime.execution_policy.sell_authorization({
+            "manual_close": True, "symbol": "LIPPY", "strategy": "sniper",
+            "position_asset": LIPPY_MINT, "exit_reason": "MANUAL_CLOSE",
+        }).allowed)
 
     def pending_sell(self, uid=101, signer=None):
         invoice = self.ledger.invoice(uid, USDC, 2_000_000)

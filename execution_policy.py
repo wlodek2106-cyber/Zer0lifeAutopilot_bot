@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from types import MappingProxyType
 
-from custody_ledger import USDC, SOL, LIPPY_MINT
+from custody_ledger import USDC, SOL, LIPPY_MINT, LIPPY_TRADING_ENABLED
 from entry_costs import MAX_COST_BPS, MAX_PRICE_IMPACT_PCT, MAX_QUOTE_AGE_SECONDS, assess_entry
 from wallet_runtime import WalletError
 
@@ -126,7 +126,8 @@ def sell_authorization(metadata):
         return allow()
     if metadata.get("exit_reason") in ("STOP_LOSS", "TRAILING_STOP"):
         return allow()
-    if (metadata.get("lippy_cycle") is True
+    if (LIPPY_TRADING_ENABLED
+            and metadata.get("lippy_cycle") is True
             and metadata.get("strategy") == "sniper"
             and metadata.get("symbol") == "LIPPY"
             and metadata.get("position_asset") == LIPPY_MINT

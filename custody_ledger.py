@@ -15,6 +15,7 @@ import trade_audit
 USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 SOL = "SOL"
 LIPPY_MINT = "9fGTsrxW5D8wxpjXVzuK8U2c6S5KVgGyi3UVcb89pump"
+LIPPY_TRADING_ENABLED = False
 LIPPY_MAX_REBUYS = 5
 LIPPY_REENTRY_RETAINED_PRICE = 0.2
 FEE_CAP = 5_000_000
@@ -1460,6 +1461,10 @@ class CustodyLedger(trade_audit.TradeAuditLedger):
             elif kind == "BUY":
                 if asset not in (USDC, SOL) or metadata.get("output_asset") in (None, asset):
                     raise LedgerError("Недопустимая валюта покупки.")
+                if (metadata.get("output_asset") == LIPPY_MINT
+                        and not LIPPY_TRADING_ENABLED):
+                    raise LedgerError(
+                        "BLOCKED: LIPPY trading is disabled; no funds were reserved.")
                 if metadata.get("strategy") == "investor":
                     source = investor_budget_account(uid)
                     if _balance(db, source, asset) < raw:

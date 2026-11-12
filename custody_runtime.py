@@ -29,7 +29,7 @@ from wallet_runtime import (
     ATA, SYSTEM, MEMO, GENESIS, durable,
 )
 from custody_ledger import (
-    CustodyLedger, LedgerError, USDC, SOL, LIPPY_MINT, LIPPY_MAX_REBUYS,
+    CustodyLedger, LedgerError, USDC, SOL, LIPPY_MINT, LIPPY_TRADING_ENABLED, LIPPY_MAX_REBUYS,
     LIPPY_REENTRY_RETAINED_PRICE, FEE_CAP, available, position_account,
     MONTHLY_TRADING_FEE_USD_CENTS, MONTHLY_TRADING_FEE_PERIOD_SECONDS,
     MONTHLY_TRADING_FEE_TERMS_VERSION,
@@ -247,7 +247,8 @@ class CustodyRuntime(WalletRuntime):
         # still using its own balance and independent execution gates.
         sniper_mints = {self.watchlist[s]["mint"] for s in self.sniper_symbols}
         sniper_seeds = {s: self.watchlist[s] for s in self.sniper_symbols}
-        sniper_seeds["LIPPY"] = {"mint": LIPPY_MINT, "label": "LIPPY"}
+        if LIPPY_TRADING_ENABLED:
+            sniper_seeds["LIPPY"] = {"mint": LIPPY_MINT, "label": "LIPPY"}
         self.discovery = MemeDiscovery(self.ledger, self.rpc,
             [self.watchlist[s]["mint"] for s in self.main_symbols
              if self.watchlist[s]["mint"] not in sniper_mints],
@@ -3537,6 +3538,12 @@ class CustodyRuntime(WalletRuntime):
         lippy_buy = kind == "BUY" and output_asset == asset_for_mint(LIPPY_MINT)
         lippy_rebuy = False
         if lippy_buy:
+            if not LIPPY_TRADING_ENABLED:
+                verdict = execution_policy.deny(
+                    "lippy_disabled",
+                    "BLOCKED: LIPPY trading is disabled; no purchase was sent.")
+                self.record_execution_check(
+                    uid, verdict, "order", kind, info.get("symbol", "LIPPY")).require()
             cycle = self.ledger.lippy_cycle_state(uid, output_asset)
             prior_positions = self.ledger.positions(uid)
             market_price = info.get("lippy_market_price")
@@ -5011,6 +5018,8 @@ class CustodyRuntime(WalletRuntime):
                 and position.get("asset") == asset_for_mint(LIPPY_MINT)
                 and position.get("strategy") == "sniper"
                 and position.get("symbol") == "LIPPY"):
+            if not LIPPY_TRADING_ENABLED:
+                return None
             reason = execution_policy.lippy_exit_reason(price, entry)
         elif position.get("strategy") == "investor":
             reason = execution_policy.investor_exit_reason(
@@ -5075,6 +5084,10 @@ class CustodyRuntime(WalletRuntime):
             lippy_mint = (self.watchlist.get(symbol, {}).get("mint")
                           if isinstance(symbol, str) else None)
             if action == "BUY" and mode == "sniper" and lippy_mint == LIPPY_MINT:
+                if not LIPPY_TRADING_ENABLED:
+                    note("lippy_disabled",
+                         "BLOCKED: LIPPY trading is disabled; no automatic order was started.")
+                    continue
                 output_asset = asset_for_mint(LIPPY_MINT)
                 if uid != self.owner_id:
                     note("lippy_owner_only", "BLOCKED: LIPPY is available only to the owner’s Meme Sniper cycle.")
